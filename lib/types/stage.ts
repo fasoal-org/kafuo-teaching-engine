@@ -19,6 +19,7 @@ import type { Action } from '@/lib/types/action';
 import type { WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
+import type { SceneLearningObjectiveRef } from '@/lib/types/teaching-package';
 
 export type {
   SceneType,
@@ -107,6 +108,12 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * scene-derived outline.
    */
   outlineId?: string;
+  /**
+   * Kafuo Learning Objectives this scene serves. App-layer, optional, additive:
+   * absent on legacy data (BR-019), never part of the `@openmaic/dsl` Scene
+   * contract, and never rewritten when Kafuo later changes the objective.
+   */
+  learningObjectives?: SceneLearningObjectiveRef[];
 };
 export type Scene = AppScene;
 

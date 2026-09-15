@@ -7,7 +7,7 @@ OpenMAIC — это стандартное приложение Next.js, кот�
 
 ## Vercel (один клик)
 
-Самый быстрый способ. Нажмите кнопку Deploy в [README репозитория](https://github.com/THU-MAIC/OpenMAIC), сделайте fork репозитория и введите минимум один API ключ LLM по инструкции.
+Самый быстрый способ. Нажмите кнопку Deploy в [README репозитория](https://github.com/fasoal-org/kafuo-teaching-engine), сделайте fork репозитория и введите минимум один API ключ LLM по инструкции.
 
 Vercel автоматически пересобирает и разворачивает Next.js приложение при каждом коммите. Для деплоя необходимо в настройках проекта указать хотя бы одного LLM провайдера.
 
@@ -101,7 +101,7 @@ docker compose --profile server-persistence up --build
 docker compose --profile video-export up --build
 ```
 
-Compose передаёт OpenMAIC URL рендер-сервиса через `RENDER_SERVICE_URL`. Если профиль не включён или сервис недоступен, экспорт возвращается к скачиванию ZIP проекта для локального рендеринга через CLI. Рендер-сервис работает в изолированной сети и требует capability `NET_ADMIN` при запуске; подробности и отдельные варианты развертывания — в [`render-service/README.md`](https://github.com/THU-MAIC/OpenMAIC/blob/main/render-service/README.md).
+Compose передаёт OpenMAIC URL рендер-сервиса через `RENDER_SERVICE_URL`. Если профиль не включён или сервис недоступен, экспорт возвращается к скачиванию ZIP проекта для локального рендеринга через CLI. Рендер-сервис работает в изолированной сети и требует capability `NET_ADMIN` при запуске; подробности и отдельные варианты развертывания — в [`render-service/README.md`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/render-service/README.md).
 
 ## Переменные окружения
 

@@ -7,7 +7,7 @@ OpenMAIC 是一個標準的 Next.js 應用程式，任何能執行 Next.js 的�
 
 ## Vercel（一鍵）
 
-最快的方式是點選[儲存庫 README](https://github.com/THU-MAIC/OpenMAIC) 中的 Deploy 按鈕，fork 儲存庫，並依照提示填入至少一個 LLM 的 API key。
+最快的方式是點選[儲存庫 README](https://github.com/fasoal-org/kafuo-teaching-engine) 中的 Deploy 按鈕，fork 儲存庫，並依照提示填入至少一個 LLM 的 API key。
 
 Vercel 會在每次提交後重新建置並部署 Next.js 應用程式。部署時需要在專案設定中設定至少一個 LLM 供應商。
 
@@ -101,7 +101,7 @@ PostgreSQL 資料儲存在 `openmaic-postgres` volume 中。`PERSISTENCE_POSTGRE
 docker compose --profile video-export up --build
 ```
 
-Compose 會透過 `RENDER_SERVICE_URL` 讓 OpenMAIC 連線至渲染服務。若未啟用此 profile，或渲染服務無法使用，匯出功能會改為下載專案 ZIP，以供本機 CLI 渲染。渲染服務使用隔離網路，啟動時需要 `NET_ADMIN` capability；其他限制與獨立部署方式請見儲存庫中的 [`render-service/README.md`](https://github.com/THU-MAIC/OpenMAIC/blob/main/render-service/README.md)。
+Compose 會透過 `RENDER_SERVICE_URL` 讓 OpenMAIC 連線至渲染服務。若未啟用此 profile，或渲染服務無法使用，匯出功能會改為下載專案 ZIP，以供本機 CLI 渲染。渲染服務使用隔離網路，啟動時需要 `NET_ADMIN` capability；其他限制與獨立部署方式請見儲存庫中的 [`render-service/README.md`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/render-service/README.md)。
 
 ## 環境變數
 

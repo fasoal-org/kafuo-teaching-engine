@@ -39,7 +39,7 @@ import {
   generateTTSForClassroom,
 } from '@/lib/server/classroom-media-generation';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
-import type { UserRequirements } from '@/lib/types/generation';
+import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
@@ -90,6 +90,21 @@ export interface GenerateClassroomResult {
   scenes: Scene[];
   scenesCount: number;
   createdAt: string;
+}
+
+/**
+ * Injectable persistence for `generateClassroom` (plan §8.1). The default is
+ * today's filesystem behavior; a Teaching Package sink persists the generated
+ * document through the owner-bound store under the service owner instead. No
+ * other logic in the pipeline depends on which sink is configured.
+ */
+export interface ClassroomPersistenceSink {
+  reserve(buildStage: (id: string) => Stage): Promise<{ id: string; stage: Stage }>;
+  persist(
+    data: { id: string; stage: Stage; scenes: Scene[]; outlines: SceneOutline[] },
+    baseUrl: string,
+  ): Promise<{ id: string; url: string; stage: Stage; scenes: Scene[]; createdAt: string }>;
+  release(id: string): Promise<void>;
 }
 
 function createInMemoryStore(stage: Stage): StageStore {
@@ -216,14 +231,23 @@ async function reserveGeneratedClassroom(
   }
 }
 
+/** The default sink: exactly the filesystem behavior the pipeline always had. */
+const filesystemClassroomSink: ClassroomPersistenceSink = {
+  reserve: reserveGeneratedClassroom,
+  persist: ({ id, stage, scenes }, baseUrl) => persistClassroom({ id, stage, scenes }, baseUrl),
+  release: releaseClassroomReservation,
+};
+
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
     baseUrl: string;
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
+    persistence?: ClassroomPersistenceSink;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
+  const sink = options.persistence ?? filesystemClassroomSink;
 
   await options.onProgress?.({
     step: 'initializing',
@@ -562,7 +586,7 @@ export async function generateClassroom(
     agents = getDefaultAgents();
   }
 
-  const { id: stageId, stage } = await reserveGeneratedClassroom((id) => ({
+  const { id: stageId, stage } = await sink.reserve((id) => ({
     id,
     name: courseTitle || outlines[0]?.title || requirement.slice(0, 50),
     description: undefined,
@@ -595,7 +619,7 @@ export async function generateClassroom(
   // generation throws before `persistClassroom` succeeds, release the
   // placeholder so a failed run does not burn the id or leave an unreadable
   // file behind. `persisted` is the completion marker.
-  let persisted: Awaited<ReturnType<typeof persistClassroom>> | undefined;
+  let persisted: Awaited<ReturnType<ClassroomPersistenceSink['persist']>> | undefined;
   try {
     const store = createInMemoryStore(stage);
     const api = createStageAPI(store);
@@ -758,7 +782,7 @@ export async function generateClassroom(
 
     // The id was reserved before media/TTS generation, so the process owns it and
     // this is an ordinary overwrite that replaces the placeholder.
-    persisted = await persistClassroom({ id: stageId, stage, scenes }, options.baseUrl);
+    persisted = await sink.persist({ id: stageId, stage, scenes, outlines }, options.baseUrl);
 
     log.info(`Classroom persisted: ${persisted.id}, URL: ${persisted.url}`);
 
@@ -780,7 +804,7 @@ export async function generateClassroom(
     };
   } finally {
     if (!persisted) {
-      await releaseClassroomReservation(stageId);
+      await sink.release(stageId);
     }
   }
 }

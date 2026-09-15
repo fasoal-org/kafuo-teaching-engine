@@ -9,6 +9,7 @@ import type { AppStage } from '@/lib/document-store/persistence-types';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
+import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
 import type { Queryable } from '@openmaic/storage/document/pg';
 
@@ -43,7 +44,9 @@ export async function getOwnerScopedDocumentStore(
       ownerId,
       validateScene: validateAppScene,
       validateStage: validateAppStage,
-      mutationFence,
+      // Teaching package immutability composed ahead of the caller's (runner
+      // lease) fence; the caller's fence keeps its exact previous behavior.
+      mutationFence: teachingPackageStageGuardFence(mutationFence),
     }) as unknown as OwnerScopedDocumentStore,
   );
 }

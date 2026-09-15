@@ -3,7 +3,7 @@ title: شرح الإعدادات
 description: موفرو LLM، توليد الوسائط، تحليل المستندات، TTS، ASR، التحكم بالوصول و feature flags.
 ---
 
-يقرأ OpenMAIC متغيرات البيئة عند بدء تشغيل الخادم. جميع الإعدادات اختيارية — فعّل ما تحتاجه فقط. مثال متغيرات البيئة موجود في المستودع ضمن [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example). لمعرفات النماذج المدمجة، راجع [النماذج المدعومة](./supported-models.mdx).
+يقرأ OpenMAIC متغيرات البيئة عند بدء تشغيل الخادم. جميع الإعدادات اختيارية — فعّل ما تحتاجه فقط. مثال متغيرات البيئة موجود في المستودع ضمن [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example). لمعرفات النماذج المدمجة، راجع [النماذج المدعومة](./supported-models.mdx).
 
 بجانب متغيرات البيئة، يمكنك أيضًا استخدام ملف `server-providers.yml` في جذر المشروع لتكوين موفري الخادم المسجلين في الكود. متغيرات البيئة تتجاوز حقول YAML المطابقة حقلًا بحقل. لا يمكن تسجيل موفري LLM متوافقين مع OpenAI مخصصين عبر بادئات متغيرات بيئة عشوائية أو معرفات YAML غير معروفة، بل فقط من خلال الإعدادات.
 
@@ -206,7 +206,7 @@ ACCESS_CODE=your-secret-code
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
-يمكن استخدام `MODEL_ROUTES` لتحديد نماذج مختلفة لمراحل توليد مختلفة؛ المراحل غير المحددة تستخدم النموذج المرسل من العميل أو `DEFAULT_MODEL`. هو كائن JSON، المفاتيح هي أسماء المراحل، والقيم إما سلسلة نموذج أو كائن يحتوي على `model` و `thinking`. قائمة المراحل الكاملة والأمثلة موجودة في [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example).
+يمكن استخدام `MODEL_ROUTES` لتحديد نماذج مختلفة لمراحل توليد مختلفة؛ المراحل غير المحددة تستخدم النموذج المرسل من العميل أو `DEFAULT_MODEL`. هو كائن JSON، المفاتيح هي أسماء المراحل، والقيم إما سلسلة نموذج أو كائن يحتوي على `model` و `thinking`. قائمة المراحل الكاملة والأمثلة موجودة في [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example).
 
 ## feature flags (مفاتيح الميزات)
 

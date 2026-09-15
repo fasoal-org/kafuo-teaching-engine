@@ -38,6 +38,10 @@ vi.mock('@/lib/persistence/server-provider', () => ({
 }));
 
 import { GET as getStageMeta } from '@/app/api/stage-meta/[stageId]/route';
+import {
+  buildEditorGrantPayload,
+  grantCookieValueForRedeem,
+} from '@/lib/server/teaching-package/editor-grant';
 import { GET as getStatus } from '@/app/api/stages/[id]/status/route';
 import { POST as postGenerationComplete } from '@/app/api/stages/[id]/generation-complete/route';
 import { POST as postPublish } from '@/app/api/stages/[id]/publish/route';
@@ -86,6 +90,43 @@ describe('GET /api/stage-meta/[stageId]', () => {
       stageMetaParams(STAGE_ID),
     );
     await expect(response.json()).resolves.toMatchObject({ isOwner: false });
+  });
+
+  // A Stage-scoped Editor grant counts as ownership for the UI signal — but
+  // only its `write` capability: a `read` grant keeps preview read-only.
+  function grantCookieFor(stageId: string, capability: 'read' | 'write'): string {
+    const { token } = buildEditorGrantPayload({ versionId: 'tpv-1', stageId, capability });
+    return `teaching_package_grant=${encodeURIComponent(
+      grantCookieValueForRedeem(new Headers(), token, stageId),
+    )}`;
+  }
+
+  it('reports an owner for a write editor grant on a foreign-owned stage', async () => {
+    vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'stage-meta-grant-key');
+    mocks.accessRow!.meta_owner_id = 'service:teaching-package';
+    const response = await getStageMeta(
+      new NextRequest(`http://localhost/api/stage-meta/${STAGE_ID}`, {
+        headers: { cookie: grantCookieFor(STAGE_ID, 'write') },
+      }),
+      stageMetaParams(STAGE_ID),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ isOwner: true });
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps a read editor grant non-owner (preview stays read-only)', async () => {
+    vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'stage-meta-grant-key');
+    mocks.accessRow!.meta_owner_id = 'service:teaching-package';
+    const response = await getStageMeta(
+      new NextRequest(`http://localhost/api/stage-meta/${STAGE_ID}`, {
+        headers: { cookie: grantCookieFor(STAGE_ID, 'read') },
+      }),
+      stageMetaParams(STAGE_ID),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ isOwner: false });
+    vi.unstubAllEnvs();
   });
 
   it('answers 404 for an absent or tombstoned course', async () => {

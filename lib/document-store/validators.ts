@@ -23,13 +23,74 @@ function requiredString(
   }
 }
 
+/**
+ * Validate the app-layer `learningObjectives` annotation for any scene type:
+ * absent → untouched (legacy compatible); present → an array of objective
+ * references with a non-empty `objectiveRef`, a snapshot carrying a non-empty
+ * `statement` (optional string `label`/`context`), and a finite `capturedAt`.
+ */
+function validateLearningObjectives(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.learningObjectives === undefined) return;
+  if (!Array.isArray(value.learningObjectives)) {
+    errors.push({
+      path: '/learningObjectives',
+      message: '`learningObjectives` must be an array when present',
+    });
+    return;
+  }
+  value.learningObjectives.forEach((entry, index) => {
+    const prefix = `/learningObjectives/${index}`;
+    const record = objectValue(entry);
+    if (!record) {
+      errors.push({ path: prefix, message: 'objective reference must be an object' });
+      return;
+    }
+    if (typeof record.objectiveRef !== 'string' || record.objectiveRef === '') {
+      errors.push({
+        path: `${prefix}/objectiveRef`,
+        message: 'expected non-empty string `objectiveRef`',
+      });
+    }
+    const snapshot = objectValue(record.snapshot);
+    if (!snapshot) {
+      errors.push({ path: `${prefix}/snapshot`, message: 'expected object `snapshot`' });
+    } else {
+      if (typeof snapshot.statement !== 'string' || snapshot.statement === '') {
+        errors.push({
+          path: `${prefix}/snapshot/statement`,
+          message: 'expected non-empty string `statement`',
+        });
+      }
+      if (snapshot.label !== undefined && typeof snapshot.label !== 'string') {
+        errors.push({ path: `${prefix}/snapshot/label`, message: '`label` must be a string' });
+      }
+      if (snapshot.context !== undefined && typeof snapshot.context !== 'string') {
+        errors.push({ path: `${prefix}/snapshot/context`, message: '`context` must be a string' });
+      }
+    }
+    if (typeof record.capturedAt !== 'number' || !Number.isFinite(record.capturedAt)) {
+      errors.push({ path: `${prefix}/capturedAt`, message: 'expected finite number `capturedAt`' });
+    }
+  });
+}
+
 /** Validate the app's four-way scene union at the document write boundary. */
 export const validateAppScene: SceneValidator = (scene) => {
   const value = objectValue(scene);
   if (!value) {
     return { valid: false, errors: [{ path: '/', message: 'scene must be an object' }] };
   }
-  if (value.type === 'slide' || value.type === 'quiz') return validateScene(scene);
+  if (value.type === 'slide' || value.type === 'quiz') {
+    // The DSL result is preserved exactly; the app-layer objective annotation
+    // is validated additionally, for every scene type.
+    const dsl = validateScene(scene);
+    const errors: ValidationIssue[] = dsl.valid ? [] : [...dsl.errors];
+    validateLearningObjectives(value, errors);
+    return errors.length === 0 ? { valid: true } : { valid: false, errors };
+  }
 
   const errors: ValidationIssue[] = [];
   requiredString(value, 'id', errors);
@@ -153,6 +214,8 @@ export const validateAppScene: SceneValidator = (scene) => {
       });
     }
   }
+
+  validateLearningObjectives(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

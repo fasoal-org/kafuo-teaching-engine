@@ -12,6 +12,7 @@ import { lazyAssetByteStore } from '@/lib/persistence/asset-byte-store';
 import { resolveAssetQuotaBytes } from '@/lib/persistence/asset-quota';
 import { ensureOwnerMaterialSchema } from '@/lib/persistence/owner-materials';
 import { ensureStageMetaSchema } from '@/lib/persistence/stage-meta';
+import { ensureTeachingPackageSchema } from '@/lib/persistence/teaching-package';
 import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators';
 
 export type PersistencePoolFactory = (connectionString: string) => Pool;
@@ -50,6 +51,9 @@ async function createServerPersistenceProvider(
     await ensureDocumentSchema(queryable);
     await ensureStageMetaSchema(queryable);
     await ensureOwnerMaterialSchema(queryable);
+    // After ensureDocumentSchema: the teaching package tables carry FKs to
+    // document_stages, so the document schema must exist first.
+    await ensureTeachingPackageSchema(queryable);
     await ensureAssetSchema(queryable);
     const withTransaction = nodePostgresTransaction(queryable);
     const byteStore = lazyAssetByteStore(process.env.ASSET_S3_BUCKET, queryable);

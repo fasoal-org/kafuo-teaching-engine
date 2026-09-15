@@ -17,7 +17,7 @@ We currently provide security updates for the latest major release and the activ
 If you discover a security vulnerability in OpenMAIC, **please do not create a public GitHub issue.** Publicly disclosing a vulnerability can put other users and self-hosted instances at risk.
 
 Instead, please report it privately using one of the following methods:
-**GitHub Private Vulnerability Reporting:** Go to the [Security tab](https://github.com/THU-MAIC/OpenMAIC/security) of the repository, click on "Advisories", and select "Report a vulnerability".
+**GitHub Private Vulnerability Reporting:** Go to the [Security tab](https://github.com/fasoal-org/kafuo-teaching-engine/security) of the repository, click on "Advisories", and select "Report a vulnerability".
 
 
 **What to include in your report:**

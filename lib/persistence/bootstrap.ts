@@ -27,10 +27,35 @@ export function isBrowserPersistenceEnabled(): boolean {
   return typeof window !== 'undefined' && process.env.NEXT_PUBLIC_PERSISTENCE === '1';
 }
 
+/**
+ * The readable companion cookie an Editor-grant redeem sets. It is a partition
+ * name, not a credential: without the HttpOnly grant it authorizes nothing,
+ * and the server only accepts it when it equals the grant's own learner key.
+ */
+function readGrantLearnerKeyCookie(): string | undefined {
+  if (typeof document === 'undefined') return undefined;
+  for (const part of document.cookie.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith('teaching_package_learner_key=')) continue;
+    const value = trimmed.slice('teaching_package_learner_key='.length);
+    try {
+      const decoded = decodeURIComponent(value);
+      return decoded.startsWith('tp:') ? decoded : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export function getPersistenceLearnerKey(): Promise<string> {
   if (!isBrowserPersistenceEnabled()) {
     return Promise.reject(new Error('Browser persistence is not enabled'));
   }
+  // A grant session runs in its own `tp:<nonce>` sandbox, separate from any
+  // real learner partition and from this device's own partition.
+  const grantLearnerKey = readGrantLearnerKeyCookie();
+  if (grantLearnerKey) return Promise.resolve(grantLearnerKey);
   return (learnerKeyPromise ??= getLearnerKey((deviceKv ??= new BrowserKVStore())).catch(
     (error) => {
       learnerKeyPromise = undefined;

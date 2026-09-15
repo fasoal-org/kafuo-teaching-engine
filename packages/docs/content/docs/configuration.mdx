@@ -3,7 +3,7 @@ title: Configuration
 description: LLM providers, media generation, document parsing, TTS, ASR, access control, and feature flags.
 ---
 
-OpenMAIC reads environment variables when the server starts. Every setting is optional—enable only what you need. See [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example) in the repository for environment variable examples. See [Supported models](./supported-models.mdx) for built-in model IDs.
+OpenMAIC reads environment variables when the server starts. Every setting is optional—enable only what you need. See [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example) in the repository for environment variable examples. See [Supported models](./supported-models.mdx) for built-in model IDs.
 
 In addition to environment variables, you can configure server-side providers registered in the code through `server-providers.yml` in the project root. Environment variables override matching YAML fields one by one. Custom OpenAI-compatible providers can only be added in Settings; they cannot be registered with arbitrary environment variable prefixes or unknown YAML provider IDs.
 
@@ -206,7 +206,7 @@ When the server API receives no client model, set the default with `DEFAULT_MODE
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
-Use `MODEL_ROUTES` to choose models for individual generation stages. Unconfigured stages continue to resolve through the client model and `DEFAULT_MODEL`. Its value is a JSON object whose keys are generation stages and whose values can be model strings or objects containing `model` and `thinking`. See [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example) for the complete stage list and examples.
+Use `MODEL_ROUTES` to choose models for individual generation stages. Unconfigured stages continue to resolve through the client model and `DEFAULT_MODEL`. Its value is a JSON object whose keys are generation stages and whose values can be model strings or objects containing `model` and `thinking`. See [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example) for the complete stage list and examples.
 
 ## Feature flags
 

@@ -7,7 +7,7 @@ OpenMAIC は標準的な Next.js アプリケーションであり、Next.js が
 
 ## Vercel（一括デプロイ）
 
-最速の方法です。[リポジトリの README](https://github.com/THU-MAIC/OpenMAIC) にある Deploy ボタンをクリックし、リポジトリをフォークして、案内に従い少なくとも 1 つの LLM API キーを入力してください。
+最速の方法です。[リポジトリの README](https://github.com/fasoal-org/kafuo-teaching-engine) にある Deploy ボタンをクリックし、リポジトリをフォークして、案内に従い少なくとも 1 つの LLM API キーを入力してください。
 
 Vercel は各コミットごとに Next.js アプリを再ビルド・再デプロイします。デプロイ時にはプロジェクト設定で少なくとも 1 つの LLM プロバイダーを設定する必要があります。
 
@@ -101,7 +101,7 @@ PostgreSQL のデータは `openmaic-postgres` ボリュームに保存されま
 docker compose --profile video-export up --build
 ```
 
-Compose は `RENDER_SERVICE_URL` を通じて OpenMAIC とレンダリングサービスを接続します。このプロファイルを有効にしないか、レンダリングサービスが利用できない場合は、エクスポートはプロジェクト ZIP のダウンロードにフォールバックし、ローカル CLI でのレンダリングを想定します。レンダリングサービスは分離されたネットワークで動作し、起動時に `NET_ADMIN` 権限が必要です。詳細や独立デプロイ方法はリポジトリの [`render-service/README.md`](https://github.com/THU-MAIC/OpenMAIC/blob/main/render-service/README.md) を参照してください。
+Compose は `RENDER_SERVICE_URL` を通じて OpenMAIC とレンダリングサービスを接続します。このプロファイルを有効にしないか、レンダリングサービスが利用できない場合は、エクスポートはプロジェクト ZIP のダウンロードにフォールバックし、ローカル CLI でのレンダリングを想定します。レンダリングサービスは分離されたネットワークで動作し、起動時に `NET_ADMIN` 権限が必要です。詳細や独立デプロイ方法はリポジトリの [`render-service/README.md`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/render-service/README.md) を参照してください。
 
 ## 環境変数
 

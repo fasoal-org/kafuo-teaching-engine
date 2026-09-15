@@ -8,7 +8,7 @@ Thank you for your interest in contributing to OpenMAIC! This guide will help yo
 | --- | --- |
 | **Bug fix** | Open a PR directly (link the issue if one exists) |
 | **Extending existing features** (e.g. adding a new model provider, new TTS engine) | Open a PR directly |
-| **New feature or architecture change** | Start a [GitHub Discussion](https://github.com/THU-MAIC/OpenMAIC/discussions) or ask in [Discord](https://discord.gg/p8Pf2r3SaG) **before** opening a PR |
+| **New feature or architecture change** | Start a [GitHub Discussion](https://github.com/fasoal-org/kafuo-teaching-engine/discussions) or ask in [Discord](https://discord.gg/p8Pf2r3SaG) **before** opening a PR |
 | **Design / UI change** | Discuss in a GitHub Discussion or Discord first — include mockups or screenshots |
 | **Refactor-only PR** | Not accepted unless a maintainer explicitly requests it |
 | **Documentation** | Open a PR directly |
@@ -32,7 +32,7 @@ To avoid duplicate effort, please **comment on an issue** to claim it before you
 
 ```bash
 # Clone the repository
-git clone https://github.com/THU-MAIC/OpenMAIC.git
+git clone https://github.com/fasoal-org/kafuo-teaching-engine.git
 cd OpenMAIC
 
 # Install dependencies
@@ -175,7 +175,7 @@ OpenMAIC/
 
 ## Reporting Bugs
 
-Use the [Bug Report](https://github.com/THU-MAIC/OpenMAIC/issues/new?template=bug_report.yml) issue template. Include:
+Use the [Bug Report](https://github.com/fasoal-org/kafuo-teaching-engine/issues/new?template=bug_report.yml) issue template. Include:
 
 - Steps to reproduce
 - Expected vs. actual behavior
@@ -184,11 +184,11 @@ Use the [Bug Report](https://github.com/THU-MAIC/OpenMAIC/issues/new?template=bu
 
 ## Requesting Features
 
-Use the [Feature Request](https://github.com/THU-MAIC/OpenMAIC/issues/new?template=feature_request.yml) issue template. For larger features, please open a [Discussion](https://github.com/THU-MAIC/OpenMAIC/discussions) first.
+Use the [Feature Request](https://github.com/fasoal-org/kafuo-teaching-engine/issues/new?template=feature_request.yml) issue template. For larger features, please open a [Discussion](https://github.com/fasoal-org/kafuo-teaching-engine/discussions) first.
 
 ## Security Vulnerabilities
 
-Please report security vulnerabilities through [GitHub Security Advisories](https://github.com/THU-MAIC/OpenMAIC/security/advisories/new). **Do not** open a public issue for security vulnerabilities.
+Please report security vulnerabilities through [GitHub Security Advisories](https://github.com/fasoal-org/kafuo-teaching-engine/security/advisories/new). **Do not** open a public issue for security vulnerabilities.
 
 ## License
 

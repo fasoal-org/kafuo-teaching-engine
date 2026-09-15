@@ -42,6 +42,18 @@ export function isServerPersistenceConfigured(): boolean {
 }
 
 /**
+ * Server-only gate for the Teaching Package API (Module 1). The package layer
+ * lives beside server persistence (its tables and Stages are PostgreSQL-only),
+ * and its routes authenticate server-to-server callers with
+ * TEACHING_ENGINE_SERVICE_KEY. Off → plain 404, like the folders routes.
+ */
+export function isTeachingPackageApiConfigured(): boolean {
+  return (
+    isServerPersistenceConfigured() && Boolean(process.env.TEACHING_ENGINE_SERVICE_KEY?.trim())
+  );
+}
+
+/**
  * Build-time workbench affordance. This public flag is separate from the
  * server runtime gate because Next.js inlines NEXT_PUBLIC values into client
  * bundles; both gates must be on before a workbench page is reachable.
