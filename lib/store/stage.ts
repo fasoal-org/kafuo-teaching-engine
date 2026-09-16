@@ -26,6 +26,10 @@ import type { PendingChange, StaleDroppedSave } from '@/lib/utils/stage-storage'
 import { collectStageAssetRefs } from '@/lib/media/collect-stage-asset-refs';
 import { reconcileSceneMediaAllocations } from '@/lib/media/reconcile-scene-media';
 import {
+  isGrantReadOnlyRefusal,
+  isTeachingPackageGrantSession,
+} from '@/lib/persistence/grant-session';
+import {
   isStageDeleted,
   isStageDeletionInFlight,
   isStageWriteStale,
@@ -55,6 +59,117 @@ type FlushRound = {
 };
 let flushInFlight: FlushRound | null = null;
 let stageStorageModulePromise: Promise<typeof import('@/lib/utils/stage-storage')> | null = null;
+
+/**
+ * ## Document-write access — the classroom's fail-closed persistence gate
+ *
+ * A Teaching Package Preview (and a learner handoff) opens the classroom under
+ * a READ editor grant. The server already refuses every document mutation made
+ * under one with `403 GRANT_READ_ONLY`; this gate is the client half, so those
+ * requests are never issued in the first place.
+ *
+ * It is a TRI-state, not a boolean, because of a genuine ordering problem. The
+ * only grant fact a page script can observe synchronously is "this tab is in a
+ * grant session" (the readable `tp:<nonce>` companion cookie — see
+ * `lib/persistence/grant-session.ts`); the grant's CAPABILITY is a server fact
+ * that arrives later, on the stage-meta sidecar round trip. The classroom
+ * meanwhile performs load-time self-healing that marks the document dirty — the
+ * lazy generated-agent roster migration is the confirmed one — inside exactly
+ * that window.
+ *
+ * So:
+ *
+ * - `'writable'`  — the default OUTSIDE a grant session, which is every
+ *   ordinary locally owned classroom. Nothing about their autosave changes.
+ * - `'unresolved'` — the default INSIDE a grant session, until the sidecar
+ *   answers. Mutations are still RECORDED (a write grant's edits must survive
+ *   the window) but nothing is scheduled or flushed, so no request is issued.
+ * - `'read-only'` — the sidecar said this viewer may not write, or a write came
+ *   back `GRANT_READ_ONLY`. Parked dirt for the stage is discarded and further
+ *   marks are refused outright.
+ *
+ * Scoped per stage id: resolving one classroom read-only says nothing about the
+ * next one, which re-enters `'unresolved'` and earns its own answer.
+ *
+ * This gate covers the DOCUMENT seam only. Runtime/learner session writes go
+ * through `HttpRuntimeStore` under their own `GRANT_RUNTIME_SCOPE`
+ * authorization and are deliberately untouched — read-only playback still
+ * records the runtime state its grant permits.
+ */
+export type StageDocumentWriteAccess = 'writable' | 'unresolved' | 'read-only';
+
+let documentAccessStageId: string | null = null;
+let documentAccessState: StageDocumentWriteAccess = 'writable';
+/** Memoized per page load: the cookie can only appear via a redeem navigation. */
+let grantSessionProbe: boolean | null = null;
+
+function defaultDocumentWriteAccess(): StageDocumentWriteAccess {
+  grantSessionProbe ??= isTeachingPackageGrantSession();
+  return grantSessionProbe ? 'unresolved' : 'writable';
+}
+
+/** This viewer's document-write standing for `stageId`. */
+export function stageDocumentWriteAccess(
+  stageId: string | null | undefined,
+): StageDocumentWriteAccess {
+  if (!stageId) return defaultDocumentWriteAccess();
+  return documentAccessStageId === stageId ? documentAccessState : defaultDocumentWriteAccess();
+}
+
+function mayWriteStageDocument(stageId: string | null | undefined): boolean {
+  return stageDocumentWriteAccess(stageId) === 'writable';
+}
+
+/**
+ * Resolve a stage's document-write standing.
+ *
+ * `'read-only'` DISCARDS whatever was parked for the stage rather than parking
+ * it further: the write can never be accepted, and leaving it in the pending
+ * map would let the departing-stage flush in `setStage` carry it into a later
+ * navigation. `'writable'` releases the window — anything recorded while the
+ * answer was outstanding is scheduled now, which is what keeps an editable
+ * handoff's load-time work durable.
+ */
+export function applyStageDocumentWriteAccess(
+  stageId: string,
+  access: 'writable' | 'read-only',
+): void {
+  documentAccessStageId = stageId;
+  documentAccessState = access;
+  if (access === 'read-only') {
+    if (pendingStageId === stageId) resetPendingChanges(stageId);
+    return;
+  }
+  if (pendingStageId === stageId && pendingChanges.size > 0) schedulePendingSave();
+}
+
+/**
+ * A write this client had already queued came back `GRANT_READ_ONLY`.
+ *
+ * Terminal by construction — a grant's capability is fixed for the session — so
+ * this neither retries nor reports success: it logs ONCE, converts the session
+ * to read-only (which drops the pending dirt and disarms the backoff timer), and
+ * mirrors the fact into the viewer-access fields the UI reads. The first refusal
+ * is what makes a session that reached this state self-correcting, instead of
+ * re-issuing the same refused write on an ever-growing backoff.
+ */
+function noteGrantReadOnlyRefusal(stageId: string): void {
+  if (stageDocumentWriteAccess(stageId) === 'read-only') return;
+  log.warn(
+    `Stage ${stageId} refused a document write with GRANT_READ_ONLY; this classroom is read-only and its autosave is now disabled.`,
+  );
+  applyStageDocumentWriteAccess(stageId, 'read-only');
+  if (useStageStore.getState().stage?.id === stageId) {
+    useStageStore.setState({ isOwner: false, readOnly: true });
+  }
+}
+
+/** Test hook: forget the resolved standing and re-probe the grant cookie. */
+export function resetStageDocumentWriteAccess(): void {
+  documentAccessStageId = null;
+  documentAccessState = 'writable';
+  grantSessionProbe = null;
+}
 
 const DEPARTING_STAGE_RETRY_DELAY_MS = 100;
 
@@ -88,6 +203,10 @@ function resetPendingChanges(stageId: string | null = null): void {
 }
 
 function schedulePendingSave(): void {
+  // Fail closed until this viewer is known to be allowed to write the document.
+  // An unresolved grant session keeps its dirt recorded but arms no timer, so a
+  // read-only Preview issues no request at all during the ownership window.
+  if (!mayWriteStageDocument(pendingStageId)) return;
   // Once a write has failed, keep the already-armed backoff timer. Streaming
   // chat mutations are already represented by the dirty descriptor; rearming
   // per delta would collapse the backoff to the base cadence or starve it.
@@ -103,6 +222,11 @@ function schedulePendingSave(): void {
 
 function markPendingChanges(stageId: string | undefined, ...changes: PendingChange[]): void {
   if (!stageId || isStageDeleted(stageId)) return;
+  // A resolved read-only classroom records nothing: the mark would only ever
+  // become a refused request. An UNRESOLVED grant session still records (the
+  // window must not cost an editable handoff its load-time work) — what it does
+  // not do is schedule, which `schedulePendingSave` enforces below.
+  if (stageDocumentWriteAccess(stageId) === 'read-only') return;
   if (pendingStageId !== stageId) resetPendingChanges(stageId);
   for (const change of changes) {
     pendingRevision += 1;
@@ -363,7 +487,7 @@ interface StageState {
    * reference's classroom rule: a visitor who is not the owner gets a
    * read-only classroom.
    */
-  setViewerAccess: (access: { isOwner: boolean }) => void;
+  setViewerAccess: (access: { isOwner: boolean; stageId?: string }) => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
   bumpGenerationEpoch: () => void;
@@ -415,12 +539,20 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * A write the route refused as read-only. Propagated as an OUTCOME rather than
+ * thrown, for the same reason `'stale-dropped'` is: callers must be able to
+ * tell "refused, permanently" from both a verified write and a retryable
+ * failure. It is neither — nothing landed, and nothing may be retried.
+ */
+type ReadOnlyRefusedSave = 'read-only-refused';
+
 async function persistDirtySnapshot(
   stageId: string,
   dirtySnapshot: ReadonlyMap<string, PendingEntry>,
   snapshot: StagePersistenceSnapshot,
   capturedEpoch: number,
-): Promise<Set<string> | StaleDroppedSave> {
+): Promise<Set<string> | StaleDroppedSave | ReadOnlyRefusedSave> {
   if (!snapshot.stage) return new Set();
   // A stale capture is dropped, not retried: this covers snapshots that
   // escaped `discardPendingStageChanges` because they already left the
@@ -431,6 +563,9 @@ async function persistDirtySnapshot(
   if (isStageWriteStale(stageId, capturedEpoch)) return 'stale-dropped';
   stageStorageModulePromise ??= import('@/lib/utils/stage-storage');
   const { saveStageDataIncremental } = await stageStorageModulePromise;
+  // Only `GRANT_READ_ONLY` is absorbed into an outcome here; every other
+  // failure keeps throwing, so a genuinely transient error still reaches the
+  // retry path untouched.
   const result = await saveStageDataIncremental(
     stageId,
     [...dirtySnapshot.values()].map(({ change }) => change),
@@ -448,7 +583,10 @@ async function persistDirtySnapshot(
       },
     },
     capturedEpoch,
-  );
+  ).catch((error: unknown) => {
+    if (isGrantReadOnlyRefusal(error)) return 'read-only-refused' as const;
+    throw error;
+  });
   // A stale drop persisted nothing, and also leaves nothing to retry: the
   // fence is permanent for this capture (the deletion epoch outlives any
   // restore). What a failed delete restores is scoped to what the deletion
@@ -463,6 +601,7 @@ async function persistDirtySnapshot(
   // the revision guards keep any restored (re-queued) descriptors, since
   // restores mint fresh revisions.
   if (result === 'stale-dropped') return 'stale-dropped';
+  if (result === 'read-only-refused') return 'read-only-refused';
   return new Set((result?.failedChanges ?? []).map(pendingChangeKey));
 }
 
@@ -495,7 +634,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     if (
       departingState.stage?.id &&
       pendingStageId === departingState.stage.id &&
-      pendingChanges.size > 0
+      pendingChanges.size > 0 &&
+      // Navigating away from a classroom this viewer may not write must not
+      // turn parked dirt into the one request that escapes the gate.
+      mayWriteStageDocument(departingState.stage.id)
     ) {
       const departingStageId = departingState.stage.id;
       const departingDirty = new Map(pendingChanges);
@@ -529,6 +671,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
             // accepted consequence of navigation not being a durability
             // barrier.
             if (result === 'stale-dropped') return;
+            if (result === 'read-only-refused') {
+              noteGrantReadOnlyRefusal(departingStageId);
+              return;
+            }
             lastFailedKeys = result;
             if (lastFailedKeys.size === 0) return;
           } catch (error) {
@@ -787,8 +933,18 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     if (isDeckComplete({ outlines, scenes, failedOutlines })) get().setGenerationComplete(true);
   },
 
-  setViewerAccess: ({ isOwner }) => {
-    set({ isOwner, readOnly: !isOwner });
+  setViewerAccess: ({ isOwner, stageId }) => {
+    const currentStageId = get().stage?.id;
+    // The probe may answer before the document has landed in the store; the
+    // viewer-facing fields still belong to the stage it was asked about.
+    if (!stageId || !currentStageId || stageId === currentStageId) {
+      set({ isOwner, readOnly: !isOwner });
+    }
+    const target = stageId ?? currentStageId;
+    // The same answer that decides the read-only UI decides whether the
+    // document may be written — this is where a grant session's persistence
+    // window closes, one way or the other.
+    if (target) applyStageDocumentWriteAccess(target, isOwner ? 'writable' : 'read-only');
   },
 
   setGenerationStatus: (generationStatus) => set({ generationStatus }),
@@ -834,6 +990,15 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
+      return false;
+    }
+    // The aggregate save bypasses the pending map entirely, so the scheduler
+    // gate above cannot see it. Both of its load-time callers — the
+    // generation-complete self-heal in `loadFromStorage` and the server-restore
+    // apply in `applyClassroomStageAndScenes` — fire during a read-only
+    // Preview's load, and each would otherwise be a refused document write.
+    if (!mayWriteStageDocument(stage.id)) {
+      log.info(`Skipping save for ${stage.id}: this classroom is not writable by this viewer`);
       return false;
     }
 
@@ -904,6 +1069,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
       return true;
     } catch (error) {
+      if (isGrantReadOnlyRefusal(error)) {
+        noteGrantReadOnlyRefusal(stage.id);
+        return false;
+      }
       log.error('Failed to save to storage:', error);
       return false;
     }
@@ -1110,6 +1279,9 @@ function startFlushRound(): FlushRound | null {
   if (!pendingStageId || pendingChanges.size === 0) return null;
 
   const stageId = pendingStageId;
+  // The single choke point every flush path funnels through — the debounce
+  // timer, an explicit drain, and the visibilitychange/beforeunload kick alike.
+  if (!mayWriteStageDocument(stageId)) return null;
   const dirtySnapshot = new Map(pendingChanges);
   const state = useStageStore.getState();
   if (state.stage?.id !== stageId) {
@@ -1124,6 +1296,16 @@ function startFlushRound(): FlushRound | null {
   const run = (async () => {
     try {
       const result = await persistDirtySnapshot(stageId, dirtySnapshot, snapshot, capturedEpoch);
+      // Terminal: nothing landed and nothing may be retried. Reported as an
+      // empty failure set so the drain stops cleanly, but taken through the
+      // refusal handler (which discards the dirt and disarms the timer) and
+      // deliberately NOT through the success bookkeeping below — a chatSnapshot
+      // rebind here would mark chats durable that the route refused.
+      if (result === 'read-only-refused') {
+        noteGrantReadOnlyRefusal(stageId);
+        recordFlushOutcome(false);
+        return new Set<string>();
+      }
       // A fenced drop persisted nothing. For the pending map that is
       // equivalent to "no failures" (nothing to retry; the deletion path owns
       // the discard/restore, and restored descriptors survive the clearing

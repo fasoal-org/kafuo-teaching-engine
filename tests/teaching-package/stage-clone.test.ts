@@ -99,6 +99,20 @@ function richDocument(stageId: string): AppDocument {
   const outline: AppDocumentOutline = {
     ...makeOutline('Teach the thing'),
     outlines: [{ id: 'outline-narrated', title: 'Narrated', sceneType: 'slide' } as never],
+    teachingFlow: [
+      { stage: 'lesson_introduction', instructions: 'Introduce once.' },
+      { stage: 'outcome_teaching_cards', instructions: 'Cards.' },
+    ],
+    sourceVisuals: [
+      {
+        id: 'src-1',
+        contentResourceId: 'cs-1',
+        pageNumber: 2,
+        mimeType: 'image/png',
+        sha256: '0'.repeat(64),
+        servingPath: `/api/classroom-media/${SOURCE_STAGE}/media/src_1_ab.png`,
+      },
+    ],
     producer: 'client',
   };
   return {
@@ -193,6 +207,10 @@ describe('cloneStageForSuccessor', () => {
       `/api/classroom-media/${SOURCE_STAGE}/media/img-x-a1b2c3.png`,
     );
 
+    // The Kafuo teaching flow and source-visual provenance survive the clone.
+    const clonedOutline = clone!.outline as AppDocumentOutline;
+    expect(clonedOutline.teachingFlow).toHaveLength(2);
+    expect(clonedOutline.sourceVisuals).toHaveLength(1);
     // The outline is stamped as a server-job product of the version.
     expect(clone!.outline).toMatchObject({
       requirement: 'Teach the thing',

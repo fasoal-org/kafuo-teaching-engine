@@ -60,6 +60,7 @@ export function buildCompleteScene(
       content: { type: 'slide', canvas },
       actions,
       ...timestamps,
+      ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
     };
   }
 
@@ -74,6 +75,7 @@ export function buildCompleteScene(
       content: { type: 'quiz', questions: content.questions },
       actions,
       ...timestamps,
+      ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
     };
   }
 
@@ -94,6 +96,7 @@ export function buildCompleteScene(
       },
       actions,
       ...timestamps,
+      ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
     };
   }
 
@@ -108,6 +111,7 @@ export function buildCompleteScene(
       content: { type: 'pbl', projectV2: content.projectV2 },
       actions,
       ...timestamps,
+      ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
     };
   }
 

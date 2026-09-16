@@ -12,10 +12,12 @@ import { getServerPersistenceProvider } from '@/lib/persistence/server-provider'
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { createSuccessor } from '@/lib/server/teaching-package/lifecycle';
 import {
+  parseTenantContext,
   readJsonObject,
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
 export const runtime = 'nodejs';
 
@@ -34,6 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
     const version = await createSuccessor(pool, {
       versionId: id,
+      tenantId: parseTenantContext(body),
       actorRef: body.actorRef,
       ...(typeof body.comment === 'string' ? { comment: body.comment } : {}),
     });
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
-    console.error('[TeachingPackages] Failed to create successor:', error);
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
     return NextResponse.json(
       { error: { code: 'INTERNAL_ERROR', message: 'failed to create successor' } },
       { status: 500 },

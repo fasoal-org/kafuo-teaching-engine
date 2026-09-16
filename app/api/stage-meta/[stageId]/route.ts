@@ -63,8 +63,22 @@ export async function GET(req: NextRequest, { params }: Params) {
       // scope inside its write transactions). A Stage-scoped Editor grant
       // counts too — but only its `write` capability: a `read` grant leaves
       // the classroom read-only, so preview stays read-only in the UI.
-      const isOwner =
-        access.ownerId === ownerId || readEditorGrant(req.headers, stageId)?.capability === 'write';
+      const editorGrant = readEditorGrant(req.headers, stageId);
+      let editorWriteCounts = editorGrant?.capability === 'write';
+      if (editorWriteCounts) {
+        // A write grant counts only for the Stage's own tenant (plan §4.4.5).
+        const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+        const { getServerPersistenceProvider } = await import(
+          '@/lib/persistence/server-provider'
+        );
+        try {
+          const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+          editorWriteCounts = await stageBelongsToTenant(pool, stageId, editorGrant!.tenantId);
+        } catch {
+          editorWriteCounts = false;
+        }
+      }
+      const isOwner = access.ownerId === ownerId || editorWriteCounts;
 
       return NextResponse.json(
         {

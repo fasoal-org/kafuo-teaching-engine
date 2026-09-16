@@ -1,0 +1,132 @@
+{
+  "specification": "sha256(sorted-key compact JSON of the SEMANTIC payload; excludes requestId, actorRef, and contentResource.url)",
+  "vectors": [
+    {
+      "request": {
+        "requestId": "kafuo-req-1",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once."
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1."
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "actorRef": "42"
+      },
+      "digest": "ee124aac3a1d92547dca5c1654cb5259a2d72f27446ce56273a2cf2a4a58a382"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-1",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain respiration."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once."
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1."
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "fileSizeBytes": 12345,
+          "checksumSha256": "aa",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "actorRef": "42",
+        "versionId": "tpv-existing-1"
+      },
+      "digest": "4971fc1beffb2761c88b723577616d08ada6654e56063e389a377597b21bb47e"
+    }
+  ]
+}

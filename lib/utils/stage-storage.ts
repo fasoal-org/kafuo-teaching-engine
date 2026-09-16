@@ -140,19 +140,26 @@ function documentSnapshot(
   existingOutline: AppDocumentOutline | undefined,
   now: number,
 ) {
-  const outline = data.outline ??
-    existingOutline ?? {
-      outlines: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+  // The store's save payload rebuilds the outline record from
+  // `{outlines, generationComplete, updatedAt}`; sibling fields the payload
+  // does not carry (producer, producerRef, pptxImports, teachingFlow,
+  // sourceVisuals) belong to the persisted record and must survive the save —
+  // merge payload-over-existing rather than replacing the record wholesale.
+  const outline: AppDocumentOutline = data.outline
+    ? {
+        ...(existingOutline ?? {}),
+        ...data.outline,
+        createdAt: existingOutline?.createdAt ?? data.outline.createdAt,
+      }
+    : (existingOutline ?? {
+        outlines: [],
+        createdAt: now,
+        updatedAt: now,
+      });
   return {
     stage: stampStage(stageId, data.stage, now),
     scenes: data.scenes.map((scene, index) => stampScene(stageId, scene, index, now)),
-    outline: {
-      ...outline,
-      createdAt: existingOutline?.createdAt ?? outline.createdAt,
-    },
+    outline,
   };
 }
 

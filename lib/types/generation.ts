@@ -148,6 +148,8 @@ export interface WidgetOutline {
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */
+import type { TeachingStageRef } from '@/lib/types/teaching-package';
+
 export interface SceneOutline {
   id: string;
   type: 'slide' | 'quiz' | 'interactive' | 'pbl';
@@ -158,6 +160,9 @@ export interface SceneOutline {
   estimatedDuration?: number; // seconds
   order: number;
   languageNote?: string; // LLM-inferred language note for this scene
+  // Kafuo Teaching Model Flow identity — copied exactly from outline to scene,
+  // never derived from title/type/order (Kafuo integration FRD §11.2).
+  teachingStage?: TeachingStageRef;
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
   // AI-generated media requests (when PDF images are insufficient)

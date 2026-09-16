@@ -38,6 +38,17 @@ Infer the course language directive by applying the decision rules from the syst
 ---
 
 ## Output Requirements
+{{#if hasTeachingFlow}}
+### Authoritative Teaching Model Flow
+
+The course structure MUST follow this ordered flow exactly. Every outline carries `teachingStage: { "key": <stage>, "flowIndex": <index> }` copied exactly from this list; outline order covers the positions in order, with no gaps, no reordering, and no re-entry (one position may yield several consecutive outlines):
+
+```
+{{teachingFlowText}}
+```
+
+Example outline field: `"teachingStage": { "key": "lesson_introduction", "flowIndex": 0 }`
+{{/if}}
 
 Please automatically infer the following from user requirements:
 

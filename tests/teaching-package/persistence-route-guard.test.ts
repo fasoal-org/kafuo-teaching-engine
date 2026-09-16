@@ -84,7 +84,7 @@ describe('persistence route teaching package guard', () => {
   async function seedVersion(stageId: string, status: 'draft' | 'approved'): Promise<void> {
     await insertVersion(qp(), {
       id: `tpv-route-${stageId}`,
-      learningItem: { type: 'lesson', id: `li-${stageId}` },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: `li-${stageId}` } },
       version: 1,
       status,
       currentStageId: stageId,

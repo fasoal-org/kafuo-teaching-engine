@@ -72,7 +72,7 @@ describe('teaching package stage guard', () => {
     const versionId = `tpv-${stageId}-${status}`;
     await insertVersion(qp(), {
       id: versionId,
-      learningItem: { type: 'lesson', id: `li-${stageId}` },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: `li-${stageId}` } },
       version: 1,
       status,
       currentStageId: stageId,
@@ -153,7 +153,7 @@ describe('teaching package stage guard', () => {
     await seedStage(stageId);
     await insertAttempt(qp(), {
       id: 'tpa-displaced-guard',
-      learningItem: { type: 'lesson', id: 'li-displaced-guard' },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: 'li-displaced-guard' } },
       kind: 'initial',
       status: 'succeeded',
       requestedByActorRef: 'actor-1',

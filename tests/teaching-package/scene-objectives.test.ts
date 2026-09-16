@@ -228,7 +228,7 @@ describe('scene learning objectives', () => {
       const versionId = unique('tpv');
       await insertVersion(qp(), {
         id: versionId,
-        learningItem: { type: 'lesson', id: unique('li') },
+        aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: unique('li') } },
         version: 1,
         status,
         currentStageId: stageId,
@@ -241,14 +241,14 @@ describe('scene learning objectives', () => {
     it('sets, reads back, and clears objectives through putScene', async () => {
       const versionId = await seedVersion('draft');
       const now = 1_800_000_000_000;
-      const result = await setSceneLearningObjectives(txPool(), versionId, [
+      const result = await setSceneLearningObjectives(txPool(), versionId, { tenantId: 'tenant-test' }, [
         normalizeAssignment({ sceneId: 'scene-1', learningObjectives: objectives() }, now),
       ]);
       expect(result.updatedSceneIds).toEqual(['scene-1']);
 
       const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
       const { readVersion } = await import('@/lib/persistence/teaching-package');
-      const version = (await readVersion(qp(), versionId))!;
+      const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!;
       const document = await store.loadDocument(version.currentStageId);
       expect(document!.scenes[0]).toMatchObject({
         id: 'scene-1',
@@ -258,7 +258,7 @@ describe('scene learning objectives', () => {
       expect(document!.scenes[1]).toMatchObject({ learningObjectives: objectives() });
 
       // An empty array clears the annotation.
-      await setSceneLearningObjectives(txPool(), versionId, [
+      await setSceneLearningObjectives(txPool(), versionId, { tenantId: 'tenant-test' }, [
         normalizeAssignment({ sceneId: 'scene-1', learningObjectives: [] }, now),
       ]);
       const after = await store.loadDocument(version.currentStageId);
@@ -286,7 +286,7 @@ describe('scene learning objectives', () => {
       for (const status of ['in_review', 'approved'] as const) {
         const versionId = await seedVersion(status);
         await expect(
-          setSceneLearningObjectives(txPool(), versionId, [
+          setSceneLearningObjectives(txPool(), versionId, { tenantId: 'tenant-test' }, [
             normalizeAssignment(
               { sceneId: 'scene-1', learningObjectives: objectives() },
               Date.now(),
@@ -299,7 +299,7 @@ describe('scene learning objectives', () => {
     it('refuses an unknown scene id with 400', async () => {
       const versionId = await seedVersion('draft');
       await expect(
-        setSceneLearningObjectives(txPool(), versionId, [
+        setSceneLearningObjectives(txPool(), versionId, { tenantId: 'tenant-test' }, [
           normalizeAssignment(
             { sceneId: 'scene-absent', learningObjectives: objectives() },
             Date.now(),

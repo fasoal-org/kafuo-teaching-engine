@@ -31,8 +31,14 @@ describe.skipIf(!contractUrl)('teaching package lifecycle concurrency on Postgre
   });
 
   beforeEach(async () => {
+    // CASCADE, and `teaching_package_source_contexts` named explicitly: the B1
+    // question-flow work added that table with an FK to the attempts table, so the
+    // bare TRUNCATE below answered `cannot truncate a table referenced in a foreign
+    // key constraint` and this suite could not run at all against a database carrying
+    // it — it failed in `beforeEach`, before any lifecycle code was reached.
     await pool.query(
-      'TRUNCATE teaching_package_generation_attempts, teaching_package_review_events, teaching_package_versions',
+      `TRUNCATE teaching_package_source_contexts, teaching_package_generation_attempts,
+                teaching_package_review_events, teaching_package_versions CASCADE`,
     );
     await pool.query(
       `DELETE FROM stage_meta WHERE stage_id LIKE 'stage-pgc-%';
@@ -57,19 +63,19 @@ describe.skipIf(!contractUrl)('teaching package lifecycle concurrency on Postgre
     const versionId = `tpv-pgc-${counter}`;
     await insertVersion(pool, {
       id: versionId,
-      learningItem: { type: 'lesson', id: itemId },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: itemId } },
       version: 1,
       status: 'draft',
       currentStageId: stageId,
       teachingModel: { key: 'g5', version: 'g5.v1' },
       now: 1,
     });
-    await submitForReview(pool, { versionId, actorRef: 'actor-1' });
+    await submitForReview(pool, { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
 
     // Two independent transactions approve the same version at the same time.
     const results = await Promise.allSettled([
-      approve(pool, { versionId, actorRef: 'reviewer-a' }),
-      approve(pool, { versionId, actorRef: 'reviewer-b' }),
+      approve(pool, { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-a' }),
+      approve(pool, { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-b' }),
     ]);
     const fulfilled = results.filter((result) => result.status === 'fulfilled');
     const rejected = results.filter((result) => result.status === 'rejected');

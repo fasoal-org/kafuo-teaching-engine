@@ -367,6 +367,13 @@ async function evaluateEditorGrant(
     if (stageId === null) return { covered: false };
     const grant = grants.find((candidate) => candidate.stageId === stageId);
     if (!grant) return { covered: false };
+    // The grant must belong to the Stage's tenant (plan §4.4.5): a Stage A
+    // grant never authorizes Stage B documents, and a cross-tenant grant
+    // behaves exactly like an absent one.
+    const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+    const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
+    const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(() => false);
+    if (!belongs) return { covered: false };
     const method = request.method.toUpperCase();
     const mutating = method !== 'GET' && method !== 'HEAD';
     if (mutating && grant.capability === 'read') {
@@ -412,6 +419,23 @@ async function evaluateEditorGrant(
       };
     }
     const grant = grants.find((candidate) => candidate.stageId === scope.stageId);
+    if (grant) {
+      const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+      const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
+      const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(() => false);
+      if (!belongs) {
+        return {
+          covered: true,
+          mode: 'runtime',
+          grant: grants[0]!,
+          refusal: {
+            status: 403,
+            code: 'GRANT_RUNTIME_SCOPE',
+            message: 'this editor grant does not cover that stage and learner',
+          },
+        };
+      }
+    }
     if (!grant || grant.learnerKey !== scope.learnerKey) {
       return {
         covered: true,

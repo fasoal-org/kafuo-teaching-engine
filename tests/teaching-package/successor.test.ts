@@ -91,7 +91,7 @@ describe('createSuccessor', () => {
     const versionId = nextId('tpv');
     await insertVersion(qp(), {
       id: versionId,
-      learningItem: item,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
       version: 1,
       status: 'approved',
       currentStageId: stageId,
@@ -112,7 +112,7 @@ describe('createSuccessor', () => {
     const item = { type: 'lesson' as const, id: nextId('li') };
     const v1 = await seedApproved(item);
 
-    const created = await createSuccessor(txPool(), { versionId: v1, actorRef: 'actor-1' });
+    const created = await createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' });
     expect(created).toMatchObject({
       version: 2,
       status: 'draft',
@@ -121,9 +121,9 @@ describe('createSuccessor', () => {
       learningItem: item,
       teachingModel: { key: 'g5', version: 'g5.v1' },
     });
-    expect(created.currentStageId).not.toBe((await readVersion(qp(), v1))!.currentStageId);
+    expect(created.currentStageId).not.toBe((await readVersion(qp(), v1, { tenantId: 'tenant-test' }))!.currentStageId);
 
-    const unchanged = await readVersion(qp(), v1);
+    const unchanged = await readVersion(qp(), v1, { tenantId: 'tenant-test' });
     expect(unchanged).toMatchObject({ status: 'approved', version: 1 });
     // The successor's event names its lineage.
     const events = await pool.query(
@@ -147,7 +147,7 @@ describe('createSuccessor', () => {
     const v2 = nextId('tpv');
     await insertVersion(qp(), {
       id: v2,
-      learningItem: item,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
       version: 2,
       status: 'draft',
       currentStageId: v2Stage,
@@ -158,7 +158,7 @@ describe('createSuccessor', () => {
     const liveBefore = await liveStageCount();
 
     await expectTpError(
-      createSuccessor(txPool(), { versionId: v1, actorRef: 'actor-1' }),
+      createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' }),
       'ACTIVE_SUCCESSOR_EXISTS',
     );
     // The pre-check fires before any clone: no extra live stage_meta row.
@@ -172,7 +172,7 @@ describe('createSuccessor', () => {
     const v1 = nextId('tpv');
     await insertVersion(qp(), {
       id: v1,
-      learningItem: item,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
       version: 1,
       status: 'draft',
       currentStageId: stageId,
@@ -181,11 +181,11 @@ describe('createSuccessor', () => {
     });
 
     await expectTpError(
-      createSuccessor(txPool(), { versionId: v1, actorRef: 'actor-1' }),
+      createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' }),
       'INVALID_TRANSITION',
     );
     await expectTpError(
-      createSuccessor(txPool(), { versionId: 'tpv-absent', actorRef: 'actor-1' }),
+      createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: 'tpv-absent', actorRef: 'actor-1' }),
       'NOT_FOUND',
     );
   });
@@ -209,12 +209,12 @@ describe('createSuccessor', () => {
     } as unknown as ConnectableQueryable;
 
     await expect(
-      createSuccessor(failingTxPool, { versionId: v1, actorRef: 'actor-1' }),
+      createSuccessor(failingTxPool, { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' }),
     ).rejects.toThrow('injected version insert failure');
 
     // No version beyond v1 exists, and the orphan clone is invisible: only the
     // v1 stage row is live.
-    const versions = await listVersionsByItem(qp(), item);
+    const versions = await listVersionsByItem(qp(), { tenantId: 'tenant-test', learningItem: item });
     expect(versions).toHaveLength(1);
     const live = await pool.query(
       `SELECT COUNT(*)::int AS n FROM stage_meta WHERE deleted_at IS NULL`,
@@ -226,24 +226,24 @@ describe('createSuccessor', () => {
     const item = { type: 'lesson' as const, id: nextId('li') };
     const v1 = await seedApproved(item);
 
-    const v2 = await createSuccessor(txPool(), { versionId: v1, actorRef: 'actor-1' });
+    const v2 = await createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' });
     expect(v2.version).toBe(2);
     const { discardSuccessor } = await import('@/lib/server/teaching-package/lifecycle');
-    await discardSuccessor(txPool(), { versionId: v2.id, actorRef: 'actor-1' });
+    await discardSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v2.id, actorRef: 'actor-1' });
 
-    const v3 = await createSuccessor(txPool(), { versionId: v1, actorRef: 'actor-1' });
+    const v3 = await createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v1, actorRef: 'actor-1' });
     expect(v3.version).toBe(3);
 
     // Full chain: approve v3 → v1 superseded; create v4 from v3.
-    await submitForReview(txPool(), { versionId: v3.id, actorRef: 'actor-1' });
-    const approved = await approve(txPool(), { versionId: v3.id, actorRef: 'reviewer-1' });
+    await submitForReview(txPool(), { tenantId: 'tenant-test', versionId: v3.id, actorRef: 'actor-1' });
+    const approved = await approve(txPool(), { tenantId: 'tenant-test', versionId: v3.id, actorRef: 'reviewer-1' });
     expect(approved.status).toBe('approved');
-    expect((await readVersion(qp(), v1))!.status).toBe('superseded');
+    expect((await readVersion(qp(), v1, { tenantId: 'tenant-test' }))!.status).toBe('superseded');
 
-    const v4 = await createSuccessor(txPool(), { versionId: v3.id, actorRef: 'actor-1' });
+    const v4 = await createSuccessor(txPool(), { tenantId: 'tenant-test', versionId: v3.id, actorRef: 'actor-1' });
     expect(v4.version).toBe(4);
     expect(v4.predecessorVersionId).toBe(v3.id);
-    const versions = await listVersionsByItem(qp(), item);
+    const versions = await listVersionsByItem(qp(), { tenantId: 'tenant-test', learningItem: item });
     expect(versions.map((version) => version.version)).toEqual([1, 2, 3, 4]);
   });
 });

@@ -16,6 +16,7 @@ import {
   createBlankEditableScene,
   insertSceneAtIndex,
   type EditableSceneType,
+  teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
 import { SCENE_CREATION_ENABLED } from '@/lib/edit/scene-creation-enabled';
 import { CHROME_DURATION_MS, CHROME_EASE, CHROME_EASE_CSS } from '@/lib/edit/transitions';
@@ -205,7 +206,14 @@ export function SlideNavRail() {
     (insertIndex: number, type: EditableSceneType) => {
       if (!stage) return;
       const title = type === 'slide' ? t('edit.nav.untitledSlide') : t('edit.sceneType.quiz');
-      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1);
+      // A scene inserted into a Kafuo package stage inherits its teaching
+      // stage from the previous scene (the first scene when inserting at 0),
+      // so an editor-created scene stays submit-capable; the identity is
+      // never inferred from titles, types, or order.
+      const inheritedTeachingStage = teachingStageForInsertion(scenes, insertIndex);
+      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
+        ...(inheritedTeachingStage !== undefined && { teachingStage: inheritedTeachingStage }),
+      });
       setScenes(insertSceneAtIndex(scenes, scene, insertIndex));
       setCurrentSceneId(scene.id);
     },

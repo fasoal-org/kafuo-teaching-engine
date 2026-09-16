@@ -66,6 +66,28 @@ export interface MediaGenerationRequest {
   style?: string;
 }
 
+/**
+ * One entry of the authoritative ordered Teaching Model Flow supplied by the
+ * caller. Array order is authoritative; identity is `(array position, stage)`.
+ */
+export interface TeachingFlowEntry {
+  /** Case-sensitive stable machine key, e.g. `lesson_introduction`. */
+  stage: string;
+  /** Non-empty pedagogical instructions for this flow position. */
+  instructions: string;
+}
+
+/**
+ * Teaching-stage identity carried by every Kafuo-generated outline and scene.
+ * `key` must equal `flow[flowIndex].stage` exactly; never derived from titles,
+ * scene types, or order (the exact-flow validator re-checks this after
+ * generation and before submit).
+ */
+export interface TeachingStageRef {
+  key: string;
+  flowIndex: number;
+}
+
 /** A generation-ready description of one course scene. */
 export interface SceneOutline {
   id: string;
@@ -77,6 +99,8 @@ export interface SceneOutline {
   estimatedDuration?: number;
   order: number;
   languageNote?: string;
+  /** Kafuo Teaching Model Flow identity; functionally mandatory on Kafuo runs. */
+  teachingStage?: TeachingStageRef;
   suggestedImageIds?: string[];
   mediaGenerations?: MediaGenerationRequest[];
   quizConfig?: {

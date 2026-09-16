@@ -14,6 +14,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import type { ClassroomPersistenceSink } from '@/lib/server/classroom-generation';
+import type {
+  SourceVisualManifestEntry,
+  TeachingFlowEntry,
+} from '@/lib/types/teaching-package';
 import { StageAccessError } from '@/lib/persistence/stage-meta';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
@@ -97,6 +101,9 @@ export function createTeachingPackagePersistenceSink(
           scenes: data.scenes as AppScene[],
           // The requirement text travels in the execution input only; the
           // outline record is not a lineage home (audit §6.7), so it stays out.
+          // The Kafuo teaching flow and source-visual provenance DO belong to
+          // the record: the pre-submit exact-flow gate and Editor insertion
+          // inheritance read them, and they must survive every save.
           outline: {
             outlines: data.outlines,
             generationComplete: true,
@@ -104,6 +111,10 @@ export function createTeachingPackagePersistenceSink(
             producerRef: attemptId,
             createdAt: now,
             updatedAt: now,
+            ...(data.teachingFlow ? { teachingFlow: data.teachingFlow as TeachingFlowEntry[] } : {}),
+            ...(data.sourceVisuals
+              ? { sourceVisuals: data.sourceVisuals as SourceVisualManifestEntry[] }
+              : {}),
           },
         };
         try {

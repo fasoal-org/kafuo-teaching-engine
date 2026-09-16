@@ -45,6 +45,7 @@ export function createSceneWithActions(
     content: scene.content as SceneContent,
     actions: scene.actions,
     outlineId: scene.outlineId,
+    ...(scene.teachingStage !== undefined && { teachingStage: scene.teachingStage }),
   });
   return result.success ? (result.data ?? null) : null;
 }

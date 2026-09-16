@@ -12,11 +12,12 @@ import { NextResponse } from 'next/server';
 
 import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import {
-  parseLearningItemRef,
+  parseAggregateScope,
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { resolveApprovedTeachingPackage } from '@/lib/server/teaching-package/resolve';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
 export const runtime = 'nodejs';
 
@@ -25,11 +26,12 @@ export async function GET(req: NextRequest) {
   try {
     authenticateServiceRequest(req);
     const params = req.nextUrl.searchParams;
-    const learningItem = parseLearningItemRef(
+    const aggregate = parseAggregateScope(
+      params.get('tenantId'),
       params.get('learningItemType'),
       params.get('learningItemId'),
     );
-    const resolution = await resolveApprovedTeachingPackage(learningItem);
+    const resolution = await resolveApprovedTeachingPackage(aggregate);
     if (resolution.kind === 'none') return NextResponse.json({ kind: 'none' });
     return NextResponse.json({
       kind: 'approved',
@@ -39,7 +41,7 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
-    console.error('[TeachingPackages] Failed to resolve current package:', error);
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
     return NextResponse.json(
       { error: { code: 'INTERNAL_ERROR', message: 'failed to resolve current package' } },
       { status: 500 },

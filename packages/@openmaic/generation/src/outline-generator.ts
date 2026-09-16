@@ -13,7 +13,13 @@ import {
   sortDocumentImagesForVision,
 } from './outline-formatters.js';
 import { uniquifyMediaElementIds } from './outline-media.js';
-import type { ImageMapping, PdfImage, SceneOutline, UserRequirements } from './outline-types.js';
+import type {
+  ImageMapping,
+  PdfImage,
+  SceneOutline,
+  TeachingFlowEntry,
+  UserRequirements,
+} from './outline-types.js';
 import type { AICallFn, GenerationResult } from './pipeline-types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
 
@@ -29,6 +35,13 @@ export interface OutlinePromptContext {
   videoGenerationEnabled?: boolean;
   researchContext?: string;
   teacherContext?: string;
+  /**
+   * The authoritative ordered Teaching Model Flow (Kafuo integration). When
+   * present, the prompt contract requires every outline to carry
+   * `teachingStage: { key, flowIndex }` copied exactly from this list; absent
+   * → the templates render byte-identically to the pre-teaching-flow prompts.
+   */
+  teachingFlow?: TeachingFlowEntry[];
 }
 
 export interface OutlineGenerationOptions extends Omit<
@@ -96,6 +109,17 @@ export function buildOutlinePrompt(
   const mediaEnabled = imageEnabled || videoEnabled;
   const hasSourceImages = (pdfImages?.length ?? 0) > 0;
 
+  const teachingFlow = context.teachingFlow;
+  const hasTeachingFlow = Array.isArray(teachingFlow) && teachingFlow.length > 0;
+  const teachingFlowText = hasTeachingFlow
+    ? teachingFlow!
+        .map(
+          (entry, index) =>
+            `${index}. stage="${entry.stage}" instructions="${entry.instructions}"`,
+        )
+        .join('\n')
+    : '';
+
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     requirement: requirements.requirement,
     pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
@@ -107,6 +131,8 @@ export function buildOutlinePrompt(
     mediaEnabled,
     researchContext: context.researchContext || 'None',
     teacherContext: context.teacherContext || '',
+    hasTeachingFlow,
+    teachingFlowText,
   });
 
   if (!prompts) {

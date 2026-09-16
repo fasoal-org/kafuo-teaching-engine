@@ -18,19 +18,41 @@ export const TEACHING_PACKAGE_LEARNER_COOKIE = 'teaching_package_learner_key';
 
 export type EditorGrantCapability = 'read' | 'write';
 
+/**
+ * Why a handoff was minted. `learner` (Kafuo question-flow closure, B2) is a
+ * read-only playback handoff for a learner session pinned to an approved (or,
+ * for an already-pinned session, superseded) version. Optional in the payload so
+ * tokens minted before the field existed still verify.
+ */
+export type EditorHandoffPurpose = 'edit' | 'preview' | 'learner';
+
+/** Versions a learner handoff may open: the approved one and pinned history. */
+export const LEARNER_HANDOFF_STATUSES = ['approved', 'superseded'] as const;
+
 export interface EditorHandoffPayload {
   v: 1;
   kind: 'handoff';
+  /** Owning tenant (server-derived; never browser supplied). */
+  tenantId: string;
   versionId: string;
   stageId: string;
   capability: EditorGrantCapability;
   nonce: string;
   exp: number;
+  purpose?: EditorHandoffPurpose;
+  /**
+   * Opaque learner reference (learner handoffs only). Kafuo sends an HMAC of its own
+   * session identity — never a raw student id — so the runtime sandbox key stays
+   * stable across redeems of the same learner session.
+   */
+  learnerRef?: string;
 }
 
 export interface EditorGrantPayload {
   v: 1;
   kind: 'grant';
+  /** Owning tenant (server-derived; never browser supplied). */
+  tenantId: string;
   versionId: string;
   stageId: string;
   capability: EditorGrantCapability;
@@ -39,6 +61,7 @@ export interface EditorGrantPayload {
 }
 
 export interface VerifiedEditorGrant {
+  tenantId: string;
   versionId: string;
   stageId: string;
   capability: EditorGrantCapability;
@@ -85,23 +108,35 @@ function decodeSigned<T>(token: string): T | null {
   }
 }
 
-/** Mint a single-purpose handoff token (exp ≤ 5 minutes). */
+/** Handoff lifetime: short-lived and configurable, never a permanent constant. */
+export function handoffTtlMs(): number {
+  const raw = Number(process.env.TEACHING_PACKAGE_HANDOFF_TTL_SECONDS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) * 1000 : HANDOFF_TTL_MS;
+}
+
+/** Mint a single-purpose handoff token bound to one tenant/version/stage. */
 export function mintEditorHandoffToken(input: {
+  tenantId: string;
   versionId: string;
   stageId: string;
   capability: EditorGrantCapability;
+  purpose?: EditorHandoffPurpose;
+  learnerRef?: string;
   now?: number;
 }): { token: string; expiresAt: number } {
   const now = input.now ?? Date.now();
-  const expiresAt = now + HANDOFF_TTL_MS;
+  const expiresAt = now + handoffTtlMs();
   const payload: EditorHandoffPayload = {
     v: 1,
     kind: 'handoff',
+    tenantId: input.tenantId,
     versionId: input.versionId,
     stageId: input.stageId,
     capability: input.capability,
     nonce: randomBytes(12).toString('base64url'),
     exp: expiresAt,
+    ...(input.purpose ? { purpose: input.purpose } : {}),
+    ...(input.learnerRef ? { learnerRef: input.learnerRef } : {}),
   };
   return { token: encodeSigned(payload), expiresAt };
 }
@@ -110,6 +145,7 @@ export function verifyEditorHandoffToken(token: string): EditorHandoffPayload | 
   const payload = decodeSigned<EditorHandoffPayload>(token);
   if (!payload || payload.v !== 1 || payload.kind !== 'handoff') return null;
   if (typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
+  if (typeof payload.tenantId !== 'string' || payload.tenantId === '') return null;
   return payload;
 }
 
@@ -118,7 +154,9 @@ function grantFromPayload(payload: EditorGrantPayload): VerifiedEditorGrant | nu
   if (payload.capability !== 'read' && payload.capability !== 'write') return null;
   if (typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
   if (typeof payload.stageId !== 'string' || typeof payload.learnerKey !== 'string') return null;
+  if (typeof payload.tenantId !== 'string' || payload.tenantId === '') return null;
   return {
+    tenantId: payload.tenantId,
     versionId: payload.versionId,
     stageId: payload.stageId,
     capability: payload.capability,
@@ -127,24 +165,45 @@ function grantFromPayload(payload: EditorGrantPayload): VerifiedEditorGrant | nu
   };
 }
 
-/** Build a fresh grant payload for one stage (redeem-time). */
+/** Build a fresh grant payload for one tenant+stage (redeem-time). */
 export function buildEditorGrantPayload(input: {
+  tenantId: string;
   versionId: string;
   stageId: string;
   capability: EditorGrantCapability;
+  /** When present, the runtime learner key is derived (stable) instead of random. */
+  learnerRef?: string;
   now?: number;
 }): { payload: EditorGrantPayload; token: string } {
   const now = input.now ?? Date.now();
   const payload: EditorGrantPayload = {
     v: 1,
     kind: 'grant',
+    tenantId: input.tenantId,
     versionId: input.versionId,
     stageId: input.stageId,
     capability: input.capability,
-    learnerKey: `tp:${randomBytes(12).toString('base64url')}`,
+    learnerKey: input.learnerRef
+      ? stableLearnerKey(input.tenantId, input.versionId, input.learnerRef)
+      : `tp:${randomBytes(12).toString('base64url')}`,
     exp: now + editorSessionSeconds() * 1000,
   };
   return { payload, token: encodeSigned(payload) };
+}
+
+/**
+ * A learner's runtime sandbox key, stable for one (tenant, version, learnerRef) and
+ * unlinkable across them: the same learner session re-opening its pinned Stage keeps
+ * its runtime state, while another session, version or tenant gets a different key.
+ * Keeps the `tp:` prefix the browser bootstrap requires.
+ */
+export function stableLearnerKey(tenantId: string, versionId: string, learnerRef: string): string {
+  const digest = createHmac('sha256', grantSecret())
+    .update(`learner-key|${tenantId}|${versionId}|${learnerRef}`)
+    .digest()
+    .subarray(0, 16)
+    .toString('base64url');
+  return `tp:${digest}`;
 }
 
 /**

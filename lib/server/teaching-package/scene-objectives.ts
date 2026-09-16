@@ -82,13 +82,20 @@ export function normalizeAssignment(
 export async function setSceneLearningObjectives(
   pool: ConnectableQueryable,
   versionId: string,
+  scope: { tenantId: string },
   assignments: ValidatedObjectiveAssignment[],
 ): Promise<{ updatedSceneIds: string[] }> {
   if (assignments.length === 0) {
     throw new TeachingPackageError('INVALID_REQUEST', 'assignments must not be empty');
   }
+  if (typeof scope.tenantId !== 'string' || scope.tenantId.trim() === '') {
+    throw new TeachingPackageError(
+      'TENANT_REQUIRED',
+      'tenantContext.tenantId must be a non-empty string',
+    );
+  }
 
-  const version = await readVersion(pool, versionId);
+  const version = await readVersion(pool, versionId, scope);
   if (!version) {
     throw new TeachingPackageError('NOT_FOUND', `teaching package ${versionId} not found`);
   }

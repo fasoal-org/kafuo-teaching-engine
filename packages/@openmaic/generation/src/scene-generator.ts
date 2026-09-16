@@ -314,14 +314,29 @@ export async function generateSceneContent(
 }
 
 /**
- * Check if a string looks like an image ID (e.g., "img_1", "img_2")
+ * Check if a string looks like an image ID (e.g., "img_1", "src-11")
  * rather than a base64 data URL or actual URL
  *
  * This function distinguishes between:
- * - Image IDs: "img_1", "img_2", etc. → returns true
+ * - Course-generation image IDs: "img_1", "img_2", etc. → returns true
+ * - Teaching Package source-visual IDs: "src-1", "src-11", etc. → returns true
  * - Base64 data URLs: "data:image/..." → returns false
  * - HTTP URLs: "http://...", "https://..." → returns false
- * - Relative paths: "/images/..." → returns false
+ * - Relative paths ("/api/classroom-media/...") → returns false
+ *
+ * The two id shapes are the SAME resource channel seen from two producers:
+ * course generation mints `img_<n>` and the Teaching Package mints `src-<n>`
+ * (TE-minted in encounter order, see `lib/server/teaching-package/source-images.ts`).
+ * Both arrive as keys of the single `imageMapping` the caller supplies, so
+ * both resolve through the one boundary below — no second mapping, no second
+ * resolution pipeline.
+ *
+ * The `src` arm matches the PREFIX, not just the numeric shape, so a model
+ * that invents a malformed logical reference ("src-abc") is detected here and
+ * dropped by the unmapped branch rather than persisted as a bare token the
+ * browser would request as a relative URL. `ast_*` asset references and
+ * `gen_img_*`/`gen_vid_*` placeholders do not carry this prefix, so they still
+ * fall through to their own handling untouched.
  */
 function isImageIdReference(value: string): boolean {
   if (!value) return false;
@@ -330,7 +345,9 @@ function isImageIdReference(value: string): boolean {
   if (value.startsWith('http://') || value.startsWith('https://')) return false;
   if (value.startsWith('/')) return false; // Relative paths
   // Match image ID format: img_1, img_2, etc.
-  return /^img_\d+$/i.test(value);
+  if (/^img_\d+$/i.test(value)) return true;
+  // Match Teaching Package source-visual ids: src-1, src-11, src-123, …
+  return /^src[-_][\w.-]*$/i.test(value);
 }
 
 /**

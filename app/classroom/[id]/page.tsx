@@ -70,6 +70,76 @@ export default function ClassroomDetailPage() {
       const loadToken = claimStageSceneLoadToken();
       const isCurrent = () => isEffectCurrent() && isCurrentStageSceneLoadToken(loadToken);
 
+      // The stage-meta sidecar resolves the viewer-facing ownership facts the
+      // document seam does not carry — `isOwner` decides read-only vs editable
+      // (see `stage-meta-client.ts`), and under a Teaching Package handoff it
+      // is also the grant's capability: a `read` grant (Preview, learner)
+      // answers `isOwner: false`, a `write` grant answers `true`.
+      //
+      // Started CONCURRENTLY with the load, not after it. The load performs
+      // self-healing that marks the document dirty — the lazy generated-agent
+      // roster migration is the confirmed one — so a read-only classroom must
+      // learn it is read-only as early as possible. Correctness does not rest
+      // on winning that race: the store's document-write gate fails closed for
+      // the whole grant session until this answers (see
+      // `stageDocumentWriteAccess`), so anything marked in the meantime is
+      // parked rather than written, and this answer either releases it or
+      // discards it. Racing it early only shortens the window.
+      //
+      // The load still applies its own access defaults; `resolveStageFallbackAccess`
+      // reads whatever this recorded, so an answer that lands first is honoured
+      // rather than clobbered.
+      //
+      // Asked until it answers, not once. Every non-answer fails closed, so a
+      // single transient 5xx would otherwise leave the genuine owner with no
+      // resume, no Retry affordance and no legacy narration converted for the
+      // rest of the load -- the pane self-heals because it re-asks after every
+      // settled load, and this route had nothing equivalent.
+      const askOwnership = async (): Promise<ClassroomGenerationOwnership> => {
+        try {
+          const result = await fetchStageMeta(classroomId);
+          if (!isEffectCurrent()) return 'unresolved';
+          // One mapping of the sidecar's three outcomes onto the generation
+          // gate, shared with every other classroom surface and with every
+          // affordance that could start generation.
+          const ownership = classroomGenerationOwnership(result);
+          noteStageGenerationOwnership(classroomId, ownership);
+          if (result.outcome === 'found') {
+            noteStageOwnership(classroomId, true, {
+              isOwner: result.meta.isOwner,
+            });
+            useStageStore.getState().setViewerAccess({
+              isOwner: result.meta.isOwner,
+              // Named explicitly: this answer may land before the document has
+              // reached the store, and it governs that stage, not whichever
+              // one happens to be loaded.
+              stageId: classroomId,
+            });
+          } else if (result.outcome === 'unavailable') {
+            // A silent sidecar is not "this is a stranger's course": record
+            // the outage so nothing treats `isOwner === false` as a visitor
+            // conclusion. The edit gate stays on the upstream defaults.
+            noteStageOwnership(classroomId, false, null);
+          } else {
+            // 'absent' — no sidecar row for this id. This classroom also
+            // serves local-only courses, so the upstream editable default
+            // stays; the server's owner-scoped writes remain the authority.
+            noteStageOwnership(classroomId, true, null);
+          }
+          return ownership;
+        } catch {
+          if (!isEffectCurrent()) return 'unresolved';
+          // Recorded, not merely left absent: an answer an earlier load
+          // established must not outlive the failure that replaced it.
+          noteStageGenerationOwnership(classroomId, 'unresolved');
+          noteStageOwnership(classroomId, false, null);
+          return 'unresolved';
+        }
+      };
+      if (isEffectCurrent()) {
+        void retryWhileOwnershipUnresolved(askOwnership, { isCurrent: isEffectCurrent });
+      }
+
       await runClassroomLoad({
         classroomId,
         loadToken,
@@ -97,58 +167,6 @@ export default function ClassroomDetailPage() {
         setLoading,
         log,
       });
-
-      // The stage-meta sidecar resolves the viewer-facing ownership facts the
-      // document seam does not carry — `isOwner` decides read-only vs editable
-      // (see `stage-meta-client.ts`). Run it strictly AFTER the load applied
-      // its defaults so its answer wins, and fire it without blocking the
-      // render that already happened.
-      //
-      // Asked until it answers, not once. Every non-answer fails closed, so a
-      // single transient 5xx would otherwise leave the genuine owner with no
-      // resume, no Retry affordance and no legacy narration converted for the
-      // rest of the load -- the pane self-heals because it re-asks after every
-      // settled load, and this route had nothing equivalent.
-      const askOwnership = async (): Promise<ClassroomGenerationOwnership> => {
-        try {
-          const result = await fetchStageMeta(classroomId);
-          if (!isEffectCurrent()) return 'unresolved';
-          // One mapping of the sidecar's three outcomes onto the generation
-          // gate, shared with every other classroom surface and with every
-          // affordance that could start generation.
-          const ownership = classroomGenerationOwnership(result);
-          noteStageGenerationOwnership(classroomId, ownership);
-          if (result.outcome === 'found') {
-            noteStageOwnership(classroomId, true, {
-              isOwner: result.meta.isOwner,
-            });
-            useStageStore.getState().setViewerAccess({
-              isOwner: result.meta.isOwner,
-            });
-          } else if (result.outcome === 'unavailable') {
-            // A silent sidecar is not "this is a stranger's course": record
-            // the outage so nothing treats `isOwner === false` as a visitor
-            // conclusion. The edit gate stays on the upstream defaults.
-            noteStageOwnership(classroomId, false, null);
-          } else {
-            // 'absent' — no sidecar row for this id. This classroom also
-            // serves local-only courses, so the upstream editable default
-            // stays; the server's owner-scoped writes remain the authority.
-            noteStageOwnership(classroomId, true, null);
-          }
-          return ownership;
-        } catch {
-          if (!isEffectCurrent()) return 'unresolved';
-          // Recorded, not merely left absent: an answer an earlier load
-          // established must not outlive the failure that replaced it.
-          noteStageGenerationOwnership(classroomId, 'unresolved');
-          noteStageOwnership(classroomId, false, null);
-          return 'unresolved';
-        }
-      };
-      if (isEffectCurrent()) {
-        void retryWhileOwnershipUnresolved(askOwnership, { isCurrent: isEffectCurrent });
-      }
     },
     [classroomId, loadFromStorage],
   );

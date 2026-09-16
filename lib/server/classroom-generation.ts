@@ -8,8 +8,11 @@ import {
   generateSceneContent,
   PBLGenerationError,
   withGenerationRetry,
+  buildVisionUserContent,
   type AICallFn,
   type AgentInfo,
+  type PdfImage,
+  type TeachingFlowEntry,
 } from '@openmaic/generation';
 import { createSceneWithActions } from '@/lib/server/scene-generation';
 import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
@@ -41,6 +44,15 @@ import {
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
+import type {
+  SourceVisualManifestEntry,
+  TeachingFlowEntry as AppTeachingFlowEntry,
+} from '@/lib/types/teaching-package';
+import {
+  applySourceVisualPrecedence,
+  SourceVisualModelUnavailableError,
+  SourceVisualProcessingError,
+} from '@/lib/server/teaching-package/source-images';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Classroom');
@@ -53,7 +65,15 @@ export function containPBLGenerationError(error: unknown, sceneTitle: string): n
 
 export interface GenerateClassroomInput {
   requirement: string;
-  pdfContent?: { text: string; images: string[] };
+  pdfContent?: { text: string; images: string[]; pdfImages?: PdfImage[] };
+  /**
+   * The authoritative ordered Kafuo Teaching Model Flow. When present, the
+   * outline prompt contract requires `teachingStage: { key, flowIndex }` on
+   * every outline and the final scenes are exact-flow gated before any
+   * package binding. Absent → prompts and behavior are byte-identical to the
+   * pre-integration path.
+   */
+  teachingFlow?: TeachingFlowEntry[];
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -88,6 +108,8 @@ export interface GenerateClassroomResult {
   url: string;
   stage: Stage;
   scenes: Scene[];
+  /** The outlines the run produced — the exact-flow gate reads these. */
+  outlines: SceneOutline[];
   scenesCount: number;
   createdAt: string;
 }
@@ -101,10 +123,36 @@ export interface GenerateClassroomResult {
 export interface ClassroomPersistenceSink {
   reserve(buildStage: (id: string) => Stage): Promise<{ id: string; stage: Stage }>;
   persist(
-    data: { id: string; stage: Stage; scenes: Scene[]; outlines: SceneOutline[] },
+    data: {
+      id: string;
+      stage: Stage;
+      scenes: Scene[];
+      outlines: SceneOutline[];
+      /** Kafuo flow lineage + source-visual provenance (package sinks persist them). */
+      teachingFlow?: AppTeachingFlowEntry[];
+      sourceVisuals?: SourceVisualManifestEntry[];
+    },
     baseUrl: string,
   ): Promise<{ id: string; url: string; stage: Stage; scenes: Scene[]; createdAt: string }>;
   release(id: string): Promise<void>;
+}
+
+/**
+ * Source-visual channel for Kafuo runs (plan §4.3.6): the normalized images
+ * (data URLs for the model's eyes) plus the materializer the Teaching Package
+ * runner injects — only the SELECTED images are written under the reserved
+ * Stage's media directory, and the manifest returns for the outline record.
+ */
+export interface SourceVisualChannel {
+  images: PdfImage[];
+  materialize: (
+    stageId: string,
+    selected: PdfImage[],
+  ) => Promise<{
+    servingMapping: Record<string, string>;
+    manifest: SourceVisualManifestEntry[];
+    failedIds: string[];
+  }>;
 }
 
 function createInMemoryStore(stage: Stage): StageStore {
@@ -244,10 +292,19 @@ export async function generateClassroom(
     baseUrl: string;
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
     persistence?: ClassroomPersistenceSink;
+    sourceVisuals?: SourceVisualChannel;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
   const sink = options.persistence ?? filesystemClassroomSink;
+  const sourceImages = pdfContent?.pdfImages;
+  const hasSourceVisuals = (sourceImages?.length ?? 0) > 0;
+  // The vision channel maps each source image id to its data URL for the two
+  // model calls that actually receive images.
+  const sourceImageMapping: Record<string, string> = {};
+  if (hasSourceVisuals) {
+    for (const image of sourceImages!) sourceImageMapping[image.id] = image.src;
+  }
 
   await options.onProgress?.({
     step: 'initializing',
@@ -298,6 +355,93 @@ export async function generateClassroom(
     );
     return result.text;
   };
+
+  // Source-visual vision routing (plan §4.3.4): exactly two model calls ever
+  // receive source images — outline generation and SLIDE content. When source
+  // visuals exist, both must resolve a model reporting
+  // `capabilities.vision === true`, and both attach the images through
+  // `buildVisionUserContent`. No routing is added for quiz/interactive/PBL,
+  // which never receive images. A model id absent from the catalog resolves
+  // `modelInfo === undefined` and fails loudly here rather than degrading to
+  // fake visual grounding.
+  const callLLMWithVision = async (
+    model: LanguageModel,
+    outputWindow: number | undefined,
+    thinking: ThinkingConfig | undefined,
+    source: string,
+    systemPrompt: string,
+    userPrompt: string,
+    images: Array<{ id: string; src: string; width?: number; height?: number }> | undefined,
+  ) => {
+    const result = await callLLM(
+      {
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content:
+              images && images.length > 0
+                ? (buildVisionUserContent(userPrompt, images) as never)
+                : userPrompt,
+          },
+        ],
+        maxOutputTokens: outputWindow,
+        maxRetries: 0,
+      },
+      source,
+      undefined,
+      thinking,
+    );
+    return result.text;
+  };
+
+  const requireVisionModel = (
+    stage: LlmStage,
+    resolvedModelInfo: { capabilities?: { vision?: boolean } } | null | undefined,
+    modelString: string,
+  ): void => {
+    if (resolvedModelInfo?.capabilities?.vision !== true) {
+      log.error(
+        `Source visuals exist but the "${stage}" model "${modelString}" reports no vision capability`,
+      );
+      throw new SourceVisualModelUnavailableError([stage]);
+    }
+  };
+
+  // The outline call's model: the `scene-outlines-stream` route when
+  // configured, else the classroom model — whichever actually runs gets the
+  // vision check when source visuals exist.
+  let outlineModel: LanguageModel = languageModel;
+  let outlineOutputWindow: number | undefined = modelInfo?.outputWindow;
+  let outlineThinking: ThinkingConfig | undefined = classroomThinking;
+  let outlineModelInfo = modelInfo;
+  const outlineRoute = getStageModel('scene-outlines-stream');
+  if (outlineRoute) {
+    const resolved = await resolveModel({ stage: 'scene-outlines-stream' });
+    outlineModel = resolved.model;
+    outlineOutputWindow = resolved.modelInfo?.outputWindow;
+    outlineThinking = resolved.thinkingConfig;
+    outlineModelInfo = resolved.modelInfo;
+    log.info(`Stage "scene-outlines-stream" routed to model: ${resolved.modelString}`);
+  }
+  const outlineAiCall: AICallFn = async (systemPrompt, userPrompt, images) => {
+    if (hasSourceVisuals) {
+      requireVisionCapableOutline();
+    }
+    return callLLMWithVision(
+      outlineModel,
+      outlineOutputWindow,
+      outlineThinking,
+      'generate-classroom',
+      systemPrompt,
+      userPrompt,
+      images,
+    );
+  };
+  function requireVisionCapableOutline(): void {
+    requireVisionModel('scene-outlines-stream', outlineModelInfo, 'resolved-outline-model');
+  }
 
   // Per-stage model resolution for the scene pipeline. The classroom used to
   // bind a single `languageModel` (from the `generate-classroom` stage) into one
@@ -378,7 +522,31 @@ export async function generateClassroom(
   const resolveSceneContentCall = async (outlineType?: string) => {
     const stage = (outlineType ? `scene-content:${outlineType}` : 'scene-content') as LlmStage;
     const { model, outputWindow, thinking } = await resolveStageModel(stage);
-    const aiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
+    // Slide content is the ONLY scene call that receives source images; when
+    // visuals exist, the actually-used model must be vision-capable.
+    let slideModelInfo = modelInfo;
+    if (hasSourceVisuals && outlineType === 'slide') {
+      const route = getStageModel(stage);
+      if (route) {
+        const resolved = await resolveModel({ stage });
+        slideModelInfo = resolved.modelInfo;
+      } else {
+        slideModelInfo = modelInfo;
+      }
+      requireVisionModel(stage, slideModelInfo, 'resolved-slide-model');
+    }
+    const aiCall: AICallFn = async (systemPrompt, userPrompt, images) => {
+      if (images && images.length > 0) {
+        return callLLMWithVision(
+          model,
+          outputWindow,
+          thinking,
+          'generate-classroom-scene',
+          systemPrompt,
+          userPrompt,
+          images,
+        );
+      }
       const result = await callLLM(
         {
           model,
@@ -541,13 +709,19 @@ export async function generateClassroom(
   const outlinesResult = await generateSceneOutlinesFromRequirements(
     requirements,
     pdfText,
-    undefined,
-    aiCall,
+    hasSourceVisuals ? sourceImages : undefined,
+    outlineAiCall,
     {
       imageGenerationEnabled: input.enableImageGeneration,
       videoGenerationEnabled: input.enableVideoGeneration,
       researchContext,
       // NO teacherContext — agents haven't been generated yet
+      ...(hasSourceVisuals
+        ? { imageMapping: sourceImageMapping, visionEnabled: true }
+        : {}),
+      ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
+        ? { teachingFlow: input.teachingFlow }
+        : {}),
     },
   );
 
@@ -615,6 +789,33 @@ export async function generateClassroom(
         }),
   }));
 
+  // Source-visual selection + materialization (plan §4.3.6): selection is the
+  // union of the outlines' suggestedImageIds intersected with the normalized
+  // source image ids; ONLY the selected images are materialized under the
+  // reserved Stage's media directory. A materialization failure of a selected
+  // image fails the run (never silently substituted by AI media).
+  let sourceServingMapping: Record<string, string> = {};
+  let sourceManifest: SourceVisualManifestEntry[] = [];
+  if (hasSourceVisuals && options.sourceVisuals) {
+    const availableIds = new Set(sourceImages!.map((image) => image.id));
+    const selectedIds = new Set(
+      outlines.flatMap((outline) => outline.suggestedImageIds ?? []),
+    );
+    const selected = sourceImages!.filter((image) => selectedIds.has(image.id));
+    const selectedActual = selected.filter((image) => availableIds.has(image.id));
+    if (selectedActual.length > 0) {
+      const materialized = await options.sourceVisuals.materialize(stageId, selectedActual);
+      if (materialized.failedIds.length > 0) {
+        throw new SourceVisualProcessingError(
+          false,
+          `source visual materialization failed for ${materialized.failedIds.length} selected image(s)`,
+        );
+      }
+      sourceServingMapping = materialized.servingMapping;
+      sourceManifest = materialized.manifest;
+    }
+  }
+
   // The reservation above claims the id; everything below owns it. If
   // generation throws before `persistClassroom` succeeds, release the
   // placeholder so a failed run does not burn the id or leave an unreadable
@@ -661,6 +862,15 @@ export async function generateClassroom(
       // gets the provider-bound AICallFn and the app injects its agentic PBL loop
       // as the classified fallback, preserving single-call → loop routing.
       const contentCall = await resolveSceneContentCall(safeOutline.type);
+      // The outline's assigned source visuals (slide scenes only): a visual
+      // need the model fills by referencing the image id, resolved onto the
+      // serving path after generation.
+      const outlineAssignedImages =
+        hasSourceVisuals && safeOutline.type === 'slide'
+          ? (sourceImages?.filter(
+              (image) => safeOutline.suggestedImageIds?.includes(image.id),
+            ) ?? [])
+          : undefined;
       const content = await (async () => {
         try {
           return await withGenerationRetry(
@@ -669,6 +879,19 @@ export async function generateClassroom(
                 agents,
                 languageDirective,
                 allowProceduralSkill: vocationalActive,
+                ...(outlineAssignedImages && outlineAssignedImages.length > 0
+                  ? {
+                      assignedImages: outlineAssignedImages,
+                      imageMapping: sourceServingMapping,
+                      visionEnabled: true,
+                      resolvedVisionImages: outlineAssignedImages.map((image) => ({
+                        id: image.id,
+                        src: sourceImageMapping[image.id] ?? image.src,
+                        width: image.width,
+                        height: image.height,
+                      })),
+                    }
+                  : {}),
                 ...(safeOutline.type === 'pbl'
                   ? {
                       pblLoopFallback: (input) =>
@@ -735,6 +958,16 @@ export async function generateClassroom(
       throw new Error('No scenes were generated');
     }
 
+    // Per-visual-need source-visual precedence (plan §4.3.6): for each slide
+    // scene, generated-image placeholders compete with the outline's unplaced
+    // selected source visuals — the source visual wins that visual need and
+    // its generation request is dropped; UNRELATED placeholder needs beyond
+    // the selected source visuals keep their requests. AI image generation is
+    // never disabled globally or per outline.
+    if (Object.keys(sourceServingMapping).length > 0) {
+      applySourceVisualPrecedence(scenes, outlines, sourceServingMapping);
+    }
+
     // Phase: Media generation (after all scenes generated)
     if (input.enableImageGeneration || input.enableVideoGeneration) {
       await options.onProgress?.({
@@ -782,7 +1015,19 @@ export async function generateClassroom(
 
     // The id was reserved before media/TTS generation, so the process owns it and
     // this is an ordinary overwrite that replaces the placeholder.
-    persisted = await sink.persist({ id: stageId, stage, scenes, outlines }, options.baseUrl);
+    persisted = await sink.persist(
+      {
+        id: stageId,
+        stage,
+        scenes,
+        outlines,
+        ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
+          ? { teachingFlow: input.teachingFlow }
+          : {}),
+        ...(sourceManifest.length > 0 ? { sourceVisuals: sourceManifest } : {}),
+      },
+      options.baseUrl,
+    );
 
     log.info(`Classroom persisted: ${persisted.id}, URL: ${persisted.url}`);
 
@@ -799,6 +1044,7 @@ export async function generateClassroom(
       url: persisted.url,
       stage: persisted.stage,
       scenes: persisted.scenes,
+      outlines,
       scenesCount: persisted.scenes.length,
       createdAt: persisted.createdAt,
     };

@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
+vi.mock('@/lib/persistence/teaching-package', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/persistence/teaching-package')>()),
+  stageBelongsToTenant: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@/lib/persistence/server-provider', () => ({
+  getServerPersistenceProvider: async () => ({ pool: { query: vi.fn() } }),
+}));
+
 const mocks = vi.hoisted(() => ({
   runtimeConfigured: true,
   persistenceConfigured: true,
@@ -95,7 +103,7 @@ describe('GET /api/stage-meta/[stageId]', () => {
   // A Stage-scoped Editor grant counts as ownership for the UI signal — but
   // only its `write` capability: a `read` grant keeps preview read-only.
   function grantCookieFor(stageId: string, capability: 'read' | 'write'): string {
-    const { token } = buildEditorGrantPayload({ versionId: 'tpv-1', stageId, capability });
+    const { token } = buildEditorGrantPayload({ tenantId: 'tenant-grant', versionId: 'tpv-1', stageId, capability });
     return `teaching_package_grant=${encodeURIComponent(
       grantCookieValueForRedeem(new Headers(), token, stageId),
     )}`;

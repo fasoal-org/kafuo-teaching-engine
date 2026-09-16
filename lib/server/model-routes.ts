@@ -151,6 +151,7 @@ export const LLM_STAGES = [
   'maic-agent',
   'maic-agent-driver',
   'conversation-title',
+  'question-generation',
 ] as const;
 
 export type LlmStage = (typeof LLM_STAGES)[number];

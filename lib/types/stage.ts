@@ -19,7 +19,10 @@ import type { Action } from '@/lib/types/action';
 import type { WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
-import type { SceneLearningObjectiveRef } from '@/lib/types/teaching-package';
+import type {
+  SceneLearningObjectiveRef,
+  TeachingStageRef,
+} from '@/lib/types/teaching-package';
 
 export type {
   SceneType,
@@ -114,6 +117,12 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * contract, and never rewritten when Kafuo later changes the objective.
    */
   learningObjectives?: SceneLearningObjectiveRef[];
+  /**
+   * Teaching-stage identity for Kafuo-generated packages. App-layer,
+   * optional, additive: absent on legacy and non-Kafuo stages; present on
+   * every Kafuo-generated scene and copied exactly from its outline.
+   */
+  teachingStage?: TeachingStageRef;
 };
 export type Scene = AppScene;
 

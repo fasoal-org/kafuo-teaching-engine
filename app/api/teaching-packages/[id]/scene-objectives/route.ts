@@ -16,10 +16,12 @@ import {
   setSceneLearningObjectives,
 } from '@/lib/server/teaching-package/scene-objectives';
 import {
+  parseTenantContext,
   readJsonObject,
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
 export const runtime = 'nodejs';
 
@@ -44,12 +46,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     );
 
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const result = await setSceneLearningObjectives(pool, id, assignments);
+    const result = await setSceneLearningObjectives(pool, id, { tenantId: parseTenantContext(body) }, assignments);
     return NextResponse.json(result);
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
-    console.error('[TeachingPackages] Failed to set scene objectives:', error);
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
     return NextResponse.json(
       { error: { code: 'INTERNAL_ERROR', message: 'failed to set scene objectives' } },
       { status: 500 },

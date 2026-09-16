@@ -13,7 +13,10 @@ import {
   isTeachingPackageStageLockedError,
   TeachingPackageError,
 } from '@/lib/server/teaching-package/errors';
-import type { LearningItemRef } from '@/lib/types/teaching-package';
+import type {
+  LearningItemRef,
+  TeachingPackageAggregateKey,
+} from '@/lib/types/teaching-package';
 
 /**
  * Map a teaching package failure onto the API's error envelope. Returns `null`
@@ -79,4 +82,54 @@ export function parseLearningItemRef(type: unknown, id: unknown): LearningItemRe
     throw new TeachingPackageError('INVALID_REQUEST', 'learningItemId must be a non-empty string');
   }
   return { type, id };
+}
+
+/**
+ * Parse the required `tenantId` value (query `tenantId` or body
+ * `tenantContext.tenantId`). There is deliberately NO env toggle: every
+ * teaching-package route is tenant-scoped (plan §4.1.3).
+ */
+export function parseTenantId(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new TeachingPackageError(
+      'TENANT_REQUIRED',
+      'tenantId is required (query "tenantId" or body "tenantContext.tenantId")',
+    );
+  }
+  return value;
+}
+
+/** Parse and validate the full `(tenantId, learningItemType, learningItemId)` scope. */
+export function parseAggregateScope(
+  tenantId: unknown,
+  type: unknown,
+  id: unknown,
+): TeachingPackageAggregateKey {
+  return { tenantId: parseTenantId(tenantId), learningItem: parseLearningItemRef(type, id) };
+}
+
+/**
+ * Extract the tenant from a request body's `tenantContext` object and reject
+ * tenant-looking fields inside `learningItem` — the tenant is server-scoped
+ * exactly once per request (plan §4.1.2).
+ */
+export function parseTenantContext(body: Record<string, unknown>): string {
+  if (
+    body.learningItem &&
+    typeof body.learningItem === 'object' &&
+    'tenantId' in (body.learningItem as Record<string, unknown>)
+  ) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'learningItem must not carry tenantId; use tenantContext.tenantId',
+    );
+  }
+  const context = body.tenantContext;
+  if (!context || typeof context !== 'object') {
+    throw new TeachingPackageError(
+      'TENANT_REQUIRED',
+      'tenantContext.tenantId is required in the request body',
+    );
+  }
+  return parseTenantId((context as Record<string, unknown>).tenantId);
 }

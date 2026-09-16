@@ -77,6 +77,38 @@ function validateLearningObjectives(
   });
 }
 
+/**
+ * Validate the app-layer `teachingStage` annotation: absent → untouched
+ * (legacy compatible); present → an object with a non-empty string `key` and
+ * an integer `flowIndex` >= 0. Semantic consistency with the authoritative
+ * flow (`key === flow[flowIndex].stage`) is the exact-flow validator's job,
+ * not the write boundary's.
+ */
+function validateTeachingStage(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.teachingStage === undefined) return;
+  const stage = objectValue(value.teachingStage);
+  if (!stage) {
+    errors.push({ path: '/teachingStage', message: '`teachingStage` must be an object when present' });
+    return;
+  }
+  if (typeof stage.key !== 'string' || stage.key === '') {
+    errors.push({ path: '/teachingStage/key', message: 'expected non-empty string `key`' });
+  }
+  if (
+    typeof stage.flowIndex !== 'number' ||
+    !Number.isInteger(stage.flowIndex) ||
+    stage.flowIndex < 0
+  ) {
+    errors.push({
+      path: '/teachingStage/flowIndex',
+      message: 'expected non-negative integer `flowIndex`',
+    });
+  }
+}
+
 /** Validate the app's four-way scene union at the document write boundary. */
 export const validateAppScene: SceneValidator = (scene) => {
   const value = objectValue(scene);
@@ -89,6 +121,7 @@ export const validateAppScene: SceneValidator = (scene) => {
     const dsl = validateScene(scene);
     const errors: ValidationIssue[] = dsl.valid ? [] : [...dsl.errors];
     validateLearningObjectives(value, errors);
+    validateTeachingStage(value, errors);
     return errors.length === 0 ? { valid: true } : { valid: false, errors };
   }
 
@@ -216,6 +249,7 @@ export const validateAppScene: SceneValidator = (scene) => {
   }
 
   validateLearningObjectives(value, errors);
+  validateTeachingStage(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

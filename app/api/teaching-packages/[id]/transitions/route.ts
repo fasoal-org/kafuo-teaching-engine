@@ -19,10 +19,12 @@ import {
   submitForReview,
 } from '@/lib/server/teaching-package/lifecycle';
 import {
+  parseTenantContext,
   readJsonObject,
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
 
 export const runtime = 'nodejs';
@@ -70,6 +72,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const comment = typeof body.comment === 'string' ? body.comment : undefined;
     const context = {
       versionId: id,
+      tenantId: parseTenantContext(body),
       actorRef,
       ...(expectedStatus === undefined ? {} : { expectedStatus }),
       ...(comment === undefined ? {} : { comment }),
@@ -102,7 +105,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
-    console.error('[TeachingPackages] Failed to run transition:', error);
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
     return NextResponse.json(
       { error: { code: 'INTERNAL_ERROR', message: 'failed to run transition' } },
       { status: 500 },

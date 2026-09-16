@@ -26,14 +26,17 @@ import {
   markAttemptSucceeded,
   nextVersionNumber,
   readActiveVersion,
-  readAttempt,
+  readAttemptById,
   readAttemptByRequestId,
   readAttemptForUpdate,
   readVersion,
   readVersionForUpdate,
+  reclaimStaleAttempts,
   updateAttempt,
 } from '@/lib/persistence/teaching-package';
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
+import { removeStageMediaDir } from '@/lib/server/classroom-storage';
+import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
 import { isPgUniqueViolation, TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   assertActorRef,
@@ -48,7 +51,10 @@ import type {
   GenerationInputSnapshot,
   LearningItemRef,
   LearningObjectiveRef,
+  TeachingFlowEntry,
   TeachingModelLineage,
+  TeachingPackageAggregateKey,
+  TeachingPackageVersion,
 } from '@/lib/types/teaching-package';
 
 /** Key names that may never be persisted inside a generationContext. */
@@ -63,6 +69,8 @@ function attemptStaleMs(): number {
 }
 
 export interface StartGenerationAttemptRequest {
+  /** Effective Kafuo tenant; `LEGACY_TENANT_ID` for the legacy body shape. */
+  tenantId: string;
   learningItem: LearningItemRef;
   teachingModel: TeachingModelLineage;
   learningObjectives?: LearningObjectiveRef[];
@@ -76,6 +84,21 @@ export interface StartGenerationAttemptRequest {
   actorRef: string;
   /** Kafuo idempotency key. */
   requestId?: string;
+  /** ---- Kafuo structured-request fields (plan §4.1.4) ---- */
+  /** Semantic request digest; MANDATORY for Kafuo-shaped requests. */
+  requestDigest?: string;
+  /** Ordered Kafuo Teaching Model Flow (identity `(flowIndex, stage)`). */
+  teachingFlow?: TeachingFlowEntry[];
+  /**
+   * Secret-free resource identity/integrity facts. Presence marks the request
+   * as Kafuo-shaped; the transient signed URL never reaches this type.
+   */
+  contentResource?: GenerationInputSnapshot['contentResource'];
+}
+
+/** The request's canonical aggregate scope (plan §4.1.2). */
+function aggregateOf(request: StartGenerationAttemptRequest): TeachingPackageAggregateKey {
+  return { tenantId: request.tenantId, learningItem: request.learningItem };
 }
 
 export function toGenerationInputSnapshot(
@@ -121,10 +144,23 @@ export function toGenerationInputSnapshot(
         }
       : null,
     requestedAt: Date.now(),
+    ...(request.tenantId ? { tenantId: request.tenantId } : {}),
+    ...(request.teachingFlow ? { teachingFlow: request.teachingFlow } : {}),
+    ...(request.contentResource ? { contentResource: request.contentResource } : {}),
+    ...(request.requestDigest ? { requestDigest: request.requestDigest } : {}),
   };
 }
 
 function validateStartRequest(request: StartGenerationAttemptRequest): void {
+  if (
+    typeof request.tenantId !== 'string' ||
+    request.tenantId.trim() === ''
+  ) {
+    throw new TeachingPackageError(
+      'TENANT_REQUIRED',
+      'tenantContext.tenantId must be a non-empty string',
+    );
+  }
   if (request.learningItem.type !== 'lesson' && request.learningItem.type !== 'section') {
     throw new TeachingPackageError(
       'UNSUPPORTED_LEARNING_ITEM_TYPE',
@@ -148,6 +184,14 @@ function validateStartRequest(request: StartGenerationAttemptRequest): void {
     throw new TeachingPackageError(
       'INVALID_REQUEST',
       'generation.requirement must be a non-empty string',
+    );
+  }
+  // Kafuo-shaped requests enforce their own idempotency contract: the semantic
+  // digest is computed by the parse layer and MUST accompany the attempt.
+  if (request.contentResource !== undefined && !request.requestDigest) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'a Kafuo-shaped generation request must carry its semantic requestDigest',
     );
   }
   for (const [index, objective] of (request.learningObjectives ?? []).entries()) {
@@ -186,19 +230,59 @@ function validateStartRequest(request: StartGenerationAttemptRequest): void {
 }
 
 /**
+ * Semantic idempotency on the requestId reuse path (plan §4.1.4): same scope +
+ * same digest returns the existing attempt unchanged; a provided digest that
+ * differs from the stored one — including a stored NULL (a legacy attempt) —
+ * is an IDEMPOTENCY_CONFLICT. Legacy callers without a digest keep the
+ * reuse-by-requestId behavior.
+ */
+/**
+ * The outcome of attempt admission.
+ *
+ * `created` is the load-bearing bit: it says whether this transaction actually
+ * INSERTED the attempt, or whether an existing one was handed back as an
+ * idempotent replay. Callers schedule the runner on a newly created attempt and
+ * on nothing else — a replay of a terminal attempt must stay terminal, and
+ * re-running it is what turned a correct Kafuo idempotency replay into an
+ * attempt reclaimed as stale.
+ */
+export interface GenerationAdmission {
+  attempt: GenerationAttempt;
+  execution: GenerationExecutionInput;
+  /** True only when this call inserted the attempt row. */
+  created: boolean;
+}
+
+function reuseOrConflict(
+  existing: GenerationAttempt,
+  request: StartGenerationAttemptRequest,
+): GenerationAttempt {
+  if (request.requestDigest !== undefined) {
+    if (existing.requestDigest === null || existing.requestDigest !== request.requestDigest) {
+      throw new TeachingPackageError(
+        'IDEMPOTENCY_CONFLICT',
+        'this requestId was already used with a different semantic payload',
+      );
+    }
+  }
+  return existing;
+}
+
+/**
  * Validate, snapshot, and insert one attempt. Returns the attempt plus the
  * execution input — which lives only in the caller's memory from here on.
  */
 export async function startGenerationAttempt(
   pool: ConnectableQueryable,
   request: StartGenerationAttemptRequest,
-): Promise<{ attempt: GenerationAttempt; execution: GenerationExecutionInput }> {
+): Promise<GenerationAdmission> {
   validateStartRequest(request);
   const snapshot = toGenerationInputSnapshot(request);
+  const aggregate = aggregateOf(request);
   const kind = request.versionId ? 'regeneration' : 'initial';
 
   if (kind === 'regeneration') {
-    const version = await readVersion(pool, request.versionId!);
+    const version = await readVersion(pool, request.versionId!, { tenantId: request.tenantId });
     if (!version) {
       throw new TeachingPackageError(
         'NOT_FOUND',
@@ -229,36 +313,29 @@ export async function startGenerationAttempt(
   }
 
   const withTransaction = nodePostgresTransaction(pool);
-  const attempt = await withTransaction(async (tx) => {
+  const admitted = await withTransaction(async (tx): Promise<{
+    attempt: GenerationAttempt;
+    created: boolean;
+  }> => {
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      itemLockKey(request.learningItem),
+      itemLockKey(aggregate),
     ]);
 
-    // Idempotency: the same requestId returns the existing attempt.
+    // Idempotency: the same requestId returns the existing attempt (digest
+    // enforced for Kafuo requests). A replay, never an insert.
     if (request.requestId) {
-      const existing = await readAttemptByRequestId(tx, request.learningItem, request.requestId);
-      if (existing) return existing;
+      const existing = await readAttemptByRequestId(tx, aggregate, request.requestId);
+      if (existing) return { attempt: reuseOrConflict(existing, request), created: false };
     }
 
-    // A crashed runner leaves `running` rows that would block the in-flight
-    // index forever; reclaim them by age under the same lock. The execution
-    // input was never persisted, so a crashed attempt cannot be resumed.
-    await tx.query(
-      `UPDATE teaching_package_generation_attempts
-          SET status = 'failed', error = 'stale', completed_at = $1
-        WHERE learning_item_type = $2 AND learning_item_id = $3
-          AND status = 'running' AND created_at < $4`,
-      [
-        Date.now(),
-        request.learningItem.type,
-        request.learningItem.id,
-        Date.now() - attemptStaleMs(),
-      ],
-    );
+    // A crashed runner leaves `queued`/`running` rows that would block the
+    // in-flight index forever; reclaim them by age under the same lock. The
+    // execution input was never persisted, so a crashed attempt cannot resume.
+    await reclaimStaleAttempts(tx, aggregate, Date.now() - attemptStaleMs());
 
     if (kind === 'initial') {
-      const active = await readActiveVersion(tx, request.learningItem);
-      const next = await nextVersionNumber(tx, request.learningItem);
+      const active = await readActiveVersion(tx, aggregate);
+      const next = await nextVersionNumber(tx, aggregate);
       if (active || next !== 1) {
         throw new TeachingPackageError(
           'INVALID_TRANSITION',
@@ -268,24 +345,30 @@ export async function startGenerationAttempt(
     }
 
     try {
-      return await insertAttempt(tx, {
+      const inserted = await insertAttempt(tx, {
         id: `tpa-${randomBytes(9).toString('base64url')}`,
-        learningItem: request.learningItem,
+        aggregate,
         versionId: request.versionId ?? null,
         kind,
         status: 'queued',
         requestId: request.requestId ?? null,
+        requestDigest: request.requestDigest ?? null,
         requestedByActorRef: request.actorRef.trim(),
         teachingModel: request.teachingModel,
         inputSnapshot: snapshot,
         now: Date.now(),
       });
+      return { attempt: inserted, created: true };
     } catch (error) {
       if (isPgUniqueViolation(error)) {
         if (request.requestId) {
-          const raced = await readAttemptByRequestId(tx, request.learningItem, request.requestId);
-          if (raced) return raced;
+          // Race recovery is a replay too: another request with this id won the
+          // insert, so this call created nothing and must not run the runner.
+          const raced = await readAttemptByRequestId(tx, aggregate, request.requestId);
+          if (raced) return { attempt: reuseOrConflict(raced, request), created: false };
         }
+        // NOT a replay — the single-in-flight constraint refused a DIFFERENT
+        // request, so this still throws rather than returning an attempt.
         throw new TeachingPackageError(
           'GENERATION_IN_PROGRESS',
           'a generation attempt is already queued or running for this learning item',
@@ -295,7 +378,46 @@ export async function startGenerationAttempt(
     }
   });
 
-  return { attempt, execution: request.generation };
+  return { attempt: admitted.attempt, execution: request.generation, created: admitted.created };
+}
+
+/** Emit `teaching_package.generation_succeeded` inside the binding transaction. */
+async function emitGenerationSucceeded(
+  tx: import('@openmaic/storage/document/pg').Queryable,
+  attempt: GenerationAttempt,
+  version: TeachingPackageVersion,
+  now: number,
+): Promise<void> {
+  const aggregate: TeachingPackageAggregateKey = {
+    tenantId: attempt.tenantId,
+    learningItem: attempt.learningItem,
+  };
+  await enqueueWebhookEvent(
+    tx,
+    aggregate,
+    'teaching_package.generation_succeeded',
+    () => ({
+      requestId: attempt.requestId ?? '',
+      attempt: {
+        id: attempt.id,
+        kind: attempt.kind,
+        status: 'succeeded',
+        producedStageId: attempt.producedStageId ?? '',
+        startedAt: attempt.startedAt ?? now,
+        completedAt: now,
+        generationRuns: attempt.generationRuns,
+      },
+      version: {
+        id: version.id,
+        version: version.version,
+        status: version.status,
+        currentStageId: version.currentStageId,
+        currentAttemptId: version.currentAttemptId,
+        teachingModel: version.teachingModel,
+        updatedAt: version.updatedAt,
+      },
+    }),
+  );
 }
 
 interface LiveStageRow extends Record<string, unknown> {
@@ -320,17 +442,48 @@ async function lockLiveServiceStage(tx: Queryable, stageId: string): Promise<voi
   }
 }
 
-/** Fail an attempt (runner error path or completion refusal). */
+/** Fail an attempt (runner error path or completion refusal) and emit the failure event. */
 export async function failGenerationAttempt(
   pool: ConnectableQueryable,
   attemptId: string,
   message: string,
+  failure?: { code?: string; retryable?: boolean },
 ): Promise<void> {
+  const before = await readAttemptById(pool, attemptId);
   await updateAttempt(pool, attemptId, {
     status: 'failed',
     error: message.slice(0, 2000),
+    ...(failure?.code !== undefined ? { errorCode: failure.code } : {}),
+    ...(failure?.retryable !== undefined ? { errorRetryable: failure.retryable } : {}),
     completedAt: Date.now(),
   });
+  if (before) {
+    const aggregate: TeachingPackageAggregateKey = {
+      tenantId: before.tenantId,
+      learningItem: before.learningItem,
+    };
+    await enqueueWebhookEvent(pool as never, aggregate, 'teaching_package.generation_failed', () => ({
+      requestId: before.requestId ?? '',
+      attempt: {
+        id: before.id,
+        kind: before.kind,
+        status: 'failed',
+        versionId: before.versionId,
+        producedStageId: before.producedStageId,
+        startedAt: before.startedAt,
+        completedAt: Date.now(),
+        generationRuns: before.generationRuns,
+      },
+      error: {
+        code: failure?.code ?? 'CLASSROOM_GENERATION_FAILED',
+        message: message.slice(0, 500),
+        retryable: failure?.retryable ?? false,
+      },
+    })).catch(() => {
+      // Delivery rows may not exist yet (Phase 1 suite runs without them);
+      // the sweep still reports the failed attempt through polling reads.
+    });
+  }
 }
 
 /** Patch the one runner-writable snapshot key: the resolved LLM model string. */
@@ -358,18 +511,28 @@ export async function completeGenerationAttempt(
   attemptId: string,
   stageId: string,
 ): Promise<GenerationAttempt | null> {
-  const attempt = await readAttempt(pool, attemptId);
+  const attempt = await readAttemptById(pool, attemptId);
   if (!attempt) {
     throw new TeachingPackageError('NOT_FOUND', `generation attempt ${attemptId} not found`);
   }
+  const aggregate: TeachingPackageAggregateKey = {
+    tenantId: attempt.tenantId,
+    learningItem: attempt.learningItem,
+  };
 
   const withTransaction = nodePostgresTransaction(pool);
+  // Set inside the transaction, acted on only after it COMMITS: removing a
+  // Stage's media directory is irreversible filesystem work, and doing it
+  // inside a transaction that then rolls back would destroy the media of a
+  // Stage that is still the version's live one.
+  let retiredStageId: string | null = null;
+  let committed: GenerationAttempt | null;
   try {
-    return await withTransaction(async (tx) => {
+    committed = await withTransaction(async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-        itemLockKey(attempt.learningItem),
+        itemLockKey(aggregate),
       ]);
-      const locked = await readAttemptForUpdate(tx, attemptId);
+      const locked = await readAttemptForUpdate(tx, attemptId, { tenantId: attempt.tenantId });
       // Reclaimed or already finished elsewhere: nothing to do.
       if (!locked || locked.status !== 'running') return locked;
       await lockLiveServiceStage(tx, stageId);
@@ -377,27 +540,64 @@ export async function completeGenerationAttempt(
 
       if (locked.kind === 'initial') {
         const created = await createInitialVersion(tx, { attempt: locked, stageId, now });
-        return markAttemptSucceeded(tx, locked.id, { stageId, versionId: created.id, now });
+        const succeeded = await markAttemptSucceeded(tx, locked.id, {
+          stageId,
+          versionId: created.id,
+          now,
+        });
+        await emitGenerationSucceeded(tx, succeeded!, created, now);
+        return succeeded;
       }
 
-      const version = await readVersionForUpdate(tx, locked.versionId!);
+      const version = await readVersionForUpdate(tx, locked.versionId!, {
+        tenantId: locked.tenantId,
+      });
       if (!version) throw new TeachingPackageError('NOT_FOUND', 'the version disappeared');
       const previousStageId = version.currentStageId;
       if (previousStageId !== stageId) {
         await lockLiveServiceStage(tx, previousStageId);
       }
-      await replaceStageAfterRegeneration(tx, { attempt: locked, version, stageId, now });
-      return markAttemptSucceeded(tx, locked.id, { stageId, versionId: version.id, now });
+      const replacement = await replaceStageAfterRegeneration(tx, {
+        attempt: locked,
+        version,
+        stageId,
+        now,
+      });
+      retiredStageId = replacement.retiredStageId;
+      const succeeded = await markAttemptSucceeded(tx, locked.id, {
+        stageId,
+        versionId: version.id,
+        now,
+      });
+      await emitGenerationSucceeded(tx, succeeded!, version, now);
+      return succeeded;
     });
   } catch (error) {
     // The Stage was persisted but the version side cannot complete: tombstone
-    // the orphan (unreferenced, so the guard allows it) and fail the attempt.
+    // the orphan (unreferenced, so the guard allows it), remove its never-bound
+    // media directory, and fail the attempt. This compensates the NEW Stage
+    // only — the version is still on its existing Stage, which the rolled-back
+    // transaction left live and current.
     await tombstoneStageMeta(pool as Queryable, stageId).catch(() => {});
+    await removeStageMediaDir(stageId);
     await failGenerationAttempt(
       pool,
       attemptId,
       error instanceof Error ? error.message : String(error),
     );
-    return readAttempt(pool, attemptId);
+    return readAttemptById(pool, attemptId);
   }
+  // Committed: the version is on the new Stage and the old one is tombstoned,
+  // so its media can go. Failure here is logged, never fatal — the lifecycle is
+  // already correct and an orphaned directory is a benign leak, whereas failing
+  // the attempt now would report a completed regeneration as failed.
+  if (retiredStageId) {
+    await removeStageMediaDir(retiredStageId).catch((error: unknown) => {
+      console.warn(
+        `Failed to remove media for replaced stage ${retiredStageId}`,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }
+  return committed;
 }

@@ -11,11 +11,12 @@ import { NextResponse } from 'next/server';
 
 import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import {
-  parseLearningItemRef,
+  parseAggregateScope,
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { listTeachingPackageVersions } from '@/lib/server/teaching-package/resolve';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
 export const runtime = 'nodejs';
 
@@ -24,16 +25,17 @@ export async function GET(req: NextRequest) {
   try {
     authenticateServiceRequest(req);
     const params = req.nextUrl.searchParams;
-    const learningItem = parseLearningItemRef(
+    const aggregate = parseAggregateScope(
+      params.get('tenantId'),
       params.get('learningItemType'),
       params.get('learningItemId'),
     );
-    const versions = await listTeachingPackageVersions(learningItem);
+    const versions = await listTeachingPackageVersions(aggregate);
     return NextResponse.json({ versions });
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
-    console.error('[TeachingPackages] Failed to list versions:', error);
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
     return NextResponse.json(
       { error: { code: 'INTERNAL_ERROR', message: 'failed to list teaching package versions' } },
       { status: 500 },

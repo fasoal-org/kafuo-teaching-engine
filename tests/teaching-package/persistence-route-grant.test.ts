@@ -41,6 +41,7 @@ const OWNER_COOKIE = '44444444-4444-4444-8444-444444444444';
 
 function grantCookie(stageId: string, capability: 'read' | 'write'): string {
   const { token } = buildEditorGrantPayload({
+    tenantId: 'tenant-test',
     versionId: `tpv-${stageId}`,
     stageId,
     capability,
@@ -53,6 +54,7 @@ function grantCookie(stageId: string, capability: 'read' | 'write'): string {
 /** The learner key of the grant a cookie carries. */
 async function grantLearnerKey(stageId: string): Promise<string> {
   const { payload } = buildEditorGrantPayload({
+    tenantId: 'tenant-test',
     versionId: `tpv-${stageId}`,
     stageId,
     capability: 'read',
@@ -115,7 +117,7 @@ describe('persistence route editor grant', () => {
     );
     await insertVersion(qp(), {
       id: 'tpv-grant-x',
-      learningItem: { type: 'lesson', id: 'li-grant-x' },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: 'li-grant-x' } },
       version: 1,
       status: 'draft',
       currentStageId: STAGE_X,
@@ -124,7 +126,7 @@ describe('persistence route editor grant', () => {
     });
     await insertVersion(qp(), {
       id: 'tpv-grant-y',
-      learningItem: { type: 'lesson', id: 'li-grant-y' },
+      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: 'li-grant-y' } },
       version: 1,
       status: 'approved',
       currentStageId: STAGE_Y,
@@ -135,12 +137,20 @@ describe('persistence route editor grant', () => {
     // Fix one grant learner key per stage for the whole test.
     grantKeyOfX = (
       await import('@/lib/server/teaching-package/editor-grant')
-    ).buildEditorGrantPayload({ versionId: 'tpv-grant-x', stageId: STAGE_X, capability: 'write' })
-      .payload.learnerKey;
+    ).buildEditorGrantPayload({
+      tenantId: 'tenant-test',
+      versionId: 'tpv-grant-x',
+      stageId: STAGE_X,
+      capability: 'write',
+    }).payload.learnerKey;
     grantKeyOfY = (
       await import('@/lib/server/teaching-package/editor-grant')
-    ).buildEditorGrantPayload({ versionId: 'tpv-grant-y', stageId: STAGE_Y, capability: 'read' })
-      .payload.learnerKey;
+    ).buildEditorGrantPayload({
+      tenantId: 'tenant-test',
+      versionId: 'tpv-grant-y',
+      stageId: STAGE_Y,
+      capability: 'read',
+    }).payload.learnerKey;
     void provider;
   });
 
@@ -182,6 +192,21 @@ describe('persistence route editor grant', () => {
     );
     expect(mutation.status).toBe(403);
     await expect(mutation.json()).resolves.toMatchObject({ error: { code: 'GRANT_READ_ONLY' } });
+
+    // The exact pair Kafuo Preview produced in the field: the document GET
+    // succeeds and the Stage PUT — what the classroom's load-time roster
+    // migration used to queue — is refused. Enforcement is server-side and
+    // stays that way; the client gate is an additional layer, never a
+    // replacement for this.
+    const stageMutation = await call(`/documents/${STAGE_X}/stage`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ id: STAGE_X, name: 'renamed by preview' }),
+    });
+    expect(stageMutation.status).toBe(403);
+    await expect(stageMutation.json()).resolves.toMatchObject({
+      error: { code: 'GRANT_READ_ONLY' },
+    });
 
     // Stage Y is NOT covered by this grant: pre-existing behavior (503).
     const other = await call(`/documents/${STAGE_Y}`, { headers: { cookie } });
@@ -233,6 +258,7 @@ describe('persistence route editor grant', () => {
     const { buildEditorGrantPayload: build } =
       await import('@/lib/server/teaching-package/editor-grant');
     const { payload, token } = build({
+      tenantId: 'tenant-test',
       versionId: 'tpv-grant-x',
       stageId: STAGE_X,
       capability: 'write',
@@ -363,6 +389,7 @@ describe('persistence route editor grant', () => {
     // same learner sandbox: capability broadens neither Stage nor learner
     // scope. A read grant creates sessions under its own key just the same…
     const { payload: readPayload, token: readToken } = build({
+      tenantId: 'tenant-test',
       versionId: 'tpv-grant-x',
       stageId: STAGE_X,
       capability: 'read',
