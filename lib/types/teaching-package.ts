@@ -117,6 +117,40 @@ export interface SceneTeachingSkills {
 }
 
 /**
+ * The durable per-Scene ALIGNMENT BASELINE (Module 2 W14/W15 — teaching-skills
+ * plan §K): the last known-aligned state of one Scene, against which the four
+ * functional alignment states are DERIVED at read (§K derivation). Identity
+ * plus state ONLY — no chain-of-thought, no long rationale (BR-TS-032,
+ * FR-TS-037).
+ *
+ * Persistence owner (plan §F/§K, one answer): package Scene/Stage lifecycle
+ * data, NOT generation-attempt state — an app-layer Scene field that travels
+ * with a same-model clone (stage-clone spread), is governed by Stage/package
+ * editability, and freezes with approved content. `sceneRev` is deliberately
+ * NOT part of the binding (it would invalidate on metadata-only edits, which
+ * FR-TS-043 forbids); the write path is still `sceneRev`-guarded via putScene.
+ *
+ * Absent on legacy data and until W15 stamps one — absence IS the derived
+ * `validation-required` state for a governed Scene.
+ */
+export interface SceneAlignmentBaseline {
+  /** The primary the baseline was taken against; absent for a genuinely non-instructional Scene. */
+  primary?: TeachingSkillRef;
+  /** The supporting set the baseline was taken against (ordered, exact versions). */
+  supporting?: TeachingSkillRef[];
+  /** The classification the baseline was taken against. */
+  classification: 'instructional' | 'non-instructional';
+  /** sha256 over the R-6 material projection (content · actions · title · description). */
+  fingerprint: string;
+  /** Who established it — reviewer-confirmed baselines only; generation baselines carry none. */
+  actorRef?: string;
+  /** Epoch milliseconds. */
+  establishedAt: number;
+  /** `'generation'` (stamped post-generation by W15) | `'reviewer-confirmation'` (recorded by W15's route). */
+  origin: 'generation' | 'reviewer-confirmation';
+}
+
+/**
  * Kafuo Teaching Model Flow entry (FRD §11.1). Array order is authoritative;
  * TE derives the zero-based `flowIndex` from position. Repeated stage keys are
  * valid — identity is `(flowIndex, stage)`. Kafuo never sends `flowIndex`.

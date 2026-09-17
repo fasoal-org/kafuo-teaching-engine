@@ -20,6 +20,7 @@ import type { WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import type {
+  SceneAlignmentBaseline,
   SceneLearningObjectiveRef,
   SceneTeachingSkills,
   TeachingStageRef,
@@ -134,6 +135,16 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * seam as `teachingStage`. Never part of the `@openmaic/dsl` Scene contract.
    */
   teachingSkills?: SceneTeachingSkills;
+  /**
+   * The durable alignment baseline (Module 2 W14/W15, plan §K). App-layer,
+   * optional, additive — package Scene/Stage lifecycle data, not
+   * generation-attempt state: it travels with a same-model clone, is governed
+   * by Stage editability, and freezes with approved content. Alignment STATE
+   * is never stored here or anywhere — it is derived at read by comparing the
+   * Scene (material fingerprint + assignment + classification) against this
+   * baseline. `sceneRev` is not part of the binding.
+   */
+  alignmentBaseline?: SceneAlignmentBaseline;
 };
 export type Scene = AppScene;
 
