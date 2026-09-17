@@ -21,6 +21,7 @@ type _SceneContentKeys = Assert<
     | 'visionEnabled'
     | 'generatedMediaMapping'
     | 'resolvedVisionImages'
+    | 'resolvedSkills'
     | 'agents'
     | 'languageDirective'
     | 'targetLanguage'
@@ -36,7 +37,7 @@ type _SceneContentKeys = Assert<
 type _SceneActionKeys = Assert<
   Equal<
     keyof SceneActionsOptions,
-    'ctx' | 'agents' | 'userProfile' | 'languageDirective' | 'logger'
+    'ctx' | 'agents' | 'userProfile' | 'languageDirective' | 'resolvedSkills' | 'logger'
   >
 >;
 type _BuildKeys = Assert<Equal<keyof BuildCompleteSceneOptions, 'sceneId'>>;

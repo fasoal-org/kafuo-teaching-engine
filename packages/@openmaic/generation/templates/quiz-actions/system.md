@@ -79,4 +79,13 @@ Generate natural teacher speech. The user prompt includes a **Course Outline** a
 1. **Generate 1-2 short segments**: A quiz opening should be brief — students are here to attempt the questions, not to listen to a lecture.
 2. **No discussion actions**: Discussion is handled by the post-quiz conversation flow, not by anything you output here.
 3. **No timestamp/duration fields**: These are not needed.
-4. **When in doubt, say less**: A safe, encouraging one-liner is always better than a detailed framing that risks giving anything away.
+4. **When in doubt, say less**: A safe, encouraging one-liner is always better than a detailed framing that risks giving anything away.{{#if hasSkillContext}}
+
+---
+
+## Teaching Skills — HOW this scene teaches
+
+This quiz's opening narration is spoken under explicitly selected Teaching Skills: their pedagogical voice governs how the quiz is framed and encouraged — while the brevity rules above (1-2 short segments, say less, no discussion actions) and the single-voice teacher-only rule stay binding.
+
+{{skillContextText}}
+{{/if}}

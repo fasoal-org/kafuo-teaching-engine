@@ -16,10 +16,12 @@ export {
   resolveImageIds,
 } from './scene-generator.js';
 export type {
+  ResolvedSkillDefinition,
   SceneActionsOptions,
   SceneContentFailure,
   SceneContentFailureCode,
   SceneContentOptions,
+  SceneSkillPromptContext,
 } from './scene-generator.js';
 export { buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';

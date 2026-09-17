@@ -53,6 +53,7 @@ import {
   SourceVisualModelUnavailableError,
   SourceVisualProcessingError,
 } from '@/lib/server/teaching-package/source-images';
+import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Classroom');
@@ -758,6 +759,21 @@ export async function generateClassroom(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
 
+  // Module 2 W11: pre-resolve the exact canonical Skill definitions ONCE per
+  // run (the `resolvedVisionImages` precedent — bytes settled BEFORE any scene
+  // prompt assembly) so the selected Skills govern generated narration,
+  // questions, feedback, pacing, and interaction. Only the governed Kafuo path
+  // supplies them; the Workbench, editor-regeneration, and scene-actions call
+  // sites never pass `resolvedSkills`, so their prompts stay byte-identical.
+  const resolvedSkills =
+    input.skillPolicy && input.teachingFlow && input.teachingFlow.length > 0
+      ? [...resolveFlowSkillPolicies(input.teachingFlow).entries()].map(([, definition]) => ({
+          skillId: definition.skillId,
+          version: definition.version,
+          definition: definition.content,
+        }))
+      : undefined;
+
   await options.onProgress?.({
     step: 'generating_outlines',
     progress: 30,
@@ -904,6 +920,7 @@ export async function generateClassroom(
                 agents,
                 languageDirective,
                 allowProceduralSkill: vocationalActive,
+                ...(resolvedSkills ? { resolvedSkills } : {}),
                 ...(outlineAssignedImages && outlineAssignedImages.length > 0
                   ? {
                       assignedImages: outlineAssignedImages,
@@ -951,6 +968,7 @@ export async function generateClassroom(
           generateSceneActions(safeOutline, content, actionsAiCall, {
             agents,
             languageDirective,
+            ...(resolvedSkills ? { resolvedSkills } : {}),
           }),
         {
           label: `scene ${index + 1}/${outlines.length} actions`,

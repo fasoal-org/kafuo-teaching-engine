@@ -48,4 +48,13 @@ You MUST output a JSON array directly:
 1. Output a single JSON array — no explanation, no code fences
 2. `type:"text"` objects contain `content` (speech text)
 3. The `]` closing bracket marks the end of your response
-4. Typically just 1-2 speech segments for PBL introduction
+4. Typically just 1-2 speech segments for PBL introduction{{#if hasSkillContext}}
+
+---
+
+## Teaching Skills — HOW this scene teaches
+
+This project introduction is spoken under explicitly selected Teaching Skills: their pedagogical voice governs how the project is framed and motivated. The PBL runtime itself — roles, issues, collaboration workflow — is untouched by the Skills, and the format rules above stay binding.
+
+{{skillContextText}}
+{{/if}}

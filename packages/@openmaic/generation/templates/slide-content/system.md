@@ -934,4 +934,15 @@ Before outputting JSON, verify:
 
 ## Output Format
 
-Output valid JSON only. No explanations, no code blocks, no additional text.
+Output valid JSON only. No explanations, no code blocks, no additional text.{{#if hasSkillContext}}
+
+---
+
+## Teaching Skills — HOW this slide teaches
+
+This slide is taught under explicitly selected Teaching Skills. The PRIMARY Skill below governs the pedagogical shape of the slide's content — how concepts are framed and sequenced, the narration-oriented wording of key points, examples, analogies, and scaffolding — with SUPPORTING Skills supplementing it. Where a pedagogical default elsewhere in this prompt conflicts with a selected Skill, the Skill governs. Safety, source grounding, factual integrity, the language directive, the JSON output format, and every layout/element constraint stay binding and never yield to a Skill.
+
+{{skillContextText}}
+
+Shape the slide's text content and structure to teach the key points in the Skills' way.
+{{/if}}

@@ -113,4 +113,15 @@ Other principles:
 
 1. Generate concise actions; do not over-script every possible interaction
 2. No timestamp/duration fields are needed
-3. No `teacherActions` field; output final action items directly in this array
+3. No `teacherActions` field; output final action items directly in this array{{#if hasSkillContext}}
+
+---
+
+## Teaching Skill Authority — HOW this scene teaches (MANDATORY)
+
+This scene is taught under explicitly selected Teaching Skills. The authority order for pedagogy is fixed: **the Teaching Model Flow and this scene's instructions first, then the PRIMARY Teaching Skill below, then its SUPPORTING Teaching Skills, then every pedagogical default elsewhere in this prompt.** Where a default — for example the "Progressive: start with simple observations" exploration strategy, the "Connect to theory" sequencing, or the "3-8 items" count guidance — conflicts with a selected Skill's HOW-to-teach behavior, the selected Skill governs the narration's pedagogical shape: its exploration sequence, pacing, question and feedback style, and how the interaction is guided. Safety, source grounding, factual integrity, the language directive, the JSON output format, the single-voice teacher-only narration rule, valid widget action names and targets, and every other system constraint stay binding and never yield to a Skill. The Skills never change the scene's flow position, the widget, or the output schema.
+
+{{skillContextText}}
+
+Apply the Skills above to every `text` and widget action you generate for this scene.
+{{/if}}

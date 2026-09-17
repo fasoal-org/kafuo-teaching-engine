@@ -93,6 +93,20 @@ export interface SceneContentOptions {
    * runs), the srcs are derived from `imageMapping` exactly as before.
    */
   resolvedVisionImages?: Array<{ id: string; src: string; width?: number; height?: number }>;
+  /**
+   * Pre-resolved canonical Teaching Skill definitions for this run (Module 2
+   * W11), following the `resolvedVisionImages` precedent: the caller resolves
+   * the exact (skillId, version) bodies server-side BEFORE calling the
+   * generator so the bytes are settled before prompt assembly. Skill IDENTITY
+   * rides the outline's `teachingSkills` carrier (already the first parameter)
+   * with zero plumbing; this option supplies the definition TEXT. When the
+   * carrier selects a Skill whose exact version is present here, the content
+   * and action prompts render the Skill authority/context block. Absent — the
+   * Workbench, editor-regeneration, and scene-actions call sites — every
+   * prompt renders byte-identically to the pre-teaching-skills output, even
+   * when an outline happens to carry a `teachingSkills` carrier.
+   */
+  resolvedSkills?: ResolvedSkillDefinition[];
   agents?: AgentInfo[];
   languageDirective?: string;
   /** Authoritative UI locale selected by the user, consumed by the PBL v2 planner. */
@@ -123,7 +137,71 @@ export interface SceneActionsOptions {
   agents?: AgentInfo[];
   userProfile?: string;
   languageDirective?: string;
+  /**
+   * Pre-resolved canonical Teaching Skill definitions (Module 2 W11) — the
+   * same value the content pass received, so narration, questions, feedback,
+   * pacing, and interaction are governed by the SAME Skills the content was.
+   * Absent → action prompts render byte-identically to today.
+   */
+  resolvedSkills?: ResolvedSkillDefinition[];
   logger?: GenerationLogger;
+}
+
+/**
+ * One exact canonical Teaching Skill definition, pre-resolved server-side
+ * (Module 2 W11). The ROLE (primary/supporting) is derived from the outline's
+ * `teachingSkills` carrier at pairing time — definitions themselves are
+ * role-free (plan §B.10: identity rides the outline, text rides this option).
+ */
+export interface ResolvedSkillDefinition {
+  skillId: string;
+  version: string;
+  /** The resolved SKILL.md body for this exact immutable version. */
+  definition: string;
+}
+
+export interface SceneSkillPromptContext {
+  hasSkillContext: boolean;
+  skillContextText: string;
+}
+
+const NO_SKILL_CONTEXT: SceneSkillPromptContext = { hasSkillContext: false, skillContextText: '' };
+
+/**
+ * Pair the outline's Teaching Skills carrier (identity) with the run's
+ * pre-resolved definitions (text). Every prompt-assembly change downstream is
+ * gated on the result being non-empty, which is what keeps the three non-Kafuo
+ * call sites byte-identical: without `resolvedSkills` no block renders even
+ * when a carrier is present.
+ */
+export function buildSceneSkillContext(
+  outline: SceneOutline,
+  resolvedSkills: ResolvedSkillDefinition[] | undefined,
+): SceneSkillPromptContext {
+  const carrier = outline.teachingSkills;
+  if (!resolvedSkills || resolvedSkills.length === 0) return NO_SKILL_CONTEXT;
+  if (!carrier || (!carrier.primary && !(carrier.supporting && carrier.supporting.length > 0))) {
+    return NO_SKILL_CONTEXT;
+  }
+
+  const find = (ref: { skillId: string; version: string }) =>
+    resolvedSkills.find((skill) => skill.skillId === ref.skillId && skill.version === ref.version);
+
+  const sections: string[] = [];
+  if (carrier.primary) {
+    const definition = find(carrier.primary);
+    sections.push(
+      `PRIMARY SKILL: ${carrier.primary.skillId}@${carrier.primary.version}\n\n${definition?.definition ?? '(definition was not supplied for this exact version)'}`,
+    );
+  }
+  for (const ref of carrier.supporting ?? []) {
+    const definition = find(ref);
+    sections.push(
+      `SUPPORTING SKILL: ${ref.skillId}@${ref.version} — supplements the primary strategy without replacing it\n\n${definition?.definition ?? '(definition was not supplied for this exact version)'}`,
+    );
+  }
+  if (sections.length === 0) return NO_SKILL_CONTEXT;
+  return { hasSkillContext: true, skillContextText: sections.join('\n\n---\n\n') };
 }
 
 // ==================== Backward Compatibility Helpers ====================
@@ -295,9 +373,17 @@ export async function generateSceneContent(
         baselineContent,
         log,
         options.onFailure,
+        options.resolvedSkills,
       );
     case 'quiz':
-      return generateQuizContent(outline, aiCall, languageDirective, log, options.onFailure);
+      return generateQuizContent(
+        outline,
+        aiCall,
+        languageDirective,
+        log,
+        options.onFailure,
+        options.resolvedSkills,
+      );
     case 'pbl':
       return generatePBLSceneContent(
         outline,
@@ -630,6 +716,7 @@ async function generateSlideContent(
   baselineContent?: GeneratedSlideContent,
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
+  resolvedSkills?: ResolvedSkillDefinition[],
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -738,6 +825,7 @@ async function generateSlideContent(
     generatedImageEnabled,
     generatedVideoEnabled,
     mediaElementEnabled,
+    ...buildSceneSkillContext(outline, resolvedSkills),
   });
 
   if (!prompts) {
@@ -874,6 +962,7 @@ async function generateQuizContent(
   languageDirective?: string,
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
+  resolvedSkills?: ResolvedSkillDefinition[],
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig = outline.quizConfig || {
     questionCount: 3,
@@ -889,6 +978,7 @@ async function generateQuizContent(
     difficulty: quizConfig.difficulty,
     questionTypes: quizConfig.questionTypes.join(', '),
     languageDirective: languageDirective || '',
+    ...buildSceneSkillContext(outline, resolvedSkills),
   });
 
   if (!prompts) {
@@ -1687,6 +1777,7 @@ export async function generateSceneActions(
       agents: agentsText,
       userProfile: userProfile || '',
       languageDirective: languageDirective || '',
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
@@ -1716,6 +1807,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
@@ -1753,6 +1845,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
@@ -1788,6 +1881,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {

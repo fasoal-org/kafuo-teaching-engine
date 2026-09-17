@@ -305,4 +305,51 @@ describe('generateClassroom Stage-1 outline gate', () => {
     const context = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4];
     expect(context.skillPolicy).toBeUndefined();
   });
+
+  it('pre-resolves exact Skill definitions and passes them to BOTH generators when governed (W11)', async () => {
+    // The definitions are settled BEFORE prompt assembly (resolvedVisionImages
+    // precedent), resolved once per run from the same policies that governed
+    // selection — this is what makes the selected Skill reach narration,
+    // questions, feedback, pacing, and interaction rather than metadata only.
+    const teachingFlow = [
+      {
+        stage: 'lesson_introduction',
+        instructions: 'Introduce.',
+        skillPolicy: {
+          required: [],
+          preferred: [{ skillId: 'feynman-learning', version: 'v1' }],
+          allowed: [
+            { skillId: 'feynman-learning', version: 'v1' },
+            { skillId: 'learning-to-learn', version: 'v1' },
+          ],
+          combinationRestrictions: [],
+        },
+      },
+    ];
+    await generateWith({ input: { skillPolicy: true, teachingFlow } });
+
+    const contentOptions = mocks.generateSceneContent.mock.calls[0]![2];
+    const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3];
+    for (const options of [contentOptions, actionsOptions]) {
+      const resolved = (
+        options as {
+          resolvedSkills?: Array<{ skillId: string; version: string; definition: string }>;
+        }
+      ).resolvedSkills;
+      expect(resolved).toBeDefined();
+      const feynman = resolved!.find((skill) => skill.skillId === 'feynman-learning');
+      expect(feynman?.version).toBe('v1');
+      expect(feynman?.definition).toContain('Feynman');
+    }
+  });
+
+  it("passes no Skill definitions when the run is ungoverned (the three non-Kafuo sites' bytes)", async () => {
+    const teachingFlow = [{ stage: 'lesson_introduction', instructions: 'Introduce.' }];
+    await generateWith({ input: { teachingFlow } });
+
+    const contentOptions = mocks.generateSceneContent.mock.calls[0]![2];
+    const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3];
+    expect((contentOptions as { resolvedSkills?: unknown }).resolvedSkills).toBeUndefined();
+    expect((actionsOptions as { resolvedSkills?: unknown }).resolvedSkills).toBeUndefined();
+  });
 });
