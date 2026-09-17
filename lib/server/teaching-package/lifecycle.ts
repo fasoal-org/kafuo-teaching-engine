@@ -45,6 +45,12 @@ import {
   type TeachingSkillsGovernance,
   validateExactTeachingFlow,
 } from '@/lib/server/teaching-package/exact-flow';
+import {
+  compareSuccessorMaterialScenes,
+  isCloneOnlySuccessor,
+  readProducingAttemptTeachingModel,
+  teachingModelLineageDrift,
+} from '@/lib/server/teaching-package/successor-model';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -54,6 +60,7 @@ import type {
   TeachingPackageStatus,
   TeachingPackageVersion,
 } from '@/lib/types/teaching-package';
+import type { AppScene } from '@/lib/types/stage';
 
 const ACTOR_REF_MAX_LENGTH = 256;
 const COMMENT_MAX_LENGTH = 4000;
@@ -256,6 +263,13 @@ interface PreparedSubmitValidation {
   stageId: string;
   /** Stage revision the validated document was read at. */
   rev: number;
+  /**
+   * W13: the advisory read proved this legacy-derived successor clone-only
+   * (§M correction 2). Tier-A legacy successors have no flow, so the flow
+   * proof below cannot pin that comparison — the locked transaction pins it
+   * to this revision instead, exactly the way the flow gate pins its own proof.
+   */
+  legacySuccessorChecked: boolean;
 }
 
 /**
@@ -281,6 +295,56 @@ interface PreparedSubmitValidation {
  * `createSuccessor` already used this shape (store work before the transaction);
  * this is the same restructuring applied to submit.
  */
+/**
+ * W13 · §M correction 2 — a materially edited legacy-derived successor is NOT
+ * submit-ready. Clone-only may preserve legacy state; the moment a Scene's R-6
+ * material fields (content · actions · title · description) differ from its
+ * same-id predecessor Scene — or a Scene was added or removed — the successor
+ * is current work that only authoritative current governance can validate, and
+ * a legacy chain has no Teaching Skill Policy to validate against. The outcome
+ * is a refusal naming the supported path (regeneration under a Module-2
+ * request), never exemption and never backfill; the historical predecessor is
+ * only ever read.
+ */
+async function assertLegacySuccessorCloneOnly(
+  pool: ConnectableQueryable,
+  version: TeachingPackageVersion,
+  successorScenes: readonly AppScene[],
+): Promise<void> {
+  const predecessor = await readVersion(pool, version.predecessorVersionId!, {
+    tenantId: version.tenantId,
+  });
+  if (!predecessor) {
+    // The successor row names a predecessor that does not exist under this
+    // tenant — an integrity violation, not a legacy state. Loud, never silent.
+    throw new TeachingPackageError(
+      'STALE_STATE',
+      `successor ${version.id} names predecessor ${version.predecessorVersionId}, which cannot be read`,
+    );
+  }
+  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+  const predecessorDocument = await store.loadDocument(predecessor.currentStageId);
+  if (!predecessorDocument) {
+    throw new TeachingPackageError(
+      'STAGE_NOT_LIVE',
+      `predecessor stage ${predecessor.currentStageId} is not live`,
+    );
+  }
+  const comparison = compareSuccessorMaterialScenes(successorScenes, predecessorDocument.scenes);
+  if (isCloneOnlySuccessor(comparison)) return;
+  const offendingSceneIds = [...comparison.editedSceneIds, ...comparison.addedSceneIds];
+  throw new TeachingPackageError(
+    'STALE_STATE',
+    `this successor of a legacy package was materially edited (${comparison.editedSceneIds.length} edited, ${comparison.addedSceneIds.length} added, ${comparison.removedSceneIds.length} removed Scene(s)), and a legacy package has no authoritative Teaching Skill Policy to validate the edit against — regenerate under a Teaching Skills-governed request before submitting`,
+    {
+      reason: 'legacy_successor_materially_edited',
+      offendingSceneIds,
+      removedSceneIds: comparison.removedSceneIds,
+      predecessorVersionId: predecessor.id,
+    },
+  );
+}
+
 async function prepareSubmitValidation(
   pool: ConnectableQueryable,
   versionId: string,
@@ -298,14 +362,71 @@ async function prepareSubmitValidation(
   // absent proof is treated as drift and re-proved under the lock.
   if (version.status !== 'draft' && version.status !== 'rejected') return null;
   const flow = await readFlowForVersion(pool, version.id);
+  const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
+
+  // W13 defensive lineage check (§L) — GOVERNED packages only, strictly behind
+  // the governance discriminator so a legacy successor can never see it. A
+  // governed version whose declared (key, version) no longer matches the
+  // producing attempt's pair carries Skill lineage validated against a
+  // different model's policy; the model-change ⟹ Stage-replacement invariant
+  // (§B.12) means no current path can produce this — the check turns that
+  // argument into something the gate actually enforces.
+  if (governance?.contract) {
+    const producingModel = await readProducingAttemptTeachingModel(pool, version.id);
+    const drift = teachingModelLineageDrift(version.teachingModel, producingModel);
+    if (drift) {
+      throw new TeachingPackageError(
+        'STALE_STATE',
+        `the version declares Teaching Model ${drift.declared.key}@${drift.declared.version} but its Scene Skill lineage was produced under ${drift.producing.key}@${drift.producing.version}; the Scenes must be regenerated under the declared model before submit`,
+        {
+          reason: 'teaching_model_lineage_drift',
+          declaredTeachingModel: drift.declared,
+          producingTeachingModel: drift.producing,
+        },
+      );
+    }
+  }
+
+  // W13 · §M correction 2: only a legacy-derived SUCCESSOR can be refused for
+  // material edits — a v1 legacy package stays legacy however it is edited
+  // (§28.5), and governed successors answer to the Skill gate instead.
+  const legacySuccessor = !governance?.contract && version.predecessorVersionId !== null;
+
   if (!flow || flow.length === 0) {
-    return { flow: null, governance: null, stageId: version.currentStageId, rev: -1 };
+    if (!legacySuccessor) {
+      return {
+        flow: null,
+        governance,
+        stageId: version.currentStageId,
+        rev: -1,
+        legacySuccessorChecked: false,
+      };
+    }
+    // Tier-A legacy successor (no flow anywhere in the chain): prove the
+    // successor clone-only against the predecessor's Scenes, and pin that proof
+    // to the stage revision — there is no flow proof to carry it.
+    const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+    const document = await store.loadDocument(version.currentStageId);
+    if (!document) {
+      throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');
+    }
+    await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
+    const manifest = await store.readFreshnessManifest(version.currentStageId);
+    return {
+      flow: null,
+      governance,
+      stageId: version.currentStageId,
+      rev: manifest?.rev ?? 0,
+      legacySuccessorChecked: true,
+    };
   }
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
   const document = await store.loadDocument(version.currentStageId);
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');
   }
+  // Exact-flow first (check 3): its error precedence over everything Module 2
+  // adds is established behavior, preserved deliberately.
   const outlineRecord = document.outline as
     | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
     | undefined;
@@ -317,11 +438,19 @@ async function prepareSubmitValidation(
       { offendingSceneIds: check.violation.offendingSceneIds },
     );
   }
+  if (legacySuccessor) {
+    await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
+  }
   // The revision the proof is tied to. Read through the same store so the read
   // stays owner-scoped; the transaction re-reads it and refuses a mismatch.
   const manifest = await store.readFreshnessManifest(version.currentStageId);
-  const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
-  return { flow, governance, stageId: version.currentStageId, rev: manifest?.rev ?? 0 };
+  return {
+    flow,
+    governance,
+    stageId: version.currentStageId,
+    rev: manifest?.rev ?? 0,
+    legacySuccessorChecked: legacySuccessor,
+  };
 }
 
 /**
@@ -380,6 +509,19 @@ export async function submitForReview(
           // Returned, not thrown: see `SubmitAttempt`. The transaction commits
           // having changed nothing, and the caller re-proves the flow.
           if (!proofHolds) return { drifted: true };
+        } else if (
+          prepared !== null &&
+          prepared.legacySuccessorChecked &&
+          locked.predecessorVersionId !== null
+        ) {
+          // W13: a tier-A legacy successor has no flow proof to pin, so the
+          // clone-only material comparison is pinned to the stage revision it
+          // inspected — a concurrent Scene write between the advisory compare
+          // and this lock invalidates the proof the same way a revision drift
+          // invalidates the flow proof above.
+          if (prepared.stageId !== locked.currentStageId || prepared.rev !== currentRev) {
+            return { drifted: true };
+          }
         }
         const updated = await updateVersionStatus(tx, locked.id, {
           status: 'in_review',
