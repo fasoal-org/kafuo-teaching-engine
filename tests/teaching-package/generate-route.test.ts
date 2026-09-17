@@ -40,6 +40,8 @@ function attempt(): GenerationAttempt {
     status: 'queued',
     requestId: null,
     requestDigest: null,
+    teachingSkillsContract: null,
+    skillPolicyDigest: null,
     generationRuns: 0,
     requestedByActorRef: 'actor-1',
     teachingModel: { key: 'g5', version: 'g5.v1' },

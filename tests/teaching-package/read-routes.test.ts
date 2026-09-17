@@ -96,6 +96,10 @@ function attempt(partial: Partial<GenerationAttempt>): GenerationAttempt {
     startedAt: null,
     completedAt: null,
     ...partial,
+    // GenerationAttempt carries these as required `string | null`; a Partial
+    // override spread alone would leave them optional.
+    teachingSkillsContract: partial.teachingSkillsContract ?? null,
+    skillPolicyDigest: partial.skillPolicyDigest ?? null,
   };
 }
 

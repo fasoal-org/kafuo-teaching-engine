@@ -89,12 +89,12 @@ export interface StartGenerationAttemptRequest {
   requestDigest?: string;
   /**
    * Teaching Skills governance marker (Module 2 W6): present ⇒ the attempt is
-   * Module-2 governed; absent ⇒ legacy. Mode derived ONCE by the parse layer —
-   * this field is that value, never re-derived per call site.
+   * Module-2 governed; `null`/absent ⇒ legacy. Mode derived ONCE by the parse
+   * layer — this field is that value, never re-derived per call site.
    */
-  teachingSkillsContract?: string;
+  teachingSkillsContract?: string | null;
   /** Skill Policy lineage digest — integrity evidence, not the mode declaration. */
-  skillPolicyDigest?: string;
+  skillPolicyDigest?: string | null;
   /** Ordered Kafuo Teaching Model Flow (identity `(flowIndex, stage)`). */
   teachingFlow?: TeachingFlowEntry[];
   /**

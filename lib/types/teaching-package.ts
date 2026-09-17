@@ -228,13 +228,15 @@ export interface GenerationInputSnapshot {
    * carry (Module 2 W6, plan §M). Its ABSENCE is the genuine pre-Module-2
    * legacy path — governance is declared, never inferred from Skill fields,
    * policy presence, or flow presence. Identifiers only; secrecy-safe.
+   * `null` and absence are both the legacy state (truthiness is the test).
    */
-  teachingSkillsContract?: string;
+  teachingSkillsContract?: string | null;
   /**
    * Deterministic digest of the resolved Skill Policy lineage — integrity
    * evidence only, NOT the mode declaration (the contract marker above is).
+   * Nullable: a policy-free flow carries no lineage evidence.
    */
-  skillPolicyDigest?: string;
+  skillPolicyDigest?: string | null;
   /** Source-visual counts patched in by the acquisition/generation layers. */
   sourceVisualSummary?: {
     available: number;

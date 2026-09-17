@@ -50,6 +50,10 @@ import {
 import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
 import { validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
 import { assertOutlineContentUnitGrounding } from '@/lib/server/teaching-package/outline-grounding';
+import {
+  requireCompleteFlowPolicies,
+  resolveFlowSkillPolicies,
+} from '@/lib/server/teaching-package/skill-policy';
 import { materializeSourceImages } from '@/lib/server/teaching-package/source-images';
 import { createTeachingPackagePersistenceSink } from '@/lib/server/teaching-package/stage-persistence-sink';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -163,6 +167,11 @@ async function runKafuoAttempt(
     ...(kafuo.normalizedContentResource ? { normalizedGrounding: true } : {}),
   };
 
+  // The W6-derived governance mode, consumed as a VALUE (§B.13): the
+  // `teachingSkills` marker was parsed once at the single detection point and
+  // already lives on this context; nothing below re-tests marker presence.
+  const governedByTeachingSkills = kafuo.teachingSkillsContract !== null;
+
   let lastFailure: { code: string; message: string; retryable: boolean } | null = null;
 
   for (let run = 1; run <= maxGenerationRuns(); run += 1) {
@@ -192,21 +201,35 @@ async function runKafuoAttempt(
       const result = await generateClassroom(execution, {
         baseUrl: '',
         persistence: trackingSink,
-        // Stage-1 gate: rejects an ungrounded outline response BEFORE any Stage
-        // is reserved or a single Scene is generated. It used to run after
-        // `generateClassroom` had produced and persisted all 33 scenes, which
-        // cost ~5 minutes per retry to learn the first outline was ungrounded.
-        ...(kafuo.normalizedContentResource
+        // Stage-1 gate — the BR-TS-048 fail-closed point (Module 2 W8). The gate
+        // fires after outlines and BEFORE `sink.reserve`, so a governed refusal
+        // costs no Stage reservation, no Scene generation, and no media write.
+        // For a governed request the W5 vocabulary is enforced here: policy
+        // completeness (SKILL_POLICY_REQUIRED) and exact-version resolution
+        // (SKILL_NOT_FOUND / SKILL_VERSION_UNRESOLVED). An invalid policy never
+        // reaches this depth — the single parse seam refused it before the
+        // attempt existed — and no unrestricted-catalog fallback exists: the
+        // gate below is the only route onward for a governed request, and these
+        // refusals are terminal (non-retryable), never re-rolled open.
+        ...(governedByTeachingSkills || kafuo.normalizedContentResource
           ? {
               validateOutlines: (outlines: SceneOutline[]) => {
-                assertOutlineContentUnitGrounding(
-                  outlines,
-                  (
-                    source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource
-                  ).manifest,
-                  attemptId,
-                  run,
-                );
+                if (governedByTeachingSkills) {
+                  requireCompleteFlowPolicies(kafuo.teachingFlow, {
+                    stageKeys: kafuo.teachingFlow.map((entry) => entry.stage),
+                  });
+                  resolveFlowSkillPolicies(kafuo.teachingFlow);
+                }
+                if (kafuo.normalizedContentResource) {
+                  assertOutlineContentUnitGrounding(
+                    outlines,
+                    (
+                      source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource
+                    ).manifest,
+                    attemptId,
+                    run,
+                  );
+                }
               },
             }
           : {}),
@@ -280,8 +303,7 @@ async function runKafuoAttempt(
       // compensates before the next. Only the decision to use a run already available
       // changes.
       const retryable =
-        code === 'CLASSROOM_GENERATION_FAILED' ||
-        code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID';
+        code === 'CLASSROOM_GENERATION_FAILED' || code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID';
       lastFailure = {
         code,
         message: error instanceof Error ? error.message : String(error),

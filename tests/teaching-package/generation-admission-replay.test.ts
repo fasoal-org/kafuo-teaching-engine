@@ -85,6 +85,10 @@ function racedAttempt(overrides: Partial<GenerationAttempt> = {}): GenerationAtt
     startedAt: null,
     completedAt: null,
     ...overrides,
+    // GenerationAttempt carries these as required `string | null`; a Partial
+    // override spread alone would leave them optional.
+    teachingSkillsContract: overrides.teachingSkillsContract ?? null,
+    skillPolicyDigest: overrides.skillPolicyDigest ?? null,
   };
 }
 

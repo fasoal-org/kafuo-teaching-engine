@@ -9,7 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 import type { AppScene } from '@/lib/types/stage';
-import type { KafuoContentResource, TeachingFlowEntry } from '@/lib/types/teaching-package';
+import type {
+  KafuoContentResource,
+  TeachingFlowEntry,
+  TeachingSkillPolicy,
+} from '@/lib/types/teaching-package';
+import { TEACHING_SKILLS_CONTRACT_V1 } from '@/lib/server/teaching-package/kafuo-request';
 import { makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +34,6 @@ const mocks = vi.hoisted(() => ({
   /** The outlines each run handed to `persistence.persist`, in order. */
   persistedOutlines: [] as Array<Array<{ sourceContentUnitIds?: unknown }>>,
 }));
-
 
 vi.mock('@/lib/server/classroom-generation', () => ({
   generateClassroom: mocks.generateClassroom,
@@ -72,8 +76,12 @@ const DATA_URL = `data:image/png;base64,${PNG.toString('base64')}`;
 class PGlitePool {
   constructor(readonly db: PGlite) {}
 
-  query(text: string, params?: unknown[]) {
-    return this.db.query(text, params);
+  /**
+   * Generic passthrough: PGlite's own `Row` default renders row fields as
+   * `{}` without it, hiding real property accesses from the checker.
+   */
+  query<Row = Record<string, unknown>>(text: string, params?: unknown[]) {
+    return this.db.query<Row>(text, params);
   }
 
   async connect() {
@@ -156,7 +164,6 @@ function mockValidRun(stageId = 'stage-run-1') {
   });
 }
 
-
 /**
  * A run whose outline citations the test dictates.
  *
@@ -234,6 +241,9 @@ function kafuoContext(): NonNullable<
       tenantId: 'tenant-k',
       learningItem: { type: 'lesson', id: `li-k-${randomUUID()}` },
     },
+    // Tier B by default: Kafuo-shaped, pre-Module-2 (no governance marker).
+    // W8 tests override this with the contract string for the governed case.
+    teachingSkillsContract: null,
     teachingFlow: FLOW,
     learningObjectives: [{ objectiveRef: 'o1', snapshot: { statement: 's' } }],
     requirement: 'req',
@@ -851,6 +861,166 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(logged).toContain('2900');
       // Blocks are internal: the refusal never reports missing block grounding.
       expect(logged).not.toContain('sourceBlockIds');
+    });
+  });
+
+  describe('teaching skills fail-closed at the Stage-1 gate (Module 2 W8)', () => {
+    /**
+     * BR-TS-048: a request carrying the governance marker fails closed on
+     * missing / unresolvable policy inside `options.validateOutlines` — after
+     * outlines, BEFORE `sink.reserve`. The mode arrives on the context as the
+     * W6-derived value (`teachingSkillsContract`); the marker is never re-tested.
+     */
+    const policy = (overrides: Partial<TeachingSkillPolicy> = {}): TeachingSkillPolicy => ({
+      required: [],
+      preferred: [{ skillId: 'feynman-learning', version: 'v1' }],
+      allowed: [
+        { skillId: 'feynman-learning', version: 'v1' },
+        { skillId: 'learning-to-learn', version: 'v1' },
+      ],
+      combinationRestrictions: [],
+      ...overrides,
+    });
+
+    /** Real registry ids at v1, so governed success resolves against the live W1 catalog. */
+    const governedFlow = (): TeachingFlowEntry[] => [
+      { stage: 'lesson_introduction', instructions: 'i', skillPolicy: policy() },
+      { stage: 'outcome_teaching_cards', instructions: 'c', skillPolicy: policy() },
+    ];
+
+    function governedContext(flow: TeachingFlowEntry[] = governedFlow()) {
+      return {
+        ...kafuoContext(),
+        teachingSkillsContract: TEACHING_SKILLS_CONTRACT_V1,
+        teachingFlow: flow,
+      };
+    }
+
+    async function attemptRow(attemptId: string) {
+      const row = await pool.query<{
+        status: string;
+        error_code: string | null;
+        error_retryable: boolean | null;
+        version_id: string | null;
+      }>(
+        `SELECT status, error_code, error_retryable, version_id
+           FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      return row.rows[0]!;
+    }
+
+    it('governed + policy MISSING: refuses SKILL_POLICY_REQUIRED with no Stage, Scene, or re-roll', async () => {
+      const flow = governedFlow();
+      // A governed request that lost a projected policy — the fail-open hole §M
+      // closes. It must refuse, never silently degrade to unrestricted selection
+      // or reclassify itself legacy.
+      delete flow[1]!.skillPolicy;
+
+      const attemptId = await startKafuo(governedContext(flow));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_POLICY_REQUIRED');
+      expect(row.error_retryable).toBe(false);
+      expect(row.version_id).toBeNull();
+      // Nothing past the gate: no Scene content, no reserved Stage.
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+      const stages = await pool.query(`SELECT count(*)::int AS n FROM stage_meta`);
+      expect(stages.rows[0]!.n).toBe(0);
+      // Configuration faults are terminal — the run budget is not spent re-rolling.
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+    });
+
+    it('governed + unresolvable exact version: refuses SKILL_VERSION_UNRESOLVED, never substitutes', async () => {
+      const flow: TeachingFlowEntry[] = [
+        {
+          stage: 'lesson_introduction',
+          instructions: 'i',
+          skillPolicy: policy({
+            preferred: [{ skillId: 'feynman-learning', version: 'v99' }],
+            allowed: [
+              { skillId: 'feynman-learning', version: 'v99' },
+              { skillId: 'learning-to-learn', version: 'v1' },
+            ],
+          }),
+        },
+        { stage: 'outcome_teaching_cards', instructions: 'c', skillPolicy: policy() },
+      ];
+
+      const attemptId = await startKafuo(governedContext(flow));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_VERSION_UNRESOLVED');
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+    });
+
+    it('governed + unknown identity: refuses SKILL_NOT_FOUND', async () => {
+      const flow: TeachingFlowEntry[] = [
+        {
+          stage: 'lesson_introduction',
+          instructions: 'i',
+          skillPolicy: policy({
+            preferred: [{ skillId: 'no-such-canonical-skill', version: 'v1' }],
+            allowed: [
+              { skillId: 'no-such-canonical-skill', version: 'v1' },
+              { skillId: 'learning-to-learn', version: 'v1' },
+            ],
+          }),
+        },
+        { stage: 'outcome_teaching_cards', instructions: 'c', skillPolicy: policy() },
+      ];
+
+      const attemptId = await startKafuo(governedContext(flow));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_NOT_FOUND');
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+    });
+
+    it('governed + complete resolvable policy: generates normally — landing is not activation', async () => {
+      // W8 lands the enforcement infrastructure only; governed traffic with a
+      // valid policy still generates exactly as before until W10 adds selection.
+      const attemptId = await startKafuo(governedContext());
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('succeeded');
+      expect(row.version_id).toMatch(/^tpv-/);
+      expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
+    });
+
+    it('tier B — Kafuo flow WITHOUT the marker still generates with no policy on any entry', async () => {
+      // kafuoContext() defaults to tier B: contract null, FLOW carries no policy.
+      // Explicitly pin that the absence of the marker keeps the legacy path open.
+      const attemptId = await startKafuo(kafuoContext());
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('succeeded');
+      expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
+      expect(kafuoContext().teachingFlow.every((entry) => entry.skillPolicy === undefined)).toBe(
+        true,
+      );
+    });
+
+    it('tier A — non-Kafuo legacy generation (no flow, no context) is untouched', async () => {
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const runner = await freshModules();
+      const started = await startGenerationAttempt(txPool(), {
+        tenantId: 'tenant-k',
+        learningItem: { type: 'lesson', id: `li-a-${randomUUID()}` },
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        generation: { requirement: 'legacy requirement, no teaching flow' },
+        actorRef: 'actor-1',
+      });
+      await runner.runGenerationAttempt(started.attempt.id, started.execution);
+
+      const row = await attemptRow(started.attempt.id);
+      expect(row.status).toBe('succeeded');
+      expect(row.version_id).toMatch(/^tpv-/);
+      expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
     });
   });
 });

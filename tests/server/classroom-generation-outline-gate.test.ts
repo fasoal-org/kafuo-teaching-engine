@@ -221,6 +221,40 @@ describe('generateClassroom Stage-1 outline gate', () => {
     expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
   });
 
+  it('holds the same no-cost boundary for the Teaching Skills fail-closed refusals (W8)', async () => {
+    /* BR-TS-048's enforcement point is this gate: a governed request whose policy is
+       missing, invalid, or unresolvable must refuse here — after outlines, before
+       `sink.reserve` — costing no Stage reservation, no Scene generation, and no media
+       write, exactly like a grounding refusal. The runner assembles the validator
+       (generation-runner.ts); this pins the boundary the assembled refusal lands on. */
+    const { sink, calls } = makeRecordingSink();
+    const persist = vi.fn(sink.persist);
+    const failure = Object.assign(
+      new Error('teachingModel.flow[1] (stage "outcome_teaching_cards") carries no Skill Policy'),
+      { code: 'SKILL_POLICY_REQUIRED' },
+    );
+
+    await expect(
+      generateWith({
+        persistence: { ...sink, persist },
+        validateOutlines: () => {
+          // Position proof, identical to the grounding case: nothing reserved yet.
+          expect(calls.reserve).toEqual([]);
+          throw failure;
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'SKILL_POLICY_REQUIRED' });
+
+    expect(calls.reserve).toEqual([]);
+    expect(persist).not.toHaveBeenCalled();
+    expect(mocks.generateSceneContent).not.toHaveBeenCalled();
+    expect(mocks.generateSceneActions).not.toHaveBeenCalled();
+    expect(mocks.createSceneWithActions).not.toHaveBeenCalled();
+    expect(mocks.generateMediaForClassroom).not.toHaveBeenCalled();
+    expect(mocks.reserveClassroom).not.toHaveBeenCalled();
+    expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
+  });
+
   it('awaits an async validator before continuing', async () => {
     const { sink, calls } = makeRecordingSink();
     let resolved = false;
