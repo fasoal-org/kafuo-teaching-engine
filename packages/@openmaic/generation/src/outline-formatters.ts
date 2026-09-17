@@ -1,5 +1,25 @@
 import type { ImageMapping, PdfImage } from './outline-types.js';
 
+/**
+ * The Content-Unit association line shared by both image renderings.
+ *
+ * Content Units are the LLM-facing pedagogical authority, so a visual is
+ * introduced to the model by the units it belongs to. `sourceBlockIds` is
+ * deliberately NOT rendered: Blocks are internal extraction/provenance records
+ * (they stay on `PdfImage` and in the selected-visual manifest), and a model
+ * that never sees a block id cannot be asked to cite one.
+ */
+function formatImageGrounding(img: PdfImage): string {
+  const parts = [
+    img.sourceContentUnitIds?.length
+      ? `Content Units: ${img.sourceContentUnitIds.join(', ')}`
+      : '',
+    img.figureLabel ? `Figure: ${img.figureLabel}` : '',
+    img.caption ? `Caption: ${img.caption}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? ` | ${parts.join(' | ')}` : '';
+}
+
 export function formatImageDescription(img: PdfImage): string {
   let dimInfo = '';
   if (img.width && img.height) {
@@ -8,7 +28,7 @@ export function formatImageDescription(img: PdfImage): string {
   }
   const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
   const desc = img.description ? ` | ${img.description}` : '';
-  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${desc}`;
+  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${formatImageGrounding(img)}${desc}`;
 }
 
 export function formatImagePlaceholder(img: PdfImage): string {
@@ -18,7 +38,7 @@ export function formatImagePlaceholder(img: PdfImage): string {
     dimInfo = ` | size: ${img.width}×${img.height} (aspect ratio ${ratio})`;
   }
   const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
-  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo} [see attached]`;
+  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo}${formatImageGrounding(img)} [see attached]`;
 }
 
 export function sortDocumentImagesForVision<

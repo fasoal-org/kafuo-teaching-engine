@@ -60,6 +60,32 @@ describe('snapshot secrecy (narrow credential-path rules, plan §4.4.7)', () => 
     expect((error as Error).message).toMatch(/contentResource\.url/);
   });
 
+  it('rejects normalizedContentResource.url and permits only stable facts', async () => {
+    const error = await insert(
+      baseSnapshot({
+        normalizedContentResource: { id: 'ncr-1', url: 'https://r2/x.zip?sig=1' },
+      }) as never,
+    );
+    expect((error as Error).message).toMatch(/normalizedContentResource\.url|credential-bearing/);
+    expect(
+      await insert(
+        baseSnapshot({
+          normalizedContentResource: {
+            id: 'ncr-1',
+            mimeType: 'application/zip',
+            schemaVersion: 'kafuo.normalized-content.v1',
+            contentSourceId: 'cs-1',
+            contentRevisionId: 'rev-1',
+            parseRunId: 'run-1',
+            structureProfile: { id: 'p-1', versionId: 'pv-1' },
+            fileSizeBytes: 10,
+            checksumSha256: 'a'.repeat(64),
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('rejects signedUrl/presignedUrl/retrievalUrl/downloadUrl keys anywhere', async () => {
     for (const key of ['signedUrl', 'presignedUrl', 'retrievalUrl', 'downloadUrl']) {
       const error = await insert(
@@ -77,9 +103,7 @@ describe('snapshot secrecy (narrow credential-path rules, plan §4.4.7)', () => 
       'https://r2.example.test/lesson.pdf?token=secret',
       'https://cdn.example.test/x?sig=1',
     ]) {
-      const error = await insert(
-        baseSnapshot({ generationContext: { assetLink: url } }) as never,
-      );
+      const error = await insert(baseSnapshot({ generationContext: { assetLink: url } }) as never);
       expect((error as Error).message).toMatch(/credential-bearing/);
     }
   });

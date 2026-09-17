@@ -38,7 +38,10 @@ function detectImageMime(bytes: Buffer): string | null {
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return 'image/jpeg';
   }
-  if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') {
+  if (
+    bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
     return 'image/webp';
   }
   if (bytes.subarray(0, 3).toString('ascii') === 'GIF') {
@@ -139,6 +142,17 @@ export interface NormalizedSourceImage {
   description?: string;
   /** The provider's own image id, retained as provenance only. */
   providerImageId?: string;
+  normalizedPackageId?: string;
+  contentSourceId?: string;
+  contentRevisionId?: string;
+  parseRunId?: string;
+  structureProfile?: { id: string; versionId: string };
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
+  sourceRole?: string;
+  caption?: string;
+  figureLabel?: string;
+  visionPriority?: number;
 }
 
 export interface NormalizeSourceImagesResult {
@@ -193,7 +207,9 @@ export function normalizeSourceImages(parsed: ParsedPdfContent): NormalizeSource
     }
     const dims = detectImageDimensions(data, actualMime!);
     const pageNumber =
-      typeof entry.pageNumber === 'number' && Number.isFinite(entry.pageNumber) && entry.pageNumber > 0
+      typeof entry.pageNumber === 'number' &&
+      Number.isFinite(entry.pageNumber) &&
+      entry.pageNumber > 0
         ? Math.floor(entry.pageNumber)
         : null;
     images.push({
@@ -223,6 +239,13 @@ export function toVisionPdfImages(images: NormalizedSourceImage[]): PdfImage[] {
     ...(image.description !== undefined ? { description: image.description } : {}),
     ...(image.width !== undefined ? { width: image.width } : {}),
     ...(image.height !== undefined ? { height: image.height } : {}),
+    ...(image.sourceContentUnitIds ? { sourceContentUnitIds: image.sourceContentUnitIds } : {}),
+    ...(image.sourceBlockIds ? { sourceBlockIds: image.sourceBlockIds } : {}),
+    ...(image.sourceRole ? { sourceRole: image.sourceRole } : {}),
+    ...(image.caption ? { caption: image.caption } : {}),
+    ...(image.figureLabel ? { figureLabel: image.figureLabel } : {}),
+    ...(image.providerImageId ? { providerVisualId: image.providerImageId } : {}),
+    ...(image.visionPriority !== undefined ? { visionPriority: image.visionPriority } : {}),
   }));
 }
 
@@ -279,19 +302,25 @@ export async function materializeSourceImages(
     }
     const servingPath = `/api/classroom-media/${stageId}/media/${fileName}`;
     servingMapping[image.id] = servingPath;
-    visionMapping[
-      image.id
-    ] = `data:${image.mimeType};base64,${image.data.toString('base64')}`;
+    visionMapping[image.id] = `data:${image.mimeType};base64,${image.data.toString('base64')}`;
     manifest.push({
       id: image.id,
       contentResourceId,
-      ...(image.providerImageId !== undefined
-        ? { providerImageId: image.providerImageId }
-        : {}),
+      ...(image.providerImageId !== undefined ? { providerImageId: image.providerImageId } : {}),
       pageNumber: image.pageNumber,
       ...(image.width !== undefined ? { width: image.width } : {}),
       ...(image.height !== undefined ? { height: image.height } : {}),
       ...(image.description !== undefined ? { description: image.description } : {}),
+      ...(image.normalizedPackageId ? { normalizedPackageId: image.normalizedPackageId } : {}),
+      ...(image.contentSourceId ? { normalizedContentSourceId: image.contentSourceId } : {}),
+      ...(image.contentRevisionId ? { contentRevisionId: image.contentRevisionId } : {}),
+      ...(image.parseRunId ? { parseRunId: image.parseRunId } : {}),
+      ...(image.structureProfile ? { structureProfile: image.structureProfile } : {}),
+      ...(image.sourceContentUnitIds ? { sourceContentUnitIds: image.sourceContentUnitIds } : {}),
+      ...(image.sourceBlockIds ? { sourceBlockIds: image.sourceBlockIds } : {}),
+      ...(image.sourceRole ? { sourceRole: image.sourceRole } : {}),
+      ...(image.caption ? { caption: image.caption } : {}),
+      ...(image.figureLabel ? { figureLabel: image.figureLabel } : {}),
       mimeType: image.mimeType,
       sha256: image.sha256,
       servingPath,
@@ -368,8 +397,7 @@ export function applySourceVisualPrecedence<
     for (const outline of outlines) {
       if (!outline.mediaGenerations || outline.mediaGenerations.length === 0) continue;
       outline.mediaGenerations = outline.mediaGenerations.filter(
-        (request) =>
-          !(request.type === 'image' && droppedRequestElementIds.has(request.elementId)),
+        (request) => !(request.type === 'image' && droppedRequestElementIds.has(request.elementId)),
       );
     }
   }

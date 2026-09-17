@@ -42,6 +42,15 @@ export interface OutlinePromptContext {
    * → the templates render byte-identically to the pre-teaching-flow prompts.
    */
   teachingFlow?: TeachingFlowEntry[];
+  /**
+   * The source text is an approved Kafuo normalized package projected as
+   * Content Units. When true, the prompt contract requires every outline to
+   * carry a non-empty `sourceContentUnitIds` copied from the
+   * `[[CONTENT_UNIT id=...]]` markers — and never block ids, which the
+   * projection does not show the model at all. Absent/false → the templates
+   * render byte-identically to the pre-grounding prompts.
+   */
+  normalizedGrounding?: boolean;
 }
 
 export interface OutlineGenerationOptions extends Omit<
@@ -133,6 +142,7 @@ export function buildOutlinePrompt(
     teacherContext: context.teacherContext || '',
     hasTeachingFlow,
     teachingFlowText,
+    normalizedGrounding: context.normalizedGrounding ?? false,
   });
 
   if (!prompts) {

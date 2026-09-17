@@ -9,7 +9,9 @@
  *   Layer A (once per attempt): bounded acquisition of the lesson PDF →
  *   normalized source (text + source visuals) reused by every classroom run.
  *
- *   Layer B (bounded configurable runs): `generateClassroom` → exact-flow
+ *   Layer B (bounded configurable runs): `generateClassroom` (with, on
+ *   normalized runs, a Stage-1 Content-Unit grounding gate that rejects an
+ *   ungrounded outline response before any Stage or Scene exists) → exact-flow
  *   validation → valid: `completeGenerationAttempt` binds the Stage; invalid
  *   or thrown after reservation: compensate (tombstone + media removal) and
  *   retry; exhausted: the attempt fails. Regeneration failure leaves the
@@ -37,14 +39,20 @@ import {
   recordPdfContentSummary,
 } from '@/lib/server/teaching-package/content-resource';
 import {
+  acquireNormalizedContentResource,
+  recordNormalizedContentSummary,
+} from '@/lib/server/teaching-package/normalized-content-resource';
+import {
   completeGenerationAttempt,
   failGenerationAttempt,
   recordResolvedLlmModel,
 } from '@/lib/server/teaching-package/generation';
 import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
 import { validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
+import { assertOutlineContentUnitGrounding } from '@/lib/server/teaching-package/outline-grounding';
 import { materializeSourceImages } from '@/lib/server/teaching-package/source-images';
 import { createTeachingPackagePersistenceSink } from '@/lib/server/teaching-package/stage-persistence-sink';
+import type { SceneOutline } from '@/lib/types/generation';
 import type { GenerationExecutionInput } from '@/lib/types/teaching-package';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
@@ -102,9 +110,20 @@ async function runKafuoAttempt(
   onProgress: (progress: ClassroomGenerationProgress) => Promise<void>,
 ): Promise<void> {
   // Layer A — one bounded acquisition per attempt, shared by every run.
-  const source = await acquireContentResource(kafuo.contentResource, {});
+  // Presence is authoritative: normalized failures never enter the PDF fallback.
+  const source = kafuo.normalizedContentResource
+    ? await acquireNormalizedContentResource(
+        kafuo.normalizedContentResource,
+        kafuo.aggregate.learningItem,
+      )
+    : await acquireContentResource(kafuo.contentResource, {});
   await patchSnapshot(pool, attemptId, (snapshot) =>
-    recordPdfContentSummary(snapshot, source),
+    kafuo.normalizedContentResource
+      ? recordNormalizedContentSummary(
+          snapshot,
+          source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource,
+        )
+      : recordPdfContentSummary(snapshot, source),
   );
   // B1.2: retain the extracted lesson text for question generation after
   // approval. The presigned URL is transient and never stored; this row holds
@@ -115,10 +134,22 @@ async function runKafuoAttempt(
     contentResourceId: kafuo.contentResource.id,
     measuredSha256: source.measuredSha256,
     text: source.text,
+    ...(kafuo.normalizedContentResource
+      ? {
+          sourceKind: 'kafuo_normalized' as const,
+          normalizedPackageId: kafuo.normalizedContentResource.id,
+          normalizedSchemaVersion: kafuo.normalizedContentResource.schemaVersion,
+          contentRevisionId: kafuo.normalizedContentResource.contentRevisionId,
+          parseRunId: kafuo.normalizedContentResource.parseRunId,
+          structureProfile: kafuo.normalizedContentResource.structureProfile,
+        }
+      : { sourceKind: 'pdf_fallback' as const }),
   });
 
   const execution: GenerationExecutionInput = {
-    requirement: kafuo.requirement,
+    requirement: kafuo.normalizedContentResource
+      ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.`
+      : kafuo.requirement,
     pdfContent: {
       text: source.text,
       images: source.images,
@@ -126,6 +157,10 @@ async function runKafuoAttempt(
     },
     ...kafuo.generation,
     teachingFlow: kafuo.teachingFlow,
+    // The prompt contract itself, not just prose on the requirement: this is
+    // what makes the outline templates render `sourceContentUnitIds` into the
+    // scene schema, the field table, and the closing reminders.
+    ...(kafuo.normalizedContentResource ? { normalizedGrounding: true } : {}),
   };
 
   let lastFailure: { code: string; message: string; retryable: boolean } | null = null;
@@ -157,6 +192,24 @@ async function runKafuoAttempt(
       const result = await generateClassroom(execution, {
         baseUrl: '',
         persistence: trackingSink,
+        // Stage-1 gate: rejects an ungrounded outline response BEFORE any Stage
+        // is reserved or a single Scene is generated. It used to run after
+        // `generateClassroom` had produced and persisted all 33 scenes, which
+        // cost ~5 minutes per retry to learn the first outline was ungrounded.
+        ...(kafuo.normalizedContentResource
+          ? {
+              validateOutlines: (outlines: SceneOutline[]) => {
+                assertOutlineContentUnitGrounding(
+                  outlines,
+                  (
+                    source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource
+                  ).manifest,
+                  attemptId,
+                  run,
+                );
+              },
+            }
+          : {}),
         sourceVisuals: {
           images: source.visionImages,
           materialize: async (stageId, selected) => {
@@ -207,27 +260,34 @@ async function runKafuoAttempt(
       if (isAcquisition) {
         // Layer A already retried within its policy; surface the terminal
         // code and stop the attempt.
-        await failGenerationAttempt(
-          pool,
-          attemptId,
-          error.message,
-          { code: error.code, retryable: error.retryable },
-        );
+        await failGenerationAttempt(pool, attemptId, error.message, {
+          code: error.code,
+          retryable: error.retryable,
+        });
         return;
       }
       const code =
         typeof (error as { code?: string }).code === 'string'
           ? (error as { code: string }).code
           : 'CLASSROOM_GENERATION_FAILED';
-      const retryable = code === 'CLASSROOM_GENERATION_FAILED';
+      // Both of these are the *model* answering badly, and a re-roll is the remedy for
+      // each. `OUTLINE_CONTENT_UNIT_GROUNDING_INVALID` gets the same budget as
+      // `TEACHING_MODEL_FLOW_MISMATCH` -- the same class of defect. It is also far cheaper
+      // to spend now: the Stage-1 gate rejects before any Scene is generated.
+      //
+      // This grants no extra attempts: the bound is still the enclosing
+      // `for (run = 1; run <= maxGenerationRuns(); ...)` loop, and every run still
+      // compensates before the next. Only the decision to use a run already available
+      // changes.
+      const retryable =
+        code === 'CLASSROOM_GENERATION_FAILED' ||
+        code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID';
       lastFailure = {
         code,
         message: error instanceof Error ? error.message : String(error),
         retryable,
       };
-      log.warn(
-        `Teaching package attempt ${attemptId} run ${run} threw (${code}); compensating`,
-      );
+      log.warn(`Teaching package attempt ${attemptId} run ${run} threw (${code}); compensating`);
       await compensateRun(pool, reservedStageId);
       if (!retryable) break;
     }
@@ -303,17 +363,17 @@ export function runGenerationAttempt(
           ? (error as { code: string }).code
           : undefined;
       const message = error instanceof Error ? error.message : String(error);
-      log.error(`Teaching package generation attempt ${attemptId} failed: ${code ?? 'unknown'}`, describeErrorSafely(error));
+      log.error(
+        `Teaching package generation attempt ${attemptId} failed: ${code ?? 'unknown'}`,
+        describeErrorSafely(error),
+      );
       try {
         const pool = await runnerPool();
         await failGenerationAttempt(pool, attemptId, message, {
           ...(code !== undefined ? { code } : {}),
         });
       } catch (markFailedError) {
-        log.error(
-          `Failed to persist failed status for attempt ${attemptId}:`,
-          markFailedError,
-        );
+        log.error(`Failed to persist failed status for attempt ${attemptId}:`, markFailedError);
       }
     } finally {
       runningAttempts.delete(attemptId);

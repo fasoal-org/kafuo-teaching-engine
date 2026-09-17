@@ -18,6 +18,7 @@ import type {
   GenerationExecutionInput,
   KafuoContentResource,
   KafuoGenerationRequest,
+  KafuoNormalizedContentResource,
   LearningObjectiveRef,
   TeachingFlowEntry,
   TeachingPackageAggregateKey,
@@ -27,7 +28,9 @@ type StartGenerationAttemptRequestAlias = StartGenerationAttemptRequest;
 
 /** Development-only escape hatch for local HTTP PDF sources. */
 function allowInsecureResourceUrl(): boolean {
-  return process.env.NODE_ENV !== 'production' && process.env.TEACHING_PACKAGE_ALLOW_HTTP_PDF === 'true';
+  return (
+    process.env.NODE_ENV !== 'production' && process.env.TEACHING_PACKAGE_ALLOW_HTTP_PDF === 'true'
+  );
 }
 
 function requireNonEmptyString(value: unknown, field: string): string {
@@ -103,7 +106,9 @@ function parseContentResource(raw: unknown): KafuoContentResource {
     id,
     url,
     mimeType: 'application/pdf',
-    ...(typeof record.fileName === 'string' && record.fileName ? { fileName: record.fileName } : {}),
+    ...(typeof record.fileName === 'string' && record.fileName
+      ? { fileName: record.fileName }
+      : {}),
     ...(typeof record.fileSizeBytes === 'number' && Number.isFinite(record.fileSizeBytes)
       ? { fileSizeBytes: record.fileSizeBytes }
       : {}),
@@ -111,6 +116,91 @@ function parseContentResource(raw: unknown): KafuoContentResource {
       ? { checksumSha256: record.checksumSha256 }
       : {}),
   };
+}
+
+function parseNormalizedContentResource(
+  raw: unknown,
+  contentResource: KafuoContentResource,
+): KafuoNormalizedContentResource | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  if (!record) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource must be an object',
+    );
+  }
+  const structure = record.structureProfile as Record<string, unknown> | undefined;
+  const resource: KafuoNormalizedContentResource = {
+    id: requireNonEmptyString(record.id, 'normalizedContentResource.id'),
+    url: requireNonEmptyString(record.url, 'normalizedContentResource.url'),
+    mimeType: record.mimeType as 'application/zip',
+    schemaVersion: record.schemaVersion as 'kafuo.normalized-content.v1',
+    contentSourceId: requireNonEmptyString(
+      record.contentSourceId,
+      'normalizedContentResource.contentSourceId',
+    ),
+    contentRevisionId: requireNonEmptyString(
+      record.contentRevisionId,
+      'normalizedContentResource.contentRevisionId',
+    ),
+    parseRunId: requireNonEmptyString(record.parseRunId, 'normalizedContentResource.parseRunId'),
+    structureProfile: {
+      id: requireNonEmptyString(structure?.id, 'normalizedContentResource.structureProfile.id'),
+      versionId: requireNonEmptyString(
+        structure?.versionId,
+        'normalizedContentResource.structureProfile.versionId',
+      ),
+    },
+    fileSizeBytes: Number(record.fileSizeBytes),
+    checksumSha256: requireNonEmptyString(
+      record.checksumSha256,
+      'normalizedContentResource.checksumSha256',
+    ).toLowerCase(),
+  };
+  if (resource.mimeType !== 'application/zip') {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource.mimeType must be application/zip',
+    );
+  }
+  if (resource.schemaVersion !== 'kafuo.normalized-content.v1') {
+    throw new TeachingPackageError(
+      'NORMALIZED_CONTENT_SCHEMA_UNSUPPORTED',
+      'normalizedContentResource.schemaVersion is unsupported',
+    );
+  }
+  if (resource.contentSourceId !== contentResource.id) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource.contentSourceId must equal contentResource.id',
+    );
+  }
+  if (!Number.isSafeInteger(resource.fileSizeBytes) || resource.fileSizeBytes <= 0) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource.fileSizeBytes must be a positive integer',
+    );
+  }
+  if (!/^[0-9a-f]{64}$/.test(resource.checksumSha256)) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource.checksumSha256 must be SHA-256 hex',
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(resource.url);
+  } catch {
+    throw new TeachingPackageError('INVALID_REQUEST', 'normalizedContentResource.url is invalid');
+  }
+  if (parsed.protocol !== 'https:' && !allowInsecureResourceUrl()) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'normalizedContentResource.url must use https',
+    );
+  }
+  return resource;
 }
 
 /**
@@ -143,7 +233,10 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   }
   const itemType = learningItem.type;
   if (itemType !== 'lesson' && itemType !== 'section') {
-    throw new TeachingPackageError('UNSUPPORTED_LEARNING_ITEM_TYPE', 'learningItem.type must be "lesson" or "section"');
+    throw new TeachingPackageError(
+      'UNSUPPORTED_LEARNING_ITEM_TYPE',
+      'learningItem.type must be "lesson" or "section"',
+    );
   }
   const item: KafuoGenerationRequest['learningItem'] = {
     type: itemType,
@@ -236,26 +329,24 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
       'learningObjectives must be a non-empty array of approved objectives',
     );
   }
-  const learningObjectives: LearningObjectiveRef[] = body.learningObjectives.map(
-    (entry, index) => {
-      const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
-      const objectiveRef = record?.objectiveRef;
-      const snapshot = record?.snapshot as Record<string, unknown> | undefined;
-      if (
-        typeof objectiveRef !== 'string' ||
-        objectiveRef.trim() === '' ||
-        !snapshot ||
-        typeof snapshot.statement !== 'string' ||
-        snapshot.statement.trim() === ''
-      ) {
-        throw new TeachingPackageError(
-          'INVALID_REQUEST',
-          `learningObjectives[${index}] requires objectiveRef and snapshot.statement`,
-        );
-      }
-      return { objectiveRef, snapshot: { statement: snapshot.statement } };
-    },
-  );
+  const learningObjectives: LearningObjectiveRef[] = body.learningObjectives.map((entry, index) => {
+    const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+    const objectiveRef = record?.objectiveRef;
+    const snapshot = record?.snapshot as Record<string, unknown> | undefined;
+    if (
+      typeof objectiveRef !== 'string' ||
+      objectiveRef.trim() === '' ||
+      !snapshot ||
+      typeof snapshot.statement !== 'string' ||
+      snapshot.statement.trim() === ''
+    ) {
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `learningObjectives[${index}] requires objectiveRef and snapshot.statement`,
+      );
+    }
+    return { objectiveRef, snapshot: { statement: snapshot.statement } };
+  });
 
   const teachingModelRaw = body.teachingModel as Record<string, unknown> | undefined;
   if (!teachingModelRaw || typeof teachingModelRaw !== 'object') {
@@ -268,6 +359,10 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   };
 
   const contentResource = parseContentResource(body.contentResource);
+  const normalizedContentResource = parseNormalizedContentResource(
+    body.normalizedContentResource,
+    contentResource,
+  );
 
   const generationRaw = (body.generation ?? {}) as Record<string, unknown>;
   const FORBIDDEN_GENERATION_KEYS = [
@@ -308,12 +403,11 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     learningObjectives,
     teachingModel,
     contentResource,
+    ...(normalizedContentResource ? { normalizedContentResource } : {}),
     generation,
     tenantContext: { tenantId },
     actorRef,
-    ...(typeof body.versionId === 'string' && body.versionId
-      ? { versionId: body.versionId }
-      : {}),
+    ...(typeof body.versionId === 'string' && body.versionId ? { versionId: body.versionId } : {}),
   };
   return {
     request,
@@ -348,6 +442,13 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
         ? { checksumSha256: request.contentResource.checksumSha256 }
         : {}),
     },
+    ...(request.normalizedContentResource
+      ? {
+          normalizedContentResource: normalizedContentResourceSnapshotFacts(
+            request.normalizedContentResource,
+          ),
+        }
+      : {}),
     generation: request.generation,
   };
   if (request.versionId !== undefined) payload.versionId = request.versionId;
@@ -396,13 +497,16 @@ export function contentResourceSnapshotFacts(resource: KafuoContentResource): {
     id: resource.id,
     mimeType: resource.mimeType,
     ...(resource.fileName !== undefined ? { fileName: resource.fileName } : {}),
-    ...(resource.fileSizeBytes !== undefined
-      ? { fileSizeBytes: resource.fileSizeBytes }
-      : {}),
-    ...(resource.checksumSha256 !== undefined
-      ? { checksumSha256: resource.checksumSha256 }
-      : {}),
+    ...(resource.fileSizeBytes !== undefined ? { fileSizeBytes: resource.fileSizeBytes } : {}),
+    ...(resource.checksumSha256 !== undefined ? { checksumSha256: resource.checksumSha256 } : {}),
   };
+}
+
+export function normalizedContentResourceSnapshotFacts(
+  resource: KafuoNormalizedContentResource,
+): Omit<KafuoNormalizedContentResource, 'url'> {
+  const { url: _url, ...stable } = resource;
+  return stable;
 }
 
 /** Build the deterministic requirement (plan §4.3.3) for a Kafuo request. */
@@ -425,6 +529,7 @@ export interface KafuoGenerationContext {
   learningObjectives: LearningObjectiveRef[];
   requirement: string;
   contentResource: KafuoContentResource;
+  normalizedContentResource?: KafuoNormalizedContentResource;
   generation: KafuoGenerationRequest['generation'];
   versionId: string | null;
 }
@@ -457,6 +562,13 @@ export function buildKafuoStartRequest(
       requestDigest: digest,
       teachingFlow: request.teachingModel.flow,
       contentResource: contentResourceSnapshotFacts(request.contentResource),
+      ...(request.normalizedContentResource
+        ? {
+            normalizedContentResource: normalizedContentResourceSnapshotFacts(
+              request.normalizedContentResource,
+            ),
+          }
+        : {}),
     },
     kafuo: {
       aggregate,
@@ -464,6 +576,9 @@ export function buildKafuoStartRequest(
       learningObjectives: request.learningObjectives,
       requirement,
       contentResource: request.contentResource,
+      ...(request.normalizedContentResource
+        ? { normalizedContentResource: request.normalizedContentResource }
+        : {}),
       generation: request.generation,
       versionId: request.versionId ?? null,
     },

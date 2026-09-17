@@ -94,6 +94,7 @@ export interface StartGenerationAttemptRequest {
    * as Kafuo-shaped; the transient signed URL never reaches this type.
    */
   contentResource?: GenerationInputSnapshot['contentResource'];
+  normalizedContentResource?: GenerationInputSnapshot['normalizedContentResource'];
 }
 
 /** The request's canonical aggregate scope (plan §4.1.2). */
@@ -147,6 +148,9 @@ export function toGenerationInputSnapshot(
     ...(request.tenantId ? { tenantId: request.tenantId } : {}),
     ...(request.teachingFlow ? { teachingFlow: request.teachingFlow } : {}),
     ...(request.contentResource ? { contentResource: request.contentResource } : {}),
+    ...(request.normalizedContentResource
+      ? { normalizedContentResource: request.normalizedContentResource }
+      : {}),
     ...(request.requestDigest ? { requestDigest: request.requestDigest } : {}),
   };
 }

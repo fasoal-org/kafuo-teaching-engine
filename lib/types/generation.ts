@@ -33,6 +33,12 @@ export interface PdfImage {
   sourceDocumentName?: string; // Original source filename for citation back to material
   sourceDocumentOrder?: number; // Upload order in the bundle
   visionPriority?: number; // Higher values are attached first when vision budget is limited
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
+  sourceRole?: string;
+  caption?: string;
+  figureLabel?: string;
+  providerVisualId?: string;
 }
 
 /**
@@ -163,6 +169,8 @@ export interface SceneOutline {
   // Kafuo Teaching Model Flow identity — copied exactly from outline to scene,
   // never derived from title/type/order (Kafuo integration FRD §11.2).
   teachingStage?: TeachingStageRef;
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
   // AI-generated media requests (when PDF images are insufficient)

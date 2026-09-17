@@ -396,6 +396,7 @@ A visual entry may repeat derived Content Unit or block associations for lookup 
 8. A visual rejected or marked duplicate by the applicable review policy must not be exported as an independent authoritative visual.
 9. A provider-generated visual description is metadata, not canonical lesson text.
 10. Block-level linkage is sufficient for Version 1. Absence of `educational_assets` or `asset_content_unit_associations` must not force raw PDF re-extraction.
+11. **Blocks remain internal extraction/provenance evidence.** They stay in the wire schema because they carry visual-to-source validation, Content Unit/visual association verification, internal provenance, and archive-integrity facts. They are not part of the LLM-facing projection (§11.2). Removing Blocks from the wire schema would require a `kafuo.normalized-content.v2` migration and is out of scope; `kafuo.normalized-content.v1` is unchanged by the Content-Unit projection.
 
 ## 10. OpenMAIC Acquisition and Validation
 
@@ -484,7 +485,18 @@ It must additionally preserve:
 
 ### 11.2 Deterministic text rendering
 
-OpenMAIC must construct the textual generation input deterministically from the ordered manifest. The rendering must preserve Content Unit boundaries, roles, titles, block order, page references, and visual references. It must not flatten the content in a way that removes the association between lesson concepts and their source visuals.
+**The approved Content Unit is the pedagogical authority sent to the LLM.** OpenMAIC must construct the textual generation input deterministically from the ordered manifest as exactly one entry per approved Content Unit, carrying that unit's own approved `normalizedText`:
+
+```
+[[CONTENT_UNIT id=2900 order=0 role=INSTRUCTIONAL]]
+TITLE: ...
+<contentUnit.normalizedText>
+[[/CONTENT_UNIT]]
+```
+
+Document Blocks are lower-level extraction and provenance records. They remain inside the normalized archive (§9.2) and are used internally for archive-integrity validation, visual resolution, Content-Unit/visual association verification, and page/block diagnostics — but they **must not be rendered into the LLM-facing text**. The projection must not emit `[[BLOCK ...]]` markers, block ids, block types, block roles, block page metadata, or per-block `associatedVisualIds`.
+
+The rendering must be **fail-closed**. A Content Unit expected to contribute teaching content but carrying no usable `normalizedText` fails acquisition with `NORMALIZED_CONTENT_EMPTY`. OpenMAIC must **not** silently fall back to concatenating that unit's Blocks: an un-normalized unit is an upstream defect, and reassembled block text is not text any reviewer approved. A text-less unit is skipped rather than failed only when it legitimately teaches no prose — it carries associated visuals (a figure-only unit), or its role is non-instructional. The adopted non-instructional carve-out is `{REFERENCE, UNCLASSIFIED}`, matching Kafuo's `book_grounded_readiness_facts.py`; note that Kafuo's `generate_lesson_metadata.py` carves out only `{REFERENCE}`, so the wider set is a deliberate choice not to fail a package Kafuo itself considers approvable. A package in which no unit renders any text remains `NORMALIZED_CONTENT_EMPTY`.
 
 The rendered value continues to enter generation through:
 
@@ -494,29 +506,39 @@ GenerationExecutionInput.pdfContent.text
 
 The field name remains `pdfContent` for compatibility even though the authoritative input was supplied as a normalized package.
 
-Outline generation must return machine-readable grounding lineage for Kafuo normalized runs. Generated and persisted outline metadata must be able to retain the authoritative normalized inputs that grounded each outline, conceptually:
+**Outline grounding is Content-Unit-level.** For Kafuo normalized runs, every generated outline must return:
 
-```ts
-sourceContentUnitIds?: string[];
-sourceBlockIds?: string[];
+```json
+"sourceContentUnitIds": ["2900"]
 ```
 
-These fields are optional for compatibility with non-Kafuo and PDF-fallback generation. For normalized generation, any emitted ids must refer to manifest Content Units and blocks and must remain machine-readable after prompt execution. This does not redesign Scene storage.
+The model must never be asked for, and must never be required to return, block ids: it is shown no block identifier, so it could only invent one. `sourceBlockIds` is retained on the outline type as an optional legacy/internal field for backward compatibility; it is not prompted, not required, and not validated.
+
+This contract must be carried by an **explicit generation option**, not by prose appended to the requirement alone. When normalized grounding is enabled, both outline prompt templates must include `sourceContentUnitIds` in the minimum Scene JSON example, the Scene field table, and the final required-field reminders, and must instruct the model to copy ids exactly from `[[CONTENT_UNIT id=...]]`, cite one or more relevant ids per outline, never invent an id, and never return block ids. When the option is absent, the non-Kafuo/PDF prompts must render byte-identically to their pre-grounding form.
+
+Grounding must be validated at **Stage 1**, immediately after outline generation and before Stage reservation, Scene content generation, media generation, and Stage persistence. Missing, empty, or unknown Content Unit ids fail with `OUTLINE_CONTENT_UNIT_GROUNDING_INVALID`. Ids are compared as strings on both sides, because the projection shows bare unquoted ids and a model copying them "exactly" emits JSON numbers. A grounding failure may consume one of the bounded outline-generation attempts, but must not generate a full set of Scenes before being discovered. This does not redesign Scene storage.
 
 ### 11.3 Visual adaptation
 
-Authoritative visuals must enter the existing source-visual channel as `PdfImage` values and normalized source images. The internal types and prompt formatters must be extended only as necessary to expose:
+Authoritative visuals must enter the existing source-visual channel as `PdfImage` values and normalized source images. **Visuals are LLM-facing and are associated by Content Unit.** The LLM-facing image description — in both the text descriptions and the vision placeholders for attached images, and in both the outline and scene-content prompts — must expose:
 
-- Content Unit ids;
-- source block/evidence ids;
-- caption and figure label;
+- the OpenMAIC internal image id (e.g. `src-1`);
+- the associated **Content Unit ids**;
 - page number;
-- source role/type; and
-- deterministic vision priority.
+- caption, figure label, and description when present; and
+- dimensions.
+
+The actual image bytes continue to enter through the existing vision channel, ordered by deterministic vision priority. Example:
+
+```
+- **src-1**: image from PDF page 2 | size: 800×600 (aspect ratio 1.33) | Content Units: 2900 | Figure: Figure 1.2 | Caption: ... [see attached]
+```
+
+**Block ids must not appear in any LLM-facing image description.** `PdfImage` continues to carry `sourceBlockIds` internally, and the selected-visual manifest continues to persist it (§12.3) — the restriction is on what is sent to the model, not on what OpenMAIC holds.
 
 The outline model must receive the authoritative association metadata and must not be asked to rediscover all relevance from page number and a generic description alone.
 
-The outline model must also receive stable Content Unit and block identifiers and return their grounding lineage on each generated outline. Outline grounding lineage is distinct from visual lineage: outline metadata records content grounding, while the existing source-visual manifest records selected visual provenance.
+Outline grounding lineage is distinct from visual lineage: outline metadata records Content-Unit-level content grounding, while the existing source-visual manifest records selected visual provenance at finer internal granularity.
 
 If the number of valid visuals exceeds the model's vision budget, OpenMAIC must prioritize them deterministically using Kafuo's associations and declared priority. It must not revert to raw PDF image extraction.
 
@@ -581,7 +603,9 @@ No signed or private source URL may be persisted in the manifest.
 
 ### 12.4 Outline grounding lineage
 
-For normalized Kafuo generation, persisted outline metadata must retain `sourceContentUnitIds` and `sourceBlockIds` (or contract-equivalent fields) produced during outline generation. The ids must be validated against the normalized manifest and must survive the same persistence, Editor-save merge, and successor-cloning paths through which existing outline metadata survives. This requirement does not add fields to Scene storage.
+For normalized Kafuo generation, persisted outline metadata must retain `sourceContentUnitIds` produced during outline generation. The ids must be validated against the normalized manifest's Content Units and must survive the same persistence, Editor-save merge, and successor-cloning paths through which existing outline metadata survives. `sourceBlockIds` may still be carried where present as an optional legacy/internal field, but it is neither required nor requested from the model. This requirement does not add fields to Scene storage.
+
+Internal visual provenance is unaffected: selected visual manifests may continue to retain the normalized package id, content source/revision/parse-run lineage, Content Unit ids, **internal Block ids**, provider visual id, checksum, and the final Stage serving path.
 
 ## 13. Fallback and Compatibility
 
@@ -605,8 +629,11 @@ The integration must expose safe, stable failure codes at minimum for:
 | Invalid/dangling association | `NORMALIZED_CONTENT_ASSOCIATION_INVALID` |
 | Media validation failure | `NORMALIZED_CONTENT_MEDIA_INVALID` |
 | No usable authoritative text | `NORMALIZED_CONTENT_EMPTY` |
+| Model outline omitted, emptied, or invented Content Unit grounding | `OUTLINE_CONTENT_UNIT_GROUNDING_INVALID` |
 
 Transient network failures may be retried within the existing acquisition policy. Integrity, schema, lineage, association, archive-safety, and empty-content failures are terminal for the attempt.
+
+`NORMALIZED_CONTENT_LINEAGE_MISMATCH` is reserved for an actual package/request lineage mismatch and must **not** be reused for a model-output error. An ungrounded outline response is a bad answer, not a bad package; reporting it under the lineage code sent one live diagnosis hunting a package that was provably correct. `OUTLINE_CONTENT_UNIT_GROUNDING_INVALID` is retryable within the existing bounded generation-run budget and grants no additional attempts.
 
 All failure messages must be safe and must not echo signed URLs, storage URIs, archive contents, provider messages, or credentials.
 

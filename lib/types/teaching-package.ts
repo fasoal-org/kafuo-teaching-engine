@@ -162,6 +162,14 @@ export interface GenerationInputSnapshot {
     measuredBytes?: number;
     measuredSha256?: string;
   };
+  /** Stable normalized-package facts only; never the signed URL. */
+  normalizedContentResource?: Omit<KafuoNormalizedContentResource, 'url'> & {
+    measuredBytes?: number;
+    measuredSha256?: string;
+    contentUnitCount?: number;
+    blockCount?: number;
+    visualCount?: number;
+  };
   /** sha256 of the canonical Kafuo request (excludes the signed URL). */
   requestDigest?: string;
   /** Source-visual counts patched in by the acquisition/generation layers. */
@@ -315,6 +323,20 @@ export interface KafuoContentResource {
   checksumSha256?: string;
 }
 
+export interface KafuoNormalizedContentResource {
+  id: string;
+  /** Transient retrieval credential — execution memory only. */
+  url: string;
+  mimeType: 'application/zip';
+  schemaVersion: 'kafuo.normalized-content.v1';
+  contentSourceId: string;
+  contentRevisionId: string;
+  parseRunId: string;
+  structureProfile: { id: string; versionId: string };
+  fileSizeBytes: number;
+  checksumSha256: string;
+}
+
 /** The structured Kafuo generation request (FRD §9.2, normative boundary). */
 export interface KafuoGenerationRequest {
   requestId: string;
@@ -323,6 +345,7 @@ export interface KafuoGenerationRequest {
   learningObjectives: LearningObjectiveRef[];
   teachingModel: TeachingModelLineage & { flow: TeachingFlowEntry[] };
   contentResource: KafuoContentResource;
+  normalizedContentResource?: KafuoNormalizedContentResource;
   generation: KafuoGenerationSwitches;
   /** From `ActorContext.resolve_tenant(...)`, never a browser body value. */
   tenantContext: { tenantId: string };
@@ -447,4 +470,14 @@ export interface SourceVisualManifestEntry {
   sha256: string;
   /** Origin-relative serving path under the Stage media dir. */
   servingPath: string;
+  normalizedPackageId?: string;
+  normalizedContentSourceId?: string;
+  contentRevisionId?: string;
+  parseRunId?: string;
+  structureProfile?: { id: string; versionId: string };
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
+  sourceRole?: string;
+  caption?: string;
+  figureLabel?: string;
 }

@@ -19,10 +19,11 @@ import { randomBytes } from 'node:crypto';
 
 import type { Queryable } from '@openmaic/storage/document/pg';
 
-import { insertWebhookDelivery, readLatestWebhookSequence } from '@/lib/persistence/teaching-package';
-import type {
-  TeachingPackageAggregateKey,
-} from '@/lib/types/teaching-package';
+import {
+  insertWebhookDelivery,
+  readLatestWebhookSequence,
+} from '@/lib/persistence/teaching-package';
+import type { TeachingPackageAggregateKey } from '@/lib/types/teaching-package';
 
 /** Namespaced lock key so webhook sequence allocation cannot collide with the item lock. */
 function webhookLockKey(aggregate: TeachingPackageAggregateKey): string {
@@ -32,7 +33,10 @@ function webhookLockKey(aggregate: TeachingPackageAggregateKey): string {
 export async function enqueueWebhookEvent(
   tx: Queryable,
   aggregate: TeachingPackageAggregateKey,
-  eventType: 'teaching_package.generation_succeeded' | 'teaching_package.generation_failed' | 'teaching_package.status_changed',
+  eventType:
+    | 'teaching_package.generation_succeeded'
+    | 'teaching_package.generation_failed'
+    | 'teaching_package.status_changed',
   buildPayload: (sequence: number, eventId: string) => Record<string, unknown>,
 ): Promise<void> {
   await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -45,6 +49,7 @@ export async function enqueueWebhookEvent(
   const serialized = JSON.stringify(payload);
   if (
     serialized.includes('contentResource') ||
+    serialized.includes('normalizedContentResource') ||
     serialized.includes('requirement') ||
     serialized.includes('pdfContent') ||
     /https?:\/\/[^"\s]*[?&](x-amz-signature|sig|token)=/i.test(serialized)

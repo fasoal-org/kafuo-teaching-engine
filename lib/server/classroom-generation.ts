@@ -74,6 +74,13 @@ export interface GenerateClassroomInput {
    * pre-integration path.
    */
   teachingFlow?: TeachingFlowEntry[];
+  /**
+   * `pdfContent.text` is an approved Kafuo normalized package projected as
+   * Content Units (never Blocks). Propagated to the outline prompt, which then
+   * requires `sourceContentUnitIds` on every outline. Absent → prompts and
+   * behavior are byte-identical to the pre-grounding path.
+   */
+  normalizedGrounding?: boolean;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -293,6 +300,13 @@ export async function generateClassroom(
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
     persistence?: ClassroomPersistenceSink;
     sourceVisuals?: SourceVisualChannel;
+    /**
+     * Stage-1 gate (plan §4.3.8): runs on the outlines the model just returned,
+     * BEFORE any Stage is reserved, any Scene is generated, and any media is
+     * written. Throwing rejects the run at its cheapest point — the caller's
+     * compensation has nothing to undo because nothing was reserved yet.
+     */
+    validateOutlines?: (outlines: SceneOutline[]) => void | Promise<void>;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
@@ -722,6 +736,7 @@ export async function generateClassroom(
       ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
         ? { teachingFlow: input.teachingFlow }
         : {}),
+      ...(input.normalizedGrounding ? { normalizedGrounding: true } : {}),
     },
   );
 
@@ -742,6 +757,11 @@ export async function generateClassroom(
     scenesGenerated: 0,
     totalScenes: outlines.length,
   });
+
+  // Stage-1 outline gate. Deliberately BEFORE `sink.reserve` below: a run that
+  // fails grounding must not cost a Stage reservation, 33 Scene generations, or
+  // any media write. Throwing here reaches the caller with nothing to compensate.
+  await options.validateOutlines?.(outlines);
 
   // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective
   let agents: AgentInfo[];

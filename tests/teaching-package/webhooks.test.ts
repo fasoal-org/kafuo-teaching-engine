@@ -73,6 +73,11 @@ describe('teaching package webhooks', () => {
         contentResource: { url: 'https://x/y.pdf?X-Amz-Signature=abc' },
       }),
     ).rejects.toThrow(/retrieval credentials|source content/);
+    await expect(
+      enqueue('teaching_package.generation_failed', {
+        normalizedContentResource: { url: 'https://x/y.zip?sig=abc' },
+      }),
+    ).rejects.toThrow(/retrieval credentials|source content/);
   });
 
   it('signs exactly `<timestamp>.<raw body>` with the dedicated secret (vector)', async () => {

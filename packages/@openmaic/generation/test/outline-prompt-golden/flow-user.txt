@@ -4,11 +4,11 @@ Please generate scene outlines based on the following course requirements.
 
 ## User Requirements
 
-{{requirement}}
+Teach photosynthesis
 
 ---
 
-{{userProfile}}
+
 
 ## Language Context
 
@@ -23,42 +23,32 @@ Infer the course language directive by applying the decision rules from the syst
 
 ### PDF Content Summary
 
-{{pdfContent}}
+some pdf text
 
 ### Available Images
 
-{{availableImages}}
+No images available
 
 ### Web Search Results
 
-{{researchContext}}
+None
 
-{{teacherContext}}
+
 
 ---
 
 ## Output Requirements
-{{#if hasTeachingFlow}}
+
 ### Authoritative Teaching Model Flow
 
 The course structure MUST follow this ordered flow exactly. Every outline carries `teachingStage: { "key": <stage>, "flowIndex": <index> }` copied exactly from this list; outline order covers the positions in order, with no gaps, no reordering, and no re-entry (one position may yield several consecutive outlines):
 
 ```
-{{teachingFlowText}}
+0. stage="lesson_introduction" instructions="Open the lesson"
 ```
 
 Example outline field: `"teachingStage": { "key": "lesson_introduction", "flowIndex": 0 }`
-{{/if}}{{#if normalizedGrounding}}
-### Authoritative Source Grounding
 
-The PDF Content Summary above is an approved normalized source, delivered as Content Units marked `[[CONTENT_UNIT id=... order=... role=...]]`. Every outline MUST carry `sourceContentUnitIds`: a non-empty array of the ids it teaches from, copied **exactly** from those markers.
-
-- Use one or more Content Unit ids that are genuinely relevant to that outline.
-- Never invent an id — only ids present in the source are valid.
-- Never return block ids; `sourceContentUnitIds` is the only grounding field.
-
-Example outline field: `"sourceContentUnitIds": ["2900"]`
-{{/if}}
 
 Please automatically infer the following from user requirements:
 
@@ -91,8 +81,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
   "title": "Scene Title",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
-  "order": 1{{#if normalizedGrounding}},
-  "sourceContentUnitIds": ["2900"]{{/if}}
+  "order": 1
 }
 ```
 
@@ -106,9 +95,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
      "questionTypes": ["single", "multiple"]
    }
    ```
-{{#if hasSourceImages}}
-- **If source images are available**, add `suggestedImageIds` to relevant slide scenes. Only use image IDs listed under Available Images.
-{{/if}}
+
 - **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use `"type": "interactive"` with `widgetType` and `widgetOutline` fields. Limit to 1-2 per course.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
    - Provide appropriate widgetOutline for the widget type
@@ -117,6 +104,4 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 - **Language**: Infer from the user's requirement text and context, then output all content in the inferred language
 - **If web search results are provided**, reference specific findings and sources in scene descriptions and keyPoints. The search results provide up-to-date information — incorporate it to make the course content current and accurate.
 
-**Final reminder**: your entire response must be a JSON **object** with exactly three top-level keys — `languageDirective` (string), `courseTitle` (string, ≤30 chars, in the teaching language), and `outlines` (array). Do not return a bare array. Do not wrap in prose or code fences.{{#if normalizedGrounding}}
-
-**Grounding reminder**: every scene in `outlines` must include a non-empty `sourceContentUnitIds` array holding Content Unit ids copied exactly from the `[[CONTENT_UNIT id=...]]` markers. Do not invent ids and do not return block ids.{{/if}}
+**Final reminder**: your entire response must be a JSON **object** with exactly three top-level keys — `languageDirective` (string), `courseTitle` (string, ≤30 chars, in the teaching language), and `outlines` (array). Do not return a bare array. Do not wrap in prose or code fences.

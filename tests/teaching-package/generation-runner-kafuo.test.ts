@@ -9,18 +9,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 import type { AppScene } from '@/lib/types/stage';
-import type {
-  KafuoContentResource,
-  TeachingFlowEntry,
-} from '@/lib/types/teaching-package';
+import type { KafuoContentResource, TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 const mocks = vi.hoisted(() => ({
   generateClassroom: vi.fn(),
   resolveModel: vi.fn(),
   acquireContentResource: vi.fn(),
+  acquireNormalizedContentResource: vi.fn(),
   materializeSourceImages: vi.fn(),
+  logWarn: vi.fn(),
+  /**
+   * Called by the `generateClassroom` mocks at the exact point the real pipeline
+   * starts Stage-2 work — after the Stage-1 outline gate, before `reserve`.
+   * `not.toHaveBeenCalled()` is therefore the proof that an ungrounded response
+   * cost no Stage and no Scene content.
+   */
+  sceneGenerationReached: vi.fn(),
+  /** The outlines each run handed to `persistence.persist`, in order. */
+  persistedOutlines: [] as Array<Array<{ sourceContentUnitIds?: unknown }>>,
 }));
+
 
 vi.mock('@/lib/server/classroom-generation', () => ({
   generateClassroom: mocks.generateClassroom,
@@ -39,19 +48,24 @@ vi.mock('@/lib/server/teaching-package/content-resource', () => ({
   },
   recordPdfContentSummary: vi.fn((snapshot) => snapshot),
 }));
+vi.mock('@/lib/server/teaching-package/normalized-content-resource', () => ({
+  acquireNormalizedContentResource: mocks.acquireNormalizedContentResource,
+  recordNormalizedContentSummary: vi.fn((snapshot) => snapshot),
+}));
 vi.mock('@/lib/server/teaching-package/source-images', async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import('@/lib/server/teaching-package/source-images')
-  >()),
+  ...(await importOriginal<typeof import('@/lib/server/teaching-package/source-images')>()),
   materializeSourceImages: mocks.materializeSourceImages,
 }));
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  // `warn` is captured rather than discarded: the grounding refusal's diagnostics are part
+  // of the contract now, because the outlines it rejects are gone by the time anyone reads
+  // the stored attempt.
+  createLogger: () => ({ info: vi.fn(), warn: mocks.logWarn, error: vi.fn(), debug: vi.fn() }),
 }));
 
 const PNG = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
-  0, 0, 0, 3, 0, 0, 0, 2, 8, 6, 0, 0, 0,
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 3,
+  0, 0, 0, 2, 8, 6, 0, 0, 0,
 ]);
 const DATA_URL = `data:image/png;base64,${PNG.toString('base64')}`;
 
@@ -101,6 +115,17 @@ function flowOutline(order: number, flowIndex: number) {
 /** The successful-run mock: reserve → persist → valid flow scenes. */
 function mockValidRun(stageId = 'stage-run-1') {
   mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+    // Pipeline order, faithfully: outlines → Stage-1 gate → reserve → scenes.
+    // `sourceContentUnitIds` alone; the happy path deliberately sends NO
+    // `sourceBlockIds`, which is the proof that block citation is not required.
+    const outlines = FLOW.map((_, index) => ({
+      ...flowOutline(index + 1, index),
+      ...(_execution.pdfContent?.text?.includes('CONTENT_UNIT')
+        ? { sourceContentUnitIds: ['cu-1'] }
+        : {}),
+    }));
+    await options.validateOutlines?.(outlines);
+    mocks.sceneGenerationReached();
     const reserved = await options.persistence.reserve((id: string) => ({
       id,
       name: 'Generated',
@@ -109,9 +134,14 @@ function mockValidRun(stageId = 'stage-run-1') {
     }));
     const scenes = FLOW.map((_, index) => flowScene(index + 1, index));
     scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
-    const outlines = FLOW.map((_, index) => flowOutline(index + 1, index));
+    mocks.persistedOutlines.push(outlines as never);
     await options.persistence.persist(
-      { id: reserved.id, stage: reserved.stage, scenes: scenes as never, outlines: outlines as never },
+      {
+        id: reserved.id,
+        stage: reserved.stage,
+        scenes: scenes as never,
+        outlines: outlines as never,
+      },
       options.baseUrl,
     );
     return {
@@ -126,13 +156,84 @@ function mockValidRun(stageId = 'stage-run-1') {
   });
 }
 
+
+/**
+ * A run whose outline citations the test dictates.
+ *
+ * `mockGenerate` above copies `['cu-1']` whenever the adapted text mentions CONTENT_UNIT,
+ * which is the happy path and cannot express the failures below: ids of the wrong JSON
+ * type, ids absent from the manifest, or no citations at all.
+ */
+function mockGenerateWithCitations(citations: {
+  sourceContentUnitIds?: unknown;
+  sourceBlockIds?: unknown;
+}) {
+  mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+    // The gate is injected INTO the pipeline, so the mock must honour where it
+    // sits: outlines are validated before anything is reserved or generated. A
+    // mock that reserved first would keep passing while proving nothing about
+    // the boundary this test exists to pin.
+    const outlines = FLOW.map((_, index) => ({
+      ...flowOutline(index + 1, index),
+      ...citations,
+    }));
+    await options.validateOutlines?.(outlines);
+    mocks.sceneGenerationReached();
+    const reserved = await options.persistence.reserve((id: string) => ({
+      id,
+      name: 'Generated',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    const scenes = FLOW.map((_, index) => flowScene(index + 1, index));
+    scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
+    mocks.persistedOutlines.push(outlines as never);
+    await options.persistence.persist(
+      {
+        id: reserved.id,
+        stage: reserved.stage,
+        scenes: scenes as never,
+        outlines: outlines as never,
+      },
+      options.baseUrl,
+    );
+    return {
+      id: reserved.id,
+      url: '',
+      stage: reserved.stage,
+      scenes: scenes as never,
+      outlines: outlines as never,
+      scenesCount: scenes.length,
+      createdAt: new Date().toISOString(),
+    };
+  });
+}
+
+function normalizedSourceWithManifest() {
+  return {
+    text: '[[CONTENT_UNIT id=2900]] [[BLOCK id=51234]] normalized text',
+    images: [DATA_URL],
+    normalizedImages: [],
+    visionImages: [],
+    visionMapping: {},
+    measuredBytes: 100,
+    measuredSha256: 'b'.repeat(64),
+    // Ids are strings in the manifest, exactly as Kafuo exports them (`str(...)`).
+    manifest: { contentUnits: [{ id: '2900', blocks: [{ id: '51234' }] }] },
+    blockCount: 1,
+  };
+}
+
 function kafuoContext(): NonNullable<
   Parameters<
-    typeof import('@/lib/server/teaching-package/generation-runner')['runGenerationAttempt']
+    (typeof import('@/lib/server/teaching-package/generation-runner'))['runGenerationAttempt']
   >[2]
 > {
   return {
-    aggregate: { tenantId: 'tenant-k', learningItem: { type: 'lesson', id: `li-k-${randomUUID()}` } },
+    aggregate: {
+      tenantId: 'tenant-k',
+      learningItem: { type: 'lesson', id: `li-k-${randomUUID()}` },
+    },
     teachingFlow: FLOW,
     learningObjectives: [{ objectiveRef: 'o1', snapshot: { statement: 's' } }],
     requirement: 'req',
@@ -143,6 +244,24 @@ function kafuoContext(): NonNullable<
     } satisfies KafuoContentResource,
     generation: {},
     versionId: null,
+  };
+}
+
+function normalizedKafuoContext() {
+  return {
+    ...kafuoContext(),
+    normalizedContentResource: {
+      id: 'ncr-1',
+      url: 'https://r2.example.test/n.zip?sig=secret',
+      mimeType: 'application/zip' as const,
+      schemaVersion: 'kafuo.normalized-content.v1' as const,
+      contentSourceId: 'cs-1',
+      contentRevisionId: 'rev-1',
+      parseRunId: 'run-1',
+      structureProfile: { id: 'p-1', versionId: 'pv-1' },
+      fileSizeBytes: 100,
+      checksumSha256: 'b'.repeat(64),
+    },
   };
 }
 
@@ -157,9 +276,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
   }
 
   async function startKafuo(context = kafuoContext()) {
-    const { startGenerationAttempt } = await import(
-      '@/lib/server/teaching-package/generation'
-    );
+    const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
     const runner = await freshModules();
     const started = await startGenerationAttempt(txPool(), {
       tenantId: context.aggregate.tenantId,
@@ -185,6 +302,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'kafuo-run-'));
     vi.stubEnv('OPENMAIC_CLASSROOMS_DIR', tmp);
     mocks.generateClassroom.mockReset();
+    mocks.sceneGenerationReached.mockReset();
+    mocks.persistedOutlines.length = 0;
+    mocks.logWarn.mockReset();
     mocks.resolveModel.mockReset();
     mocks.resolveModel.mockResolvedValue({
       model: { id: 'm' },
@@ -200,6 +320,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       manifest: [],
     });
     mocks.acquireContentResource.mockReset();
+    mocks.acquireNormalizedContentResource.mockReset();
     mocks.acquireContentResource.mockResolvedValue({
       text: 'pdf text',
       images: [DATA_URL],
@@ -235,9 +356,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
   it('acquires once, runs once for a valid flow, and binds version 1 draft', async () => {
     const attemptId = await startKafuo();
-    const { readAttemptById, readVersion } = await import(
-      '@/lib/persistence/teaching-package'
-    );
+    const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
     const after = (await readAttemptById(qp(), attemptId))!;
     expect(after.status).toBe('succeeded');
     expect(after.versionId).toMatch(/^tpv-/);
@@ -249,7 +368,10 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     }))!;
     expect(version).toMatchObject({ version: 1, status: 'draft' });
     // The snapshot kept the secret-free resource facts — never the URL.
-    const raw = await pool.query(`SELECT input_snapshot::text AS s FROM teaching_package_generation_attempts WHERE id = $1`, [attemptId]);
+    const raw = await pool.query(
+      `SELECT input_snapshot::text AS s FROM teaching_package_generation_attempts WHERE id = $1`,
+      [attemptId],
+    );
     expect((raw.rows[0] as { s: string }).s).not.toContain('sig=abc');
     // B1.2: Layer A retained the extracted lesson text for question generation after
     // approval — the text and measured identity only, never the URL.
@@ -262,6 +384,70 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(row).toMatchObject({ tenant_id: 'tenant-k', measured_sha256: 'b'.repeat(64) });
     expect(row.j).not.toContain('sig=abc');
     expect(row.j).not.toContain('http');
+  });
+
+  it('uses normalized acquisition exclusively and never calls the PDF path', async () => {
+    mocks.acquireNormalizedContentResource.mockResolvedValue({
+      text: '[[CONTENT_UNIT id=cu-1]] normalized text',
+      images: [DATA_URL],
+      normalizedImages: [
+        {
+          id: 'src-1',
+          data: PNG,
+          mimeType: 'image/png',
+          sha256: '0'.repeat(64),
+          pageNumber: 1,
+          sourceContentUnitIds: ['cu-1'],
+          sourceBlockIds: ['block-1'],
+        },
+      ],
+      visionImages: [
+        {
+          id: 'src-1',
+          src: DATA_URL,
+          pageNumber: 1,
+          sourceContentUnitIds: ['cu-1'],
+          sourceBlockIds: ['block-1'],
+        },
+      ],
+      visionMapping: { 'src-1': DATA_URL },
+      measuredBytes: 100,
+      measuredSha256: 'b'.repeat(64),
+      manifest: { contentUnits: [{ id: 'cu-1', blocks: [{ id: 'block-1' }] }] },
+      blockCount: 1,
+    });
+    const attemptId = await startKafuo(normalizedKafuoContext());
+    expect(mocks.acquireNormalizedContentResource).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+    expect(mocks.generateClassroom.mock.calls[0]![0].pdfContent.text).toContain('cu-1');
+    const retained = await pool.query(
+      `SELECT source_kind, normalized_package_id, content_revision_id, parse_run_id,
+              structure_profile_id, structure_profile_version_id
+         FROM teaching_package_source_contexts WHERE attempt_id = $1`,
+      [attemptId],
+    );
+    expect(retained.rows[0]).toMatchObject({
+      source_kind: 'kafuo_normalized',
+      normalized_package_id: 'ncr-1',
+      content_revision_id: 'rev-1',
+      parse_run_id: 'run-1',
+      structure_profile_id: 'p-1',
+      structure_profile_version_id: 'pv-1',
+    });
+  });
+
+  it('does not fall back to PDF when normalized acquisition fails', async () => {
+    mocks.acquireNormalizedContentResource.mockRejectedValue(
+      Object.assign(new Error('safe normalized failure'), {
+        name: 'ContentResourceAcquisitionError',
+        code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID',
+        retryable: false,
+      }),
+    );
+    await startKafuo(normalizedKafuoContext());
+    expect(mocks.acquireNormalizedContentResource).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+    expect(mocks.generateClassroom).not.toHaveBeenCalled();
   });
 
   it('retries an invalid flow, then succeeds on a later run (only the valid stage binds)', async () => {
@@ -280,7 +466,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
       const outlines = indices.map((flowIndex, index) => flowOutline(index + 1, flowIndex));
       await options.persistence.persist(
-        { id: reserved.id, stage: reserved.stage, scenes: scenes as never, outlines: outlines as never },
+        {
+          id: reserved.id,
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+        },
         options.baseUrl,
       );
       return {
@@ -319,7 +510,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const scenes = [flowScene(1, 0)]; // never covers position 1
       scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
       await options.persistence.persist(
-        { id: reserved.id, stage: reserved.stage, scenes: scenes as never, outlines: [flowOutline(1, 0)] as never },
+        {
+          id: reserved.id,
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: [flowOutline(1, 0)] as never,
+        },
         options.baseUrl,
       );
       return {
@@ -365,7 +561,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
       const outlines = FLOW.map((_, index) => flowOutline(index + 1, index));
       await options.persistence.persist(
-        { id: reserved.id, stage: reserved.stage, scenes: scenes as never, outlines: outlines as never },
+        {
+          id: reserved.id,
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+        },
         options.baseUrl,
       );
       return {
@@ -393,9 +594,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
   it('keeps the previous usable stage when a regeneration fails', async () => {
     // First: a valid initial generation.
     const attemptId = await startKafuo();
-    const { readAttemptById, readVersion } = await import(
-      '@/lib/persistence/teaching-package'
-    );
+    const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
     const first = (await readAttemptById(qp(), attemptId))!;
     const versionId = first.versionId!;
     const before = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
@@ -404,9 +603,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     // Then: a regeneration of the same version that always fails.
     mocks.generateClassroom.mockReset();
     mocks.generateClassroom.mockRejectedValue(new Error('regeneration exploded'));
-    const { startGenerationAttempt } = await import(
-      '@/lib/server/teaching-package/generation'
-    );
+    const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
     const runner = await freshModules();
     const regeneration = await startGenerationAttempt(txPool(), {
       tenantId: 'tenant-k',
@@ -435,9 +632,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
   });
 
   it('fails terminally when Layer A acquisition is non-retryable', async () => {
-    const { ContentResourceAcquisitionError } = await import(
-      '@/lib/server/teaching-package/content-resource'
-    );
+    const { ContentResourceAcquisitionError } =
+      await import('@/lib/server/teaching-package/content-resource');
     mocks.acquireContentResource.mockRejectedValue(
       new ContentResourceAcquisitionError(
         'CONTENT_RESOURCE_NOT_PDF',
@@ -452,5 +648,209 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(after.errorCode).toBe('CONTENT_RESOURCE_NOT_PDF');
     expect(after.versionId).toBeNull();
     expect(mocks.generateClassroom).not.toHaveBeenCalled();
+  });
+
+  describe('normalized outline grounding', () => {
+    /**
+     * Lesson 282 / Learning Item 121 failed here with
+     * `NORMALIZED_CONTENT_LINEAGE_MISMATCH` on a manifest that was provably correct:
+     * 18 content units and 93 blocks, checksum verified. Two defects met there. The gate
+     * compared the model's citations against `Set<string>` while the projection showed the
+     * model bare unquoted ids and asked it to copy them "exactly" -- a model doing exactly
+     * that emits JSON numbers. And the code itself blamed the package for what was a model
+     * output error; `OUTLINE_CONTENT_UNIT_GROUNDING_INVALID` now says so.
+     */
+    it('accepts numeric ids that name real manifest entries', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      // What a compliant model returns when it copies `id=2900` out of the source text.
+      mockGenerateWithCitations({ sourceContentUnitIds: [2900] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]).toMatchObject({ status: 'succeeded', error_code: null });
+      // ...and the accepted numeric id is normalized before it is persisted, so the
+      // declared `string[]` stays true through persistence, merge and cloning.
+      const persisted = mocks.persistedOutlines.at(-1)!;
+      expect(persisted[0]!.sourceContentUnitIds).toEqual(['2900']);
+    });
+
+    it('accepts string ids, as it always did', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: ['2900'] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]!.status).toBe('succeeded');
+    });
+
+    it('never requires block ids: a Content-Unit-only citation succeeds', async () => {
+      /* The model is no longer shown a single `[[BLOCK]]` marker, so it cannot be asked
+         to cite one. An outline carrying ONLY `sourceContentUnitIds` is complete. */
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: ['2900'] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]!.status).toBe('succeeded');
+    });
+
+    it('does not ask the model for block ids', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: ['2900'] });
+
+      await startKafuo(normalizedKafuoContext());
+
+      const execution = mocks.generateClassroom.mock.calls[0]![0] as {
+        requirement: string;
+        normalizedGrounding?: boolean;
+      };
+      expect(execution.requirement).toContain('sourceContentUnitIds');
+      expect(execution.requirement).not.toContain('sourceBlockIds');
+      expect(execution.requirement).not.toContain('[[BLOCK');
+      // The contract is an explicit generation option, not prose alone: this is what
+      // switches the outline templates onto the grounded schema.
+      expect(execution.normalizedGrounding).toBe(true);
+    });
+
+    it('leaves the non-normalized PDF path without the grounding contract', async () => {
+      mockValidRun();
+
+      await startKafuo(kafuoContext());
+
+      const execution = mocks.generateClassroom.mock.calls[0]![0] as {
+        normalizedGrounding?: boolean;
+      };
+      expect(execution.normalizedGrounding).toBeUndefined();
+    });
+
+    it('refuses ids that name nothing in the manifest', async () => {
+      /* The check the normalization must not throw away: a hallucinated citation is still
+         ungrounded, whatever its JSON type. */
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]).toMatchObject({
+        status: 'failed',
+        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
+      });
+    });
+
+    it('refuses an outline that cites nothing at all', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]).toMatchObject({
+        status: 'failed',
+        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
+      });
+    });
+
+    it('refuses an outline with no sourceContentUnitIds field at all', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      // Exactly the real failure: every outline omitted the field.
+      mockGenerateWithCitations({});
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]).toMatchObject({
+        status: 'failed',
+        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
+      });
+    });
+
+    it('does not reuse NORMALIZED_CONTENT_LINEAGE_MISMATCH for a model output error', async () => {
+      /* That code is reserved for a genuine package/request lineage mismatch. Reporting a
+         bad answer under it is what sent the last diagnosis hunting a correct package. */
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT error_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]!.error_code).not.toBe('NORMALIZED_CONTENT_LINEAGE_MISMATCH');
+    });
+
+    it('rejects before any Scene content is generated or any Stage reserved', async () => {
+      /* The point of the whole change: this used to be discovered only after
+         `generateClassroom` had produced and persisted all 33 Scenes. */
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+      const stages = await pool.query(`SELECT count(*)::int AS n FROM stage_meta`);
+      expect(stages.rows[0]!.n).toBe(0);
+      const row = await pool.query(
+        `SELECT version_id FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]!.version_id).toBeNull();
+    });
+
+    it('spends the existing run budget on a grounding miss, and no more', async () => {
+      /* The budget itself is unchanged: the bound is still `maxGenerationRuns()`. Each
+         retry is now cheap — it re-rolls the outline call, not 33 Scenes. */
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
+
+      const attemptId = await startKafuo(normalizedKafuoContext());
+
+      const row = await pool.query(
+        `SELECT generation_runs FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      expect(Number(row.rows[0]!.generation_runs)).toBe(3);
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(3);
+      // ...and not one of those three retries produced Scene content.
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+    });
+
+    it('logs the rejected citations and what the manifest offered', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
+      mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
+
+      await startKafuo(normalizedKafuoContext());
+
+      const logged = mocks.logWarn.mock.calls.flat().join(' ');
+      expect(logged).toContain('rejected outline grounding');
+      // The offending values, and a sample of the real ones, so the next diagnosis does
+      // not need the database.
+      expect(logged).toContain('9999');
+      expect(logged).toContain('2900');
+      // Blocks are internal: the refusal never reports missing block grounding.
+      expect(logged).not.toContain('sourceBlockIds');
+    });
   });
 });

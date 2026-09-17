@@ -120,13 +120,25 @@
           "checksumSha256": "aa",
           "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
         },
+        "normalizedContentResource": {
+          "id": "ncr-1",
+          "url": "https://r2.example.test/n.zip?X-Amz-Signature=abc",
+          "mimeType": "application/zip",
+          "schemaVersion": "kafuo.normalized-content.v1",
+          "contentSourceId": "cs-77",
+          "contentRevisionId": "rev-11",
+          "parseRunId": "run-22",
+          "structureProfile": { "id": "profile-3", "versionId": "profile-version-4" },
+          "fileSizeBytes": 4567,
+          "checksumSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
         "generation": {
           "enableTTS": true
         },
         "actorRef": "42",
         "versionId": "tpv-existing-1"
       },
-      "digest": "4971fc1beffb2761c88b723577616d08ada6654e56063e389a377597b21bb47e"
+      "digest": "6fee91a22956165a22557963520400c69ce70c64ada1db0d3507c7f3e1f958f4"
     }
   ]
 }

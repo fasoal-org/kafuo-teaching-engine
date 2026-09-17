@@ -187,6 +187,14 @@ CREATE TABLE IF NOT EXISTS teaching_package_source_contexts (
   ${TENANT_CHECK},
   content_resource_id TEXT NOT NULL,
   measured_sha256 TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'pdf_fallback'
+    CHECK (source_kind IN ('pdf_fallback', 'kafuo_normalized')),
+  normalized_package_id TEXT,
+  normalized_schema_version TEXT,
+  content_revision_id TEXT,
+  parse_run_id TEXT,
+  structure_profile_id TEXT,
+  structure_profile_version_id TEXT,
   text TEXT NOT NULL,
   text_length INTEGER NOT NULL,
   truncated BOOLEAN NOT NULL DEFAULT FALSE,
@@ -238,6 +246,16 @@ DROP INDEX IF EXISTS teaching_package_versions_single_active;
 DROP INDEX IF EXISTS teaching_package_versions_item_version_idx;
 DROP INDEX IF EXISTS teaching_package_attempts_single_inflight;
 DROP INDEX IF EXISTS teaching_package_attempts_request_id_unique;
+`;
+
+const SOURCE_CONTEXT_EVOLUTION = `
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'pdf_fallback';
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS normalized_package_id TEXT;
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS normalized_schema_version TEXT;
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS content_revision_id TEXT;
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS parse_run_id TEXT;
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS structure_profile_id TEXT;
+ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS structure_profile_version_id TEXT;
 `;
 
 /** Canonical indexes — tenant-scoped unique constraints in their ONLY form. */
@@ -313,6 +331,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(SOURCE_CONTEXT_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(SOURCE_CONTEXT_EVOLUTION)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique
@@ -893,6 +914,15 @@ function assertSnapshotPersistable(snapshot: GenerationInputSnapshot): void {
     'url' in (record.contentResource as Record<string, unknown>)
   ) {
     throw new Error('input snapshot must not carry contentResource.url (transient credential)');
+  }
+  if (
+    record.normalizedContentResource &&
+    typeof record.normalizedContentResource === 'object' &&
+    'url' in (record.normalizedContentResource as Record<string, unknown>)
+  ) {
+    throw new Error(
+      'input snapshot must not carry normalizedContentResource.url (transient credential)',
+    );
   }
   assertNoCredentialUrls(record, '');
   if (record.generationContext && typeof record.generationContext === 'object') {
@@ -1510,6 +1540,12 @@ export interface SourceContextInput {
   contentResourceId: string;
   measuredSha256: string;
   text: string;
+  sourceKind?: 'pdf_fallback' | 'kafuo_normalized';
+  normalizedPackageId?: string;
+  normalizedSchemaVersion?: string;
+  contentRevisionId?: string;
+  parseRunId?: string;
+  structureProfile?: { id: string; versionId: string };
 }
 
 /** Idempotent per attempt: a re-run of Layer A for the same attempt keeps one row. */
@@ -1523,14 +1559,23 @@ export async function upsertSourceContext(
   await queryable.query(
     `INSERT INTO teaching_package_source_contexts
        (attempt_id, tenant_id, content_resource_id, measured_sha256, text,
-        text_length, truncated, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        text_length, truncated, created_at, source_kind, normalized_package_id,
+        normalized_schema_version, content_revision_id, parse_run_id,
+        structure_profile_id, structure_profile_version_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (attempt_id) DO UPDATE SET
        content_resource_id = EXCLUDED.content_resource_id,
        measured_sha256 = EXCLUDED.measured_sha256,
        text = EXCLUDED.text,
        text_length = EXCLUDED.text_length,
        truncated = EXCLUDED.truncated
+       , source_kind = EXCLUDED.source_kind
+       , normalized_package_id = EXCLUDED.normalized_package_id
+       , normalized_schema_version = EXCLUDED.normalized_schema_version
+       , content_revision_id = EXCLUDED.content_revision_id
+       , parse_run_id = EXCLUDED.parse_run_id
+       , structure_profile_id = EXCLUDED.structure_profile_id
+       , structure_profile_version_id = EXCLUDED.structure_profile_version_id
      WHERE teaching_package_source_contexts.tenant_id = EXCLUDED.tenant_id`,
     [
       input.attemptId,
@@ -1541,6 +1586,13 @@ export async function upsertSourceContext(
       input.text.length,
       truncated,
       Date.now(),
+      input.sourceKind ?? 'pdf_fallback',
+      input.normalizedPackageId ?? null,
+      input.normalizedSchemaVersion ?? null,
+      input.contentRevisionId ?? null,
+      input.parseRunId ?? null,
+      input.structureProfile?.id ?? null,
+      input.structureProfile?.versionId ?? null,
     ],
   );
 }

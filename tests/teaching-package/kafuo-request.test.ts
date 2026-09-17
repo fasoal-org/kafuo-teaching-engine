@@ -45,6 +45,21 @@ function body(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function normalized(url = 'https://r2.example.test/n.zip?X-Amz-Signature=abc') {
+  return {
+    id: 'ncr-1',
+    url,
+    mimeType: 'application/zip',
+    schemaVersion: 'kafuo.normalized-content.v1',
+    contentSourceId: 'cs-77',
+    contentRevisionId: 'rev-1',
+    parseRunId: 'run-1',
+    structureProfile: { id: 'p-1', versionId: 'pv-1' },
+    fileSizeBytes: 123,
+    checksumSha256: 'a'.repeat(64),
+  };
+}
+
 beforeEach(() => {
   vi.unstubAllEnvs();
 });
@@ -150,6 +165,23 @@ describe('parseKafuoGenerationRequest', () => {
       expect.objectContaining({ code: 'INVALID_REQUEST' }),
     );
   });
+
+  it('validates the normalized resource contract and content-source equality', () => {
+    expect(
+      parseKafuoGenerationRequest(body({ normalizedContentResource: normalized() })).request
+        .normalizedContentResource?.schemaVersion,
+    ).toBe('kafuo.normalized-content.v1');
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ normalizedContentResource: { ...normalized(), contentSourceId: 'other' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ normalizedContentResource: { ...normalized(), schemaVersion: 'v2' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'NORMALIZED_CONTENT_SCHEMA_UNSUPPORTED' }));
+  });
 });
 
 describe('canonicalRequestDigest', () => {
@@ -194,6 +226,22 @@ describe('canonicalRequestDigest', () => {
     const second = parseKafuoGenerationRequest(body({ versionId: 'tpv-1' })).request;
     expect(canonicalRequestDigest(first)).not.toBe(canonicalRequestDigest(second));
   });
+
+  it('includes stable normalized facts but excludes its refreshed signed URL', () => {
+    const first = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: normalized() }),
+    ).request;
+    const refreshed = parseKafuoGenerationRequest(
+      body({
+        normalizedContentResource: normalized('https://r2.example.test/n.zip?X-Amz-Signature=NEW'),
+      }),
+    ).request;
+    const changed = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: { ...normalized(), parseRunId: 'run-2' } }),
+    ).request;
+    expect(canonicalRequestDigest(first)).toBe(canonicalRequestDigest(refreshed));
+    expect(canonicalRequestDigest(first)).not.toBe(canonicalRequestDigest(changed));
+  });
 });
 
 describe('buildKafuoStartRequest', () => {
@@ -211,5 +259,15 @@ describe('buildKafuoStartRequest', () => {
     expect(kafuo.contentResource.url).toContain('X-Amz-Signature');
     expect(JSON.stringify(start)).not.toContain('https://');
     expect(JSON.stringify(start)).not.toContain('X-Amz-Signature');
+  });
+
+  it('keeps the normalized signed URL only in execution memory', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: normalized() }),
+    );
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(JSON.stringify(start.normalizedContentResource)).not.toContain('https://');
+    expect(JSON.stringify(start)).not.toContain('X-Amz-Signature');
+    expect(kafuo.normalizedContentResource?.url).toContain('X-Amz-Signature');
   });
 });

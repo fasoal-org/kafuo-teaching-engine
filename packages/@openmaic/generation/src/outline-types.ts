@@ -16,6 +16,12 @@ export interface PdfImage {
   sourceDocumentName?: string;
   sourceDocumentOrder?: number;
   visionPriority?: number;
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
+  sourceRole?: string;
+  caption?: string;
+  figureLabel?: string;
+  providerVisualId?: string;
 }
 
 export type ImageMapping = Record<string, string>;
@@ -101,6 +107,9 @@ export interface SceneOutline {
   languageNote?: string;
   /** Kafuo Teaching Model Flow identity; functionally mandatory on Kafuo runs. */
   teachingStage?: TeachingStageRef;
+  /** Machine-readable normalized Kafuo grounding; optional for PDF/non-Kafuo runs. */
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
   suggestedImageIds?: string[];
   mediaGenerations?: MediaGenerationRequest[];
   quizConfig?: {
