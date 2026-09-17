@@ -57,7 +57,16 @@ export type TeachingPackageErrorCode =
   | 'OBJECTIVE_NOT_IN_PACKAGE'
   | 'OBJECTIVE_TEACHING_MISSING'
   | 'QUESTION_GENERATION_MODEL_UNAVAILABLE'
-  | 'QUESTION_GENERATION_OUTPUT_INVALID';
+  | 'QUESTION_GENERATION_OUTPUT_INVALID'
+  // --- Teaching Skills canonical versioning (Module 2 W1, plan §M) ---
+  /**
+   * A historical exact canonical Skill version cannot be resolved for
+   * interpretation: the skill is unknown to the registry, the version was
+   * never declared, its retained snapshot is absent, or its bytes drifted
+   * from the declared content digest. Reported, never substituted with a
+   * newer version (FR-TS-036, VAL-TS-019).
+   */
+  | 'SKILL_LINEAGE_UNRESOLVABLE';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -100,6 +109,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   OBJECTIVE_TEACHING_MISSING: 422,
   QUESTION_GENERATION_MODEL_UNAVAILABLE: 503,
   QUESTION_GENERATION_OUTPUT_INVALID: 502,
+  SKILL_LINEAGE_UNRESOLVABLE: 409,
 };
 
 export class TeachingPackageError extends Error {
