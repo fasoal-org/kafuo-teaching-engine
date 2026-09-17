@@ -84,14 +84,14 @@ function validateLearningObjectives(
  * flow (`key === flow[flowIndex].stage`) is the exact-flow validator's job,
  * not the write boundary's.
  */
-function validateTeachingStage(
-  value: Record<string, unknown>,
-  errors: ValidationIssue[],
-): void {
+function validateTeachingStage(value: Record<string, unknown>, errors: ValidationIssue[]): void {
   if (value.teachingStage === undefined) return;
   const stage = objectValue(value.teachingStage);
   if (!stage) {
-    errors.push({ path: '/teachingStage', message: '`teachingStage` must be an object when present' });
+    errors.push({
+      path: '/teachingStage',
+      message: '`teachingStage` must be an object when present',
+    });
     return;
   }
   if (typeof stage.key !== 'string' || stage.key === '') {
@@ -109,6 +109,89 @@ function validateTeachingStage(
   }
 }
 
+/**
+ * Validate the app-layer `alignmentBaseline` annotation (Module 2 W15):
+ * absent → untouched (legacy compatible); present → the durable per-Scene
+ * alignment baseline shape — identity and state only. The fingerprint is an
+ * opaque digest string here; whether it MATCHES the scene is the §K
+ * derivation's read-time question, never the write boundary's.
+ */
+function validateAlignmentBaseline(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.alignmentBaseline === undefined) return;
+  const baseline = objectValue(value.alignmentBaseline);
+  if (!baseline) {
+    errors.push({
+      path: '/alignmentBaseline',
+      message: '`alignmentBaseline` must be an object when present',
+    });
+    return;
+  }
+  const ref = (entry: unknown, where: string) => {
+    const record = objectValue(entry);
+    if (
+      !record ||
+      typeof record.skillId !== 'string' ||
+      record.skillId === '' ||
+      typeof record.version !== 'string' ||
+      record.version === ''
+    ) {
+      errors.push({ path: where, message: `expected exact { skillId, version } at ${where}` });
+    }
+  };
+  if (baseline.primary !== undefined) ref(baseline.primary, '/alignmentBaseline/primary');
+  if (baseline.supporting !== undefined) {
+    if (!Array.isArray(baseline.supporting)) {
+      errors.push({
+        path: '/alignmentBaseline/supporting',
+        message: '`supporting` must be an array when present',
+      });
+    } else {
+      baseline.supporting.forEach((entry, index) =>
+        ref(entry, `/alignmentBaseline/supporting/${index}`),
+      );
+    }
+  }
+  if (
+    baseline.classification !== 'instructional' &&
+    baseline.classification !== 'non-instructional'
+  ) {
+    errors.push({
+      path: '/alignmentBaseline/classification',
+      message: 'expected "instructional" | "non-instructional"',
+    });
+  }
+  if (typeof baseline.fingerprint !== 'string' || baseline.fingerprint === '') {
+    errors.push({
+      path: '/alignmentBaseline/fingerprint',
+      message: 'expected non-empty string `fingerprint`',
+    });
+  }
+  if (
+    baseline.actorRef !== undefined &&
+    (typeof baseline.actorRef !== 'string' || baseline.actorRef === '')
+  ) {
+    errors.push({
+      path: '/alignmentBaseline/actorRef',
+      message: '`actorRef` must be a non-empty string when present',
+    });
+  }
+  if (typeof baseline.establishedAt !== 'number' || !Number.isFinite(baseline.establishedAt)) {
+    errors.push({
+      path: '/alignmentBaseline/establishedAt',
+      message: 'expected finite number `establishedAt`',
+    });
+  }
+  if (baseline.origin !== 'generation' && baseline.origin !== 'reviewer-confirmation') {
+    errors.push({
+      path: '/alignmentBaseline/origin',
+      message: 'expected "generation" | "reviewer-confirmation"',
+    });
+  }
+}
+
 /** Validate the app's four-way scene union at the document write boundary. */
 export const validateAppScene: SceneValidator = (scene) => {
   const value = objectValue(scene);
@@ -122,6 +205,7 @@ export const validateAppScene: SceneValidator = (scene) => {
     const errors: ValidationIssue[] = dsl.valid ? [] : [...dsl.errors];
     validateLearningObjectives(value, errors);
     validateTeachingStage(value, errors);
+    validateAlignmentBaseline(value, errors);
     return errors.length === 0 ? { valid: true } : { valid: false, errors };
   }
 
@@ -250,6 +334,7 @@ export const validateAppScene: SceneValidator = (scene) => {
 
   validateLearningObjectives(value, errors);
   validateTeachingStage(value, errors);
+  validateAlignmentBaseline(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

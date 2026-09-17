@@ -14,10 +14,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import type { ClassroomPersistenceSink } from '@/lib/server/classroom-generation';
-import type {
-  SourceVisualManifestEntry,
-  TeachingFlowEntry,
-} from '@/lib/types/teaching-package';
+import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
+import { stampGenerationAlignmentBaselines } from '@/lib/server/teaching-package/alignment';
 import { StageAccessError } from '@/lib/persistence/stage-meta';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
@@ -96,9 +94,18 @@ export function createTeachingPackagePersistenceSink(
       const now = Date.now();
 
       for (let attempt = 0; ; attempt += 1) {
+        // W15: generation-origin alignment baselines are stamped HERE, on the
+        // final scene set — content and Actions composed, narration references
+        // normalized, and (on the collision-retry path below) media references
+        // already rewritten to the final stage id — so the recorded fingerprint
+        // reflects the actual generated pedagogical result, never the outline's
+        // intent (plan §K ordering requirement). Only governed Scenes (those
+        // carrying a teachingSkills carrier) are stamped; legacy Scenes stay
+        // untouched.
+        const scenesToSave = stampGenerationAlignmentBaselines(data.scenes as AppScene[], now);
         const document: AppDocument = {
           stage: data.stage,
-          scenes: data.scenes as AppScene[],
+          scenes: scenesToSave,
           // The requirement text travels in the execution input only; the
           // outline record is not a lineage home (audit §6.7), so it stays out.
           // The Kafuo teaching flow and source-visual provenance DO belong to
@@ -111,7 +118,9 @@ export function createTeachingPackagePersistenceSink(
             producerRef: attemptId,
             createdAt: now,
             updatedAt: now,
-            ...(data.teachingFlow ? { teachingFlow: data.teachingFlow as TeachingFlowEntry[] } : {}),
+            ...(data.teachingFlow
+              ? { teachingFlow: data.teachingFlow as TeachingFlowEntry[] }
+              : {}),
             ...(data.sourceVisuals
               ? { sourceVisuals: data.sourceVisuals as SourceVisualManifestEntry[] }
               : {}),
@@ -123,7 +132,10 @@ export function createTeachingPackagePersistenceSink(
             id: data.id,
             url: `${baseUrl}/classroom/${data.id}`,
             stage: data.stage,
-            scenes: data.scenes as AppScene[],
+            // The stamped set — the same scenes that were saved, so every
+            // downstream consumer (exact-flow validation, binding, callers)
+            // sees baselines on the scenes the document actually carries.
+            scenes: scenesToSave as typeof data.scenes,
             createdAt: new Date(now).toISOString(),
           };
         } catch (error) {

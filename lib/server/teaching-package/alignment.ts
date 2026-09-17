@@ -190,3 +190,71 @@ export function deriveStageAlignment(
 ): Map<string, SceneAlignmentDerivation> {
   return new Map(scenes.map((scene) => [scene.id, deriveSceneAlignment(scene)]));
 }
+
+// ---------------------------------------------------------------------------
+// Baseline establishment (Module 2 W15 — plan §P Step 16 · §K · BR-TS-032/038 ·
+// FR-TS-037/044/045/071 · VAL-TS-010 · AC-TS-032)
+// ---------------------------------------------------------------------------
+
+/**
+ * Establish a baseline from a Scene's CURRENT state — the one construction
+ * point both origins share (plan §K: "Both origins produce the same shape, so
+ * Submit has one thing to check"):
+ *
+ * - `'generation'` — stamped only once final Scene content and Actions exist
+ *   (the persistence sink, after narration normalization, so the fingerprint
+ *   reflects the ACTUAL generated pedagogical result, never the outline's
+ *   intent); carries no actorRef.
+ * - `'reviewer-confirmation'` — recorded by the confirmation route in
+ *   draft/rejected, binding the assignment + classification + fingerprint the
+ *   reviewer confirmed, with actorRef and time.
+ *
+ * Identity plus state ONLY — no chain-of-thought, no rationale (BR-TS-032,
+ * FR-TS-037). Validity is recomputed at read against this record; the record
+ * itself is never trusted as a state. A stale baseline is inert, not
+ * dangerous: it cannot overwrite newer state, it simply fails to match.
+ */
+export function buildSceneAlignmentBaseline(
+  scene: AppScene,
+  options: { origin: 'generation' | 'reviewer-confirmation'; actorRef?: string; now: number },
+): SceneAlignmentBaseline {
+  const skills = scene.teachingSkills;
+  return {
+    ...(skills?.primary ? { primary: skills.primary } : {}),
+    ...(skills?.supporting ? { supporting: skills.supporting } : {}),
+    classification: skills?.classification ?? 'instructional',
+    fingerprint: sceneMaterialFingerprint(scene),
+    ...(options.origin === 'reviewer-confirmation' && options.actorRef
+      ? { actorRef: options.actorRef }
+      : {}),
+    establishedAt: options.now,
+    origin: options.origin,
+  };
+}
+
+/**
+ * Stamp generation-origin baselines onto the Scenes a governed generation just
+ * produced (Module 2 W15). Only Scenes carrying a `teachingSkills` carrier are
+ * stamped: that carrier exists exclusively on Module-2-governed runs (W10's
+ * gate emits it only under resolved policy), so presence IS the governed
+ * signal and legacy Scenes stay untouched — absence on legacy data is the
+ * backward-compatibility mechanism itself (AC-TS-034).
+ *
+ * The caller MUST invoke this only on the FINAL scene set (content and Actions
+ * composed, narration normalized, media references rewritten to the final
+ * stage id) — the fingerprint must reflect the persisted result, not an
+ * intermediate one.
+ */
+export function stampGenerationAlignmentBaselines(
+  scenes: readonly AppScene[],
+  now: number,
+): AppScene[] {
+  return scenes.map((scene) =>
+    scene.teachingSkills
+      ? {
+          ...scene,
+          alignmentBaseline: buildSceneAlignmentBaseline(scene, { origin: 'generation', now }),
+        }
+      : scene,
+  );
+}
