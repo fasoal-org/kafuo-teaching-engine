@@ -149,12 +149,14 @@ describe('teaching package service auth', () => {
       OBJECTIVE_TEACHING_MISSING: 422,
       QUESTION_GENERATION_MODEL_UNAVAILABLE: 503,
       QUESTION_GENERATION_OUTPUT_INVALID: 502,
-      // Module 2 Teaching Skills vocabulary (W1/W5, plan §J).
+      // Module 2 Teaching Skills vocabulary (W1/W5/W10, plan §J).
       SKILL_LINEAGE_UNRESOLVABLE: 409,
       SKILL_POLICY_REQUIRED: 400,
       SKILL_POLICY_INVALID: 422,
       SKILL_NOT_FOUND: 422,
       SKILL_VERSION_UNRESOLVED: 422,
+      SKILL_ASSIGNMENT_INVALID: 422,
+      SKILL_REQUIREMENT_UNSATISFIED: 422,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

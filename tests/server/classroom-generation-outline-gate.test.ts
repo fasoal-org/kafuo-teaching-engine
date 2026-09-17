@@ -291,4 +291,18 @@ describe('generateClassroom Stage-1 outline gate', () => {
     const context = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4];
     expect(context.normalizedGrounding).toBeUndefined();
   });
+
+  it('propagates the skillPolicy governance mode to the outline prompt context (W10)', async () => {
+    // The mode arrives here already derived once (the runner's
+    // `teachingSkillsContract` value) — the classroom layer only forwards it.
+    await generateWith({ input: { skillPolicy: true } });
+    const context = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4];
+    expect(context.skillPolicy).toBe(true);
+  });
+
+  it('leaves skillPolicy out of the outline prompt context unless the run is governed', async () => {
+    await generateWith({});
+    const context = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4];
+    expect(context.skillPolicy).toBeUndefined();
+  });
 });

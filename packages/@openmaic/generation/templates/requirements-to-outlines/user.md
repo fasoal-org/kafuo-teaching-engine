@@ -58,6 +58,12 @@ The PDF Content Summary above is an approved normalized source, delivered as Con
 - Never return block ids; `sourceContentUnitIds` is the only grounding field.
 
 Example outline field: `"sourceContentUnitIds": ["2900"]`
+{{/if}}{{#if hasSkillPolicy}}
+### Teaching Skill Selection
+
+Every outline you return MUST carry `teachingSkills`: `"classification"` set to `"instructional"` or `"non-instructional"` by the outline's actual pedagogical purpose (never by scene type, never by Skill absence), and when instructional, exactly one `primary: { "skillId": "<id>", "version": "<version>" }` plus any intentional `supporting` refs — every ref copied exactly from that flow position's permitted Skills in the system prompt's policy table.
+
+Example outline field: `"teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }`
 {{/if}}
 Please automatically infer the following from user requirements:
 
@@ -91,7 +97,8 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
   "order": 1{{#if normalizedGrounding}},
-  "sourceContentUnitIds": ["2900"]{{/if}}
+  "sourceContentUnitIds": ["2900"]{{/if}}{{#if hasSkillPolicy}},
+  "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }{{/if}}
 }
 ```
 

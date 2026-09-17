@@ -20,6 +20,11 @@
  * - exposes `requireCompleteFlowPolicies` — the governed-request completeness
  *   refusal (`SKILL_POLICY_REQUIRED`, BR-TS-048) the W8 gate will wire.
  *
+ * Module 2 W10 adds `validateOutlineSkillSelections` — the deterministic
+ * Stage-1-gate validation of the selections the Generation Agent emitted onto
+ * outline `teachingSkills` carriers (invented identity, out-of-policy
+ * selection, required scope/role; preferred never binds).
+ *
  * Module 2 W6 adds the policy-lineage digest (`computeSkillPolicyDigest`) —
  * integrity evidence for the attempt columns, never the mode declaration.
  *
@@ -154,5 +159,195 @@ export function requireCompleteFlowPolicies(
       `teachingModel.flow[${index}] (stage "${entry.stage}") carries no Skill Policy; a governed request fails closed rather than using unrestricted Skill selection`,
       { flowIndex: index, stage: entry.stage, stageKeys: [...(options.stageKeys ?? [])] },
     );
+  }
+}
+
+/**
+ * The structural outline slice `validateOutlineSkillSelections` needs. Declared
+ * locally so the validator stays independently callable against any SceneOutline
+ * twin (app `lib/types/generation`, package outline-types) without an import
+ * cycle.
+ */
+export interface OutlineSkillSelectionShape {
+  id: string;
+  teachingStage?: { key: string; flowIndex: number };
+  teachingSkills?: {
+    primary?: TeachingSkillRef;
+    supporting?: readonly TeachingSkillRef[];
+    classification?: string;
+  };
+}
+
+const sameSkillPair = (a: TeachingSkillRef, b: TeachingSkillRef) =>
+  a.skillId === b.skillId && a.version === b.version;
+
+/**
+ * Deterministic Stage-1-gate validation of the selections the Generation Agent
+ * emitted onto outline `teachingSkills` carriers (Module 2 W10 — enforced by
+ * code, never by prompt wording alone):
+ *
+ * - every selected ref (primary + supporting) must resolve against the W1
+ *   canonical registry — an invented identity refuses with `SKILL_NOT_FOUND`
+ *   (VAL-TS-001), an unresolvable exact version with `SKILL_VERSION_UNRESOLVED`;
+ * - every selected ref must be inside its flow position's permitted (allowed)
+ *   set — an out-of-policy selection refuses with `SKILL_ASSIGNMENT_INVALID`
+ *   (VAL-TS-004; the unrestricted catalog is never a fallback, BR-TS-048);
+ * - every required rule must be satisfied exactly as scoped and roled
+ *   (`SKILL_REQUIREMENT_UNSATISFIED`, VAL-TS-005 — no default scope inferred).
+ *
+ * Preferred Skills deliberately DO NOT bind (BR-TS-011): a selection that skips
+ * a preferred Skill is valid, and this validator must never reject one.
+ *
+ * Deliberately out of scope here (W12's §L checks): instructional-without-
+ * primary structure, duplicate supporting / primary-as-supporting keying,
+ * combination restrictions, and classification structural validity. For
+ * requirement satisfaction an outline NOT explicitly classified
+ * `non-instructional` counts as instructional — omitting the classification can
+ * never dodge a requirement (BR-TS-054).
+ */
+export function validateOutlineSkillSelections(
+  outlines: readonly OutlineSkillSelectionShape[],
+  flow: readonly TeachingFlowEntry[],
+  dir: string = skillsDir,
+): void {
+  // Per-outline permission checks first, so an invented identity is reported as
+  // SKILL_NOT_FOUND rather than as a generic out-of-policy assignment.
+  for (const outline of outlines) {
+    const skills = outline.teachingSkills;
+    if (!skills) continue;
+    const selections: Array<{ role: 'primary' | 'supporting'; ref: TeachingSkillRef }> = [];
+    if (skills.primary) selections.push({ role: 'primary', ref: skills.primary });
+    for (const ref of skills.supporting ?? []) selections.push({ role: 'supporting', ref });
+
+    if (selections.length === 0) continue;
+
+    const stageRef = outline.teachingStage;
+    if (!stageRef || stageRef.flowIndex < 0 || stageRef.flowIndex >= flow.length) {
+      throw new TeachingPackageError(
+        'SKILL_ASSIGNMENT_INVALID',
+        `outline ${JSON.stringify(outline.id)} carries a Skill selection but no usable teachingStage flow position to attribute it to`,
+        { offendingSceneIds: [outline.id] },
+      );
+    }
+    const entry = flow[stageRef.flowIndex]!;
+    const policy = entry.skillPolicy;
+    if (!policy) {
+      // Unreachable behind requireCompleteFlowPolicies on the assembled gate;
+      // kept fail-closed so the validator is safe to call independently.
+      throw new TeachingPackageError(
+        'SKILL_POLICY_REQUIRED',
+        `outline ${JSON.stringify(outline.id)} selects Skills at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which carries no Skill Policy`,
+        { offendingSceneIds: [outline.id], flowIndex: stageRef.flowIndex, stage: entry.stage },
+      );
+    }
+
+    for (const { role, ref } of selections) {
+      // Registry resolution: invented identities and unresolvable exact versions
+      // are distinct failures from an out-of-policy but resolvable selection.
+      // The W5 helper reports the reference's own context; rethrow with the
+      // selecting outline's scene scope so the refusal is actionable (FR-TS-053).
+      try {
+        resolvePolicyRef(ref, entry, dir);
+      } catch (error) {
+        if (error instanceof TeachingPackageError) {
+          const base =
+            error.details && typeof error.details === 'object' ? (error.details as object) : {};
+          throw new TeachingPackageError(
+            error.code,
+            `outline ${JSON.stringify(outline.id)}: ${error.message}`,
+            {
+              ...base,
+              offendingSceneIds: [outline.id],
+              sceneId: outline.id,
+              flowIndex: stageRef.flowIndex,
+              stage: entry.stage,
+              role,
+            },
+          );
+        }
+        throw error;
+      }
+      const permitted = policy.allowed.some((allowedRef) => sameSkillPair(allowedRef, ref));
+      if (!permitted) {
+        throw new TeachingPackageError(
+          'SKILL_ASSIGNMENT_INVALID',
+          `outline ${JSON.stringify(outline.id)} selects ${JSON.stringify(ref.skillId)}@${JSON.stringify(ref.version)} as ${role} at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which is outside that position's permitted Skills — the unrestricted catalog is never a fallback`,
+          {
+            offendingSceneIds: [outline.id],
+            sceneId: outline.id,
+            flowIndex: stageRef.flowIndex,
+            stage: entry.stage,
+            skillId: ref.skillId,
+            skillVersion: ref.version,
+            role,
+          },
+        );
+      }
+    }
+  }
+
+  // Required scope and role satisfaction per flow position (VAL-TS-005).
+  for (let flowIndex = 0; flowIndex < flow.length; flowIndex += 1) {
+    const entry = flow[flowIndex]!;
+    const policy = entry.skillPolicy;
+    if (!policy || policy.required.length === 0) continue;
+
+    const atPosition = outlines.filter((outline) => outline.teachingStage?.flowIndex === flowIndex);
+    // BR-TS-054: only an EXPLICIT non-instructional classification exempts an
+    // outline from every-instructional-scene requirements; omission never does.
+    const instructional = atPosition.filter(
+      (outline) => outline.teachingSkills?.classification !== 'non-instructional',
+    );
+
+    for (const rule of policy.required) {
+      const role = rule.role;
+      const satisfied = (outline: OutlineSkillSelectionShape): boolean => {
+        const skills = outline.teachingSkills;
+        if (!skills) return false;
+        if (role === 'primary') {
+          return !!skills.primary && sameSkillPair(skills.primary, rule.skill);
+        }
+        return (skills.supporting ?? []).some((ref) => sameSkillPair(ref, rule.skill));
+      };
+
+      if (rule.scope === 'every_instructional_scene') {
+        const offenders = instructional.filter((outline) => !satisfied(outline));
+        if (offenders.length > 0) {
+          throw new TeachingPackageError(
+            'SKILL_REQUIREMENT_UNSATISFIED',
+            `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=every_instructional_scene) is missing from ${offenders.length === 1 ? 'an instructional outline' : `${offenders.length} instructional outlines`} at flow position ${flowIndex} (stage "${entry.stage}")`,
+            {
+              offendingSceneIds: offenders.map((outline) => outline.id),
+              flowIndex,
+              stage: entry.stage,
+              skillId: rule.skill.skillId,
+              skillVersion: rule.skill.version,
+              role,
+              requiredScope: rule.scope,
+            },
+          );
+        }
+        continue;
+      }
+
+      // scope=flow_position — the only other closed-vocabulary scope; anything
+      // else was already refused at the parse seam, so this is exhaustive.
+      const anySatisfied = atPosition.some(satisfied);
+      if (!anySatisfied) {
+        throw new TeachingPackageError(
+          'SKILL_REQUIREMENT_UNSATISFIED',
+          `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=flow_position) is not selected anywhere at flow position ${flowIndex} (stage "${entry.stage}")`,
+          {
+            offendingSceneIds: atPosition.map((outline) => outline.id),
+            flowIndex,
+            stage: entry.stage,
+            skillId: rule.skill.skillId,
+            skillVersion: rule.skill.version,
+            role,
+            requiredScope: rule.scope,
+          },
+        );
+      }
+    }
   }
 }

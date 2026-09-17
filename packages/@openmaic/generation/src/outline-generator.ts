@@ -51,6 +51,18 @@ export interface OutlinePromptContext {
    * render byte-identically to the pre-grounding prompts.
    */
   normalizedGrounding?: boolean;
+  /**
+   * This run is governed by Teaching Skills (Module 2 W10). The caller derives
+   * the governance mode ONCE from the request marker and passes it here as a
+   * value; it is never re-derived from `teachingFlow` entries. When true, the
+   * templates render the Skill authority block and require every outline to
+   * carry `teachingSkills` — classification plus, when instructional, exactly
+   * one policy-permitted primary and intentional supporting refs — copied from
+   * the per-position policies carried on the `teachingFlow` entries.
+   * Absent/false → the templates render byte-identically to the pre-teaching-
+   * skills prompts.
+   */
+  skillPolicy?: boolean;
 }
 
 export interface OutlineGenerationOptions extends Omit<
@@ -100,6 +112,33 @@ function buildAvailableImages(
   return { availableImagesText, visionImages };
 }
 
+function buildSkillPolicyText(teachingFlow: TeachingFlowEntry[] | undefined): string {
+  const formatRef = (ref: { skillId: string; version: string }) => `${ref.skillId}@${ref.version}`;
+  return (teachingFlow ?? [])
+    .map((entry, index) => {
+      const policy = entry.skillPolicy;
+      if (!policy) {
+        return `${index}. stage="${entry.stage}" | NO POLICY PROJECTED`;
+      }
+      const required = policy.required.length
+        ? policy.required
+            .map((rule) => `${formatRef(rule.skill)} (scope=${rule.scope}, role=${rule.role})`)
+            .join('; ')
+        : 'none';
+      const preferred = policy.preferred.length
+        ? policy.preferred.map(formatRef).join(', ')
+        : 'none';
+      const allowed = policy.allowed.length ? policy.allowed.map(formatRef).join(', ') : 'none';
+      const restrictions = policy.combinationRestrictions.length
+        ? policy.combinationRestrictions
+            .map((pair) => `(${formatRef(pair.skillA)} + ${formatRef(pair.skillB)})`)
+            .join('; ')
+        : 'none';
+      return `${index}. stage="${entry.stage}" | required: ${required} | preferred: ${preferred} | allowed: ${allowed} | prohibited-to-combine: ${restrictions}`;
+    })
+    .join('\n');
+}
+
 /** Build the byte-stable system and user prompts for outline generation. */
 export function buildOutlinePrompt(
   requirements: UserRequirements,
@@ -123,11 +162,15 @@ export function buildOutlinePrompt(
   const teachingFlowText = hasTeachingFlow
     ? teachingFlow!
         .map(
-          (entry, index) =>
-            `${index}. stage="${entry.stage}" instructions="${entry.instructions}"`,
+          (entry, index) => `${index}. stage="${entry.stage}" instructions="${entry.instructions}"`,
         )
         .join('\n')
     : '';
+  // The governance mode is an explicit declaration, never inferred from the
+  // entries: a governed run whose flow lost its policies renders the block (and
+  // is refused by the caller's Stage-1 gate), never a silently legacy prompt.
+  const hasSkillPolicy = context.skillPolicy === true;
+  const skillPolicyText = hasSkillPolicy ? buildSkillPolicyText(teachingFlow) : '';
 
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     requirement: requirements.requirement,
@@ -143,6 +186,8 @@ export function buildOutlinePrompt(
     hasTeachingFlow,
     teachingFlowText,
     normalizedGrounding: context.normalizedGrounding ?? false,
+    hasSkillPolicy,
+    skillPolicyText,
   });
 
   if (!prompts) {

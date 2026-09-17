@@ -81,6 +81,15 @@ export interface GenerateClassroomInput {
    * behavior are byte-identical to the pre-grounding path.
    */
   normalizedGrounding?: boolean;
+  /**
+   * This run is governed by Teaching Skills (Module 2 W10). The caller derives
+   * the mode ONCE from the request's `teachingSkills` contract marker and
+   * passes it here as a value. Propagated to the outline prompt, which then
+   * renders the Skill authority block and requires `teachingSkills`
+   * (classification + policy-permitted primary/supporting) on every outline.
+   * Absent → prompts and behavior are byte-identical to the pre-Module-2 path.
+   */
+  skillPolicy?: boolean;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -730,13 +739,12 @@ export async function generateClassroom(
       videoGenerationEnabled: input.enableVideoGeneration,
       researchContext,
       // NO teacherContext — agents haven't been generated yet
-      ...(hasSourceVisuals
-        ? { imageMapping: sourceImageMapping, visionEnabled: true }
-        : {}),
+      ...(hasSourceVisuals ? { imageMapping: sourceImageMapping, visionEnabled: true } : {}),
       ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
         ? { teachingFlow: input.teachingFlow }
         : {}),
       ...(input.normalizedGrounding ? { normalizedGrounding: true } : {}),
+      ...(input.skillPolicy ? { skillPolicy: true } : {}),
     },
   );
 
@@ -818,9 +826,7 @@ export async function generateClassroom(
   let sourceManifest: SourceVisualManifestEntry[] = [];
   if (hasSourceVisuals && options.sourceVisuals) {
     const availableIds = new Set(sourceImages!.map((image) => image.id));
-    const selectedIds = new Set(
-      outlines.flatMap((outline) => outline.suggestedImageIds ?? []),
-    );
+    const selectedIds = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
     const selected = sourceImages!.filter((image) => selectedIds.has(image.id));
     const selectedActual = selected.filter((image) => availableIds.has(image.id));
     if (selectedActual.length > 0) {
@@ -887,9 +893,8 @@ export async function generateClassroom(
       // serving path after generation.
       const outlineAssignedImages =
         hasSourceVisuals && safeOutline.type === 'slide'
-          ? (sourceImages?.filter(
-              (image) => safeOutline.suggestedImageIds?.includes(image.id),
-            ) ?? [])
+          ? (sourceImages?.filter((image) => safeOutline.suggestedImageIds?.includes(image.id)) ??
+            [])
           : undefined;
       const content = await (async () => {
         try {

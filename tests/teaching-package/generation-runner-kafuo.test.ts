@@ -1023,4 +1023,255 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('teaching skills selection at the Stage-1 gate (Module 2 W10)', () => {
+    /**
+     * The W10 prohibitions are enforced by CODE inside `options.validateOutlines`
+     * — invented identity, out-of-policy selection, unsatisfied required
+     * scope/role — never by prompt wording alone (VAL-TS-001/004/005,
+     * BR-TS-048/011). Preferred guides and never binds: omitting a preferred
+     * Skill is legal end-to-end.
+     */
+
+    const policy = (overrides: Partial<TeachingSkillPolicy> = {}): TeachingSkillPolicy => ({
+      required: [],
+      preferred: [{ skillId: 'feynman-learning', version: 'v1' }],
+      allowed: [
+        { skillId: 'feynman-learning', version: 'v1' },
+        { skillId: 'learning-to-learn', version: 'v1' },
+      ],
+      combinationRestrictions: [],
+      ...overrides,
+    });
+
+    const governedFlow = (flowPolicy: () => TeachingSkillPolicy): TeachingFlowEntry[] => [
+      { stage: 'lesson_introduction', instructions: 'i', skillPolicy: flowPolicy() },
+      { stage: 'outcome_teaching_cards', instructions: 'c', skillPolicy: flowPolicy() },
+    ];
+
+    function governedContext(flow: TeachingFlowEntry[]) {
+      return {
+        ...kafuoContext(),
+        teachingSkillsContract: TEACHING_SKILLS_CONTRACT_V1,
+        teachingFlow: flow,
+      };
+    }
+
+    async function attemptRow(attemptId: string) {
+      const row = await pool.query<{
+        status: string;
+        error_code: string | null;
+        error_retryable: boolean | null;
+        version_id: string | null;
+      }>(
+        `SELECT status, error_code, error_retryable, version_id
+           FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      return row.rows[0]!;
+    }
+
+    /** A run whose outlines carry the `teachingSkills` selections the test dictates. */
+    function mockGenerateWithSelections(
+      selections: Array<
+        | {
+            classification?: string;
+            primary?: { skillId: string; version: string };
+            supporting?: Array<{ skillId: string; version: string }>;
+          }
+        | undefined
+      >,
+    ) {
+      mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+        const outlines = FLOW.map((_, index) => ({
+          ...flowOutline(index + 1, index),
+          ...(selections[index] ? { teachingSkills: selections[index] } : {}),
+        }));
+        await options.validateOutlines?.(outlines);
+        mocks.sceneGenerationReached();
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'Generated',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        const scenes = FLOW.map((_, index) => flowScene(index + 1, index));
+        scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
+        mocks.persistedOutlines.push(outlines as never);
+        await options.persistence.persist(
+          {
+            id: reserved.id,
+            stage: reserved.stage,
+            scenes: scenes as never,
+            outlines: outlines as never,
+          },
+          options.baseUrl,
+        );
+        return {
+          id: reserved.id,
+          url: '',
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+          scenesCount: scenes.length,
+          createdAt: new Date().toISOString(),
+        };
+      });
+    }
+
+    it('governed + out-of-policy selection: refuses SKILL_ASSIGNMENT_INVALID with no Stage, Scene, or re-roll', async () => {
+      // lecture-style resolves in the live catalog but is not in the position's
+      // permitted set — the unrestricted catalog is never a fallback (BR-TS-048).
+      mockGenerateWithSelections([
+        {
+          classification: 'instructional',
+          primary: { skillId: 'lecture-style', version: 'v1' },
+        },
+        undefined,
+      ]);
+
+      const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_ASSIGNMENT_INVALID');
+      expect(row.error_retryable).toBe(false);
+      expect(row.version_id).toBeNull();
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+      const stages = await pool.query(`SELECT count(*)::int AS n FROM stage_meta`);
+      expect(stages.rows[0]!.n).toBe(0);
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+    });
+
+    it('governed + invented identity: refuses SKILL_NOT_FOUND from the selection itself', async () => {
+      mockGenerateWithSelections([
+        undefined,
+        {
+          classification: 'instructional',
+          primary: { skillId: 'made-up-pedagogy', version: 'v1' },
+        },
+      ]);
+
+      const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_NOT_FOUND');
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+    });
+
+    it('governed + unresolvable exact version on a selection: refuses SKILL_VERSION_UNRESOLVED, never substitutes', async () => {
+      mockGenerateWithSelections([
+        undefined,
+        {
+          classification: 'instructional',
+          primary: { skillId: 'feynman-learning', version: 'v99' },
+        },
+      ]);
+
+      const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_VERSION_UNRESOLVED');
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+    });
+
+    it('governed + required scope/role ignored: refuses SKILL_REQUIREMENT_UNSATISFIED', async () => {
+      // Position 1 requires feynman as primary somewhere in the position; the
+      // only selection there is learning-to-learn as primary — permitted, but
+      // the required rule is unsatisfied (VAL-TS-005: preferred-legal is not
+      // required-satisfied).
+      mockGenerateWithSelections([
+        undefined,
+        {
+          classification: 'instructional',
+          primary: { skillId: 'learning-to-learn', version: 'v1' },
+        },
+      ]);
+
+      const attemptId = await startKafuo(
+        governedContext(
+          governedFlow(() =>
+            policy({
+              required: [
+                {
+                  skill: { skillId: 'feynman-learning', version: 'v1' },
+                  scope: 'flow_position',
+                  role: 'primary',
+                },
+              ],
+            }),
+          ),
+        ),
+      );
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('failed');
+      expect(row.error_code).toBe('SKILL_REQUIREMENT_UNSATISFIED');
+      expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
+    });
+
+    it('governed + legal selection with the preferred Skill OMITTED: generates and persists the carriers', async () => {
+      // BR-TS-011 pinned end-to-end: preferred guides, it does not bind. The
+      // PRIMARY selection at every position is a permitted Skill that is NOT
+      // the preferred one, the one required rule (supporting, scoped to
+      // position 1 only) is satisfied there, and the run succeeds with the
+      // selections on the persisted outlines.
+      mockGenerateWithSelections([
+        {
+          classification: 'instructional',
+          primary: { skillId: 'learning-to-learn', version: 'v1' },
+        },
+        {
+          classification: 'instructional',
+          primary: { skillId: 'learning-to-learn', version: 'v1' },
+          supporting: [{ skillId: 'feynman-learning', version: 'v1' }],
+        },
+      ]);
+
+      const flow: TeachingFlowEntry[] = [
+        { stage: 'lesson_introduction', instructions: 'i', skillPolicy: policy() },
+        {
+          stage: 'outcome_teaching_cards',
+          instructions: 'c',
+          skillPolicy: policy({
+            required: [
+              {
+                skill: { skillId: 'feynman-learning', version: 'v1' },
+                scope: 'flow_position',
+                role: 'supporting',
+              },
+            ],
+          }),
+        },
+      ];
+
+      const attemptId = await startKafuo(governedContext(flow));
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('succeeded');
+      expect(row.version_id).toMatch(/^tpv-/);
+      expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
+      const persisted = mocks.persistedOutlines[0] as Array<{
+        teachingSkills?: { primary?: { skillId: string } };
+      }>;
+      expect(persisted?.[1]?.teachingSkills?.primary?.skillId).toBe('learning-to-learn');
+    });
+
+    it('tier B — selections without governance pass through untouched (no marker, no gate)', async () => {
+      // Without the marker the assembled validator never runs: a tier-B run
+      // carrying outline selections is legacy behavior, byte-for-byte.
+      mockGenerateWithSelections([
+        { classification: 'instructional', primary: { skillId: 'lecture-style', version: 'v1' } },
+        undefined,
+      ]);
+
+      const attemptId = await startKafuo(kafuoContext());
+      const row = await attemptRow(attemptId);
+
+      expect(row.status).toBe('succeeded');
+      expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
+    });
+  });
 });

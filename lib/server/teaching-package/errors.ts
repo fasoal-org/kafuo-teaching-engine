@@ -75,7 +75,19 @@ export type TeachingPackageErrorCode =
   /** A referenced canonical Skill identity does not exist in TE's registry (VAL-TS-001). */
   | 'SKILL_NOT_FOUND'
   /** A referenced exact canonical Skill version does not resolve (VAL-TS-002, AC-TS-010). */
-  | 'SKILL_VERSION_UNRESOLVED';
+  | 'SKILL_VERSION_UNRESOLVED'
+  // --- Teaching Skills generation-time selection (Module 2 W10, plan §J) ---
+  /**
+   * A selected Skill assignment is invalid for its flow position: the ref is
+   * outside the position's permitted set (VAL-TS-004 — the unrestricted catalog
+   * is never a fallback, BR-TS-048), or otherwise structurally invalid.
+   */
+  | 'SKILL_ASSIGNMENT_INVALID'
+  /**
+   * A required Skill rule was not satisfied according to its explicit policy
+   * scope and role (VAL-TS-005 — no default scope is ever inferred, BR-TS-010).
+   */
+  | 'SKILL_REQUIREMENT_UNSATISFIED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -123,6 +135,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SKILL_POLICY_INVALID: 422,
   SKILL_NOT_FOUND: 422,
   SKILL_VERSION_UNRESOLVED: 422,
+  SKILL_ASSIGNMENT_INVALID: 422,
+  SKILL_REQUIREMENT_UNSATISFIED: 422,
 };
 
 export class TeachingPackageError extends Error {

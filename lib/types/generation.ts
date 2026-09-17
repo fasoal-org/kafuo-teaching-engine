@@ -154,7 +154,7 @@ export interface WidgetOutline {
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */
-import type { TeachingStageRef } from '@/lib/types/teaching-package';
+import type { SceneTeachingSkills, TeachingStageRef } from '@/lib/types/teaching-package';
 
 export interface SceneOutline {
   id: string;
@@ -166,6 +166,10 @@ export interface SceneOutline {
   estimatedDuration?: number; // seconds
   order: number;
   languageNote?: string; // LLM-inferred language note for this scene
+  // Teaching Skills assignment + instructional classification (Module 2 W9
+  // carrier, populated by W10's generation-time selection). Absent on legacy
+  // and non-governed runs — that absence is explicit, never fabricated.
+  teachingSkills?: SceneTeachingSkills;
   // Kafuo Teaching Model Flow identity — copied exactly from outline to scene,
   // never derived from title/type/order (Kafuo integration FRD §11.2).
   teachingStage?: TeachingStageRef;

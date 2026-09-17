@@ -53,6 +53,7 @@ import { assertOutlineContentUnitGrounding } from '@/lib/server/teaching-package
 import {
   requireCompleteFlowPolicies,
   resolveFlowSkillPolicies,
+  validateOutlineSkillSelections,
 } from '@/lib/server/teaching-package/skill-policy';
 import { materializeSourceImages } from '@/lib/server/teaching-package/source-images';
 import { createTeachingPackagePersistenceSink } from '@/lib/server/teaching-package/stage-persistence-sink';
@@ -150,6 +151,11 @@ async function runKafuoAttempt(
       : { sourceKind: 'pdf_fallback' as const }),
   });
 
+  // The W6-derived governance mode, consumed as a VALUE (§B.13): the
+  // `teachingSkills` marker was parsed once at the single detection point and
+  // already lives on this context; nothing below re-tests marker presence.
+  const governedByTeachingSkills = kafuo.teachingSkillsContract !== null;
+
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.`
@@ -165,12 +171,10 @@ async function runKafuoAttempt(
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.
     ...(kafuo.normalizedContentResource ? { normalizedGrounding: true } : {}),
+    // W10: the derived-once mode value renders the Skill authority block and
+    // the `teachingSkills` output contract in the outline templates.
+    ...(governedByTeachingSkills ? { skillPolicy: true } : {}),
   };
-
-  // The W6-derived governance mode, consumed as a VALUE (§B.13): the
-  // `teachingSkills` marker was parsed once at the single detection point and
-  // already lives on this context; nothing below re-tests marker presence.
-  const governedByTeachingSkills = kafuo.teachingSkillsContract !== null;
 
   let lastFailure: { code: string; message: string; retryable: boolean } | null = null;
 
@@ -206,11 +210,15 @@ async function runKafuoAttempt(
         // costs no Stage reservation, no Scene generation, and no media write.
         // For a governed request the W5 vocabulary is enforced here: policy
         // completeness (SKILL_POLICY_REQUIRED) and exact-version resolution
-        // (SKILL_NOT_FOUND / SKILL_VERSION_UNRESOLVED). An invalid policy never
-        // reaches this depth — the single parse seam refused it before the
-        // attempt existed — and no unrestricted-catalog fallback exists: the
-        // gate below is the only route onward for a governed request, and these
-        // refusals are terminal (non-retryable), never re-rolled open.
+        // (SKILL_NOT_FOUND / SKILL_VERSION_UNRESOLVED). W10 adds the
+        // deterministic SELECTION validation on the emitted outline carriers:
+        // invented identities, out-of-policy selections, and unsatisfied
+        // required scope/role refuse here — never merely discouraged by prompt
+        // wording. An invalid policy never reaches this depth — the single
+        // parse seam refused it before the attempt existed — and no
+        // unrestricted-catalog fallback exists: the gate below is the only
+        // route onward for a governed request, and these refusals are terminal
+        // (non-retryable), never re-rolled open.
         ...(governedByTeachingSkills || kafuo.normalizedContentResource
           ? {
               validateOutlines: (outlines: SceneOutline[]) => {
@@ -219,6 +227,7 @@ async function runKafuoAttempt(
                     stageKeys: kafuo.teachingFlow.map((entry) => entry.stage),
                   });
                   resolveFlowSkillPolicies(kafuo.teachingFlow);
+                  validateOutlineSkillSelections(outlines, kafuo.teachingFlow);
                 }
                 if (kafuo.normalizedContentResource) {
                   assertOutlineContentUnitGrounding(

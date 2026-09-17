@@ -81,6 +81,15 @@ export interface TeachingFlowEntry {
   stage: string;
   /** Non-empty pedagogical instructions for this flow position. */
   instructions: string;
+  /**
+   * The Skill Policy this resolved position inherited from its Teaching Model
+   * flow definition item (Module 2 W10). Structural twin of the app-layer
+   * `TeachingSkillPolicy` — the package cannot import from `lib/`, so the shape
+   * is declared here and stays wire-identical. Absent on pre-Module-2 entries;
+   * whether a run renders the Skill selection contract is declared by
+   * `OutlinePromptContext.skillPolicy`, never inferred from this field.
+   */
+  skillPolicy?: TeachingSkillPolicy;
 }
 
 /**
@@ -115,10 +124,40 @@ export interface SceneSkillRef {
 export interface SceneTeachingSkills {
   /** Exactly one primary on an instructional Scene (BR-TS-021). */
   primary?: SceneSkillRef;
-  /** Intentional `0..N` supporting Skills (BR-TS-022). */
+  /** Intentional `0..N` supporting Skills (BR-TS-022 — no arbitrary V1 cap). */
   supporting?: SceneSkillRef[];
   /** Emitted at outline time; never derived from Skill absence (BR-TS-054). */
   classification?: 'instructional' | 'non-instructional';
+}
+
+/**
+ * A required Skill rule with an EXPLICIT scope and assignment role (Module 2
+ * W10). Structural twin of the app-layer `TeachingRequiredSkillRule`; the
+ * closed V1 vocabularies are enforced at the app's parse seam, not here.
+ */
+export interface TeachingRequiredSkillRule {
+  skill: SceneSkillRef;
+  scope: string;
+  role: string;
+}
+
+/** An explicitly prohibited unordered pairing on one Scene (BR-TS-055). */
+export interface TeachingSkillCombinationRestriction {
+  skillA: SceneSkillRef;
+  skillB: SceneSkillRef;
+}
+
+/**
+ * The Teaching Skill Policy for one resolved flow position (Module 2 W10):
+ * what the Generation Agent may select at that position. Authored on Kafuo's
+ * frozen flow definition item and received already projected — the outline
+ * prompt renders it and never re-derives it.
+ */
+export interface TeachingSkillPolicy {
+  required: TeachingRequiredSkillRule[];
+  preferred: SceneSkillRef[];
+  allowed: SceneSkillRef[];
+  combinationRestrictions: TeachingSkillCombinationRestriction[];
 }
 
 /** A generation-ready description of one course scene. */
