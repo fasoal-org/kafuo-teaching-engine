@@ -66,7 +66,16 @@ export type TeachingPackageErrorCode =
    * from the declared content digest. Reported, never substituted with a
    * newer version (FR-TS-036, VAL-TS-019).
    */
-  | 'SKILL_LINEAGE_UNRESOLVABLE';
+  | 'SKILL_LINEAGE_UNRESOLVABLE'
+  // --- Teaching Skills policy parsing + resolution (Module 2 W5, plan §J/§M) ---
+  /** A governed request's flow item carries no Skill Policy — fail closed (BR-TS-048). */
+  | 'SKILL_POLICY_REQUIRED'
+  /** A received Skill Policy is malformed or internally incoherent (FR-TS-011, VAL-TS-003). */
+  | 'SKILL_POLICY_INVALID'
+  /** A referenced canonical Skill identity does not exist in TE's registry (VAL-TS-001). */
+  | 'SKILL_NOT_FOUND'
+  /** A referenced exact canonical Skill version does not resolve (VAL-TS-002, AC-TS-010). */
+  | 'SKILL_VERSION_UNRESOLVED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -110,6 +119,10 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   QUESTION_GENERATION_MODEL_UNAVAILABLE: 503,
   QUESTION_GENERATION_OUTPUT_INVALID: 502,
   SKILL_LINEAGE_UNRESOLVABLE: 409,
+  SKILL_POLICY_REQUIRED: 400,
+  SKILL_POLICY_INVALID: 422,
+  SKILL_NOT_FOUND: 422,
+  SKILL_VERSION_UNRESOLVED: 422,
 };
 
 export class TeachingPackageError extends Error {

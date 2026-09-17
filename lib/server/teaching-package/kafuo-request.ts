@@ -21,6 +21,9 @@ import type {
   KafuoNormalizedContentResource,
   LearningObjectiveRef,
   TeachingFlowEntry,
+  TeachingRequiredSkillRule,
+  TeachingSkillPolicy,
+  TeachingSkillRef,
   TeachingPackageAggregateKey,
 } from '@/lib/types/teaching-package';
 
@@ -38,6 +41,210 @@ function requireNonEmptyString(value: unknown, field: string): string {
     throw new TeachingPackageError('INVALID_REQUEST', `${field} must be a non-empty string`);
   }
   return value;
+}
+
+/**
+ * Mirrors the Teaching Engine's canonical-registry identity syntax and the
+ * Kafuo-side authoring guard, so a reference TE accepts as well-formed is one the
+ * W1 registry can look up (and vice versa). Format guard, not a versioning scheme.
+ */
+const SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SKILL_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Closed V1 vocabularies — BR-TS-010: no implicit default scope, explicit role. */
+const SKILL_REQUIREMENT_SCOPES = ['flow_position', 'every_instructional_scene'] as const;
+const SKILL_ASSIGNMENT_ROLES = ['primary', 'supporting'] as const;
+
+function parseSkillRef(raw: unknown, field: string, where: () => string): TeachingSkillRef {
+  const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  const skillId = record?.skillId;
+  const version = record?.version;
+  if (typeof skillId !== 'string' || !SKILL_ID_PATTERN.test(skillId)) {
+    throw new TeachingPackageError(
+      'SKILL_POLICY_INVALID',
+      `${where()}: ${field}.skillId must be a well-formed canonical skill id`,
+    );
+  }
+  if (typeof version !== 'string' || !SKILL_VERSION_PATTERN.test(version)) {
+    throw new TeachingPackageError(
+      'SKILL_POLICY_INVALID',
+      `${where()}: ${field}.version must be a well-formed canonical version (exact, never "latest")`,
+    );
+  }
+  return { skillId, version };
+}
+
+function refList(raw: unknown, field: string, where: () => string): TeachingSkillRef[] {
+  if (raw === undefined || raw === null) {
+    throw new TeachingPackageError('SKILL_POLICY_INVALID', `${where()}: ${field} is required`);
+  }
+  if (!Array.isArray(raw)) {
+    throw new TeachingPackageError('SKILL_POLICY_INVALID', `${where()}: ${field} must be an array`);
+  }
+  return raw.map((item, i) => parseSkillRef(item, `${field}[${i}]`, where));
+}
+
+/**
+ * Structurally validate one received flow-entry Skill Policy at the single
+ * parsing seam (Module 2 W5). TE re-validates what Kafuo authored — the wire is
+ * never trusted (VAL-TS-003/004) — applying the same coherence rules the Kafuo
+ * side enforces at authoring: required/preferred sit exactly inside the allowed
+ * boundary, one exact version per skill id per set, one required rule per skill
+ * id, restrictions name two distinct allowed members once each, and at most one
+ * skill required as the Primary of every instructional Scene (FR-TS-074 — two
+ * can never be satisfied together, BR-TS-021).
+ *
+ * Kafuo validated this policy's SHAPE before dispatch; whether each exact
+ * (skillId, version) RESOLVES is decided separately, against the W1 canonical
+ * registry, by the skill-policy resolution module — never here.
+ */
+function parseSkillPolicy(raw: unknown, index: number, stage: string): TeachingSkillPolicy {
+  const where = () => `teachingModel.flow[${index}] (stage "${stage}").skillPolicy`;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TeachingPackageError(
+      'SKILL_POLICY_INVALID',
+      `${where()} must be an object when present`,
+    );
+  }
+  const record = raw as Record<string, unknown>;
+
+  const requiredRaw = record.required;
+  if (!Array.isArray(requiredRaw)) {
+    throw new TeachingPackageError('SKILL_POLICY_INVALID', `${where()}: required must be an array`);
+  }
+  const required: TeachingRequiredSkillRule[] = requiredRaw.map((item, i) => {
+    const rule = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+    if (!rule) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: required[${i}] must be an object`,
+      );
+    }
+    const skill = parseSkillRef(rule.skill, `required[${i}].skill`, where);
+    if (
+      typeof rule.scope !== 'string' ||
+      !(SKILL_REQUIREMENT_SCOPES as readonly string[]).includes(rule.scope)
+    ) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: required[${i}].scope must be one of ${SKILL_REQUIREMENT_SCOPES.join(' | ')} (BR-TS-010: no implicit default scope)`,
+      );
+    }
+    if (
+      typeof rule.role !== 'string' ||
+      !(SKILL_ASSIGNMENT_ROLES as readonly string[]).includes(rule.role)
+    ) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: required[${i}].role must be one of ${SKILL_ASSIGNMENT_ROLES.join(' | ')}`,
+      );
+    }
+    return { skill, scope: rule.scope, role: rule.role };
+  });
+
+  const preferred = refList(record.preferred, 'preferred', where);
+  const allowed = refList(record.allowed, 'allowed', where);
+
+  const restrictionsRaw = record.combinationRestrictions;
+  if (!Array.isArray(restrictionsRaw)) {
+    throw new TeachingPackageError(
+      'SKILL_POLICY_INVALID',
+      `${where()}: combinationRestrictions must be an array`,
+    );
+  }
+  const combinationRestrictions = restrictionsRaw.map((item, i) => {
+    const restriction = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+    if (!restriction) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: combinationRestrictions[${i}] must be an object`,
+      );
+    }
+    return {
+      skillA: parseSkillRef(restriction.skillA, `combinationRestrictions[${i}].skillA`, where),
+      skillB: parseSkillRef(restriction.skillB, `combinationRestrictions[${i}].skillB`, where),
+    };
+  });
+
+  // Coherence — the FRD §14.3 rules. A structurally valid but contradictory
+  // policy is refused, never repaired (FR-TS-011).
+  const allowedPairs = new Set(allowed.map((ref) => `${ref.skillId}\u0000${ref.version}`));
+  const uniqueIds = (refs: TeachingSkillRef[], set: string) => {
+    const seen = new Set<string>();
+    for (const ref of refs) {
+      if (seen.has(ref.skillId)) {
+        throw new TeachingPackageError(
+          'SKILL_POLICY_INVALID',
+          `${where()}: ${set} names skill id "${ref.skillId}" more than once (one exact version per skill)`,
+        );
+      }
+      seen.add(ref.skillId);
+    }
+  };
+  uniqueIds(allowed, 'allowed');
+  uniqueIds(preferred, 'preferred');
+  const requiredIds = new Set<string>();
+  for (const rule of required) {
+    if (requiredIds.has(rule.skill.skillId)) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: required carries more than one rule for skill id "${rule.skill.skillId}"`,
+      );
+    }
+    requiredIds.add(rule.skill.skillId);
+  }
+  for (const ref of [...required.map((r) => r.skill), ...preferred]) {
+    if (!allowedPairs.has(`${ref.skillId}\u0000${ref.version}`)) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: ${ref.skillId}@${ref.version} is required/preferred but not in the allowed boundary (FRD §14.3)`,
+      );
+    }
+  }
+  const seenRestrictions = new Set<string>();
+  for (const { skillA, skillB } of combinationRestrictions) {
+    for (const endpoint of [skillA, skillB]) {
+      if (!allowedPairs.has(`${endpoint.skillId}\u0000${endpoint.version}`)) {
+        throw new TeachingPackageError(
+          'SKILL_POLICY_INVALID',
+          `${where()}: combination restriction names ${endpoint.skillId}@${endpoint.version}, which is not in the allowed boundary`,
+        );
+      }
+    }
+    if (skillA.skillId === skillB.skillId && skillA.version === skillB.version) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: combination restriction must name two distinct skills`,
+      );
+    }
+    const key = [
+      `${skillA.skillId}\u0000${skillA.version}`,
+      `${skillB.skillId}\u0000${skillB.version}`,
+    ]
+      .sort()
+      .join('|');
+    if (seenRestrictions.has(key)) {
+      throw new TeachingPackageError(
+        'SKILL_POLICY_INVALID',
+        `${where()}: the same combination restriction is declared twice`,
+      );
+    }
+    seenRestrictions.add(key);
+  }
+  const everyScenePrimaries = required.filter(
+    (rule) => rule.scope === 'every_instructional_scene' && rule.role === 'primary',
+  );
+  if (everyScenePrimaries.length > 1) {
+    throw new TeachingPackageError(
+      'SKILL_POLICY_INVALID',
+      `${where()}: more than one skill is required as the Primary of every instructional Scene (${everyScenePrimaries
+        .map((rule) => `${rule.skill.skillId}@${rule.skill.version}`)
+        .join(
+          ', ',
+        )}); an instructional Scene has exactly one Primary (BR-TS-021), so the configuration is contradictory (FR-TS-074)`,
+    );
+  }
+
+  return { required, preferred, allowed, combinationRestrictions };
 }
 
 function parseFlow(raw: unknown): TeachingFlowEntry[] {
@@ -70,18 +277,15 @@ function parseFlow(raw: unknown): TeachingFlowEntry[] {
       );
     }
     // Skill Policy rides through as received — Kafuo's expansion projected it and
-    // TE never re-derives it (plan §G). Carried here so the shared canonical
-    // digest covers it (Module 2 W4); structural validation of the carried
-    // policy is W5's job at this same seam.
-    const skillPolicy = record.skillPolicy;
-    if (skillPolicy === undefined) return { stage, instructions };
-    if (!skillPolicy || typeof skillPolicy !== 'object' || Array.isArray(skillPolicy)) {
-      throw new TeachingPackageError(
-        'FLOW_INVALID',
-        `teachingModel.flow[${index}].skillPolicy must be an object when present`,
-      );
-    }
-    return { stage, instructions, skillPolicy: skillPolicy as TeachingFlowEntry['skillPolicy'] };
+    // TE never re-derives it (plan §G). Structural validation happens here, at
+    // this single seam; exact-version resolution against the W1 canonical
+    // registry happens separately in the skill-policy module.
+    if (record.skillPolicy === undefined) return { stage, instructions };
+    return {
+      stage,
+      instructions,
+      skillPolicy: parseSkillPolicy(record.skillPolicy, index, stage),
+    };
   });
 }
 
