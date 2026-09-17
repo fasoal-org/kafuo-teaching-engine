@@ -87,7 +87,21 @@ export type TeachingPackageErrorCode =
    * A required Skill rule was not satisfied according to its explicit policy
    * scope and role (VAL-TS-005 — no default scope is ever inferred, BR-TS-010).
    */
-  | 'SKILL_REQUIREMENT_UNSATISFIED';
+  | 'SKILL_REQUIREMENT_UNSATISFIED'
+  // --- Teaching Skills deterministic validators (Module 2 W12, plan §J/§K) ---
+  /**
+   * Authoritative flow instructions and configured Skill Policy cannot be
+   * satisfied together (FR-TS-074): a Teaching Model CONFIGURATION fault, never
+   * an agent or reviewer fault — a reviewer cannot override it, and the remedy
+   * is a new Teaching Model version (BR-TS-051).
+   */
+  | 'TEACHING_MODEL_CONFIG_CONTRADICTORY'
+  /**
+   * A Scene's instructional/non-instructional classification is structurally
+   * invalid on a governed package: absent, or outside the closed vocabulary
+   * (VAL-TS-007 — never derived from Skill absence, BR-TS-054).
+   */
+  | 'SCENE_CLASSIFICATION_INVALID';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -137,6 +151,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SKILL_VERSION_UNRESOLVED: 422,
   SKILL_ASSIGNMENT_INVALID: 422,
   SKILL_REQUIREMENT_UNSATISFIED: 422,
+  TEACHING_MODEL_CONFIG_CONTRADICTORY: 422,
+  SCENE_CLASSIFICATION_INVALID: 422,
 };
 
 export class TeachingPackageError extends Error {
