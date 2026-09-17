@@ -94,6 +94,33 @@ export interface TeachingStageRef {
   flowIndex: number;
 }
 
+/**
+ * An exact canonical Teaching Skill reference: stable id + immutable version
+ * (Module 2 W9). Structural twin of the app-layer `TeachingSkillRef` — the
+ * package cannot import from `lib/`, so the shape is declared here and stays
+ * wire-identical. Keeping BOTH fields lets validators key duplicates on the id
+ * while resolution keys on the pair.
+ */
+export interface SceneSkillRef {
+  skillId: string;
+  version: string;
+}
+
+/**
+ * The Scene-level Teaching Skills carrier (Module 2 W9, plan §E/§F): Primary and
+ * Supporting assignment plus the instructional classification, on ONE carrier
+ * for every Scene type. All members optional and additive — absence is the
+ * legacy state (AC-TS-034); nothing populates this until W10's selection.
+ */
+export interface SceneTeachingSkills {
+  /** Exactly one primary on an instructional Scene (BR-TS-021). */
+  primary?: SceneSkillRef;
+  /** Intentional `0..N` supporting Skills (BR-TS-022). */
+  supporting?: SceneSkillRef[];
+  /** Emitted at outline time; never derived from Skill absence (BR-TS-054). */
+  classification?: 'instructional' | 'non-instructional';
+}
+
 /** A generation-ready description of one course scene. */
 export interface SceneOutline {
   id: string;
@@ -107,6 +134,12 @@ export interface SceneOutline {
   languageNote?: string;
   /** Kafuo Teaching Model Flow identity; functionally mandatory on Kafuo runs. */
   teachingStage?: TeachingStageRef;
+  /**
+   * Teaching Skills assignment + instructional classification (Module 2 W9),
+   * selected at outline generation (W10) and copied verbatim onto the Scene.
+   * Absent on legacy and non-Kafuo runs.
+   */
+  teachingSkills?: SceneTeachingSkills;
   /** Machine-readable normalized Kafuo grounding; optional for PDF/non-Kafuo runs. */
   sourceContentUnitIds?: string[];
   sourceBlockIds?: string[];

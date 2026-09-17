@@ -93,6 +93,30 @@ export interface TeachingSkillPolicy {
 }
 
 /**
+ * The Scene-level Teaching Skills carrier (Module 2 W9, plan §E/§F): Primary and
+ * Supporting assignment plus the instructional classification, on ONE carrier for
+ * every Scene type — no second Scene model.
+ *
+ * Every member is optional and additive: absence on a legacy Scene is the
+ * backward-compatibility mechanism itself (AC-TS-034 — legacy lineage absence is
+ * explicit and never fabricated). Nothing populates the carrier until W10's
+ * generation-time selection; W12's validators consume it.
+ *
+ * The refs keep BOTH the stable canonical id and the exact version so later
+ * validators can key duplicates on the ID while resolution keys on the pair
+ * (plan §K: `primary feynman v1` + `supporting feynman v2` must be detectable as
+ * the same Skill twice).
+ */
+export interface SceneTeachingSkills {
+  /** Exactly one primary on an instructional Scene (BR-TS-021); absent on a genuinely non-instructional one. */
+  primary?: TeachingSkillRef;
+  /** Intentional `0..N` supporting Skills (BR-TS-022 — no arbitrary V1 cap). */
+  supporting?: TeachingSkillRef[];
+  /** The classification emitted at outline time (FR-TS-022); never derived from Skill absence (BR-TS-054). */
+  classification?: 'instructional' | 'non-instructional';
+}
+
+/**
  * Kafuo Teaching Model Flow entry (FRD §11.1). Array order is authoritative;
  * TE derives the zero-based `flowIndex` from position. Repeated stage keys are
  * valid — identity is `(flowIndex, stage)`. Kafuo never sends `flowIndex`.

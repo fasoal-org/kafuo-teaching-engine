@@ -21,6 +21,7 @@ import type { PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
 import type {
   SceneLearningObjectiveRef,
+  SceneTeachingSkills,
   TeachingStageRef,
 } from '@/lib/types/teaching-package';
 
@@ -123,6 +124,16 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * every Kafuo-generated scene and copied exactly from its outline.
    */
   teachingStage?: TeachingStageRef;
+  /**
+   * Teaching Skills assignment + instructional classification (Module 2 W9).
+   * App-layer, optional, additive: absent on legacy data — and that absence IS
+   * the backward-compatibility mechanism (AC-TS-034: legacy lineage absence is
+   * explicit, never fabricated). Present on every Module-2-governed
+   * instructional scene once W10 performs generation-time selection; copied
+   * exactly from its outline by `buildCompleteScene`'s four branches, the same
+   * seam as `teachingStage`. Never part of the `@openmaic/dsl` Scene contract.
+   */
+  teachingSkills?: SceneTeachingSkills;
 };
 export type Scene = AppScene;
 

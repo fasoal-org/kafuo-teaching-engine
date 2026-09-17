@@ -61,6 +61,7 @@ export function buildCompleteScene(
       actions,
       ...timestamps,
       ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
+      ...(outline.teachingSkills !== undefined && { teachingSkills: outline.teachingSkills }),
     };
   }
 
@@ -76,6 +77,7 @@ export function buildCompleteScene(
       actions,
       ...timestamps,
       ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
+      ...(outline.teachingSkills !== undefined && { teachingSkills: outline.teachingSkills }),
     };
   }
 
@@ -97,6 +99,7 @@ export function buildCompleteScene(
       actions,
       ...timestamps,
       ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
+      ...(outline.teachingSkills !== undefined && { teachingSkills: outline.teachingSkills }),
     };
   }
 
@@ -112,6 +115,7 @@ export function buildCompleteScene(
       actions,
       ...timestamps,
       ...(outline.teachingStage !== undefined && { teachingStage: outline.teachingStage }),
+      ...(outline.teachingSkills !== undefined && { teachingSkills: outline.teachingSkills }),
     };
   }
 

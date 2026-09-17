@@ -106,6 +106,8 @@ export type {
   MediaGenerationRequest,
   PdfImage,
   SceneOutline,
+  SceneSkillRef,
+  SceneTeachingSkills,
   TeachingFlowEntry,
   TeachingStageRef,
   UserRequirements,

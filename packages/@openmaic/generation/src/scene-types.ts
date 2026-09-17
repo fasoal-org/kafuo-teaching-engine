@@ -51,18 +51,21 @@ export type GeneratedSceneContent =
   | GeneratedInteractiveContent
   | GeneratedPBLContent;
 
-import type { TeachingStageRef } from './outline-types.js';
+import type { SceneTeachingSkills, TeachingStageRef } from './outline-types.js';
 
 export type CompleteSceneContent = SlideContent | QuizContent | InteractiveContent | PBLContent;
 
 /**
  * Scene assembled by the package, including the originating outline identity
- * and — when the outline carried one — its teaching-stage reference, copied
- * exactly (never re-derived) from outline to scene.
+ * and — when the outline carried one — its teaching-stage reference and its
+ * Teaching Skills carrier, each copied exactly (never re-derived) from outline
+ * to scene.
  */
 export type CompleteScene = Scene<Action, CompleteSceneContent> & {
   outlineId: string;
   teachingStage?: TeachingStageRef;
+  /** Teaching Skills assignment + classification (Module 2 W9), verbatim from the outline. */
+  teachingSkills?: SceneTeachingSkills;
 };
 
 /** Widget configuration emitted by the model and normalized by the scene layer. */
