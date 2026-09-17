@@ -159,6 +159,9 @@ describe('teaching package service auth', () => {
       SKILL_REQUIREMENT_UNSATISFIED: 422,
       TEACHING_MODEL_CONFIG_CONTRADICTORY: 422,
       SCENE_CLASSIFICATION_INVALID: 422,
+      // Module 2 W17: the submit-gate alignment refusal (conflict class, like
+      // STALE_STATE / STAGE_CHANGED_SINCE_SUBMISSION).
+      SKILL_ALIGNMENT_UNRESOLVED: 409,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

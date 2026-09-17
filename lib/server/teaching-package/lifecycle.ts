@@ -51,6 +51,17 @@ import {
   readProducingAttemptTeachingModel,
   teachingModelLineageDrift,
 } from '@/lib/server/teaching-package/successor-model';
+import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
+import {
+  toTeachingPackageError,
+  validateFlowPolicySatisfiability,
+  validateFlowSkillPolicies,
+  validateRequiredSkillSatisfaction,
+  validateSceneClassifications,
+  validateSkillAssignmentStructure,
+  validateSkillReferencesResolve,
+} from '@/lib/server/teaching-package/skill-validators';
+import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -363,34 +374,25 @@ async function prepareSubmitValidation(
   if (version.status !== 'draft' && version.status !== 'rejected') return null;
   const flow = await readFlowForVersion(pool, version.id);
   const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
-
-  // W13 defensive lineage check (§L) — GOVERNED packages only, strictly behind
-  // the governance discriminator so a legacy successor can never see it. A
-  // governed version whose declared (key, version) no longer matches the
-  // producing attempt's pair carries Skill lineage validated against a
-  // different model's policy; the model-change ⟹ Stage-replacement invariant
-  // (§B.12) means no current path can produce this — the check turns that
-  // argument into something the gate actually enforces.
-  if (governance?.contract) {
-    const producingModel = await readProducingAttemptTeachingModel(pool, version.id);
-    const drift = teachingModelLineageDrift(version.teachingModel, producingModel);
-    if (drift) {
-      throw new TeachingPackageError(
-        'STALE_STATE',
-        `the version declares Teaching Model ${drift.declared.key}@${drift.declared.version} but its Scene Skill lineage was produced under ${drift.producing.key}@${drift.producing.version}; the Scenes must be regenerated under the declared model before submit`,
-        {
-          reason: 'teaching_model_lineage_drift',
-          declaredTeachingModel: drift.declared,
-          producingTeachingModel: drift.producing,
-        },
-      );
-    }
+  // Check 2 — the legacy/Module-2 discriminator (§M): the durable persisted
+  // marker decides, never Skill-field absence. Legacy skips the Skill checks
+  // (4–10); tier B keeps the exact-flow gate below.
+  const governed = !!governance?.contract;
+  if (governed && (!flow || flow.length === 0)) {
+    // A governed attempt always carries flow + policy (the parse seam refuses
+    // otherwise); a governed version with no resolvable flow is corrupt
+    // lineage — fail closed, never degrade to the legacy path (BR-TS-048).
+    throw new TeachingPackageError(
+      'SKILL_POLICY_REQUIRED',
+      'the governed version records no Teaching Model Flow to validate Skills against',
+      { versionId: version.id },
+    );
   }
 
   // W13 · §M correction 2: only a legacy-derived SUCCESSOR can be refused for
   // material edits — a v1 legacy package stays legacy however it is edited
   // (§28.5), and governed successors answer to the Skill gate instead.
-  const legacySuccessor = !governance?.contract && version.predecessorVersionId !== null;
+  const legacySuccessor = !governed && version.predecessorVersionId !== null;
 
   if (!flow || flow.length === 0) {
     if (!legacySuccessor) {
@@ -425,8 +427,8 @@ async function prepareSubmitValidation(
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');
   }
-  // Exact-flow first (check 3): its error precedence over everything Module 2
-  // adds is established behavior, preserved deliberately.
+  // Check 3 — exact flow first: its error precedence over everything Module 2
+  // adds is established behavior, preserved deliberately (§L ordering).
   const outlineRecord = document.outline as
     | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
     | undefined;
@@ -441,6 +443,9 @@ async function prepareSubmitValidation(
   if (legacySuccessor) {
     await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
   }
+  if (governed) {
+    await enforceGovernedSkillGate(document.scenes, flow, version, pool);
+  }
   // The revision the proof is tied to. Read through the same store so the read
   // stays owner-scoped; the transaction re-reads it and refuses a mismatch.
   const manifest = await store.readFreshnessManifest(version.currentStageId);
@@ -451,6 +456,86 @@ async function prepareSubmitValidation(
     rev: manifest?.rev ?? 0,
     legacySuccessorChecked: legacySuccessor,
   };
+}
+
+/**
+ * The governed Submit gate — §L checks 4–11, INVOKED from the W12 validators
+ * (never re-implemented) in the plan's fixed order. Runs only behind the W6
+ * governance discriminator (`governed === true`), so a legacy package can
+ * never produce a Skill error. Every failure here keeps the package out of
+ * `in_review` (FR-TS-052, AC-TS-020).
+ *
+ * The SCENES are the selection carrier the gate validates: they are what
+ * persists through editing, what the W14 mutation route writes, and what the
+ * W16 panel inspects — the outline record keeps the generation-time selection
+ * as history.
+ */
+async function enforceGovernedSkillGate(
+  scenes: readonly AppScene[],
+  flow: readonly unknown[],
+  version: TeachingPackageVersion,
+  pool: ConnectableQueryable,
+): Promise<void> {
+  const typedFlow = flow as readonly TeachingFlowEntry[];
+  // Checks 4–9 — deterministic validators, first failure wins (§L order).
+  const deterministic = [
+    () => validateFlowSkillPolicies(typedFlow),
+    () => validateFlowPolicySatisfiability(typedFlow),
+    () => validateSkillReferencesResolve(typedFlow, scenes),
+    () => validateRequiredSkillSatisfaction(scenes, typedFlow),
+    () => validateSkillAssignmentStructure(scenes, typedFlow),
+    () => validateSceneClassifications(scenes),
+  ];
+  for (const validate of deterministic) {
+    const failure = validate();
+    if (failure) throw toTeachingPackageError(failure);
+  }
+
+  // Check 10 — alignment is a RECOMPUTATION, not a lookup (§K): each Scene's
+  // current material fingerprint, assignment and classification are re-derived
+  // against its baseline. Known or unresolved mismatch blocks Submit —
+  // uncertainty is never silently resolved as success (FR-TS-044, VAL-TS-010).
+  const misaligned = scenes
+    .map((scene) => ({ scene, derivation: deriveSceneAlignment(scene) }))
+    .filter((entry) => !entry.derivation.aligned);
+  if (misaligned.length > 0) {
+    throw new TeachingPackageError(
+      'SKILL_ALIGNMENT_UNRESOLVED',
+      `${misaligned.length === 1 ? 'one Scene requires' : `${misaligned.length} Scenes require`} alignment validation before submit — ${misaligned
+        .map((entry) => `${entry.scene.id} (${entry.derivation.state})`)
+        .join(', ')}; confirm, correct, or regenerate before submitting`,
+      {
+        offendingSceneIds: misaligned.map((entry) => entry.scene.id),
+        alignment: misaligned.map((entry) => ({
+          sceneId: entry.scene.id,
+          alignmentState: entry.derivation.state,
+          ...(entry.derivation.reason ? { reason: entry.derivation.reason } : {}),
+        })),
+      },
+    );
+  }
+
+  // Check 11 — lineage intact (§L): a governed version whose declared
+  // (key, version) no longer matches the producing attempt's carries Skill
+  // lineage validated against a different model's policy; the model-change ⟹
+  // Stage-replacement invariant (§B.12) means no current path can produce
+  // this — the check turns that argument into something the gate enforces.
+  // Approved immutability, the other half of check 11, is the existing
+  // Stage-resident machinery (assertStageWritable + submittedStageRev) and
+  // adds nothing here.
+  const producingModel = await readProducingAttemptTeachingModel(pool, version.id);
+  const drift = teachingModelLineageDrift(version.teachingModel, producingModel);
+  if (drift) {
+    throw new TeachingPackageError(
+      'STALE_STATE',
+      `the version declares Teaching Model ${drift.declared.key}@${drift.declared.version} but its Scene Skill lineage was produced under ${drift.producing.key}@${drift.producing.version}; the Scenes must be regenerated under the declared model before submit`,
+      {
+        reason: 'teaching_model_lineage_drift',
+        declaredTeachingModel: drift.declared,
+        producingTeachingModel: drift.producing,
+      },
+    );
+  }
 }
 
 /**

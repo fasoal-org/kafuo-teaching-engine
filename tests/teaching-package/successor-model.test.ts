@@ -48,6 +48,7 @@ import {
   MATERIAL_SCENE_FIELDS,
   NON_MATERIAL_SCENE_FIELDS,
   sceneMaterialFingerprint,
+  stampGenerationAlignmentBaselines,
 } from '@/lib/server/teaching-package/alignment';
 import type { AppScene } from '@/lib/types/stage';
 import type { AppStage } from '@/lib/document-store/persistence-types';
@@ -87,6 +88,8 @@ async function expectTpError(
   expect(rejection).toMatchObject({ code });
   return rejection as TeachingPackageError;
 }
+
+const FEYNMAN_REF = { skillId: 'feynman-learning', version: 'v1' };
 
 describe('W13 pure comparisons', () => {
   const g5v1 = { key: 'g5', version: 'g5.v1' };
@@ -279,6 +282,30 @@ describe('W13 submit-gate successor checks', () => {
     { stage: 'outcome_teaching_cards', instructions: 'c' },
   ];
 
+  /** Flow entries carrying permissive policy, for the governed gate's checks. */
+  const governedPolicyFlow: TeachingFlowEntry[] = [
+    {
+      stage: 'lesson_introduction',
+      instructions: 'i',
+      skillPolicy: {
+        required: [],
+        preferred: [],
+        allowed: [FEYNMAN_REF, { skillId: 'lecture-style', version: 'v1' }],
+        combinationRestrictions: [],
+      },
+    },
+    {
+      stage: 'outcome_teaching_cards',
+      instructions: 'c',
+      skillPolicy: {
+        required: [],
+        preferred: [],
+        allowed: [FEYNMAN_REF, { skillId: 'lecture-style', version: 'v1' }],
+        combinationRestrictions: [],
+      },
+    },
+  ];
+
   function flowScenes(stageId: string): AppScene[] {
     return [
       {
@@ -290,6 +317,30 @@ describe('W13 submit-gate successor checks', () => {
         teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
       },
     ];
+  }
+
+  /**
+   * The fully valid governed shape (W17): flow-tagged, classified, in-policy
+   * selections with generation baselines — the state a governed generation
+   * leaves behind. The two defensive-check tests below must reach check 11,
+   * which sits AFTER checks 4–10 in the assembled gate.
+   */
+  function governedFlowScenes(stageId: string): AppScene[] {
+    return stampGenerationAlignmentBaselines(
+      [
+        {
+          ...makeSlideScene('s1', stageId, 1),
+          teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+          teachingSkills: { primary: FEYNMAN_REF, classification: 'instructional' as const },
+        },
+        {
+          ...makeSlideScene('s2', stageId, 2),
+          teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+          teachingSkills: { classification: 'non-instructional' as const },
+        },
+      ],
+      1,
+    );
   }
 
   // ---- the materially-edited legacy-derived successor (§M correction 2) ----
@@ -483,14 +534,14 @@ describe('W13 submit-gate successor checks', () => {
   it('refuses a governed version whose declared (key, version) drifted from its producing attempt', async () => {
     const item = { type: 'lesson' as const, id: nextId('li') };
     const stageId = nextId('stage');
-    await seedStage(stageId, flowScenes(stageId));
+    await seedStage(stageId, governedFlowScenes(stageId));
     const attemptId = nextId('tpa');
     const versionId = await seedVersion(item, {
       versionId: nextId('tpv'),
       stageId,
       status: 'draft',
       currentAttemptId: attemptId,
-      attempt: { id: attemptId, contract: 'kafuo.teaching-skills.v1', flow },
+      attempt: { id: attemptId, contract: 'kafuo.teaching-skills.v1', flow: governedPolicyFlow },
     });
     // Break the §B.12 invariant the way a future buggy path would: the version
     // row declares a model the producing attempt never used. This is the
@@ -514,14 +565,14 @@ describe('W13 submit-gate successor checks', () => {
   it('a governed version with an intact pair submits (the check does not over-fire)', async () => {
     const item = { type: 'lesson' as const, id: nextId('li') };
     const stageId = nextId('stage');
-    await seedStage(stageId, flowScenes(stageId));
+    await seedStage(stageId, governedFlowScenes(stageId));
     const attemptId = nextId('tpa');
     const versionId = await seedVersion(item, {
       versionId: nextId('tpv'),
       stageId,
       status: 'draft',
       currentAttemptId: attemptId,
-      attempt: { id: attemptId, contract: 'kafuo.teaching-skills.v1', flow },
+      attempt: { id: attemptId, contract: 'kafuo.teaching-skills.v1', flow: governedPolicyFlow },
     });
     const updated = await submitForReview(txPool(), {
       tenantId: 'tenant-test',

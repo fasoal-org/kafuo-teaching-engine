@@ -101,7 +101,16 @@ export type TeachingPackageErrorCode =
    * invalid on a governed package: absent, or outside the closed vocabulary
    * (VAL-TS-007 — never derived from Skill absence, BR-TS-054).
    */
-  | 'SCENE_CLASSIFICATION_INVALID';
+  | 'SCENE_CLASSIFICATION_INVALID'
+  // --- Teaching Skills submit gate (Module 2 W17, plan §J/§K/§L) ---
+  /**
+   * Alignment at Submit is unresolved (VAL-TS-010, AC-TS-032/034): a governed
+   * Scene is stale against its baseline (a material edit, Skill change or
+   * classification change after the last baseline), or has never been
+   * validated or confirmed at all. Uncertainty is never silently resolved as
+   * success — the reviewer confirms, corrects, or regenerates (FR-TS-044/071).
+   */
+  | 'SKILL_ALIGNMENT_UNRESOLVED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -153,6 +162,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SKILL_REQUIREMENT_UNSATISFIED: 422,
   TEACHING_MODEL_CONFIG_CONTRADICTORY: 422,
   SCENE_CLASSIFICATION_INVALID: 422,
+  SKILL_ALIGNMENT_UNRESOLVED: 409,
 };
 
 export class TeachingPackageError extends Error {

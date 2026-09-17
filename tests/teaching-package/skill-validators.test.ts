@@ -555,21 +555,29 @@ describe('check 9 — validateSceneClassifications (structurally valid)', () => 
   });
 });
 
-describe('no wiring into the submit gate (that is W17)', () => {
+describe('submit gate wiring (W17 — the W12 "unwired" pin superseded by design)', () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-  it('prepareSubmitValidation neither imports the validators nor emits any Skill code', () => {
+  it('the gate INVOKES the validators, composed behind the discriminator, with exact-flow precedence intact', () => {
     const lifecycle = readFileSync(
       join(repoRoot, 'lib/server/teaching-package/lifecycle.ts'),
       'utf-8',
     );
-    expect(lifecycle).not.toContain('skill-validators');
-    expect(lifecycle).not.toContain('validateFlowSkillPolicies');
-    expect(lifecycle).not.toContain('SKILL_');
-    expect(lifecycle).not.toContain('SCENE_CLASSIFICATION_INVALID');
-    // The existing exact-flow gate is the untouched reference for precedence:
-    // existing lifecycle tests pin its ordering and HTTP statuses.
+    // Composed, not reimplemented: every W12 validator is invoked by name.
+    for (const validator of [
+      'validateFlowSkillPolicies',
+      'validateFlowPolicySatisfiability',
+      'validateSkillReferencesResolve',
+      'validateRequiredSkillSatisfaction',
+      'validateSkillAssignmentStructure',
+      'validateSceneClassifications',
+    ]) {
+      expect(lifecycle, validator).toContain(validator);
+    }
+    // The existing exact-flow gate stays the precedence reference, and the
+    // governed Skill gate runs only behind the W6 discriminator.
     expect(lifecycle).toContain('validateExactTeachingFlow');
+    expect(lifecycle).toContain('if (governed)');
   });
 
   it('toTeachingPackageError preserves the §J status vocabulary', () => {
