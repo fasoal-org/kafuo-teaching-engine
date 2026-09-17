@@ -20,6 +20,11 @@
  * Deliberately not a new visual idiom. The bar keeps the bench's own hairline,
  * type scale and flat icon buttons; the timeline keeps the height, padding and
  * geometry it had as a standalone bar.
+ *
+ * Module 2 W16 adds the Teaching Skills inspection pill, which floats ABOVE
+ * the dock (bottom-full) rather than joining its layout: it is a reviewer
+ * surface for teaching-package stages only and self-hides everywhere else, so
+ * it costs the ordinary bench nothing.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useStageStore } from '@/lib/store/stage';
@@ -30,6 +35,7 @@ import type { CanvasPagerProps } from '@/components/edit/EditShell/CanvasPager';
 import type { SceneType } from '@/lib/types/stage';
 import { EditDockProvider } from './dock-context';
 import { DockEditBar, DOCK_EDIT_BAR_HEIGHT } from './DockEditBar';
+import { TeachingSkillsPanel } from './TeachingSkillsPanel';
 
 /**
  * The timeline's height, in px — the body only; the edit bar is added on top of
@@ -101,6 +107,11 @@ export function EditDock({
       }}
       className="relative flex flex-col border-t border-gray-100 bg-white/80 backdrop-blur-xl dark:border-gray-800 dark:bg-slate-900/80"
     >
+      {/* Teaching Skills inspection (Module 2 W16) — attached HERE, at the
+          dock, not at the surface layer: surfaces cover only slide and quiz,
+          and this panel must render for interactive and PBL Scenes too. It
+          self-hides on non-package and legacy classrooms. */}
+      <TeachingSkillsPanel sceneId={sceneId} />
       <DockEditBar sceneId={sceneId} canPickElements={canPickElements} pager={pager} />
 
       <div data-testid="edit-dock-timeline" className="flex min-h-0 flex-1 flex-col">
