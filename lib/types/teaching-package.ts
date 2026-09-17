@@ -223,6 +223,18 @@ export interface GenerationInputSnapshot {
   };
   /** sha256 of the canonical Kafuo request (excludes the signed URL). */
   requestDigest?: string;
+  /**
+   * The explicit Teaching Skills governance contract marker Module 2 requests
+   * carry (Module 2 W6, plan §M). Its ABSENCE is the genuine pre-Module-2
+   * legacy path — governance is declared, never inferred from Skill fields,
+   * policy presence, or flow presence. Identifiers only; secrecy-safe.
+   */
+  teachingSkillsContract?: string;
+  /**
+   * Deterministic digest of the resolved Skill Policy lineage — integrity
+   * evidence only, NOT the mode declaration (the contract marker above is).
+   */
+  skillPolicyDigest?: string;
   /** Source-visual counts patched in by the acquisition/generation layers. */
   sourceVisualSummary?: {
     available: number;
@@ -303,6 +315,14 @@ export interface GenerationAttempt {
   requestId: string | null;
   /** Semantic digest of the Kafuo request; null for legacy body callers. */
   requestDigest: string | null;
+  /**
+   * The authoritative Teaching Skills governance discriminator, persisted from
+   * the request marker (Module 2 W6, plan §F/§M). `NULL` ⇒ the attempt was not
+   * governed by Teaching Skills ⇒ legacy. Never inferred from content.
+   */
+  teachingSkillsContract: string | null;
+  /** Skill Policy lineage digest — integrity evidence, not the mode declaration. */
+  skillPolicyDigest: string | null;
   /** Full-classroom generation runs consumed (Layer B, plan §4.3.8). */
   generationRuns: number;
   requestedByActorRef: string;
@@ -403,6 +423,12 @@ export interface KafuoGenerationRequest {
   actorRef: string;
   /** Present ⇒ regeneration of that TE version. */
   versionId?: string;
+  /**
+   * The explicit `teachingSkills` governance marker, when the request carried
+   * one (Module 2 W6). Undefined ⇒ legacy — never inferred from `skillPolicy`
+   * presence (plan §M).
+   */
+  teachingSkillsContract?: string;
 }
 
 // ---------------------------------------------------------------------------

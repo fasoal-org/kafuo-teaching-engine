@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS teaching_package_generation_attempts (
   status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
   request_id TEXT,
   request_digest TEXT,
+  teaching_skills_contract TEXT,
+  skill_policy_digest TEXT,
   generation_runs INTEGER NOT NULL DEFAULT 0,
   requested_by_actor_ref TEXT NOT NULL,
   teaching_model_key TEXT NOT NULL,
@@ -229,6 +231,12 @@ $$;
 ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS tenant_id TEXT;
 UPDATE teaching_package_generation_attempts SET tenant_id = '${LEGACY_TENANT_ID}' WHERE tenant_id IS NULL;
 ALTER TABLE teaching_package_generation_attempts ALTER COLUMN tenant_id SET NOT NULL;
+-- Teaching Skills governance (Module 2 W6, plan §F — the module's only DDL):
+-- additive, nullable, idempotent. NULL teaching_skills_contract ⇒ the attempt
+-- was not governed ⇒ legacy. Deliberately NO backfill — absence IS the legacy
+-- marker and inferring one would fabricate governance history (AC-TS-034).
+ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS teaching_skills_contract TEXT;
+ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS skill_policy_digest TEXT;
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -760,6 +768,8 @@ interface RawAttemptRow extends Record<string, unknown> {
   status: string;
   request_id: string | null;
   request_digest: string | null;
+  teaching_skills_contract: string | null;
+  skill_policy_digest: string | null;
   generation_runs: number | string;
   requested_by_actor_ref: string;
   teaching_model_key: string;
@@ -787,6 +797,8 @@ const ATTEMPT_COLUMNS = `id,
   status,
   request_id,
   request_digest,
+  teaching_skills_contract,
+  skill_policy_digest,
   generation_runs,
   requested_by_actor_ref,
   teaching_model_key,
@@ -817,6 +829,8 @@ function rowToAttempt(row: RawAttemptRow): GenerationAttempt {
     status: row.status as GenerationAttemptStatus,
     requestId: row.request_id,
     requestDigest: row.request_digest,
+    teachingSkillsContract: row.teaching_skills_contract,
+    skillPolicyDigest: row.skill_policy_digest,
     generationRuns: Number(row.generation_runs ?? 0),
     requestedByActorRef: row.requested_by_actor_ref,
     teachingModel: { key: row.teaching_model_key, version: row.teaching_model_version },
@@ -945,6 +959,10 @@ export interface InsertTeachingPackageAttemptInput {
   requestId?: string | null;
   /** Semantic digest of the Kafuo request; null for legacy body callers. */
   requestDigest?: string | null;
+  /** Teaching Skills contract marker; null/omitted ⇒ the attempt is legacy (Module 2 W6). */
+  teachingSkillsContract?: string | null;
+  /** Skill Policy lineage digest — integrity evidence only (Module 2 W6). */
+  skillPolicyDigest?: string | null;
   requestedByActorRef: string;
   teachingModel: TeachingModelLineage;
   inputSnapshot: GenerationInputSnapshot;
@@ -959,9 +977,10 @@ export async function insertAttempt(
   const inserted = await queryable.query<RawAttemptRow>(
     `INSERT INTO teaching_package_generation_attempts
        (id, tenant_id, learning_item_type, learning_item_id, version_id, kind, status,
-        request_id, request_digest, requested_by_actor_ref,
+        request_id, request_digest, teaching_skills_contract, skill_policy_digest,
+        requested_by_actor_ref,
         teaching_model_key, teaching_model_version, input_snapshot, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
      RETURNING ${ATTEMPT_COLUMNS}`,
     [
       input.id,
@@ -973,6 +992,8 @@ export async function insertAttempt(
       input.status,
       input.requestId ?? null,
       input.requestDigest ?? null,
+      input.teachingSkillsContract ?? null,
+      input.skillPolicyDigest ?? null,
       input.requestedByActorRef,
       input.teachingModel.key,
       input.teachingModel.version,

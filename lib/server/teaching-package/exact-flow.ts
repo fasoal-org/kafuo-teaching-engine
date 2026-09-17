@@ -44,7 +44,9 @@ interface SceneWithStage {
 }
 
 /** Order scenes by persisted `order`; duplicate/ambiguous order is invalid. */
-function orderScenes(scenes: SceneWithStage[]): { ordered: SceneWithStage[] } | { ambiguous: boolean } {
+function orderScenes(
+  scenes: SceneWithStage[],
+): { ordered: SceneWithStage[] } | { ambiguous: boolean } {
   const finite = scenes.every(
     (scene) => typeof scene.order === 'number' && Number.isFinite(scene.order),
   );
@@ -177,7 +179,8 @@ export function validateExactTeachingFlow(
       collapsed.push(index);
     }
   }
-  const matches = collapsed.length === expected.length && collapsed.every((v, i) => v === expected[i]);
+  const matches =
+    collapsed.length === expected.length && collapsed.every((v, i) => v === expected[i]);
   if (matches) return { valid: true };
 
   const reason: ExactFlowViolation['reason'] = collapsed.some((value, index) =>
@@ -249,6 +252,66 @@ export async function readFlowForVersion(
         return snapshot.teachingFlow;
       }
       return null;
+    }
+    currentId = row.predecessor_version_id;
+  }
+  return null;
+}
+
+/**
+ * The Teaching Skills governance state for an existing version (Module 2 W6,
+ * plan §F/§M) — the COMPANION read beside `readFlowForVersion`, over the same
+ * attempt resolution and the same `predecessor_version_id` walk, so a cloned
+ * successor inherits governance exactly as it inherits flow (FR-TS-048).
+ *
+ * The durable `teaching_skills_contract` COLUMN is the authoritative mode
+ * discriminator: `null` ⇒ the attempt was not governed ⇒ legacy. Governance is
+ * DECLARED by that persisted marker, never inferred from Skill fields, Skill
+ * Policy presence, flow presence, or Scene content (plan §M). `skill_policy_digest`
+ * rides along as lineage/integrity evidence — it is not the mode declaration.
+ *
+ * Returns `null` when no generated attempt is reachable (tier A — pre-Kafuo);
+ * an attempt with a NULL contract answers `{ contract: null, … }` (tier B —
+ * Kafuo, pre-Module-2), which is a DIFFERENT state from no attempt at all.
+ */
+export interface TeachingSkillsGovernance {
+  contract: string | null;
+  policyDigest: string | null;
+}
+
+export async function readTeachingSkillsGovernanceForVersion(
+  tx: Queryable,
+  versionId: string,
+): Promise<TeachingSkillsGovernance | null> {
+  const visited = new Set<string>();
+  let currentId: string | null = versionId;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const versionResult = await tx.query<Record<string, unknown>>(
+      `SELECT current_attempt_id, predecessor_version_id
+         FROM teaching_package_versions
+        WHERE id = $1`,
+      [currentId],
+    );
+    const row = versionResult.rows[0] as
+      | { current_attempt_id: string | null; predecessor_version_id: string | null }
+      | undefined;
+    if (!row) return null;
+    if (row.current_attempt_id) {
+      const attemptResult = await tx.query<Record<string, unknown>>(
+        `SELECT teaching_skills_contract, skill_policy_digest
+           FROM teaching_package_generation_attempts
+          WHERE id = $1`,
+        [row.current_attempt_id],
+      );
+      const attempt = attemptResult.rows[0] as
+        | { teaching_skills_contract: string | null; skill_policy_digest: string | null }
+        | undefined;
+      if (!attempt) return null;
+      return {
+        contract: attempt.teaching_skills_contract,
+        policyDigest: attempt.skill_policy_digest,
+      };
     }
     currentId = row.predecessor_version_id;
   }

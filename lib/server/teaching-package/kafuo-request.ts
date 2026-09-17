@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
+import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import type {
   GenerationExecutionInput,
   KafuoContentResource,
@@ -28,6 +29,13 @@ import type {
 } from '@/lib/types/teaching-package';
 
 type StartGenerationAttemptRequestAlias = StartGenerationAttemptRequest;
+
+/**
+ * The Teaching Skills governance contract this TE speaks (Module 2 W6, plan §M).
+ * Mirrors Kafuo's `TEACHING_SKILLS_CONTRACT_V1` (`contracts.py`); the shared
+ * specification both sides pin.
+ */
+export const TEACHING_SKILLS_CONTRACT_V1 = 'kafuo.teaching-skills.v1';
 
 /** Development-only escape hatch for local HTTP PDF sources. */
 function allowInsecureResourceUrl(): boolean {
@@ -574,6 +582,27 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     flow: parseFlow(teachingModelRaw.flow),
   };
 
+  // The explicit governance marker (Module 2 W6, plan §M). This is the ONE
+  // place the mode is detected; everything downstream receives the derived
+  // value and never re-tests `teachingSkills` presence per call site. Absent ⇒
+  // genuine legacy path. An UNKNOWN contract string is refused here — a
+  // contract this TE does not speak must fail closed, mirroring the
+  // `schemaVersion` refusal pattern — rather than being silently ignored.
+  const teachingSkillsMarker = body.teachingSkills;
+  let teachingSkillsContract: string | undefined;
+  if (teachingSkillsMarker !== undefined) {
+    if (
+      typeof teachingSkillsMarker !== 'string' ||
+      teachingSkillsMarker !== TEACHING_SKILLS_CONTRACT_V1
+    ) {
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `teachingSkills must be the supported contract ${JSON.stringify(TEACHING_SKILLS_CONTRACT_V1)} when present`,
+      );
+    }
+    teachingSkillsContract = TEACHING_SKILLS_CONTRACT_V1;
+  }
+
   const contentResource = parseContentResource(body.contentResource);
   const normalizedContentResource = parseNormalizedContentResource(
     body.normalizedContentResource,
@@ -624,6 +653,9 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     tenantContext: { tenantId },
     actorRef,
     ...(typeof body.versionId === 'string' && body.versionId ? { versionId: body.versionId } : {}),
+    // Mode derived ONCE at this single detection point (plan §B.13): the
+    // marker's presence/absence is settled here and carried as a value.
+    ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
   };
   return {
     request,
@@ -745,6 +777,8 @@ export function buildKafuoRequirement(request: KafuoGenerationRequest): string {
  */
 export interface KafuoGenerationContext {
   aggregate: TeachingPackageAggregateKey;
+  /** Module-2 mode derived once at parse: the contract marker, or null = legacy. */
+  teachingSkillsContract: string | null;
   teachingFlow: TeachingFlowEntry[];
   learningObjectives: LearningObjectiveRef[];
   requirement: string;
@@ -780,6 +814,8 @@ export function buildKafuoStartRequest(
       actorRef: request.actorRef,
       requestId: request.requestId,
       requestDigest: digest,
+      teachingSkillsContract: request.teachingSkillsContract ?? null,
+      skillPolicyDigest: computeSkillPolicyDigest(request.teachingModel.flow),
       teachingFlow: request.teachingModel.flow,
       contentResource: contentResourceSnapshotFacts(request.contentResource),
       ...(request.normalizedContentResource
@@ -792,6 +828,7 @@ export function buildKafuoStartRequest(
     },
     kafuo: {
       aggregate,
+      teachingSkillsContract: request.teachingSkillsContract ?? null,
       teachingFlow: request.teachingModel.flow,
       learningObjectives: request.learningObjectives,
       requirement,

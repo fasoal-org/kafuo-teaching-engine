@@ -87,6 +87,14 @@ export interface StartGenerationAttemptRequest {
   /** ---- Kafuo structured-request fields (plan §4.1.4) ---- */
   /** Semantic request digest; MANDATORY for Kafuo-shaped requests. */
   requestDigest?: string;
+  /**
+   * Teaching Skills governance marker (Module 2 W6): present ⇒ the attempt is
+   * Module-2 governed; absent ⇒ legacy. Mode derived ONCE by the parse layer —
+   * this field is that value, never re-derived per call site.
+   */
+  teachingSkillsContract?: string;
+  /** Skill Policy lineage digest — integrity evidence, not the mode declaration. */
+  skillPolicyDigest?: string;
   /** Ordered Kafuo Teaching Model Flow (identity `(flowIndex, stage)`). */
   teachingFlow?: TeachingFlowEntry[];
   /**
@@ -152,14 +160,18 @@ export function toGenerationInputSnapshot(
       ? { normalizedContentResource: request.normalizedContentResource }
       : {}),
     ...(request.requestDigest ? { requestDigest: request.requestDigest } : {}),
+    // Policy lineage rides the same JSONB snapshot as teachingFlow (plan §F):
+    // identifiers and digests only — no URLs, no credentials — so the
+    // snapshot-secrecy rules hold and the predecessor walk resolves it.
+    ...(request.teachingSkillsContract
+      ? { teachingSkillsContract: request.teachingSkillsContract }
+      : {}),
+    ...(request.skillPolicyDigest ? { skillPolicyDigest: request.skillPolicyDigest } : {}),
   };
 }
 
 function validateStartRequest(request: StartGenerationAttemptRequest): void {
-  if (
-    typeof request.tenantId !== 'string' ||
-    request.tenantId.trim() === ''
-  ) {
+  if (typeof request.tenantId !== 'string' || request.tenantId.trim() === '') {
     throw new TeachingPackageError(
       'TENANT_REQUIRED',
       'tenantContext.tenantId must be a non-empty string',
@@ -317,70 +329,76 @@ export async function startGenerationAttempt(
   }
 
   const withTransaction = nodePostgresTransaction(pool);
-  const admitted = await withTransaction(async (tx): Promise<{
-    attempt: GenerationAttempt;
-    created: boolean;
-  }> => {
-    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      itemLockKey(aggregate),
-    ]);
+  const admitted = await withTransaction(
+    async (
+      tx,
+    ): Promise<{
+      attempt: GenerationAttempt;
+      created: boolean;
+    }> => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        itemLockKey(aggregate),
+      ]);
 
-    // Idempotency: the same requestId returns the existing attempt (digest
-    // enforced for Kafuo requests). A replay, never an insert.
-    if (request.requestId) {
-      const existing = await readAttemptByRequestId(tx, aggregate, request.requestId);
-      if (existing) return { attempt: reuseOrConflict(existing, request), created: false };
-    }
-
-    // A crashed runner leaves `queued`/`running` rows that would block the
-    // in-flight index forever; reclaim them by age under the same lock. The
-    // execution input was never persisted, so a crashed attempt cannot resume.
-    await reclaimStaleAttempts(tx, aggregate, Date.now() - attemptStaleMs());
-
-    if (kind === 'initial') {
-      const active = await readActiveVersion(tx, aggregate);
-      const next = await nextVersionNumber(tx, aggregate);
-      if (active || next !== 1) {
-        throw new TeachingPackageError(
-          'INVALID_TRANSITION',
-          'an initial attempt is valid only while the learning item has no version at all; use regeneration or create a successor',
-        );
+      // Idempotency: the same requestId returns the existing attempt (digest
+      // enforced for Kafuo requests). A replay, never an insert.
+      if (request.requestId) {
+        const existing = await readAttemptByRequestId(tx, aggregate, request.requestId);
+        if (existing) return { attempt: reuseOrConflict(existing, request), created: false };
       }
-    }
 
-    try {
-      const inserted = await insertAttempt(tx, {
-        id: `tpa-${randomBytes(9).toString('base64url')}`,
-        aggregate,
-        versionId: request.versionId ?? null,
-        kind,
-        status: 'queued',
-        requestId: request.requestId ?? null,
-        requestDigest: request.requestDigest ?? null,
-        requestedByActorRef: request.actorRef.trim(),
-        teachingModel: request.teachingModel,
-        inputSnapshot: snapshot,
-        now: Date.now(),
-      });
-      return { attempt: inserted, created: true };
-    } catch (error) {
-      if (isPgUniqueViolation(error)) {
-        if (request.requestId) {
-          // Race recovery is a replay too: another request with this id won the
-          // insert, so this call created nothing and must not run the runner.
-          const raced = await readAttemptByRequestId(tx, aggregate, request.requestId);
-          if (raced) return { attempt: reuseOrConflict(raced, request), created: false };
+      // A crashed runner leaves `queued`/`running` rows that would block the
+      // in-flight index forever; reclaim them by age under the same lock. The
+      // execution input was never persisted, so a crashed attempt cannot resume.
+      await reclaimStaleAttempts(tx, aggregate, Date.now() - attemptStaleMs());
+
+      if (kind === 'initial') {
+        const active = await readActiveVersion(tx, aggregate);
+        const next = await nextVersionNumber(tx, aggregate);
+        if (active || next !== 1) {
+          throw new TeachingPackageError(
+            'INVALID_TRANSITION',
+            'an initial attempt is valid only while the learning item has no version at all; use regeneration or create a successor',
+          );
         }
-        // NOT a replay — the single-in-flight constraint refused a DIFFERENT
-        // request, so this still throws rather than returning an attempt.
-        throw new TeachingPackageError(
-          'GENERATION_IN_PROGRESS',
-          'a generation attempt is already queued or running for this learning item',
-        );
       }
-      throw error;
-    }
-  });
+
+      try {
+        const inserted = await insertAttempt(tx, {
+          id: `tpa-${randomBytes(9).toString('base64url')}`,
+          aggregate,
+          versionId: request.versionId ?? null,
+          kind,
+          status: 'queued',
+          requestId: request.requestId ?? null,
+          requestDigest: request.requestDigest ?? null,
+          teachingSkillsContract: request.teachingSkillsContract ?? null,
+          skillPolicyDigest: request.skillPolicyDigest ?? null,
+          requestedByActorRef: request.actorRef.trim(),
+          teachingModel: request.teachingModel,
+          inputSnapshot: snapshot,
+          now: Date.now(),
+        });
+        return { attempt: inserted, created: true };
+      } catch (error) {
+        if (isPgUniqueViolation(error)) {
+          if (request.requestId) {
+            // Race recovery is a replay too: another request with this id won the
+            // insert, so this call created nothing and must not run the runner.
+            const raced = await readAttemptByRequestId(tx, aggregate, request.requestId);
+            if (raced) return { attempt: reuseOrConflict(raced, request), created: false };
+          }
+          // NOT a replay — the single-in-flight constraint refused a DIFFERENT
+          // request, so this still throws rather than returning an attempt.
+          throw new TeachingPackageError(
+            'GENERATION_IN_PROGRESS',
+            'a generation attempt is already queued or running for this learning item',
+          );
+        }
+        throw error;
+      }
+    },
+  );
 
   return { attempt: admitted.attempt, execution: request.generation, created: admitted.created };
 }
@@ -396,32 +414,27 @@ async function emitGenerationSucceeded(
     tenantId: attempt.tenantId,
     learningItem: attempt.learningItem,
   };
-  await enqueueWebhookEvent(
-    tx,
-    aggregate,
-    'teaching_package.generation_succeeded',
-    () => ({
-      requestId: attempt.requestId ?? '',
-      attempt: {
-        id: attempt.id,
-        kind: attempt.kind,
-        status: 'succeeded',
-        producedStageId: attempt.producedStageId ?? '',
-        startedAt: attempt.startedAt ?? now,
-        completedAt: now,
-        generationRuns: attempt.generationRuns,
-      },
-      version: {
-        id: version.id,
-        version: version.version,
-        status: version.status,
-        currentStageId: version.currentStageId,
-        currentAttemptId: version.currentAttemptId,
-        teachingModel: version.teachingModel,
-        updatedAt: version.updatedAt,
-      },
-    }),
-  );
+  await enqueueWebhookEvent(tx, aggregate, 'teaching_package.generation_succeeded', () => ({
+    requestId: attempt.requestId ?? '',
+    attempt: {
+      id: attempt.id,
+      kind: attempt.kind,
+      status: 'succeeded',
+      producedStageId: attempt.producedStageId ?? '',
+      startedAt: attempt.startedAt ?? now,
+      completedAt: now,
+      generationRuns: attempt.generationRuns,
+    },
+    version: {
+      id: version.id,
+      version: version.version,
+      status: version.status,
+      currentStageId: version.currentStageId,
+      currentAttemptId: version.currentAttemptId,
+      teachingModel: version.teachingModel,
+      updatedAt: version.updatedAt,
+    },
+  }));
 }
 
 interface LiveStageRow extends Record<string, unknown> {
@@ -466,24 +479,29 @@ export async function failGenerationAttempt(
       tenantId: before.tenantId,
       learningItem: before.learningItem,
     };
-    await enqueueWebhookEvent(pool as never, aggregate, 'teaching_package.generation_failed', () => ({
-      requestId: before.requestId ?? '',
-      attempt: {
-        id: before.id,
-        kind: before.kind,
-        status: 'failed',
-        versionId: before.versionId,
-        producedStageId: before.producedStageId,
-        startedAt: before.startedAt,
-        completedAt: Date.now(),
-        generationRuns: before.generationRuns,
-      },
-      error: {
-        code: failure?.code ?? 'CLASSROOM_GENERATION_FAILED',
-        message: message.slice(0, 500),
-        retryable: failure?.retryable ?? false,
-      },
-    })).catch(() => {
+    await enqueueWebhookEvent(
+      pool as never,
+      aggregate,
+      'teaching_package.generation_failed',
+      () => ({
+        requestId: before.requestId ?? '',
+        attempt: {
+          id: before.id,
+          kind: before.kind,
+          status: 'failed',
+          versionId: before.versionId,
+          producedStageId: before.producedStageId,
+          startedAt: before.startedAt,
+          completedAt: Date.now(),
+          generationRuns: before.generationRuns,
+        },
+        error: {
+          code: failure?.code ?? 'CLASSROOM_GENERATION_FAILED',
+          message: message.slice(0, 500),
+          retryable: failure?.retryable ?? false,
+        },
+      }),
+    ).catch(() => {
       // Delivery rows may not exist yet (Phase 1 suite runs without them);
       // the sweep still reports the failed attempt through polling reads.
     });

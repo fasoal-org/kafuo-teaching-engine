@@ -20,11 +20,16 @@
  * - exposes `requireCompleteFlowPolicies` — the governed-request completeness
  *   refusal (`SKILL_POLICY_REQUIRED`, BR-TS-048) the W8 gate will wire.
  *
+ * Module 2 W6 adds the policy-lineage digest (`computeSkillPolicyDigest`) —
+ * integrity evidence for the attempt columns, never the mode declaration.
+ *
  * What it deliberately does NOT do: re-expand the Teaching Model, re-derive or
  * re-project policy (Kafuo's `expand_teaching_model_flow` already did; TE
  * validates what it received), and it never touches the post-approval
  * question-generation mirror `expandFlowStages`.
  */
+import { createHash } from 'node:crypto';
+
 import {
   resolveCanonicalSkillVersion,
   type CanonicalSkillDefinition,
@@ -32,6 +37,31 @@ import {
 import { skillsDir } from '@/lib/server/agent-runtime/skills';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { TeachingFlowEntry, TeachingSkillRef } from '@/lib/types/teaching-package';
+
+/**
+ * Deterministic digest of a request's resolved Skill Policy lineage (Module 2
+ * W6, R-4): sha256 over the sorted-key compact JSON of the ordered per-entry
+ * policies. Integrity evidence ONLY — it names which policy lineage governed
+ * the attempt and makes silent drift detectable; it is not the governance mode
+ * declaration (the `teachingSkills` contract marker is) and never a substitute
+ * for Teaching Model version immutability.
+ */
+export function computeSkillPolicyDigest(flow: readonly TeachingFlowEntry[]): string | null {
+  const carried = flow.filter((entry) => entry.skillPolicy !== undefined);
+  if (carried.length === 0) return null;
+  const canonical = JSON.stringify(
+    carried.map((entry) => entry.skillPolicy),
+    (_key, value) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)),
+        );
+      }
+      return value;
+    },
+  );
+  return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
 
 /** Every exact reference one entry's policy names, in stable order. */
 export function skillRefsInPolicy(

@@ -39,7 +39,12 @@ import { isPgUniqueViolation, TeachingPackageError } from '@/lib/server/teaching
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { cloneStageForSuccessor } from '@/lib/server/teaching-package/stage-clone';
-import { readFlowForVersion, validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
+import {
+  readFlowForVersion,
+  readTeachingSkillsGovernanceForVersion,
+  type TeachingSkillsGovernance,
+  validateExactTeachingFlow,
+} from '@/lib/server/teaching-package/exact-flow';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -236,9 +241,18 @@ function appendEvent(
  * What the pre-submit exact-flow gate proved, and the Stage identity it proved
  * it against. `flow === null` means the version records no Kafuo Teaching Model
  * Flow (a legacy version), so the gate does not apply.
+ *
+ * `governance` is the Teaching Skills discriminator read beside the flow
+ * (Module 2 W6, plan §B.13/§M): derived here on the advisory read AND
+ * re-derived inside the aggregate-lock transaction below — a single advisory
+ * derivation would let a concurrent write slip a governed package past a
+ * future Skill gate. The Skill checks themselves are Wave 17; W6 delivers the
+ * discriminator and its lock-safe derivation only.
  */
 interface PreparedSubmitValidation {
   flow: readonly unknown[] | null;
+  /** Teaching Skills governance as proven by the advisory read. */
+  governance: TeachingSkillsGovernance | null;
   stageId: string;
   /** Stage revision the validated document was read at. */
   rev: number;
@@ -285,7 +299,7 @@ async function prepareSubmitValidation(
   if (version.status !== 'draft' && version.status !== 'rejected') return null;
   const flow = await readFlowForVersion(pool, version.id);
   if (!flow || flow.length === 0) {
-    return { flow: null, stageId: version.currentStageId, rev: -1 };
+    return { flow: null, governance: null, stageId: version.currentStageId, rev: -1 };
   }
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
   const document = await store.loadDocument(version.currentStageId);
@@ -306,7 +320,8 @@ async function prepareSubmitValidation(
   // The revision the proof is tied to. Read through the same store so the read
   // stays owner-scoped; the transaction re-reads it and refuses a mismatch.
   const manifest = await store.readFreshnessManifest(version.currentStageId);
-  return { flow, stageId: version.currentStageId, rev: manifest?.rev ?? 0 };
+  const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
+  return { flow, governance, stageId: version.currentStageId, rev: manifest?.rev ?? 0 };
 }
 
 /**
@@ -317,9 +332,7 @@ async function prepareSubmitValidation(
  * which would turn a routine "the Editor saved while this was validating" into a
  * non-Error escaping to the route layer as a 500. A return value cannot be lost.
  */
-type SubmitAttempt =
-  | { drifted: true }
-  | { drifted: false; version: TeachingPackageVersion };
+type SubmitAttempt = { drifted: true } | { drifted: false; version: TeachingPackageVersion };
 
 /** Submit for review: draft|rejected → in_review; captures the stage revision. */
 export async function submitForReview(
@@ -344,6 +357,12 @@ export async function submitForReview(
         // Authoritative re-reads, all on `tx` — nothing below takes a second
         // connection while this transaction holds the aggregate lock.
         const flow = await readFlowForVersion(tx, locked.id);
+        // Governance is re-derived UNDER the lock, exactly as the flow is
+        // (plan §B.13): the advisory derivation above can go stale, and a
+        // future Skill gate (W17) must consume this locked value, never the
+        // advisory one. A contract drift between the two invalidates the proof
+        // the same way a stage-revision drift does — retried, never errored.
+        const governance = await readTeachingSkillsGovernanceForVersion(tx, locked.id);
         const manifest = await readStageFreshnessManifest(locked.currentStageId, tx);
         const currentRev = manifest?.rev ?? 0;
         if (flow && flow.length > 0) {
@@ -356,7 +375,8 @@ export async function submitForReview(
             prepared !== null &&
             prepared.flow !== null &&
             prepared.stageId === locked.currentStageId &&
-            prepared.rev === currentRev;
+            prepared.rev === currentRev &&
+            prepared.governance?.contract === governance?.contract;
           // Returned, not thrown: see `SubmitAttempt`. The transaction commits
           // having changed nothing, and the caller re-proves the flow.
           if (!proofHolds) return { drifted: true };
