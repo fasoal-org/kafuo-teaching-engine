@@ -128,7 +128,10 @@
           "contentSourceId": "cs-77",
           "contentRevisionId": "rev-11",
           "parseRunId": "run-22",
-          "structureProfile": { "id": "profile-3", "versionId": "profile-version-4" },
+          "structureProfile": {
+            "id": "profile-3",
+            "versionId": "profile-version-4"
+          },
           "fileSizeBytes": 4567,
           "checksumSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
@@ -139,6 +142,153 @@
         "versionId": "tpv-existing-1"
       },
       "digest": "6fee91a22956165a22557963520400c69ce70c64ada1db0d3507c7f3e1f958f4"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-1",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once.",
+              "skillPolicy": {
+                "required": [],
+                "preferred": [
+                  {
+                    "skillId": "understanding-by-design",
+                    "version": "v1"
+                  }
+                ],
+                "allowed": [
+                  {
+                    "skillId": "understanding-by-design",
+                    "version": "v1"
+                  },
+                  {
+                    "skillId": "social-emotional-learning",
+                    "version": "v1"
+                  }
+                ],
+                "combinationRestrictions": []
+              }
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1.",
+              "skillPolicy": {
+                "required": [
+                  {
+                    "skill": {
+                      "skillId": "understanding-by-design",
+                      "version": "v1"
+                    },
+                    "scope": "flow_position",
+                    "role": "primary"
+                  }
+                ],
+                "preferred": [
+                  {
+                    "skillId": "understanding-by-design",
+                    "version": "v1"
+                  }
+                ],
+                "allowed": [
+                  {
+                    "skillId": "understanding-by-design",
+                    "version": "v1"
+                  },
+                  {
+                    "skillId": "spiral-curriculum",
+                    "version": "v1"
+                  },
+                  {
+                    "skillId": "feynman-learning",
+                    "version": "v1"
+                  }
+                ],
+                "combinationRestrictions": []
+              }
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1.",
+              "skillPolicy": {
+                "required": [],
+                "preferred": [
+                  {
+                    "skillId": "spiral-curriculum",
+                    "version": "v1"
+                  }
+                ],
+                "allowed": [
+                  {
+                    "skillId": "spiral-curriculum",
+                    "version": "v1"
+                  },
+                  {
+                    "skillId": "learning-to-learn",
+                    "version": "v1"
+                  }
+                ],
+                "combinationRestrictions": [
+                  {
+                    "skillA": {
+                      "skillId": "spiral-curriculum",
+                      "version": "v1"
+                    },
+                    "skillB": {
+                      "skillId": "learning-to-learn",
+                      "version": "v1"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "actorRef": "42",
+        "teachingSkills": "kafuo.teaching-skills.v1"
+      },
+      "digest": "4716d1c1de1950c51e2cf4870a8a48ae107cd7e44d5189ecc32781bb347c8eca"
     }
   ]
 }

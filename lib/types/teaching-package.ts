@@ -48,15 +48,66 @@ export interface TeachingModelLineage {
 }
 
 /**
+ * An exact canonical Skill reference — `(skillId, version)`, never "latest".
+ * Kafuo validates reference shape; TE alone is authoritative for whether the
+ * reference resolves (teaching-skills plan §G).
+ */
+export interface TeachingSkillRef {
+  skillId: string;
+  version: string;
+}
+
+/**
+ * A required Skill rule with an EXPLICIT requirement scope and assignment role
+ * (BR-TS-010 — V1 defines no implicit default scope and no "appears on at least
+ * one Scene" fallback). Closed V1 vocabularies: scope ∈
+ * {'flow_position','every_instructional_scene'}, role ∈ {'primary','supporting'}.
+ */
+export interface TeachingRequiredSkillRule {
+  skill: TeachingSkillRef;
+  scope: string;
+  role: string;
+}
+
+/**
+ * An explicitly prohibited unordered pairing of two exact Skill versions on one
+ * Scene (BR-TS-055 — explicit restrictions only; V1 builds no universal
+ * compatibility engine).
+ */
+export interface TeachingSkillCombinationRestriction {
+  skillA: TeachingSkillRef;
+  skillB: TeachingSkillRef;
+}
+
+/**
+ * The Teaching Model Skill Policy for one resolved flow-position instance
+ * (FRD §10.7). Authored on Kafuo's frozen flow definition item and projected onto
+ * every expanded entry by `expand_teaching_model_flow`; TE receives and validates
+ * it and NEVER re-expands or re-derives it (plan §G).
+ */
+export interface TeachingSkillPolicy {
+  required: TeachingRequiredSkillRule[];
+  preferred: TeachingSkillRef[];
+  allowed: TeachingSkillRef[];
+  combinationRestrictions: TeachingSkillCombinationRestriction[];
+}
+
+/**
  * Kafuo Teaching Model Flow entry (FRD §11.1). Array order is authoritative;
  * TE derives the zero-based `flowIndex` from position. Repeated stage keys are
  * valid — identity is `(flowIndex, stage)`. Kafuo never sends `flowIndex`.
+ *
+ * `skillPolicy` is the definition item's policy projected onto this resolved
+ * position by Kafuo's expansion; optional because pre-Module-2 requests carry
+ * none (the legacy path parses exactly as before).
  */
 export interface TeachingFlowEntry {
   /** Case-sensitive stable machine key, e.g. `lesson_introduction`. */
   stage: string;
   /** Non-empty pedagogical instructions for this flow position. */
   instructions: string;
+  /** Projected Skill Policy; absent on pre-Module-2 (legacy) requests. */
+  skillPolicy?: TeachingSkillPolicy;
 }
 
 /** Teaching-stage identity carried by every Kafuo-generated outline and Scene. */

@@ -69,7 +69,19 @@ function parseFlow(raw: unknown): TeachingFlowEntry[] {
         `teachingModel.flow[${index}].instructions must be a non-empty string`,
       );
     }
-    return { stage, instructions };
+    // Skill Policy rides through as received — Kafuo's expansion projected it and
+    // TE never re-derives it (plan §G). Carried here so the shared canonical
+    // digest covers it (Module 2 W4); structural validation of the carried
+    // policy is W5's job at this same seam.
+    const skillPolicy = record.skillPolicy;
+    if (skillPolicy === undefined) return { stage, instructions };
+    if (!skillPolicy || typeof skillPolicy !== 'object' || Array.isArray(skillPolicy)) {
+      throw new TeachingPackageError(
+        'FLOW_INVALID',
+        `teachingModel.flow[${index}].skillPolicy must be an object when present`,
+      );
+    }
+    return { stage, instructions, skillPolicy: skillPolicy as TeachingFlowEntry['skillPolicy'] };
   });
 }
 
@@ -430,6 +442,10 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
       flow: request.teachingModel.flow.map((e) => ({
         stage: e.stage,
         instructions: e.instructions,
+        // Policy participates in the shared canonical digest (Module 2 W4,
+        // VAL-TS-022): silent policy drift must surface as a digest change.
+        // Absent policy stays absent — the legacy digest is byte-stable.
+        ...(e.skillPolicy !== undefined ? { skillPolicy: e.skillPolicy } : {}),
       })),
     },
     contentResource: {
