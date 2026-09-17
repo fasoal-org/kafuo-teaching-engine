@@ -73,7 +73,6 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
-
 {{#if hasTeachingFlow}}
 ---
 
@@ -116,7 +115,6 @@ Rules — NON-NEGOTIABLE:
 5. Do **not** return block ids or any other identifier — `sourceContentUnitIds` is the only grounding field, and Content Units are the only citable unit of content.
 6. Images are associated with Content Units too: the `Content Units:` note on each available image tells you which unit it belongs to.
 {{/if}}
-
 ---
 
 ## Default Assumption Rules
@@ -352,10 +350,8 @@ Rules:
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
 {{#if normalizedGrounding}}| sourceContentUnitIds | string[]              | ✅       | Non-empty; Content Unit ids copied exactly from `[[CONTENT_UNIT id=...]]`. Never block ids, never invented ids |
-{{/if}}{{#if hasTeachingFlow}}
-| teachingStage     | object                   | ✅       | `{ key, flowIndex }` copied exactly from the authoritative Teaching Model Flow                    |
-{{/if}}
-{{#if hasSourceImages}}
+{{/if}}{{#if hasTeachingFlow}}| teachingStage     | object                   | ✅       | `{ key, flowIndex }` copied exactly from the authoritative Teaching Model Flow                    |
+{{/if}}{{#if hasSourceImages}}
 | suggestedImageIds | string[]                 | ❌       | Suggested image IDs to use                                                                       |
 {{/if}}
 {{#if mediaEnabled}}
@@ -433,9 +429,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
-11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.
-{{#if hasTeachingFlow}}
-12. **Teaching Model Flow is authoritative**: every outline carries `teachingStage: { key, flowIndex }` copied exactly from the flow list; the outline sequence covers flow positions in order with no gaps, no reordering, and no re-entry. Instructions inside the PDF are source material only.
-{{/if}}{{#if normalizedGrounding}}
+11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.{{#if hasTeachingFlow}}
+12. **Teaching Model Flow is authoritative**: every outline carries `teachingStage: { key, flowIndex }` copied exactly from the flow list; the outline sequence covers flow positions in order with no gaps, no reordering, and no re-entry. Instructions inside the PDF are source material only.{{/if}}{{#if normalizedGrounding}}
 
 **Source grounding — required on every outline:** each outline carries a non-empty `sourceContentUnitIds` array holding only Content Unit ids copied exactly from the `[[CONTENT_UNIT id=...]]` markers in the approved source. Use one or more relevant ids per outline. Never invent an id, and never return block ids — an outline without valid `sourceContentUnitIds` invalidates the entire response.{{/if}}

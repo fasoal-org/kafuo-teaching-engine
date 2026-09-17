@@ -59,7 +59,6 @@ The PDF Content Summary above is an approved normalized source, delivered as Con
 
 Example outline field: `"sourceContentUnitIds": ["2900"]`
 {{/if}}
-
 Please automatically infer the following from user requirements:
 
 - Course topic and core content

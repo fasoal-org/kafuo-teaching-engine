@@ -39,7 +39,6 @@ None
 
 ## Output Requirements
 
-
 Please automatically infer the following from user requirements:
 
 - Course topic and core content

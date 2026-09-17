@@ -49,7 +49,6 @@ The course structure MUST follow this ordered flow exactly. Every outline carrie
 
 Example outline field: `"teachingStage": { "key": "lesson_introduction", "flowIndex": 0 }`
 
-
 Please automatically infer the following from user requirements:
 
 - Course topic and core content

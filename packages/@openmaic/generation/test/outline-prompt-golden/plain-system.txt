@@ -74,8 +74,6 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
 
-
-
 ---
 
 ## Default Assumption Rules
@@ -301,7 +299,6 @@ Rules:
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
-
 
 | suggestedImageIds | string[]                 | ❌       | Suggested image IDs to use                                                                       |
 
