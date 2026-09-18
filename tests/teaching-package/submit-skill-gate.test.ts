@@ -347,7 +347,12 @@ describe('W17 submit gate', () => {
         requirement: 'Pipeline-sourced governed run',
         pdfContent: { text: 'pdf body', images: [] },
         teachingFlow: flow,
-        skillPolicy: true,
+        // W1: the governed mode travels as the marker-derived authority value.
+        governed: {
+          contract: 'kafuo.teaching-skills.v1',
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          flow,
+        },
       },
       { baseUrl: '', persistence: createTeachingPackagePersistenceSink('tpa-pipeline') },
     );

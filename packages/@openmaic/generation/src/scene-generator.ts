@@ -138,6 +138,14 @@ export interface SceneActionsOptions {
   userProfile?: string;
   languageDirective?: string;
   /**
+   * ONE resolved Teaching Model Flow position (Module 3/4 W1, TAE-RQ-009) —
+   * the WHEN this scene teaches, resolved by orchestration. The generator
+   * CONSUMES it; it never resolves, chooses, or re-derives it, so this is a
+   * single resolved context, never a Flow array or an index. Absent (every
+   * non-governed call site) → action prompts render byte-identically to today.
+   */
+  flowContext?: SceneFlowContext;
+  /**
    * Pre-resolved canonical Teaching Skill definitions (Module 2 W11) — the
    * same value the content pass received, so narration, questions, feedback,
    * pacing, and interaction are governed by the SAME Skills the content was.
@@ -145,6 +153,22 @@ export interface SceneActionsOptions {
    */
   resolvedSkills?: ResolvedSkillDefinition[];
   logger?: GenerationLogger;
+}
+
+/**
+ * ONE resolved Teaching Model Flow position (Module 3/4 W1 — plan §7.1.2). No
+ * array, no index lookup: orchestration resolved WHICH entry this Scene
+ * teaches at; the generator only renders it. The structural twin of the app's
+ * flow-context shape — the package cannot import from `lib/`, exactly as
+ * `TeachingStageRef` / `SceneSkillRef` / `TeachingSkillPolicy` are twinned in
+ * `outline-types.ts`.
+ */
+export interface SceneFlowContext {
+  teachingModelKey: string;
+  teachingModelVersion: string;
+  stageKey: string;
+  flowIndex: number;
+  instructions: string;
 }
 
 /**
@@ -166,6 +190,47 @@ export interface SceneSkillPromptContext {
 }
 
 const NO_SKILL_CONTEXT: SceneSkillPromptContext = { hasSkillContext: false, skillContextText: '' };
+
+export interface SceneFlowPromptContext {
+  hasFlowContext: boolean;
+  flowContextText: string;
+}
+
+const NO_FLOW_CONTEXT: SceneFlowPromptContext = { hasFlowContext: false, flowContextText: '' };
+
+/**
+ * Render the ONE resolved Teaching Model Flow position (Module 3/4 W1,
+ * TAE-RQ-009/005/012 — plan §7.1.2). Pure: takes the already-resolved context
+ * and NOTHING else — no `SceneOutline`, no `teachingStage` read, no Flow array,
+ * no index lookup. The generator consumes WHEN; it never resolves WHEN, and
+ * this signature makes that architectural invariant structural. Absent
+ * `flowContext` → `NO_FLOW_CONTEXT`, which is what keeps every non-governed
+ * call site byte-identical.
+ */
+export function buildSceneFlowContext(
+  flowContext: SceneFlowContext | undefined,
+): SceneFlowPromptContext {
+  if (!flowContext) return NO_FLOW_CONTEXT;
+  return {
+    hasFlowContext: true,
+    flowContextText: [
+      '## Teaching Model Flow Authority — WHEN this scene teaches (MANDATORY)',
+      `Teaching Model: ${flowContext.teachingModelKey}@${flowContext.teachingModelVersion}`,
+      `Flow position:  ${flowContext.stageKey} (position ${flowContext.flowIndex + 1})`,
+      'Authoritative Flow Instructions for this position:',
+      flowContext.instructions,
+      [
+        'These instructions outrank every pedagogical default in this prompt and every',
+        'Teaching Skill below. Generate Actions ONLY for this flow position. Do not',
+        "teach another position's material, do not choose a different position, do not",
+        'add or reorder positions, and do not emit Actions that navigate, advance,',
+        'skip, re-enter, or select a flow position — the system owns ordering, not the',
+        'Actions. Safety, source grounding, factual integrity, the language directive,',
+        'valid element references, and the JSON output schema remain binding.',
+      ].join('\n'),
+    ].join('\n'),
+  };
+}
 
 /**
  * Pair the outline's Teaching Skills carrier (identity) with the run's
@@ -1777,6 +1842,7 @@ export async function generateSceneActions(
       agents: agentsText,
       userProfile: userProfile || '',
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
@@ -1807,6 +1873,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
@@ -1845,6 +1912,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
@@ -1881,6 +1949,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 

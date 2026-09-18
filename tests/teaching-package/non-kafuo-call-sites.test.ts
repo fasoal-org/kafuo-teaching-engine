@@ -31,7 +31,7 @@ const CALL_SITES = {
   'Scene-actions route (must stay byte-identical)': 'app/api/generate/scene-actions/route.ts',
 } as const;
 
-describe('non-Kafuo call sites of the shared scene generators (W11)', () => {
+describe('non-Kafuo call sites of the shared scene generators (W11 + Module 3/4 W1)', () => {
   it('only the Kafuo path supplies resolvedSkills to the shared generators', () => {
     for (const [label, relativePath] of Object.entries(CALL_SITES)) {
       const source = readFileSync(join(repoRoot, relativePath), 'utf-8');
@@ -45,10 +45,25 @@ describe('non-Kafuo call sites of the shared scene generators (W11)', () => {
     }
   });
 
-  it('the Kafuo path gates the definitions on the derived governance mode', () => {
+  it('only the Kafuo path supplies flowContext to the shared action generator (W1)', () => {
+    // Same structural pin for the W1 Flow block: the three non-Kafuo sites
+    // never pass `flowContext`, so the Teaching Model Flow Authority block is
+    // unreachable there and their action prompts stay byte-identical.
+    for (const [label, relativePath] of Object.entries(CALL_SITES)) {
+      const source = readFileSync(join(repoRoot, relativePath), 'utf-8');
+      if (relativePath === 'lib/server/classroom-generation.ts') {
+        expect(source, label).toMatch(/flowContext/);
+      } else {
+        expect(source, label).not.toContain('flowContext');
+      }
+    }
+  });
+
+  it('the Kafuo path gates the definitions on the single governed-mode predicate', () => {
     const source = readFileSync(join(repoRoot, 'lib/server/classroom-generation.ts'), 'utf-8');
-    // Mode derived once (W10's skillPolicy value), never re-tested per site —
-    // and ungoverned Kafuo runs (tier B) render byte-identically too.
-    expect(source).toMatch(/input\.skillPolicy[\s\S]{0,200}resolveFlowSkillPolicies/);
+    // W1: mode derives once from the marker-built `governed` authority value —
+    // never re-tested per site, and ungoverned Kafuo runs (tier B) render
+    // byte-identically too.
+    expect(source).toMatch(/input\.governed[\s\S]{0,200}resolveFlowSkillPolicies/);
   });
 });

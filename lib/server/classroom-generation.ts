@@ -12,6 +12,7 @@ import {
   type AICallFn,
   type AgentInfo,
   type PdfImage,
+  type SceneFlowContext,
   type TeachingFlowEntry,
 } from '@openmaic/generation';
 import { createSceneWithActions } from '@/lib/server/scene-generation';
@@ -47,7 +48,9 @@ import type { Scene, Stage } from '@/lib/types/stage';
 import type {
   SourceVisualManifestEntry,
   TeachingFlowEntry as AppTeachingFlowEntry,
+  TeachingModelLineage,
 } from '@/lib/types/teaching-package';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   applySourceVisualPrecedence,
   SourceVisualModelUnavailableError,
@@ -62,6 +65,24 @@ export function containPBLGenerationError(error: unknown, sceneTitle: string): n
   if (!(error instanceof PBLGenerationError)) throw error;
   log.warn(`PBL generation failed for scene "${sceneTitle}": ${error.message}`);
   return null;
+}
+
+/**
+ * The authority a governed run carries (Module 3/4 W1, plan §7.1.1). Built
+ * ONCE by the generation runner from the Teaching Skills contract marker
+ * alone; `input.governed !== undefined` is the SINGLE governed-mode predicate
+ * for the whole pipeline. The mode is never inferred from `teachingFlow`
+ * presence, Flow Instructions, `teachingStage`, `teachingSkills`, Skill
+ * Policy, `resolvedSkills`, Scene content, or Action content — a run carrying
+ * any of those without the contract marker is legacy.
+ */
+export interface GovernedGenerationContext {
+  /** The parsed contract marker (TEACHING_SKILLS_CONTRACT_V1). */
+  contract: string;
+  /** The Teaching Model identity this run was authorized under. */
+  teachingModel: TeachingModelLineage;
+  /** The authoritative Flow — ORCHESTRATION ONLY, never handed to the generator. */
+  flow: readonly TeachingFlowEntry[];
 }
 
 export interface GenerateClassroomInput {
@@ -83,14 +104,14 @@ export interface GenerateClassroomInput {
    */
   normalizedGrounding?: boolean;
   /**
-   * This run is governed by Teaching Skills (Module 2 W10). The caller derives
-   * the mode ONCE from the request's `teachingSkills` contract marker and
-   * passes it here as a value. Propagated to the outline prompt, which then
-   * renders the Skill authority block and requires `teachingSkills`
-   * (classification + policy-permitted primary/supporting) on every outline.
-   * Absent → prompts and behavior are byte-identical to the pre-Module-2 path.
+   * The authority a governed run carries (Module 3/4 W1, TAE-RQ-009/015).
+   * Built ONCE by the caller from the Teaching Skills contract marker alone —
+   * presence IS governance, and nothing downstream may re-derive the mode from
+   * Flow presence, carriers, or Scene fields. The outline prompt's Skill
+   * contract and the per-Scene Flow context both derive from this value.
+   * Absent → the run is legacy and every prompt renders byte-identically.
    */
-  skillPolicy?: boolean;
+  governed?: GovernedGenerationContext;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -100,6 +121,52 @@ export interface GenerateClassroomInput {
   enableVideoGeneration?: boolean;
   enableTTS?: boolean;
   agentMode?: 'default' | 'generate';
+}
+
+/**
+ * Resolve ONE Scene's exact authoritative Flow entry, in orchestration
+ * (Module 3/4 W1, TAE-RQ-009/012 — plan §7.1.2). Teaching Model orchestration
+ * resolves WHEN; Action generation only consumes it. The returned context is
+ * the only Flow shape the generator ever sees — no array, no index lookup.
+ *
+ * Fail-closed: on a governed run, an outline without a `teachingStage`, an
+ * out-of-range `flowIndex`, a stage/key mismatch against the authoritative
+ * entry, or empty Flow Instructions refuses with GOVERNED_FLOW_CONTEXT_UNRESOLVED
+ * BEFORE Action generation — a governed Scene can never be generated with the
+ * Flow block silently omitted. The refusal is identity-only (§12.6): no
+ * narration, no source prose. A non-governed run returns undefined, never
+ * throws, and behaves exactly as before W1.
+ */
+export function resolveGovernedSceneFlowContext(
+  governed: GovernedGenerationContext | undefined,
+  outline: SceneOutline,
+): SceneFlowContext | undefined {
+  if (!governed) return undefined;
+  const stage = outline.teachingStage;
+  const identity = {
+    teachingModel: `${governed.teachingModel.key}@${governed.teachingModel.version}`,
+    stageKey: stage?.key,
+    flowIndex: stage?.flowIndex,
+  };
+  function refuse(reason: string): never {
+    throw new TeachingPackageError(
+      'GOVERNED_FLOW_CONTEXT_UNRESOLVED',
+      `cannot resolve the authoritative Flow entry for a governed scene (${reason})`,
+      { ...identity, reason },
+    );
+  }
+  if (!stage) refuse('outline has no teachingStage');
+  const entry: AppTeachingFlowEntry | undefined = governed.flow[stage.flowIndex];
+  if (!entry) refuse('teachingStage.flowIndex is out of range for the governed flow');
+  if (entry.stage !== stage.key) refuse('flow entry stage does not match teachingStage.key');
+  if (!entry.instructions.trim()) refuse('flow entry instructions are empty');
+  return {
+    teachingModelKey: governed.teachingModel.key,
+    teachingModelVersion: governed.teachingModel.version,
+    stageKey: entry.stage,
+    flowIndex: stage.flowIndex,
+    instructions: entry.instructions,
+  };
 }
 
 export type ClassroomGenerationStep =
@@ -745,7 +812,9 @@ export async function generateClassroom(
         ? { teachingFlow: input.teachingFlow }
         : {}),
       ...(input.normalizedGrounding ? { normalizedGrounding: true } : {}),
-      ...(input.skillPolicy ? { skillPolicy: true } : {}),
+      // W1: the outline contract boolean DERIVES from the single governed-mode
+      // predicate — no second discriminator exists anywhere in the pipeline.
+      ...(input.governed ? { skillPolicy: true } : {}),
     },
   );
 
@@ -765,14 +834,15 @@ export async function generateClassroom(
   // questions, feedback, pacing, and interaction. Only the governed Kafuo path
   // supplies them; the Workbench, editor-regeneration, and scene-actions call
   // sites never pass `resolvedSkills`, so their prompts stay byte-identical.
-  const resolvedSkills =
-    input.skillPolicy && input.teachingFlow && input.teachingFlow.length > 0
-      ? [...resolveFlowSkillPolicies(input.teachingFlow).entries()].map(([, definition]) => ({
-          skillId: definition.skillId,
-          version: definition.version,
-          definition: definition.content,
-        }))
-      : undefined;
+  // W1: gated on `input.governed` — the marker-only mode — never on Flow
+  // presence; the governed context carries the authoritative Flow.
+  const resolvedSkills = input.governed
+    ? [...resolveFlowSkillPolicies(input.governed.flow).entries()].map(([, definition]) => ({
+        skillId: definition.skillId,
+        version: definition.version,
+        definition: definition.content,
+      }))
+    : undefined;
 
   await options.onProgress?.({
     step: 'generating_outlines',
@@ -904,6 +974,12 @@ export async function generateClassroom(
       // gets the provider-bound AICallFn and the app injects its agentic PBL loop
       // as the classified fallback, preserving single-call → loop routing.
       const contentCall = await resolveSceneContentCall(safeOutline.type);
+      // W1 (TAE-RQ-009): orchestration resolves this Scene's exact authoritative
+      // Flow entry ONCE, before any generation spend. On a governed run the
+      // resolution is fail-closed — an unresolvable context throws here rather
+      // than letting a governed Scene be generated with the Flow block silently
+      // omitted. Legacy runs resolve to undefined and pass no context.
+      const flowContext = resolveGovernedSceneFlowContext(input.governed, safeOutline);
       // The outline's assigned source visuals (slide scenes only): a visual
       // need the model fills by referencing the image id, resolved onto the
       // serving path after generation.
@@ -968,6 +1044,9 @@ export async function generateClassroom(
           generateSceneActions(safeOutline, content, actionsAiCall, {
             agents,
             languageDirective,
+            // W1: the ONE resolved Flow position — the generator never sees the
+            // array and never performs the lookup itself.
+            ...(flowContext ? { flowContext } : {}),
             ...(resolvedSkills ? { resolvedSkills } : {}),
           }),
         {

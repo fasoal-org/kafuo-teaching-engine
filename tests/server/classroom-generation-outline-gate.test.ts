@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ClassroomPersistenceSink,
   GenerateClassroomInput,
+  GovernedGenerationContext,
 } from '@/lib/server/classroom-generation';
 import type { SceneOutline } from '@/lib/types/generation';
 
@@ -79,7 +80,31 @@ const outline = {
   description: 'Explain sinks',
   keyPoints: ['Sinks are injectable'],
   order: 1,
+  // W1: a governed run resolves each outline's exact Flow entry — the fixture
+  // carries one matching the governed flow below.
+  teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
 } as const;
+
+/** The marker-built governed authority (Module 3/4 W1 shape). */
+const GOVERNED_CONTEXT: GovernedGenerationContext = {
+  contract: 'kafuo.teaching-skills.v1',
+  teachingModel: { key: 'g5', version: 'g5.v1' },
+  flow: [
+    {
+      stage: 'lesson_introduction',
+      instructions: 'Introduce.',
+      skillPolicy: {
+        required: [],
+        preferred: [{ skillId: 'feynman-learning', version: 'v1' }],
+        allowed: [
+          { skillId: 'feynman-learning', version: 'v1' },
+          { skillId: 'learning-to-learn', version: 'v1' },
+        ],
+        combinationRestrictions: [],
+      },
+    },
+  ],
+};
 
 const slideContent = { elements: [], remark: 'Sinks are injectable' };
 
@@ -295,7 +320,7 @@ describe('generateClassroom Stage-1 outline gate', () => {
   it('propagates the skillPolicy governance mode to the outline prompt context (W10)', async () => {
     // The mode arrives here already derived once (the runner's
     // `teachingSkillsContract` value) — the classroom layer only forwards it.
-    await generateWith({ input: { skillPolicy: true } });
+    await generateWith({ input: { governed: GOVERNED_CONTEXT } });
     const context = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4];
     expect(context.skillPolicy).toBe(true);
   });
@@ -311,22 +336,8 @@ describe('generateClassroom Stage-1 outline gate', () => {
     // precedent), resolved once per run from the same policies that governed
     // selection — this is what makes the selected Skill reach narration,
     // questions, feedback, pacing, and interaction rather than metadata only.
-    const teachingFlow = [
-      {
-        stage: 'lesson_introduction',
-        instructions: 'Introduce.',
-        skillPolicy: {
-          required: [],
-          preferred: [{ skillId: 'feynman-learning', version: 'v1' }],
-          allowed: [
-            { skillId: 'feynman-learning', version: 'v1' },
-            { skillId: 'learning-to-learn', version: 'v1' },
-          ],
-          combinationRestrictions: [],
-        },
-      },
-    ];
-    await generateWith({ input: { skillPolicy: true, teachingFlow } });
+    // W1: the policies now ride the governed authority's own flow.
+    await generateWith({ input: { governed: GOVERNED_CONTEXT } });
 
     const contentOptions = mocks.generateSceneContent.mock.calls[0]![2];
     const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3];
@@ -351,5 +362,81 @@ describe('generateClassroom Stage-1 outline gate', () => {
     const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3];
     expect((contentOptions as { resolvedSkills?: unknown }).resolvedSkills).toBeUndefined();
     expect((actionsOptions as { resolvedSkills?: unknown }).resolvedSkills).toBeUndefined();
+  });
+
+  // ---- Module 3/4 W1: the exact resolved Flow entry, marker-only mode ----
+
+  it('passes the resolved flowContext to the actions generator on a governed run (W1)', async () => {
+    await generateWith({ input: { governed: GOVERNED_CONTEXT } });
+
+    const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3] as {
+      flowContext?: unknown;
+    };
+    // ONE resolved position — the generator never sees the array.
+    expect(actionsOptions.flowContext).toEqual({
+      teachingModelKey: 'g5',
+      teachingModelVersion: 'g5.v1',
+      stageKey: 'lesson_introduction',
+      flowIndex: 0,
+      instructions: 'Introduce.',
+    });
+  });
+
+  it('governance mode is marker-only: tier-B inputs (flow, teachingStage, teachingSkills, no marker) are legacy (W1)', async () => {
+    // Everything governance-ADJACENT is present — a teachingFlow, an outline
+    // carrying teachingStage AND a teachingSkills carrier — but no contract
+    // marker. The run is legacy: no flowContext, no resolvedSkills, and no
+    // refusal fires (generation completes).
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'Use English.',
+        outlines: [
+          {
+            ...outline,
+            teachingSkills: {
+              classification: 'instructional',
+              primary: { skillId: 'feynman-learning', version: 'v1' },
+            },
+          },
+        ],
+      },
+    });
+    await generateWith({
+      input: { teachingFlow: [{ stage: 'lesson_introduction', instructions: 'Introduce.' }] },
+    });
+
+    const actionsOptions = mocks.generateSceneActions.mock.calls[0]![3] as {
+      flowContext?: unknown;
+      resolvedSkills?: unknown;
+    };
+    expect('flowContext' in actionsOptions).toBe(false);
+    expect(actionsOptions.resolvedSkills).toBeUndefined();
+  });
+
+  it('a governed run refuses BEFORE action generation when the Flow context is unresolvable (W1)', async () => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'Use English.',
+        outlines: [
+          {
+            id: 'outline-bare',
+            type: 'slide',
+            title: 'No Stage',
+            description: 'd',
+            keyPoints: [],
+            order: 1,
+          },
+        ],
+      },
+    });
+
+    await expect(generateWith({ input: { governed: GOVERNED_CONTEXT } })).rejects.toMatchObject({
+      code: 'GOVERNED_FLOW_CONTEXT_UNRESOLVED',
+      status: 422,
+    });
+    // Fail-closed means CLOSED: the refusal precedes Action generation.
+    expect(mocks.generateSceneActions).not.toHaveBeenCalled();
   });
 });

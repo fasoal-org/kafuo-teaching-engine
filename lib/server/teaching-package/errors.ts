@@ -110,7 +110,16 @@ export type TeachingPackageErrorCode =
    * validated or confirmed at all. Uncertainty is never silently resolved as
    * success — the reviewer confirms, corrects, or regenerates (FR-TS-044/071).
    */
-  | 'SKILL_ALIGNMENT_UNRESOLVED';
+  | 'SKILL_ALIGNMENT_UNRESOLVED'
+  // --- Teaching Actions + Action Engine (Module 3/4 W1, plan §7.1.2) ---
+  /**
+   * A governed run could not resolve a Scene's authoritative Flow context:
+   * no `teachingStage` on the outline, an out-of-range `flowIndex`, a stage/key
+   * mismatch, or empty Flow Instructions. An unresolvable authoritative
+   * context is a bad request, not a bad model answer — non-retryable
+   * (TAE-RQ-009/012; details are identity-only per plan §12.6).
+   */
+  | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -163,6 +172,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   TEACHING_MODEL_CONFIG_CONTRADICTORY: 422,
   SCENE_CLASSIFICATION_INVALID: 422,
   SKILL_ALIGNMENT_UNRESOLVED: 409,
+  GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
 };
 
 export class TeachingPackageError extends Error {

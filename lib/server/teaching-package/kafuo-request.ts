@@ -22,6 +22,7 @@ import type {
   KafuoNormalizedContentResource,
   LearningObjectiveRef,
   TeachingFlowEntry,
+  TeachingModelLineage,
   TeachingRequiredSkillRule,
   TeachingSkillPolicy,
   TeachingSkillRef,
@@ -780,6 +781,8 @@ export interface KafuoGenerationContext {
   /** Module-2 mode derived once at parse: the contract marker, or null = legacy. */
   teachingSkillsContract: string | null;
   teachingFlow: TeachingFlowEntry[];
+  /** The Teaching Model identity the governed context carries (Module 3/4 W1). */
+  teachingModel: TeachingModelLineage;
   learningObjectives: LearningObjectiveRef[];
   requirement: string;
   contentResource: KafuoContentResource;
@@ -830,6 +833,10 @@ export function buildKafuoStartRequest(
       aggregate,
       teachingSkillsContract: request.teachingSkillsContract ?? null,
       teachingFlow: request.teachingModel.flow,
+      teachingModel: {
+        key: request.teachingModel.key,
+        version: request.teachingModel.version,
+      },
       learningObjectives: request.learningObjectives,
       requirement,
       contentResource: request.contentResource,

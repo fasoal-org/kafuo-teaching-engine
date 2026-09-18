@@ -245,6 +245,7 @@ function kafuoContext(): NonNullable<
     // W8 tests override this with the contract string for the governed case.
     teachingSkillsContract: null,
     teachingFlow: FLOW,
+    teachingModel: { key: 'g5', version: 'g5.v1' },
     learningObjectives: [{ objectiveRef: 'o1', snapshot: { statement: 's' } }],
     requirement: 'req',
     contentResource: {

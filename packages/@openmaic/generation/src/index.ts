@@ -21,8 +21,11 @@ export type {
   SceneContentFailure,
   SceneContentFailureCode,
   SceneContentOptions,
+  SceneFlowContext,
+  SceneFlowPromptContext,
   SceneSkillPromptContext,
 } from './scene-generator.js';
+export { buildSceneFlowContext } from './scene-generator.js';
 export { buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';
 export {

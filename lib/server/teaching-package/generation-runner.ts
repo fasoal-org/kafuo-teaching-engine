@@ -171,9 +171,19 @@ async function runKafuoAttempt(
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.
     ...(kafuo.normalizedContentResource ? { normalizedGrounding: true } : {}),
-    // W10: the derived-once mode value renders the Skill authority block and
-    // the `teachingSkills` output contract in the outline templates.
-    ...(governedByTeachingSkills ? { skillPolicy: true } : {}),
+    // Module 3/4 W1: the governed authority travels as ONE value built here,
+    // from the marker alone — `input.governed !== undefined` is the pipeline's
+    // single governed-mode predicate (plan §7.1.1). The outline contract
+    // boolean and every downstream governance branch derive from it.
+    ...(governedByTeachingSkills
+      ? {
+          governed: {
+            contract: kafuo.teachingSkillsContract as string,
+            teachingModel: kafuo.teachingModel,
+            flow: kafuo.teachingFlow,
+          },
+        }
+      : {}),
   };
 
   let lastFailure: { code: string; message: string; retryable: boolean } | null = null;
@@ -311,6 +321,10 @@ async function runKafuoAttempt(
       // `for (run = 1; run <= maxGenerationRuns(); ...)` loop, and every run still
       // compensates before the next. Only the decision to use a run already available
       // changes.
+      //
+      // Module 3/4 W1: `GOVERNED_FLOW_CONTEXT_UNRESOLVED` is deliberately NOT in
+      // this set — an unresolvable authoritative context is a bad request, not a
+      // bad model answer, so it terminates the attempt after compensation.
       const retryable =
         code === 'CLASSROOM_GENERATION_FAILED' || code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID';
       lastFailure = {

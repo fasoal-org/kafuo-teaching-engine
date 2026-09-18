@@ -162,6 +162,7 @@ describe('teaching package service auth', () => {
       // Module 2 W17: the submit-gate alignment refusal (conflict class, like
       // STALE_STATE / STAGE_CHANGED_SINCE_SUBMISSION).
       SKILL_ALIGNMENT_UNRESOLVED: 409,
+      GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

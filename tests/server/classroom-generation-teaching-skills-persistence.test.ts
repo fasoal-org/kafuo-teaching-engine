@@ -188,7 +188,12 @@ describe('generateClassroom — the Teaching Skills carrier survives the real ge
         requirement: 'Governed run',
         pdfContent: { text: 'pdf body', images: [] },
         teachingFlow: governedFlow,
-        skillPolicy: true,
+        // W1: the governed mode travels as the marker-derived authority value.
+        governed: {
+          contract: 'kafuo.teaching-skills.v1',
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          flow: governedFlow,
+        },
       },
       { baseUrl: '', persistence: stampingSink() },
     );

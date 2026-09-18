@@ -113,7 +113,11 @@ Other principles:
 
 1. Generate concise actions; do not over-script every possible interaction
 2. No timestamp/duration fields are needed
-3. No `teacherActions` field; output final action items directly in this array{{#if hasSkillContext}}
+3. No `teacherActions` field; output final action items directly in this array{{#if hasFlowContext}}
+
+---
+
+{{flowContextText}}{{/if}}{{#if hasSkillContext}}
 
 ---
 

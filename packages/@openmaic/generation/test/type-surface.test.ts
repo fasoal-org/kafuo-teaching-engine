@@ -37,7 +37,13 @@ type _SceneContentKeys = Assert<
 type _SceneActionKeys = Assert<
   Equal<
     keyof SceneActionsOptions,
-    'ctx' | 'agents' | 'userProfile' | 'languageDirective' | 'resolvedSkills' | 'logger'
+    | 'ctx'
+    | 'agents'
+    | 'userProfile'
+    | 'languageDirective'
+    | 'flowContext'
+    | 'resolvedSkills'
+    | 'logger'
   >
 >;
 type _BuildKeys = Assert<Equal<keyof BuildCompleteSceneOptions, 'sceneId'>>;

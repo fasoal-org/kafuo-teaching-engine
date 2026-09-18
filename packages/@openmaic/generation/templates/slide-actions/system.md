@@ -175,7 +175,11 @@ Elements to focus on should be **key content currently being discussed**:
 2. **Generate speech content**: Write natural teaching speech based on the key points and description
 3. **Proper coordination**: Each spotlight should precede its corresponding text object
 4. **Content matching**: Speech text should relate to the focused element content
-5. **No timestamp/duration fields**: These are not needed{{#if hasSkillContext}}
+5. **No timestamp/duration fields**: These are not needed{{#if hasFlowContext}}
+
+---
+
+{{flowContextText}}{{/if}}{{#if hasSkillContext}}
 
 ---
 
