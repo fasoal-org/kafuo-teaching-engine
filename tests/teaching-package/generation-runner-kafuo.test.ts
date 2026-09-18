@@ -611,6 +611,19 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     const versionId = first.versionId!;
     const before = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
     const stageBefore = before.currentStageId;
+    // W6.6 (TAE-RQ-028/030): snapshot the predecessor document BEFORE the
+    // failing regen runs — Scenes, Actions and lineage carriers byte-for-byte.
+    // loadDocument migrates on read, so both comparison sides are loads.
+    const { getOwnerScopedDocumentStore } =
+      await import('@/lib/server/agent-runtime/owner-scoped-documents');
+    const { TEACHING_PACKAGE_STAGE_OWNER } = await import('@/lib/server/teaching-package/owner');
+    const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+    const documentBefore = (await store.loadDocument(stageBefore))!;
+    expect(documentBefore.scenes.length).toBeGreaterThan(0);
+    expect(
+      documentBefore.scenes.some((scene) => scene.teachingStage !== undefined),
+      'the seeded predecessor carries flow lineage to compare against',
+    ).toBe(true);
 
     // Then: a regeneration of the same version that always fails.
     mocks.generateClassroom.mockReset();
@@ -641,6 +654,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     const after = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
     expect(after.currentStageId).toBe(stageBefore);
     expect(after.status).toBe('draft');
+    const documentAfter = (await store.loadDocument(stageBefore))!;
+    expect(JSON.stringify(documentAfter)).toBe(JSON.stringify(documentBefore));
   });
 
   it('fails terminally when Layer A acquisition is non-retryable', async () => {

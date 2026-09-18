@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Mirror of Kafuo's closed action-adjacent vocabularies (Module 3/4 W6, TAE-RQ-036).",
+    "Provisioned from the sibling backend repo, exactly like the W7 digest vectors",
+    "(tests/fixtures/kafuo-digest-vectors.json): the backend owns the source of truth and",
+    "its own tests pin these enums; this mirror lets the Teaching Engine side assert the",
+    "two systems' vocabularies stay DISJOINT without a live cross-repo dependency.",
+    "Sources (zakrly-backend): app/modules/student_progress/domain/teaching_visual.py",
+    "(VisualActionType, VisualActionStage) and app/modules/student_progress/domain/",
+    "teaching_runtime.py (TeachingTransition, RUNTIME_VOCABULARY_VERSION d2.v2).",
+    "Tutoring Answer Actions carry no closed enum on the Kafuo side",
+    "(tutoring_sessions answer_action_dtos.action_type is an open string; the chat",
+    "projection's message_type default \"answer\" is the one closed wire token), and",
+    "package commands are an HTTP surface, not a vocabulary — so neither contributes",
+    "more than the answer token mirrored here."
+  ],
+  "visualActionTypes": ["focus", "highlight", "clear"],
+  "visualActionStages": ["requested", "rendered", "skipped", "failed"],
+  "teachingTransitions": [
+    "next_card",
+    "complete_explanation",
+    "open_example",
+    "start_solution",
+    "next_step",
+    "complete_example",
+    "next_example",
+    "request_handoff"
+  ],
+  "answerActionTokens": ["answer"]
+}
