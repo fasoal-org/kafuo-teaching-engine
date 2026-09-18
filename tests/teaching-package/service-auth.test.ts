@@ -163,6 +163,8 @@ describe('teaching package service auth', () => {
       // STALE_STATE / STAGE_CHANGED_SINCE_SUBMISSION).
       SKILL_ALIGNMENT_UNRESOLVED: 409,
       GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
+      GOVERNED_SCENE_GENERATION_FAILED: 422,
+      GOVERNED_ACTION_GENERATION_FAILED: 422,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

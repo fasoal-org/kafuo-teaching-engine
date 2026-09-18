@@ -119,7 +119,23 @@ export type TeachingPackageErrorCode =
    * context is a bad request, not a bad model answer — non-retryable
    * (TAE-RQ-009/012; details are identity-only per plan §12.6).
    */
-  | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED';
+  | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED'
+  // --- Teaching Actions + Action Engine (Module 3/4 W2, plan §7.2) ---
+  /**
+   * A governed Scene's content generation failed after bounded retries
+   * (TAE-RQ-017): the Flow position cannot be silently dropped, so the run
+   * refuses rather than binding a Stage with a missing Scene — and the
+   * failure carries its own code, never a TEACHING_MODEL_FLOW_MISMATCH.
+   * Retryable at the attempt level: a bad model answer is not a bad package.
+   */
+  | 'GOVERNED_SCENE_GENERATION_FAILED'
+  /**
+   * A governed Scene's Action generation fell back to the model-free
+   * defaults on every bounded attempt (TAE-RQ-017): structurally canonical
+   * but pedagogically ungoverned output may never be bound as the package's
+   * Stage. Retryable at the attempt level, same precedent.
+   */
+  | 'GOVERNED_ACTION_GENERATION_FAILED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -173,6 +189,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SCENE_CLASSIFICATION_INVALID: 422,
   SKILL_ALIGNMENT_UNRESOLVED: 409,
   GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
+  GOVERNED_SCENE_GENERATION_FAILED: 422,
+  GOVERNED_ACTION_GENERATION_FAILED: 422,
 };
 
 export class TeachingPackageError extends Error {

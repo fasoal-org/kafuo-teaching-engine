@@ -12,6 +12,7 @@ import {
   type AICallFn,
   type AgentInfo,
   type PdfImage,
+  type SceneActionsFallback,
   type SceneFlowContext,
   type TeachingFlowEntry,
 } from '@openmaic/generation';
@@ -1034,26 +1035,64 @@ export async function generateClassroom(
         }
       })();
       if (!content) {
+        // Module 3/4 W2 (TAE-RQ-017): on a governed run a dropped Scene is a
+        // dropped Flow position. Skipping it here would surface later as a
+        // misattributed TEACHING_MODEL_FLOW_MISMATCH; refuse with the
+        // Scene-generation code instead. Non-governed runs keep the skip.
+        if (input.governed) {
+          throw new TeachingPackageError(
+            'GOVERNED_SCENE_GENERATION_FAILED',
+            `a governed scene's content generation failed after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
+            { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
+          );
+        }
         log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
         continue;
       }
 
       const actionsAiCall = await getSceneActionsAiCall();
+      // Module 3/4 W2 (TAE-RQ-017): a governed run must never bind a fallback
+      // Action sequence — the defaults are model-free, so they cannot be a
+      // governed pedagogical result. The observer records whether THIS attempt
+      // fell back; shouldRetryResult re-rolls while it did, and a fallback
+      // surviving the full budget refuses with the run's own code below.
+      // Non-governed callers keep today's contract exactly: first result wins.
+      let attemptProducedFallback = false;
       const actions = await withGenerationRetry(
-        () =>
-          generateSceneActions(safeOutline, content, actionsAiCall, {
+        () => {
+          attemptProducedFallback = false;
+          return generateSceneActions(safeOutline, content, actionsAiCall, {
             agents,
             languageDirective,
             // W1: the ONE resolved Flow position — the generator never sees the
             // array and never performs the lookup itself.
             ...(flowContext ? { flowContext } : {}),
             ...(resolvedSkills ? { resolvedSkills } : {}),
-          }),
+            ...(input.governed
+              ? {
+                  onFallback: (info: SceneActionsFallback) => {
+                    attemptProducedFallback = true;
+                    log.warn(
+                      `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
+                    );
+                  },
+                }
+              : {}),
+          });
+        },
         {
           label: `scene ${index + 1}/${outlines.length} actions`,
+          ...(input.governed ? { shouldRetryResult: () => attemptProducedFallback } : {}),
           onRetry: (event) => reportSceneRetry('actions', event),
         },
       );
+      if (input.governed && attemptProducedFallback) {
+        throw new TeachingPackageError(
+          'GOVERNED_ACTION_GENERATION_FAILED',
+          `a governed scene's Action generation produced no canonical sequence after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
+          { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
+        );
+      }
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
       const sceneId = createSceneWithActions(safeOutline, content, actions, api);

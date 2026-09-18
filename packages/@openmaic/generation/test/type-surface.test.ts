@@ -43,6 +43,7 @@ type _SceneActionKeys = Assert<
     | 'languageDirective'
     | 'flowContext'
     | 'resolvedSkills'
+    | 'onFallback'
     | 'logger'
   >
 >;

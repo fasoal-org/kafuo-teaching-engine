@@ -325,8 +325,17 @@ async function runKafuoAttempt(
       // Module 3/4 W1: `GOVERNED_FLOW_CONTEXT_UNRESOLVED` is deliberately NOT in
       // this set — an unresolvable authoritative context is a bad request, not a
       // bad model answer, so it terminates the attempt after compensation.
+      //
+      // Module 3/4 W2: `GOVERNED_SCENE_GENERATION_FAILED` and
+      // `GOVERNED_ACTION_GENERATION_FAILED` ARE in it — a bad model answer is
+      // not a bad package (the OUTLINE_CONTENT_UNIT_GROUNDING_INVALID
+      // precedent), so both re-roll within the same bounded budget after
+      // compensation, never binding a partial or ungoverned Stage.
       const retryable =
-        code === 'CLASSROOM_GENERATION_FAILED' || code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID';
+        code === 'CLASSROOM_GENERATION_FAILED' ||
+        code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID' ||
+        code === 'GOVERNED_SCENE_GENERATION_FAILED' ||
+        code === 'GOVERNED_ACTION_GENERATION_FAILED';
       lastFailure = {
         code,
         message: error instanceof Error ? error.message : String(error),

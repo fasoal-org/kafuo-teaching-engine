@@ -17,6 +17,8 @@ export {
 } from './scene-generator.js';
 export type {
   ResolvedSkillDefinition,
+  SceneActionsFallback,
+  SceneActionsFallbackCode,
   SceneActionsOptions,
   SceneContentFailure,
   SceneContentFailureCode,

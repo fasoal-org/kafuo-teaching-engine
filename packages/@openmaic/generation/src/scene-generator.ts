@@ -78,6 +78,19 @@ export interface SceneContentFailure {
   code: SceneContentFailureCode;
 }
 
+/**
+ * Why an Action sequence fell back to the model-free defaults (Module 3/4
+ * W2, TAE-RQ-017): the prompt could not be assembled, or the model's reply
+ * parsed to zero canonical Actions. Reported to an OBSERVING caller only —
+ * `generateSceneActions` still returns the defaults; the governed caller
+ * decides to retry and eventually refuse.
+ */
+export type SceneActionsFallbackCode = 'prompt-unavailable' | 'invalid-model-output';
+
+export interface SceneActionsFallback {
+  code: SceneActionsFallbackCode;
+}
+
 export interface SceneContentOptions {
   assignedImages?: PdfImage[];
   imageMapping?: ImageMapping;
@@ -152,6 +165,15 @@ export interface SceneActionsOptions {
    * Absent → action prompts render byte-identically to today.
    */
   resolvedSkills?: ResolvedSkillDefinition[];
+  /**
+   * Observer for fallback-to-defaults (Module 3/4 W2), mirroring
+   * `SceneContentOptions.onFailure`. Invoked at every default-return site
+   * with the reason; the return value is unchanged — the defaults are still
+   * returned, and a caller that refuses them (the governed pipeline) does so
+   * by observing this and failing. Non-governed callers pass nothing and
+   * receive the default array exactly as before.
+   */
+  onFallback?: (info: SceneActionsFallback) => void;
   logger?: GenerationLogger;
 }
 
@@ -1847,6 +1869,7 @@ export async function generateSceneActions(
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultSlideActions(outline, content.elements);
     }
 
@@ -1858,6 +1881,7 @@ export async function generateSceneActions(
       return processActions(actions, content.elements, agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultSlideActions(outline, content.elements);
   }
 
@@ -1878,6 +1902,7 @@ export async function generateSceneActions(
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultQuizActions(outline);
     }
 
@@ -1888,6 +1913,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultQuizActions(outline);
   }
 
@@ -1917,6 +1943,7 @@ export async function generateSceneActions(
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultInteractiveActions(outline);
     }
 
@@ -1932,6 +1959,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultInteractiveActions(outline);
   }
 
@@ -1954,6 +1982,7 @@ export async function generateSceneActions(
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultPBLActions(outline);
     }
 
@@ -1964,6 +1993,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultPBLActions(outline);
   }
 

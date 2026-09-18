@@ -1275,4 +1275,115 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(mocks.sceneGenerationReached).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('Module 3/4 W2 — governed failure codes bind nothing', () => {
+    /**
+     * Level A (tests/server/classroom-generation-governed-failures.test.ts)
+     * proves the REAL pipeline throws these codes under real model failure.
+     * This level proves what the runner does with them: compensate every run,
+     * re-roll within the bounded budget for the retryable pair, fail the
+     * attempt with the code itself, and leave the version's bound Stage
+     * untouched.
+     */
+    async function startFailingRegeneration(
+      code:
+        | 'GOVERNED_ACTION_GENERATION_FAILED'
+        | 'GOVERNED_SCENE_GENERATION_FAILED'
+        | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED',
+    ) {
+      // First: a valid initial generation binds version 1.
+      const attemptId = await startKafuo();
+      const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+      const first = (await readAttemptById(qp(), attemptId))!;
+      const versionId = first.versionId!;
+      const stageBefore = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!
+        .currentStageId;
+
+      // Then: a regeneration whose governed run reserves a Stage, writes
+      // media, and refuses with the code under test.
+      mocks.generateClassroom.mockReset();
+      const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
+      mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'G',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        await fs.mkdir(path.join(tmp, reserved.id, 'media'), { recursive: true });
+        await fs.writeFile(path.join(tmp, reserved.id, 'media', 'x.png'), PNG);
+        throw new TeachingPackageError(code, `injected ${code} refusal`);
+      });
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const runner = await freshModules();
+      const regeneration = await startGenerationAttempt(txPool(), {
+        tenantId: 'tenant-k',
+        learningItem: first.learningItem,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        generation: { requirement: 'again', teachingFlow: FLOW },
+        versionId,
+        actorRef: 'actor-2',
+        requestId: `kafuo-w2-${randomUUID()}`,
+        requestDigest: 'c'.repeat(64),
+        teachingFlow: FLOW,
+        contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      });
+      await runner.runGenerationAttempt(regeneration.attempt.id, regeneration.execution, {
+        ...kafuoContext(),
+        aggregate: { tenantId: 'tenant-k', learningItem: first.learningItem },
+        versionId,
+      });
+      return { versionId, stageBefore, attemptId: regeneration.attempt.id };
+    }
+
+    it.each([
+      ['GOVERNED_ACTION_GENERATION_FAILED', true],
+      ['GOVERNED_SCENE_GENERATION_FAILED', true],
+    ] as const)(
+      '%s: attempt fails with its own code, compensates every run, keeps the bound Stage',
+      async (code, retryable) => {
+        const { versionId, stageBefore, attemptId } = await startFailingRegeneration(code);
+        const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+
+        const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
+        const failed = (await readAttemptById(qp(), attemptId))!;
+        expect(failed.status).toBe('failed');
+        expect(failed.errorCode).toBe(code);
+        if (retryable) {
+          // A bad model answer is not a bad package: the bounded budget was
+          // spent re-rolling, each run compensated before the next.
+          expect(failed.generationRuns).toBeGreaterThanOrEqual(2);
+        }
+        // Nothing new was bound: the version still points at the Stage the
+        // valid initial generation bound.
+        expect(version.currentStageId).toBe(stageBefore);
+        // compensateRun ran on every failed run — no live stage survived
+        // beyond the original binding...
+        const live = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM stage_meta WHERE deleted_at IS NULL`,
+        );
+        expect((live.rows[0] as { n: number }).n).toBe(1);
+        // ...and every failed run's media directory was removed.
+        const entries = await fs.readdir(tmp);
+        expect(entries).toHaveLength(0);
+      },
+    );
+
+    it('GOVERNED_FLOW_CONTEXT_UNRESOLVED stays NON-retryable: one run, then the attempt fails', async () => {
+      const { versionId, stageBefore, attemptId } = await startFailingRegeneration(
+        'GOVERNED_FLOW_CONTEXT_UNRESOLVED',
+      );
+      const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+
+      const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
+      const failed = (await readAttemptById(qp(), attemptId))!;
+      expect(failed.status).toBe('failed');
+      expect(failed.errorCode).toBe('GOVERNED_FLOW_CONTEXT_UNRESOLVED');
+      // An unresolvable authoritative context is a bad request: exactly one
+      // run was spent, never re-rolled open.
+      expect(failed.generationRuns).toBe(1);
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+      expect(version.currentStageId).toBe(stageBefore);
+    });
+  });
 });
