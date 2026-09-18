@@ -46,6 +46,7 @@ export function createSceneWithActions(
     actions: scene.actions,
     outlineId: scene.outlineId,
     ...(scene.teachingStage !== undefined && { teachingStage: scene.teachingStage }),
+    ...(scene.teachingSkills !== undefined && { teachingSkills: scene.teachingSkills }),
   });
   return result.success ? (result.data ?? null) : null;
 }

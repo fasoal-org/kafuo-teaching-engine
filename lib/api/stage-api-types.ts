@@ -7,7 +7,7 @@
 import type { Stage, Scene, SceneContent, SceneType, StageMode } from '@/lib/types/stage';
 import type { PPTElement } from '@openmaic/dsl';
 import type { Action } from '@/lib/types/action';
-import type { TeachingStageRef } from '@/lib/types/teaching-package';
+import type { SceneTeachingSkills, TeachingStageRef } from '@/lib/types/teaching-package';
 
 // ==================== Type Definitions ====================
 
@@ -33,6 +33,12 @@ export interface CreateSceneParams {
   outlineId?: string;
   /** Teaching-stage identity copied exactly from the outline (Kafuo packages). */
   teachingStage?: TeachingStageRef;
+  /**
+   * Teaching Skills assignment + classification copied exactly from the outline
+   * (Module 2 W9/W10). Absent — not `undefined`-valued — on carrier-free
+   * outlines; that absence is the backward-compatibility mechanism (AC-TS-034).
+   */
+  teachingSkills?: SceneTeachingSkills;
 }
 
 /**

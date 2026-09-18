@@ -48,6 +48,40 @@ import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 const FEYNMAN = { skillId: 'feynman-learning', version: 'v1' };
 const LECTURE = { skillId: 'lecture-style', version: 'v1' };
 
+/**
+ * LLM boundaries for the pipeline-sourced case below — the only parts of a
+ * generation run that are not deterministic code. Every other test in this
+ * suite leaves them untouched (they never run a generation), so the partial
+ * mocks are inert for them. Scene content parsing, `createSceneWithActions`,
+ * `api.scene.create`, the real teaching-package sink (W15 stamping + document
+ * save), and the whole submit gate run for real.
+ */
+const pipelineMocks = vi.hoisted(() => ({
+  resolveModel: vi.fn(),
+  isProviderKeyRequired: vi.fn(),
+  generateSceneOutlinesFromRequirements: vi.fn(),
+  generateSceneActions: vi.fn(),
+  callLLM: vi.fn(),
+}));
+
+vi.mock('@/lib/server/resolve-model', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/resolve-model')>()),
+  resolveModel: pipelineMocks.resolveModel,
+}));
+vi.mock('@/lib/ai/providers', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/providers')>()),
+  isProviderKeyRequired: pipelineMocks.isProviderKeyRequired,
+}));
+vi.mock('@/lib/ai/llm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/llm')>()),
+  callLLM: pipelineMocks.callLLM,
+}));
+vi.mock('@openmaic/generation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openmaic/generation')>()),
+  generateSceneOutlinesFromRequirements: pipelineMocks.generateSceneOutlinesFromRequirements,
+  generateSceneActions: pipelineMocks.generateSceneActions,
+}));
+
 class PGlitePool {
   constructor(readonly db: PGlite) {}
 
@@ -237,6 +271,135 @@ describe('W17 submit gate', () => {
 
   it('admits a fully valid governed package (checks 4–10 pass)', async () => {
     const { versionId } = await seedVersion();
+    const updated = await submit(versionId);
+    expect(updated.status).toBe('in_review');
+  });
+
+  // ---- the coverage gap this suite had: no case ever sourced its governed
+  // Scenes from the generation pipeline — every hand-built case attached
+  // carriers directly, so the gate was only ever tested against Scenes the
+  // real pipeline could not produce (the Module 2 P0 defect) ----
+
+  it('admits a governed package whose Scenes came from the REAL generation pipeline', async () => {
+    // LLM boundaries only: outlines and actions are stubbed replies, scene
+    // content is parsed from a stubbed model reply by the real generator.
+    pipelineMocks.resolveModel.mockResolvedValue({
+      model: { id: 'language-model' },
+      modelInfo: { capabilities: { vision: true } },
+      modelString: 'vision-model',
+      providerId: 'test',
+      apiKey: '',
+    });
+    pipelineMocks.isProviderKeyRequired.mockReturnValue(false);
+    pipelineMocks.callLLM.mockResolvedValue({
+      text: JSON.stringify({
+        elements: [
+          {
+            type: 'text',
+            content: 'Pipeline-governed body',
+            left: 100,
+            top: 100,
+            width: 600,
+            height: 60,
+          },
+        ],
+        remark: '',
+      }),
+    });
+    pipelineMocks.generateSceneActions.mockResolvedValue([]);
+    pipelineMocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'po1',
+            type: 'slide' as const,
+            title: 'Opening',
+            description: 'Introduce the topic.',
+            keyPoints: ['Anchor the goal'],
+            order: 1,
+            teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            teachingSkills: { primary: FEYNMAN, classification: 'instructional' as const },
+          },
+          {
+            id: 'po2',
+            type: 'slide' as const,
+            title: 'Cards',
+            description: 'Structural consolidation.',
+            keyPoints: ['Recap'],
+            order: 2,
+            teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+            teachingSkills: { classification: 'non-instructional' as const },
+          },
+        ],
+      },
+    });
+
+    // The REAL governed run: real createSceneWithActions, real api.scene.create,
+    // and the REAL teaching-package sink — which stamps W15 generation baselines
+    // and saves the document through this suite's PGlite-backed store.
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const { createTeachingPackagePersistenceSink } =
+      await import('@/lib/server/teaching-package/stage-persistence-sink');
+    const generated = await generateClassroom(
+      {
+        requirement: 'Pipeline-sourced governed run',
+        pdfContent: { text: 'pdf body', images: [] },
+        teachingFlow: flow,
+        skillPolicy: true,
+      },
+      { baseUrl: '', persistence: createTeachingPackagePersistenceSink('tpa-pipeline') },
+    );
+
+    // The pipeline really delivered the carrier and its baseline — the exact
+    // state the hand-built cases used to fabricate.
+    expect(generated.scenes.length).toBeGreaterThan(0);
+    for (const scene of generated.scenes) {
+      expect(scene.teachingSkills).toBeDefined();
+      expect(scene.alignmentBaseline?.origin).toBe('generation');
+    }
+
+    // Seed the version/attempt around the pipeline-produced Stage — the
+    // document itself was already saved by the real sink — then submit.
+    const item = { type: 'lesson' as const, id: nextId('li') };
+    const versionId = nextId('tpv');
+    const attemptId = nextId('tpa');
+    await insertVersion(qp(), {
+      id: versionId,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
+      version: 1,
+      status: 'draft',
+      currentStageId: generated.id,
+      currentAttemptId: attemptId,
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      now: 1,
+    });
+    await insertAttempt(qp(), {
+      id: attemptId,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'actor-1',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingSkillsContract: 'kafuo.teaching-skills.v1',
+      inputSnapshot: {
+        learningItem: item,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'p',
+        pdfContentSummary: null,
+        requestedAt: 1,
+        teachingFlow: flow,
+      },
+      now: 1,
+    });
+
     const updated = await submit(versionId);
     expect(updated.status).toBe('in_review');
   });
