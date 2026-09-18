@@ -15,11 +15,21 @@
  * each validator's `offendingSceneIds`; a validator whose failure names no
  * scene (a flow-level configuration fault) is reported on every Scene at the
  * implicated flow position, so it is still visible where it bites.
+ *
+ * W5 (Module 3/4 plan §7.5, TAE-RQ-025/027) extends the same pattern to
+ * Actions: `validateSceneActionStructure` (W3) is invoked over the full scene
+ * set exactly like the Skill validators, its findings are attributed per
+ * Scene on `sceneId` and per row on `actionId`, and they surface both in the
+ * per-Scene `failures` channel and in the `actionFindings` projection the
+ * timeline marks rows with. The projection carries Action identity and
+ * findings ONLY — never Action content: the timeline already renders the
+ * content (TAE-RQ-027).
  */
 import {
   deriveSceneAlignment,
   type SceneAlignmentDerivation,
 } from '@/lib/server/teaching-package/alignment';
+import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import {
   validateRequiredSkillSatisfaction,
   validateSceneClassifications,
@@ -29,7 +39,7 @@ import {
   validateFlowPolicySatisfiability,
   type SkillValidatorFailure,
 } from '@/lib/server/teaching-package/skill-validators';
-import type { AppScene } from '@/lib/types/stage';
+import type { AppScene, Stage } from '@/lib/types/stage';
 import type { TeachingFlowEntry, TeachingSkillRef } from '@/lib/types/teaching-package';
 
 /** How a Scene's selections relate to its flow position's policy. */
@@ -56,12 +66,39 @@ export interface SceneInspection {
     reason?: SceneAlignmentDerivation['reason'];
     baselineOrigin?: 'generation' | 'reviewer-confirmation';
   };
+  /**
+   * The Scene's ordered-Action count (TAE-RQ-025) — a count, never content.
+   * The timeline owns rendering the Actions themselves.
+   */
+  actionCount: number;
+  /**
+   * Per-Action structural findings (W5 — TAE-RQ-025/027), from W3's
+   * `validateSceneActionStructure` invoked above, attributed per row on
+   * `actionId`. Identity + code + message only.
+   */
+  actionFindings: Array<{
+    actionId?: string;
+    actionType?: string;
+    code: string;
+    message: string;
+  }>;
   /** Scene-scoped actionable failures (FR-TS-053), each with its code. */
   failures: Array<{ code: string; message: string }>;
 }
 
 export interface StageTeachingSkillsInspection {
   scenes: SceneInspection[];
+}
+
+export interface BuildStageTeachingSkillsInspectionOptions {
+  /**
+   * The loaded Stage — the roster `discussion.agentId` resolves against
+   * (W5, plan §7.5: pass the loaded stage so references resolve against the
+   * real roster, exactly as the submit gate would). `allowUnknownTypes` is
+   * deliberately NOT settable here: the reviewer surface reports what the
+   * submit gate would refuse.
+   */
+  stage?: Pick<Stage, 'generatedAgentConfigs' | 'agentIds'> | null;
 }
 
 const samePair = (a: TeachingSkillRef, b: TeachingSkillRef) =>
@@ -119,8 +156,19 @@ function attributeFailures(
 export function buildStageTeachingSkillsInspection(
   scenes: readonly AppScene[],
   flow: readonly TeachingFlowEntry[],
+  options: BuildStageTeachingSkillsInspectionOptions = {},
 ): StageTeachingSkillsInspection {
   const failuresByScene = attributeFailures(scenes, flow);
+  // W3's canonical Action validator, invoked ONCE over the full scene set —
+  // the same invoke-don't-reimplement discipline as the Skill validators.
+  const actionFindingsByScene = new Map<string, ReturnType<typeof validateSceneActionStructure>>();
+  for (const finding of validateSceneActionStructure(scenes, {
+    stage: options.stage ?? null,
+  })) {
+    const list = actionFindingsByScene.get(finding.sceneId) ?? [];
+    list.push(finding);
+    actionFindingsByScene.set(finding.sceneId, list);
+  }
   return {
     scenes: scenes.map((scene) => {
       const skills = scene.teachingSkills;
@@ -138,6 +186,7 @@ export function buildStageTeachingSkillsInspection(
             ? ('within-policy' as const)
             : ('out-of-policy' as const);
       const derivation = deriveSceneAlignment(scene);
+      const sceneActionFindings = actionFindingsByScene.get(scene.id) ?? [];
       return {
         sceneId: scene.id,
         sceneType: scene.type,
@@ -163,7 +212,25 @@ export function buildStageTeachingSkillsInspection(
           ...(derivation.reason ? { reason: derivation.reason } : {}),
           ...(derivation.baselineOrigin ? { baselineOrigin: derivation.baselineOrigin } : {}),
         },
-        failures: failuresByScene.get(scene.id) ?? [],
+        actionCount: (scene.actions ?? []).length,
+        actionFindings: sceneActionFindings.map((finding) => ({
+          ...(finding.actionId !== undefined ? { actionId: finding.actionId } : {}),
+          ...(finding.actionType !== undefined ? { actionType: finding.actionType } : {}),
+          code: finding.code,
+          message: finding.message,
+        })),
+        // Action findings fold into the same per-Scene failures channel
+        // (plan §7.5): the panel's failures list shows them once, while the
+        // dedicated actionFindings projection carries the per-row identity
+        // the timeline marker keys on. Codes dedupe — two broken Actions of
+        // the same kind surface as one chip plus two marked rows.
+        failures: [
+          ...(failuresByScene.get(scene.id) ?? []),
+          ...[...new Set(sceneActionFindings.map((finding) => finding.code))].map((code) => {
+            const finding = sceneActionFindings.find((candidate) => candidate.code === code)!;
+            return { code: finding.code, message: finding.message };
+          }),
+        ],
       };
     }),
   };

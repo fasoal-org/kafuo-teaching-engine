@@ -67,6 +67,7 @@ import type { Action, DiscussionAction } from '@/lib/types/action';
 import type { SceneType } from '@/lib/types/stage';
 import { ELEMENT_BOUND, cueLabel, cueMeta, elementLabel } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
+import { useSceneActionFindings } from './action-findings';
 import {
   appendDiscussion,
   clampInsertSlot,
@@ -1085,6 +1086,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   // so it reads `collapsed` rather than being hidden by the shell.
   const { collapsed: lineMode, toggleCollapsed } = useEditDock();
   const [tip, setTip] = useState<TooltipState | null>(null);
+  // W5: governance findings for THIS scene, keyed by Action id — the row
+  // marker source. Empty (and fetch-free to render) on non-package stages.
+  const actionFindings = useSceneActionFindings(sceneId);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [regenAll, setRegenAll] = useState(false);
@@ -1358,6 +1362,25 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
               );
               return (
                 <div key={key} className="relative flex h-full items-stretch">
+                  {/* W5: the governance finding marker (TAE-RQ-025/027) —
+                      identity + code only, keyed by the row's Action id, so
+                      the reviewer sees WHICH row the inspection flagged; the
+                      Teaching Skills panel carries the codes and messages. */}
+                  {actionFindings.has(key) && (
+                    <span
+                      data-testid="action-finding-marker"
+                      data-action-id={key}
+                      data-finding-codes={[...actionFindings.get(key)!]
+                        .map((finding) => finding.code)
+                        .join(',')}
+                      title={[...actionFindings.get(key)!]
+                        .map((finding) => finding.code)
+                        .join(', ')}
+                      className="absolute left-1/2 top-0 z-10 -translate-x-1/2 rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white shadow-sm"
+                    >
+                      !
+                    </span>
+                  )}
                   <motion.div
                     initial={reduce ? false : { opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}

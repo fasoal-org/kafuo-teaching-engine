@@ -90,7 +90,11 @@ export async function GET(req: NextRequest, { params }: Params) {
         'the governed version’s stage or flow is not readable',
       );
     }
-    const inspection = buildStageTeachingSkillsInspection(document.scenes, flow);
+    const inspection = buildStageTeachingSkillsInspection(document.scenes, flow, {
+      // W5 (plan §7.5): the loaded stage, so discussion.agentId resolves
+      // against the real roster exactly as the submit gate would.
+      stage: document.stage,
+    });
     const version = await readVersionById(pool, grant.versionId);
     return NextResponse.json({
       governed: true,

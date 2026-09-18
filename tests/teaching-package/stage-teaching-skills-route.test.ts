@@ -462,4 +462,116 @@ describe('W16 stage teaching-skills inspection routes', () => {
       'INVALID_TRANSITION',
     );
   });
+  describe('W5 — the inspection GET carries Actions alongside governance context', () => {
+    /**
+     * Scenes carrying persisted Actions — the W3-validator view a reviewer
+     * needs next to Skills/flow/alignment. The slide's dangling `elementId` is
+     * DSL-VALID (a string), so it saves through the strict barrier and only the
+     * canonical reference check flags it; the interactive scene's unknown type
+     * rides the lenient app-layer path (the F-2 split) exactly as the historical
+     * corpus does.
+     */
+    function scenesWithActions(stageId: string): AppScene[] {
+      const slide = {
+        ...makeSlideScene('s-slide-actions', stageId, 1),
+        teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+        teachingSkills: { primary: FEYNMAN, classification: 'instructional' as const },
+        actions: [
+          { id: 'a-ok', type: 'speech', text: 'Narration.' },
+          { id: 'a-flagged', type: 'spotlight', elementId: 'el-missing' },
+        ],
+      } as unknown as AppScene;
+      const interactive = {
+        id: 's-interactive-actions',
+        stageId,
+        title: 'Interactive',
+        order: 2,
+        type: 'interactive',
+        content: { type: 'interactive', url: 'https://example.test/widget' },
+        createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
+        teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+        teachingSkills: { primary: LECTURE, classification: 'instructional' as const },
+        actions: [{ id: 'a-legacy', type: 'legacy_confetti_burst' }],
+      } as unknown as AppScene;
+      return [slide, interactive];
+    }
+
+    it('a read grant gets Skills, flow position, alignment, actionCount AND actionFindings together', async () => {
+      const { versionId, stageId } = await seedVersion({ scenes: scenesWithActions });
+      const route = await loadRoute('teaching-skills');
+      const response = await route.GET!(
+        grantedRequest(stageId, versionId, { capability: 'read' }),
+        { params: Promise.resolve({ stageId }) },
+      );
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as {
+        governed: boolean;
+        capability: string;
+        scenes: Array<Record<string, unknown>>;
+      };
+      expect(payload.governed).toBe(true);
+      expect(payload.capability).toBe('read');
+
+      const slide = payload.scenes.find((scene) => scene.sceneId === 's-slide-actions')!;
+      expect(slide.primary).toEqual(FEYNMAN);
+      expect(slide.flowPosition).toEqual({ key: 'lesson_introduction', flowIndex: 0 });
+      expect(slide.alignment).toMatchObject({
+        state: expect.any(String),
+        aligned: expect.any(Boolean),
+      });
+      expect(slide.actionCount).toBe(2);
+      expect(slide.actionFindings).toEqual([
+        expect.objectContaining({
+          actionId: 'a-flagged',
+          actionType: 'spotlight',
+          code: 'ACTION_REFERENCE_INVALID',
+        }),
+      ]);
+      // The folded per-Scene failures channel carries the code too.
+      expect(slide.failures).toEqual([
+        expect.objectContaining({ code: 'ACTION_REFERENCE_INVALID' }),
+      ]);
+
+      const interactive = payload.scenes.find(
+        (scene) => scene.sceneId === 's-interactive-actions',
+      )!;
+      expect(interactive.actionCount).toBe(1);
+      expect(interactive.actionFindings).toEqual([
+        expect.objectContaining({
+          actionId: 'a-legacy',
+          actionType: 'legacy_confetti_burst',
+          code: 'ACTION_TYPE_UNKNOWN',
+        }),
+      ]);
+
+      // Identity only (TAE-RQ-027): the persisted narration never rides the GET
+      // (actionType/element ids are identity and DO appear, by design).
+      expect(JSON.stringify(payload)).not.toContain('Narration.');
+    });
+
+    it('a write operation still refuses on a read grant; a non-governed Stage still answers governed:false', async () => {
+      const { versionId, stageId } = await seedVersion({ scenes: scenesWithActions });
+      const route = await loadRoute('teaching-skills');
+      const refused = await route.PUT(
+        grantedRequest(stageId, versionId, {
+          method: 'PUT',
+          capability: 'read',
+          body: {
+            assignments: [{ sceneId: 's-slide-actions', teachingSkills: { primary: LECTURE } }],
+          },
+        }),
+        { params: Promise.resolve({ stageId }) },
+      );
+      expect(refused.status).toBe(403);
+
+      const legacy = await seedVersion({ contract: null, scenes: scenesWithActions });
+      const legacyResponse = await route.GET!(
+        grantedRequest(legacy.stageId, legacy.versionId, { capability: 'read' }),
+        { params: Promise.resolve({ stageId: legacy.stageId }) },
+      );
+      expect(legacyResponse.status).toBe(200);
+      expect(await legacyResponse.json()).toEqual({ governed: false });
+    });
+  });
 });

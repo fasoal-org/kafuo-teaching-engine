@@ -20,6 +20,14 @@
  * regeneration) and records reviewer confirmation. Authorization is the
  * Editor grant's capability plus the existing status guard — both enforced
  * server-side; the panel only reflects them (`editable`).
+ *
+ * Module 3/4 W5 (plan §7.5, TAE-RQ-025/027) adds the Actions governance
+ * context: the inspection response's `actionCount` and the structural
+ * findings folded into `failures` render here as a SUMMARY that points at the
+ * timeline rows — the ordered Actions themselves render once, in the
+ * ActionsBar timeline this panel floats above; this panel never lists them
+ * (the C-8 reuse decision), and the payload it reads carries Action identity
+ * and findings only, never Action content.
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -49,6 +57,15 @@ interface SceneInspectionView {
     reason?: string;
     baselineOrigin?: string;
   };
+  /** W5: ordered-Action count (identity-only projection — never content). */
+  actionCount: number;
+  /** W5: per-Action structural findings, attributed on `actionId`. */
+  actionFindings: Array<{
+    actionId?: string;
+    actionType?: string;
+    code: string;
+    message: string;
+  }>;
   failures: Array<{ code: string; message: string }>;
 }
 
@@ -275,6 +292,26 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
               >
                 {ALIGNMENT_LABELS[scene.alignment.state]}
                 {scene.alignment.reason ? ` — ${scene.alignment.reason}` : ''}
+              </dd>
+            </div>
+
+            {/* W5: the Actions governance context — a summary pointing at the
+                timeline this panel floats above, never a second Action list.
+                The timeline marks the offending rows; the codes and messages
+                ride the failures channel below. */}
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-zinc-500 dark:text-zinc-400">Actions</dt>
+              <dd data-testid="teaching-skills-actions" className="text-right">
+                <span>{scene.actionCount ?? 0} in the timeline</span>
+                {(scene.actionFindings ?? []).length > 0 ? (
+                  <div className="text-red-600 dark:text-red-400">
+                    {(scene.actionFindings ?? []).length} structural finding
+                    {(scene.actionFindings ?? []).length === 1 ? '' : 's'} — marked on the offending
+                    Action rows in the timeline
+                  </div>
+                ) : (
+                  <div className="text-zinc-400">no structural findings</div>
+                )}
               </dd>
             </div>
           </dl>
