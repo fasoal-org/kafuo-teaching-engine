@@ -329,7 +329,7 @@ describe('W17 submit gate', () => {
                 alignmentBaseline: buildSceneAlignmentBaseline(
                   { ...scene, teachingSkills: { classification: 'instructional' as const } },
                   { origin: 'generation', now: 1 },
-                ),
+                )!,
               }
             : scene,
         ),
@@ -357,7 +357,7 @@ describe('W17 submit gate', () => {
                     },
                   },
                   { origin: 'generation', now: 1 },
-                ),
+                )!,
               }
             : scene,
         ),

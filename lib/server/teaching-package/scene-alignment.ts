@@ -134,18 +134,43 @@ export async function confirmSceneAlignments(
         { sceneId: confirmation.sceneId },
       );
     }
+    const classification = scene.teachingSkills.classification;
+    if (classification !== 'instructional' && classification !== 'non-instructional') {
+      // Mirrors the missing-carrier refusal above: a baseline binds a
+      // classification the Scene ACTUALLY carries. Confirming an unclassified
+      // Scene would write a baseline it can never match — `aligned` would stay
+      // false after a successful confirmation. Refused before the first
+      // putScene, so nothing is written for any target in the request.
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `scene ${confirmation.sceneId} carries no instructional classification to confirm`,
+        { sceneId: confirmation.sceneId },
+      );
+    }
     targets.push(scene);
   }
 
   const confirmedSceneIds: string[] = [];
   for (const scene of targets) {
+    const baseline = buildSceneAlignmentBaseline(scene, {
+      origin: 'reviewer-confirmation',
+      actorRef: scope.actorRef,
+      now,
+    });
+    if (!baseline) {
+      // Unreachable behind the classification guard in the resolution loop.
+      // Kept explicit — never a non-null assertion — so the compiler forces
+      // every future caller of the constructor to confront the unclassified
+      // shape rather than re-fabricating a classification.
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `scene ${scene.id} carries no instructional classification to confirm`,
+        { sceneId: scene.id },
+      );
+    }
     const updated: AppScene = {
       ...scene,
-      alignmentBaseline: buildSceneAlignmentBaseline(scene, {
-        origin: 'reviewer-confirmation',
-        actorRef: scope.actorRef,
-        now,
-      }),
+      alignmentBaseline: baseline,
     };
     await store.putScene(document.stage.id, updated);
     confirmedSceneIds.push(scene.id);

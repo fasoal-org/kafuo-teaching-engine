@@ -209,6 +209,16 @@ export function deriveStageAlignment(
  *   draft/rejected, binding the assignment + classification + fingerprint the
  *   reviewer confirmed, with actorRef and time.
  *
+ * Returns `null` for a Scene that carries no classification (or a value
+ * outside the closed vocabulary): a baseline binds a classification the Scene
+ * ACTUALLY carries, and fabricating one produced a record the Scene could
+ * never match — `stale / classification-change` from birth, a falsehood about
+ * a Scene where nothing changed, which reviewer confirmation could not lift.
+ * Such a Scene gets NO baseline from any path; it derives
+ * `validation-required` until it carries one. The nullable return is the
+ * enforcement: the compiler forces every future caller to confront the
+ * unclassified shape instead of silently re-fabricating.
+ *
  * Identity plus state ONLY — no chain-of-thought, no rationale (BR-TS-032,
  * FR-TS-037). Validity is recomputed at read against this record; the record
  * itself is never trusted as a state. A stale baseline is inert, not
@@ -217,12 +227,16 @@ export function deriveStageAlignment(
 export function buildSceneAlignmentBaseline(
   scene: AppScene,
   options: { origin: 'generation' | 'reviewer-confirmation'; actorRef?: string; now: number },
-): SceneAlignmentBaseline {
+): SceneAlignmentBaseline | null {
   const skills = scene.teachingSkills;
+  const classification = skills?.classification;
+  if (classification !== 'instructional' && classification !== 'non-instructional') {
+    return null;
+  }
   return {
     ...(skills?.primary ? { primary: skills.primary } : {}),
     ...(skills?.supporting ? { supporting: skills.supporting } : {}),
-    classification: skills?.classification ?? 'instructional',
+    classification,
     fingerprint: sceneMaterialFingerprint(scene),
     ...(options.origin === 'reviewer-confirmation' && options.actorRef
       ? { actorRef: options.actorRef }
@@ -240,6 +254,11 @@ export function buildSceneAlignmentBaseline(
  * signal and legacy Scenes stay untouched — absence on legacy data is the
  * backward-compatibility mechanism itself (AC-TS-034).
  *
+ * An unclassified Scene (a malformed carrier the Stage-1 gate would normally
+ * refuse) is SKIPPED rather than stamped with a fabricated classification: it
+ * derives `validation-required` — the honest state — instead of a
+ * self-invalidating `stale`.
+ *
  * The caller MUST invoke this only on the FINAL scene set (content and Actions
  * composed, narration normalized, media references rewritten to the final
  * stage id) — the fingerprint must reflect the persisted result, not an
@@ -249,12 +268,9 @@ export function stampGenerationAlignmentBaselines(
   scenes: readonly AppScene[],
   now: number,
 ): AppScene[] {
-  return scenes.map((scene) =>
-    scene.teachingSkills
-      ? {
-          ...scene,
-          alignmentBaseline: buildSceneAlignmentBaseline(scene, { origin: 'generation', now }),
-        }
-      : scene,
-  );
+  return scenes.map((scene) => {
+    if (!scene.teachingSkills) return scene;
+    const baseline = buildSceneAlignmentBaseline(scene, { origin: 'generation', now });
+    return baseline ? { ...scene, alignmentBaseline: baseline } : scene;
+  });
 }

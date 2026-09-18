@@ -89,7 +89,7 @@ describe('W15 baseline construction (pure)', () => {
       establishedAt: 5,
       origin: 'generation',
     });
-    expect('actorRef' in generation).toBe(false);
+    expect('actorRef' in generation!).toBe(false);
 
     const confirmed = buildSceneAlignmentBaseline(scene, {
       origin: 'reviewer-confirmation',
@@ -100,8 +100,35 @@ describe('W15 baseline construction (pure)', () => {
       origin: 'reviewer-confirmation',
       actorRef: 'reviewer-9',
       establishedAt: 6,
-      fingerprint: generation.fingerprint,
+      fingerprint: generation!.fingerprint,
     });
+  });
+
+  it('constructs NO baseline for a Scene that carries no classification — nothing is fabricated', () => {
+    // The defect this pins: the constructor once substituted 'instructional'
+    // for an absent classification, producing a baseline the Scene could never
+    // match — stale/classification-change from birth, unconfirmable. The
+    // construction point now refuses instead of fabricating.
+    const unclassified: AppScene = {
+      ...makeSlideScene('s-unclassified', 'stage-a', 3),
+      teachingSkills: { primary: FEYNMAN },
+    };
+    expect(buildSceneAlignmentBaseline(unclassified, { origin: 'generation', now: 1 })).toBeNull();
+    expect(
+      buildSceneAlignmentBaseline(unclassified, {
+        origin: 'reviewer-confirmation',
+        actorRef: 'reviewer-1',
+        now: 1,
+      }),
+    ).toBeNull();
+    // A value outside the closed vocabulary is refused the same way — the
+    // barrier never validated the carrier's classification, so construction
+    // must (the write barrier owns the BASELINE's shape, not the carrier's).
+    const garbage: AppScene = {
+      ...makeSlideScene('s-garbage', 'stage-a', 4),
+      teachingSkills: { primary: FEYNMAN, classification: 'maybe' } as never,
+    };
+    expect(buildSceneAlignmentBaseline(garbage, { origin: 'generation', now: 1 })).toBeNull();
   });
 
   it('stamps generation baselines only on governed Scenes', () => {
@@ -110,6 +137,23 @@ describe('W15 baseline construction (pure)', () => {
     expect(stamped[0]!.alignmentBaseline).toMatchObject({ origin: 'generation', establishedAt: 9 });
     expect(stamped[0]!.alignmentBaseline!.fingerprint).toBe(sceneMaterialFingerprint(scene));
     expect('alignmentBaseline' in stamped[1]!).toBe(false);
+  });
+
+  it('stamps NO baseline on an unclassified Scene — validation-required, never a self-invalidating stale', () => {
+    const unclassified: AppScene = {
+      ...makeSlideScene('s-unclassified', 'stage-a', 5),
+      teachingSkills: { primary: FEYNMAN },
+    };
+    const stamped = stampGenerationAlignmentBaselines([unclassified, scene], 9);
+    // The carrier survives; the baseline does not exist; the honest derivation
+    // is validation-required — not stale, since nothing changed.
+    expect(stamped[0]!.teachingSkills).toEqual({ primary: FEYNMAN });
+    expect('alignmentBaseline' in stamped[0]!).toBe(false);
+    expect(deriveSceneAlignment(stamped[0]!)).toMatchObject({
+      state: 'validation-required',
+      aligned: false,
+    });
+    expect(stamped[1]!.alignmentBaseline).toBeDefined();
   });
 });
 
@@ -398,10 +442,48 @@ describe('W15 durable confirmation', () => {
     await expectTpError(confirm(governed.versionId, ['missing']), 'INVALID_REQUEST');
   });
 
+  it('refuses to confirm an unclassified Scene and writes NOTHING — a confirmation must yield aligned', async () => {
+    // The gap that let the defect through W15: no test ever confirmed a Scene
+    // without a classification. Confirming one used to write a fabricated
+    // baseline the Scene could never match — `aligned` stayed false after a
+    // "successful" confirmation. Now the route refuses before the first
+    // putScene, mirroring its missing-carrier refusal.
+    const { versionId, stageId } = await seedGovernedVersion({});
+    // s1 loses only its classification, via a raw putScene the carrier
+    // validator does not gate (the baseline validator owns the baseline's
+    // shape, not the carrier's).
+    const store = makeStore();
+    const seeded = (await store.loadDocument(stageId))!;
+    await store.putScene(stageId, {
+      ...seeded.scenes.find((candidate) => candidate.id === 's1')!,
+      teachingSkills: { primary: FEYNMAN },
+    });
+    const before = await store.loadDocument(stageId);
+    await expectTpError(confirm(versionId, ['s1']), 'INVALID_REQUEST');
+    // Nothing was written — not for the refused scene, and no partial state
+    // anywhere else in the document.
+    expect((await store.loadDocument(stageId))!.scenes).toEqual(before!.scenes);
+
+    // The well-formed sibling still confirms and derives aligned (the
+    // non-negotiable affirmative behavior, exercised beside the refusal).
+    await confirm(versionId, ['s2']);
+    const confirmed = (await store.loadDocument(stageId))!.scenes.find(
+      (candidate) => candidate.id === 's2',
+    )!;
+    expect(deriveSceneAlignment(confirmed)).toMatchObject({ state: 'confirmed', aligned: true });
+  });
+
   it('the persistence sink stamps generation baselines on the final scene set', async () => {
     const stageId = nextId('stage');
     const governed = governedScenes(stageId)[0]!;
     const legacyScene = makeSlideScene('legacy', stageId, 3);
+    // A carrier without a classification (malformed model output the Stage-1
+    // gate would normally refuse): the sink must SKIP it, not stamp a
+    // fabricated baseline that derives stale from birth.
+    const unclassified: AppScene = {
+      ...makeSlideScene('s-unclassified', stageId, 4),
+      teachingSkills: { primary: FEYNMAN },
+    };
     const { createTeachingPackagePersistenceSink } =
       await import('@/lib/server/teaching-package/stage-persistence-sink');
     const sink = createTeachingPackagePersistenceSink('tpa-w15');
@@ -409,7 +491,7 @@ describe('W15 durable confirmation', () => {
       {
         id: stageId,
         stage: { id: stageId, name: 'Sink', createdAt: 1, updatedAt: 1 } as never,
-        scenes: [governed, legacyScene] as never[],
+        scenes: [governed, legacyScene, unclassified] as never[],
         outlines: [] as never[],
       },
       '',
@@ -417,6 +499,9 @@ describe('W15 durable confirmation', () => {
     const document = await makeStore().loadDocument(stageId);
     const savedGoverned = document!.scenes.find((candidate) => candidate.id === 's1')!;
     const savedLegacy = document!.scenes.find((candidate) => candidate.id === 'legacy')!;
+    const savedUnclassified = document!.scenes.find(
+      (candidate) => candidate.id === 's-unclassified',
+    )!;
     // The baseline's fingerprint is over the SAVED material bytes — content and
     // actions as persisted, after narration normalization.
     expect(savedGoverned.alignmentBaseline).toMatchObject({
@@ -429,6 +514,14 @@ describe('W15 durable confirmation', () => {
     );
     expect(deriveSceneAlignment(savedGoverned)).toMatchObject({ state: 'current', aligned: true });
     expect('alignmentBaseline' in savedLegacy).toBe(false);
+    // Unclassified: no baseline, honest validation-required — never a
+    // self-invalidating stale/classification-change.
+    expect(savedUnclassified.teachingSkills).toEqual({ primary: FEYNMAN });
+    expect('alignmentBaseline' in savedUnclassified).toBe(false);
+    expect(deriveSceneAlignment(savedUnclassified)).toMatchObject({
+      state: 'validation-required',
+      aligned: false,
+    });
   });
 
   it('the write barrier accepts a well-formed baseline and refuses a malformed one', () => {
