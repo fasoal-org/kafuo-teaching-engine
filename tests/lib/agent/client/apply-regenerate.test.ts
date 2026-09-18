@@ -220,3 +220,31 @@ describe('planRegenerateApply — edit_interactive_html', () => {
     ).toEqual({ snapshot: null, patch: null });
   });
 });
+
+// ---- Module 3/4 W4 (TAE-RQ-019): the Action-only patch shape, pinned ----
+
+describe('planRegenerateApply — Action-only regeneration (TAE-RQ-019)', () => {
+  it('an actions-only result patches ONLY the actions — no content key, so Scene identity, content, Stage, Skills, objectives and Model lineage are retained', () => {
+    const plan = planRegenerateApply(
+      {
+        sceneId: 's1',
+        actions: [{ id: 'a_new', type: 'speech', text: 'Regenerated.' } as never],
+      },
+      slideScene(),
+      'regenerate_scene_actions',
+    );
+    // The patch is exactly { actions } — a shallow partial whose every other
+    // Scene field, governed carriers included, is untouched by construction.
+    expect(Object.keys(plan.patch!)).toEqual(['actions']);
+    expect(plan.snapshot).toMatchObject({ sceneId: 's1', actionsOnly: true });
+  });
+
+  it('an empty Action result is rejected — the page is unchanged', () => {
+    const plan = planRegenerateApply(
+      { sceneId: 's1', actions: [] },
+      slideScene(),
+      'regenerate_scene_actions',
+    );
+    expect(plan.patch).toBeNull();
+  });
+});

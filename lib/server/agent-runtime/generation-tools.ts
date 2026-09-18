@@ -20,6 +20,8 @@ import type { AppDocumentOutline } from '@/lib/document-store/persistence-types'
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
+import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
+import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import { COURSE_STAGE_ID_DESCRIPTION } from './course-stage';
 import type { CourseToolDeps } from './course-tools';
 import { runStageMutation } from './mutation-fence';
@@ -104,6 +106,17 @@ type ActionGenerator = typeof generateSceneActions;
 export interface GenerationToolDeps extends CourseToolDeps {
   aiCall?: AICallFn;
   generateActions?: ActionGenerator;
+  /**
+   * Module 3/4 W4: resolves the governed regeneration context for a Stage's
+   * version (durable marker only). Absent → the lazy default, which reads
+   * package lineage when a DATABASE_URL is configured and answers undefined
+   * for non-package Stages; injected explicitly by tests and any runtime with
+   * its own pool.
+   */
+  resolveGovernedContext?: (
+    stageId: string,
+    scene: Pick<Scene, 'teachingStage'>,
+  ) => Promise<GovernedRegenerationContext | undefined>;
 }
 
 function sceneIdFor(scenes: readonly Scene[], order: number) {
@@ -225,6 +238,48 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
   const routed = createGenerationAiCallFactory({ abortSignal: deps.abortSignal });
   const aiCallFor = (stage: Parameters<typeof routed>[0]) => deps.aiCall ?? routed(stage);
   const actionGenerator = deps.generateActions ?? generateSceneActions;
+  // W4: the governed-context resolver. Default = lazy module read, so the
+  // non-DB runtimes (and the unit harnesses) never touch package lineage
+  // unless a DATABASE_URL exists.
+  const resolveGoverned =
+    deps.resolveGovernedContext ??
+    (async (stageId: string, scene: Pick<Scene, 'teachingStage'>) => {
+      const { resolveGovernedRegenerationContextForStage } =
+        await import('@/lib/server/teaching-package/governed-regeneration');
+      return resolveGovernedRegenerationContextForStage(stageId, scene);
+    });
+
+  /** Resolve the governed context for a Scene, or map the refusal to a tool error result. */
+  const governedContextFor = async (
+    stageId: string,
+    scene: Pick<Scene, 'teachingStage'>,
+    label: string,
+  ): Promise<{ context?: GovernedRegenerationContext; refusal?: ReturnType<typeof result> }> => {
+    try {
+      return { context: await resolveGoverned(stageId, scene) };
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? 'GOVERNED_FLOW_CONTEXT_UNRESOLVED';
+      return {
+        refusal: result(
+          `${label} refused on a governed Stage: the authoritative governed context could not be resolved (${(error as Error).message}). Nothing was written.`,
+          {
+            error: code,
+            stageId,
+            ...(scene.teachingStage ? { stageKey: scene.teachingStage.key } : {}),
+          },
+          true,
+        ),
+      };
+    }
+  };
+
+  /** W4.4: stamp a fresh generation-origin baseline on a governed regeneration. */
+  const stampGenerationBaseline = (scene: Scene): Scene => {
+    const baseline = buildSceneAlignmentBaseline(scene, { origin: 'generation', now: Date.now() });
+    // An unclassified Scene gets NO baseline (the W15-FIX null return): it
+    // derives validation-required, never a fabricated stale.
+    return baseline ? { ...scene, alignmentBaseline: baseline } : scene;
+  };
 
   const generateScene: AgentTool<typeof SceneParams> = {
     name: 'generate_scene',
@@ -314,6 +369,12 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         type: params.type,
         description: brief,
         keyPoints: params.materialFacts ?? [],
+        // Module 3/4 W4 (TAE-RQ-020): seed the governed lineage from the
+        // Scene being replaced, so the replacement is BUILT governed — the
+        // same flow position and Skill assignment, no reselection — rather
+        // than repaired afterwards by carry-forward.
+        ...(existing?.teachingStage ? { teachingStage: existing.teachingStage } : {}),
+        ...(existing?.teachingSkills ? { teachingSkills: existing.teachingSkills } : {}),
         ...(params.type === 'interactive' &&
         (params.widgetType !== undefined || params.widgetOutline !== undefined)
           ? {
@@ -381,6 +442,17 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         imageMapping[id] = src;
       }
       const agents = doc.stage.generatedAgentConfigs;
+      // Module 3/4 W4 (TAE-RQ-018): on a governed Stage, the regeneration
+      // happens under the authoritative context or refuses — never generic
+      // generation with carriers copied back. A governed Stage REPLACING a
+      // Scene with no teachingStage (or a NEW page, which has no position)
+      // cannot resolve a context and refuses for that reason.
+      const { context: governed, refusal: governedRefusal } = await governedContextFor(
+        params.stageId,
+        existing ?? { teachingStage: undefined },
+        'generate_scene',
+      );
+      if (governedRefusal) return governedRefusal;
       let content: Awaited<ReturnType<typeof generateSceneContent>>;
       let contentFailure: SceneContentFailureCode | undefined;
       try {
@@ -391,6 +463,7 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           ...(assignedImages.length ? { assignedImages, imageMapping } : {}),
           ...(params.instruction ? { editDirective: params.instruction } : {}),
           ...(baseline ? { baselineContent: baseline } : {}),
+          ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
           onFailure: (failure) => {
             contentFailure = failure.code;
           },
@@ -445,13 +518,17 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         await actionGenerator(outline, content, aiCallFor('scene-actions'), {
           agents,
           languageDirective: doc.stage.languageDirective ?? '',
+          // W4: the ONE resolved Flow position plus the resolved Skill
+          // definitions — the same governed context the content pass used.
+          ...(governed ? { flowContext: governed.flowContext } : {}),
+          ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
         }),
       );
       const built = buildCompleteScene(outline, content, actions, params.stageId, {
         sceneId: existing?.id ?? sceneIdFor(doc.scenes, params.order),
       });
       if (!built) return result('Page assembly failed; nothing was written.', {}, true);
-      const scene = built as Scene;
+      const scene = (governed ? stampGenerationBaseline(built as Scene) : built) as Scene;
       await runStageMutation(signal, () =>
         putSceneBringingCurrent(deps.store, params.stageId, scene),
       );
@@ -521,6 +598,16 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         ? doc?.scenes.find((item) => item.id === params.sceneId)
         : doc?.scenes.find((item) => item.order === params.order);
       if (!doc || !scene) return result('Page not found. Call list_scenes.', {}, true);
+      // Module 3/4 W4 (TAE-RQ-018/019): on a governed Stage the regenerated
+      // Actions are produced under the authoritative context or the tool
+      // refuses — never generic generation with the old carriers merely
+      // preserved (the false-governance pattern W4 exists to close).
+      const { context: governed, refusal: governedRefusal } = await governedContextFor(
+        params.stageId,
+        scene,
+        'generate_actions',
+      );
+      if (governedRefusal) return governedRefusal;
       const outline = outlineFromScene(scene, doc.outline);
       const actions = filterKnownActions(
         await actionGenerator(
@@ -532,12 +619,20 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
             agents: doc.stage.generatedAgentConfigs,
             languageDirective: doc.stage.languageDirective ?? '',
             userProfile: params.styleDirective,
+            ...(governed ? { flowContext: governed.flowContext } : {}),
+            ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
           },
         ),
       );
       if (!actions.length)
         return result('No known actions were generated; the page was unchanged.', {}, true);
-      const next = { ...scene, actions } as Scene;
+      // W4.4: a regeneration IS successful generation — a fresh
+      // generation-origin baseline is stamped after the final Actions exist
+      // (governed runs only; buildSceneAlignmentBaseline returns null for an
+      // unclassified Scene, which then derives validation-required).
+      const next = (
+        governed ? stampGenerationBaseline({ ...scene, actions } as Scene) : { ...scene, actions }
+      ) as Scene;
       await runStageMutation(signal, () =>
         putSceneBringingCurrent(deps.store, params.stageId, next),
       );

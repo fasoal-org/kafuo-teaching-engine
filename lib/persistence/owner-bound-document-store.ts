@@ -65,6 +65,51 @@ function queryableFor(connection: Pick<PoolClientLike, 'query'>): Queryable {
   };
 }
 
+/**
+ * The governed lineage fields carried forward on whole-Scene writes
+ * (Module 3/4 W4, plan §7.4.2). Structural, so the store stays generic over
+ * `TScene`: the carry-forward reads and writes these keys only when the
+ * stored Scene carries them and the incoming one omits them.
+ */
+const SCENE_LINEAGE_FIELDS = [
+  'teachingStage',
+  'teachingSkills',
+  'learningObjectives',
+  'alignmentBaseline',
+] as const;
+
+/**
+ * Carry the stored Scene's governed lineage onto an incoming whole-Scene
+ * write that omits it. Necessary but never sufficient: it protects lineage
+ * against lineage-less writers (grant-delegated PUTs, partial server
+ * patches); it is never accepted as proof of governance — every governed
+ * GENERATION path must additionally run under the resolved governed context.
+ *
+ * Rules: an incoming value always wins; nothing is fabricated for a stored
+ * Scene that carries nothing (absence on legacy data is the
+ * backward-compatibility mechanism itself).
+ */
+export function carryForwardSceneLineage<TScene>(
+  stored: TScene | null | undefined,
+  incoming: TScene,
+): TScene {
+  if (!stored) return incoming;
+  // Copy lazily: when nothing is carried the incoming object is returned BY
+  // REFERENCE, so lineage-less writes are indistinguishable from a store
+  // without the carry-forward (the legacy path stays untouched, identity
+  // included).
+  let merged: Record<string, unknown> | undefined;
+  const source = stored as Record<string, unknown>;
+  const target = incoming as Record<string, unknown>;
+  for (const field of SCENE_LINEAGE_FIELDS) {
+    if (target[field] === undefined && source[field] !== undefined) {
+      if (!merged) merged = { ...incoming } as Record<string, unknown>;
+      merged[field] = source[field];
+    }
+  }
+  return (merged as TScene | undefined) ?? incoming;
+}
+
 class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   implements DocumentStore<TScene, TStage>, DocumentFolderStore
 {
@@ -98,9 +143,16 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   putScene(stageId: string, scene: TScene): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, () =>
-      this.inner.putScene(stageId, scene),
-    );
+    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, async () => {
+      // Module 3/4 W4: the incremental scene write is where every whole-Scene
+      // seam converges (grant-delegated HTTP PUT, agent tools, server
+      // patches), so the stored Scene's governed lineage rides it without
+      // application cooperation — the same structural argument as the
+      // trigger-maintained sceneRev. Whole-document saveDocument is
+      // deliberately excluded: it legitimately replaces the entire scene set.
+      const stored = await this.inner.getScene(stageId, (scene as { id: string }).id);
+      return this.inner.putScene(stageId, carryForwardSceneLineage(stored, scene));
+    });
   }
 
   deleteScene(stageId: string, sceneId: string): Promise<void> {
