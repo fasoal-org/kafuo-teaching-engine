@@ -1,7 +1,8 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1384,6 +1385,231 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(failed.generationRuns).toBe(1);
       expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
       expect(version.currentStageId).toBe(stageBefore);
+    });
+  });
+
+  describe('Module 3/4 W3 — the canonical Action generation gate', () => {
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+    /**
+     * Scenes that pass exact-flow and carry the given actions on scene 1.
+     * `scene1Type` picks the carrier: the write barrier's lenient unknown-type
+     * path applies to interactive scenes (slide/quiz scenes validate Actions
+     * through the strict DSL branch), while reference cases want a real slide
+     * canvas to resolve against.
+     */
+    function scenesWithActions(
+      actions: unknown[],
+      scene1Type: 'slide' | 'interactive' = 'interactive',
+    ): AppScene[] {
+      const scenes = FLOW.map((_, index) => flowScene(index + 1, index));
+      const first = scenes[0]!;
+      (first as { actions?: unknown }).actions = actions;
+      if (scene1Type === 'slide') {
+        (first.content as { canvas?: { elements?: unknown[] } }).canvas = {
+          ...((first.content as { canvas?: object }).canvas ?? {}),
+          elements: [
+            {
+              id: 'el-text-1',
+              type: 'text',
+              content: 'Body',
+              left: 0,
+              top: 0,
+              width: 100,
+              height: 10,
+            },
+          ],
+        };
+      } else {
+        (first as { type?: unknown }).type = 'interactive';
+        (first as { content?: unknown }).content = {
+          type: 'interactive',
+          url: '',
+          html: '<!DOCTYPE html><html><head></head><body></body></html>',
+          widgetType: 'simulation',
+          widgetConfig: {},
+        };
+      }
+      return scenes;
+    }
+
+    /**
+     * Bind version 1 with a valid governed generation, then run a governed
+     * REGENERATION whose mock persists `runsActions` per run (last repeats).
+     * `persist` false returns the result without writing the document — for
+     * payloads the write barrier itself refuses (a structurally invalid
+     * canonical Action on a slide), so the GATE can still be exercised.
+     */
+    async function regenerateWithActions(
+      runsActions: readonly (readonly unknown[])[],
+      caseOptions: { scene1Type?: 'slide' | 'interactive'; persist?: boolean } = {},
+    ): Promise<{ versionId: string; stageBefore: string; attemptId: string }> {
+      // The governed context's flow must carry Skill Policies — the Stage-1
+      // gate (requireCompleteFlowPolicies) refuses a governed attempt without
+      // them. Same stage keys as FLOW so the mocked scenes cover it exactly.
+      const governedW3Flow: TeachingFlowEntry[] = FLOW.map((entry) => ({
+        ...entry,
+        skillPolicy: {
+          required: [],
+          preferred: [],
+          allowed: [
+            { skillId: 'feynman-learning', version: 'v1' },
+            { skillId: 'learning-to-learn', version: 'v1' },
+          ],
+          combinationRestrictions: [],
+        },
+      }));
+      const governedContext = {
+        ...kafuoContext(),
+        teachingSkillsContract: TEACHING_SKILLS_CONTRACT_V1,
+        teachingFlow: governedW3Flow,
+      };
+      const attemptId = await startKafuo(governedContext);
+      const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+      const first = (await readAttemptById(qp(), attemptId))!;
+      const versionId = first.versionId!;
+      const stageBefore = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!
+        .currentStageId;
+
+      let call = 0;
+      mocks.generateClassroom.mockReset();
+      mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+        call += 1;
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'G',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        await fs.mkdir(path.join(tmp, reserved.id, 'media'), { recursive: true });
+        await fs.writeFile(path.join(tmp, reserved.id, 'media', 'x.png'), PNG);
+        const actions = [...runsActions[Math.min(call - 1, runsActions.length - 1)]!];
+        const scenes = scenesWithActions(actions, caseOptions.scene1Type ?? 'interactive');
+        scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
+        const outlines = FLOW.map((_, index) => flowOutline(index + 1, index));
+        if (caseOptions.persist !== false) {
+          await options.persistence.persist(
+            {
+              id: reserved.id,
+              stage: reserved.stage,
+              scenes: scenes as never,
+              outlines: outlines as never,
+            },
+            options.baseUrl,
+          );
+        }
+        return {
+          id: reserved.id,
+          url: '',
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+          scenesCount: scenes.length,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const runner = await freshModules();
+      const regeneration = await startGenerationAttempt(txPool(), {
+        tenantId: 'tenant-k',
+        learningItem: first.learningItem,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        generation: { requirement: 'again', teachingFlow: FLOW },
+        versionId,
+        actorRef: 'actor-2',
+        requestId: `kafuo-w3-${randomUUID()}`,
+        requestDigest: 'd'.repeat(64),
+        teachingFlow: FLOW,
+        contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      });
+      await runner.runGenerationAttempt(regeneration.attempt.id, regeneration.execution, {
+        ...governedContext,
+        aggregate: { tenantId: 'tenant-k', learningItem: first.learningItem },
+        versionId,
+      });
+      return { versionId, stageBefore, attemptId: regeneration.attempt.id };
+    }
+
+    it.each([
+      [
+        'an unknown Action type',
+        [{ id: 'a-unknown', type: 'legacy_teleport' }],
+        'ACTION_TYPE_UNKNOWN',
+        // The write barrier's lenient unknown-type path is the interactive
+        // branch — the persisted artifact reaches the gate for real.
+        { scene1Type: 'interactive' as const },
+      ],
+      [
+        'a structurally invalid canonical Action',
+        [{ id: 'a-speech', type: 'speech' }],
+        'ACTION_STRUCTURE_INVALID',
+        // The write barrier refuses this payload on ANY scene kind (known
+        // types run the DSL variant validation everywhere), so the run is
+        // returned without persisting — the GATE is still what classifies it.
+        { persist: false },
+      ],
+      [
+        'a broken laser.elementId',
+        [{ id: 'a-laser', type: 'laser', elementId: 'el-missing' }],
+        'ACTION_REFERENCE_INVALID',
+        // A variant-valid reference failure persists fine; the gate catches
+        // what the barrier was never meant to.
+        { scene1Type: 'slide' as const },
+      ],
+    ] as const)(
+      'governed regeneration persisting %s fails the attempt, binds nothing, compensates',
+      async (_label, actions, code, caseOptions) => {
+        const { versionId, stageBefore, attemptId } = await regenerateWithActions(
+          [actions],
+          caseOptions,
+        );
+        const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+
+        const failed = (await readAttemptById(qp(), attemptId))!;
+        expect(failed.status).toBe('failed');
+        expect(failed.errorCode).toBe(code);
+        expect(failed.generationRuns).toBeGreaterThanOrEqual(2); // retryable, re-rolled
+        // Nothing new bound: the version still points at the valid Stage.
+        const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
+        expect(version.currentStageId).toBe(stageBefore);
+        // compensateRun ran on every failed run — no live stage beyond the
+        // original binding, and no media directory survived.
+        const live = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM stage_meta WHERE deleted_at IS NULL`,
+        );
+        expect((live.rows[0] as { n: number }).n).toBe(1);
+        expect(await fs.readdir(tmp)).toHaveLength(0);
+      },
+    );
+
+    it('an invalid Action emitted once then valid Actions binds normally after the re-roll', async () => {
+      const { versionId, attemptId } = await regenerateWithActions([
+        [{ id: 'a-unknown', type: 'legacy_teleport' }],
+        [{ id: 'a-ok', type: 'speech', text: 'Canonical.' }],
+      ]);
+      const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
+
+      const succeeded = (await readAttemptById(qp(), attemptId))!;
+      expect(succeeded.status).toBe('succeeded');
+      expect(succeeded.generationRuns).toBe(2);
+      const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
+      expect(version.currentStageId).not.toBeNull();
+    });
+
+    it('the legacy (non-Kafuo) binding path gained no gate', async () => {
+      // Source pin: exactly ONE validateSceneActionStructure call site exists,
+      // inside runKafuoAttempt — the legacy branch below runGenerationAttempt
+      // never validates.
+      const source = readFileSync(
+        path.join(repoRoot, 'lib/server/teaching-package/generation-runner.ts'),
+        'utf-8',
+      );
+      const callMatches = source.match(/validateSceneActionStructure\(/g) ?? [];
+      expect(callMatches).toHaveLength(1);
+      const splitAt = source.indexOf('export function runGenerationAttempt');
+      const [kafuoHalf, legacyHalf] = [source.slice(0, splitAt), source.slice(splitAt)];
+      expect(kafuoHalf).toContain('validateSceneActionStructure(');
+      expect(legacyHalf).not.toContain('validateSceneActionStructure');
     });
   });
 });

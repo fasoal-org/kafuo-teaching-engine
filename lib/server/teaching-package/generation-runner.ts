@@ -49,6 +49,7 @@ import {
 } from '@/lib/server/teaching-package/generation';
 import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
 import { validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
+import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { assertOutlineContentUnitGrounding } from '@/lib/server/teaching-package/outline-grounding';
 import {
   requireCompleteFlowPolicies,
@@ -294,6 +295,32 @@ async function runKafuoAttempt(
         continue;
       }
 
+      // Module 3/4 W3 — the canonical Action gate (plan §7.3/§9.1, point A):
+      // an invalid governed artifact never becomes the current output. The
+      // gate sits beside the exact-flow pre-binding check in the same
+      // compensate-and-re-roll loop, so a failure costs a run and never a
+      // bound Stage. Governed runs only — the legacy binding path below has
+      // no gate. A malformed Action is a bad model answer, not a bad package:
+      // retryable, same budget as every other model-answer defect.
+      if (governedByTeachingSkills) {
+        const actionFindings = validateSceneActionStructure(result.scenes, {
+          stage: result.stage,
+        });
+        if (actionFindings.length > 0) {
+          const first = actionFindings[0]!;
+          lastFailure = {
+            code: first.code,
+            message: `${first.message} (+${actionFindings.length - 1} more Action finding(s))`,
+            retryable: true,
+          };
+          log.warn(
+            `Teaching package attempt ${attemptId} run ${run} failed Action validation (${first.code}): ${first.message}`,
+          );
+          await compensateRun(pool, result.id);
+          continue;
+        }
+      }
+
       // Valid Stage → the ONLY binding path.
       await completeGenerationAttempt(pool, attemptId, result.id);
       return;
@@ -331,11 +358,17 @@ async function runKafuoAttempt(
       // not a bad package (the OUTLINE_CONTENT_UNIT_GROUNDING_INVALID
       // precedent), so both re-roll within the same bounded budget after
       // compensation, never binding a partial or ungoverned Stage.
+      //
+      // Module 3/4 W3: the three Action-validation codes join them — a
+      // malformed Action is the same class of model-answer defect.
       const retryable =
         code === 'CLASSROOM_GENERATION_FAILED' ||
         code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID' ||
         code === 'GOVERNED_SCENE_GENERATION_FAILED' ||
-        code === 'GOVERNED_ACTION_GENERATION_FAILED';
+        code === 'GOVERNED_ACTION_GENERATION_FAILED' ||
+        code === 'ACTION_STRUCTURE_INVALID' ||
+        code === 'ACTION_TYPE_UNKNOWN' ||
+        code === 'ACTION_REFERENCE_INVALID';
       lastFailure = {
         code,
         message: error instanceof Error ? error.message : String(error),

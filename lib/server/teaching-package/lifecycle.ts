@@ -52,6 +52,7 @@ import {
   teachingModelLineageDrift,
 } from '@/lib/server/teaching-package/successor-model';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
+import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import {
   toTeachingPackageError,
   validateFlowPolicySatisfiability,
@@ -444,6 +445,40 @@ async function prepareSubmitValidation(
     await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
   }
   if (governed) {
+    // Module 3/4 W3 — the Action gate (plan §7.3/§9.1, point B): an
+    // independent re-proof of the PERSISTED current Stage, protecting against
+    // post-generation editor / mutation / persistence changes the generation
+    // gate cannot see. Sits after exact-flow (whose error precedence is
+    // established and stays first) and before the Skill gate; each gate
+    // throws its own code with its own offendingSceneIds and none consults
+    // another's success (TAE-RQ-022). The whole proof is re-proved under the
+    // aggregate advisory lock against submittedStageRev, so this check
+    // inherits the flow proof's concurrency protection (TAE-RQ-024).
+    // Applicability per §9.3: enforced for governed versions only — tier-A/B
+    // legacy and clone-only successors never reach this branch, and a
+    // materially edited legacy successor was refused above.
+    const actionFindings = validateSceneActionStructure(document.scenes, {
+      stage: document.stage,
+    });
+    if (actionFindings.length > 0) {
+      const first = actionFindings[0]!;
+      throw new TeachingPackageError(
+        first.code,
+        `${first.message} (+${actionFindings.length - 1} more Action finding(s))`,
+        {
+          offendingSceneIds: [...new Set(actionFindings.map((finding) => finding.sceneId))],
+          // Identity only (TAE-RQ-027): no narration, content, or source text.
+          findings: actionFindings.map((finding) => ({
+            sceneId: finding.sceneId,
+            actionId: finding.actionId,
+            actionType: finding.actionType,
+            path: finding.path,
+            category: finding.category,
+            code: finding.code,
+          })),
+        },
+      );
+    }
     await enforceGovernedSkillGate(document.scenes, flow, version, pool);
   }
   // The revision the proof is tied to. Read through the same store so the read

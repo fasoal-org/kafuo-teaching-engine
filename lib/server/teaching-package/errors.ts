@@ -135,7 +135,18 @@ export type TeachingPackageErrorCode =
    * but pedagogically ungoverned output may never be bound as the package's
    * Stage. Retryable at the attempt level, same precedent.
    */
-  | 'GOVERNED_ACTION_GENERATION_FAILED';
+  | 'GOVERNED_ACTION_GENERATION_FAILED'
+  // --- Teaching Actions + Action Engine (Module 3/4 W3, plan §7.3/§9) ---
+  /** A canonical Action violates its variant's required-field structure (TAE-RQ-004/022). */
+  | 'ACTION_STRUCTURE_INVALID'
+  /**
+   * A governed Scene carries an Action of a type outside the canonical union
+   * (TAE-RQ-034): the refusal names it verbatim and requires removal or
+   * explicit replacement — never an inferred candidate (TAE-RQ-032).
+   */
+  | 'ACTION_TYPE_UNKNOWN'
+  /** A deterministic reference (element / media / agent) resolves against nothing persisted (TAE-RQ-023). */
+  | 'ACTION_REFERENCE_INVALID';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -191,6 +202,9 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
   GOVERNED_SCENE_GENERATION_FAILED: 422,
   GOVERNED_ACTION_GENERATION_FAILED: 422,
+  ACTION_STRUCTURE_INVALID: 422,
+  ACTION_TYPE_UNKNOWN: 422,
+  ACTION_REFERENCE_INVALID: 422,
 };
 
 export class TeachingPackageError extends Error {

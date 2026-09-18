@@ -624,4 +624,434 @@ describe('W17 submit gate', () => {
     const { versionId } = await seedVersion({ status: 'in_review' });
     await expectTpError(submit(versionId), 'INVALID_TRANSITION', 409);
   });
+
+  // ---- Module 3/4 W3: the canonical Action submit gate ----
+
+  /** An interactive governed Scene carrying arbitrary (even unknown) Actions. */
+  function interactiveSceneWithActions(
+    id: string,
+    stageId: string,
+    order: number,
+    flowIndex: number,
+    actions: unknown[],
+  ): AppScene {
+    return {
+      ...makeSlideScene(id, stageId, order),
+      type: 'interactive',
+      teachingStage: { key: flow[flowIndex]!.stage, flowIndex },
+      teachingSkills: { classification: 'instructional' as const },
+      content: {
+        type: 'interactive',
+        url: '',
+        html: '<!DOCTYPE html><html><head></head><body></body></html>',
+        widgetType: 'simulation',
+        widgetConfig: {},
+      },
+      actions: actions as never,
+    } as unknown as AppScene;
+  }
+
+  it('submit independently refuses an invalid Action introduced AFTER generation passed (gate B ≠ gate A)', async () => {
+    // The pipeline-sourced shape: generation really ran and its gate approved
+    // the artifact — then a grant-delegated-style write mutates the persisted
+    // Stage. Only the submit re-proof can catch this.
+    pipelineMocks.resolveModel.mockResolvedValue({
+      model: { id: 'language-model' },
+      modelInfo: { capabilities: { vision: true } },
+      modelString: 'vision-model',
+      providerId: 'test',
+      apiKey: '',
+    });
+    pipelineMocks.isProviderKeyRequired.mockReturnValue(false);
+    pipelineMocks.callLLM.mockResolvedValue({
+      text: JSON.stringify({
+        elements: [{ type: 'text', content: 'Body', left: 100, top: 100, width: 600, height: 60 }],
+        remark: '',
+      }),
+    });
+    pipelineMocks.generateSceneActions.mockResolvedValue([
+      { id: 'a-ok', type: 'speech', text: 'Canonical.' },
+    ]);
+    pipelineMocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'w3o1',
+            type: 'slide',
+            title: 'Opening',
+            description: 'd',
+            keyPoints: [],
+            order: 1,
+            teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            teachingSkills: { primary: FEYNMAN, classification: 'instructional' as const },
+          },
+          {
+            id: 'w3o2',
+            type: 'slide',
+            title: 'Cards',
+            description: 'd',
+            keyPoints: [],
+            order: 2,
+            teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+            teachingSkills: { classification: 'non-instructional' as const },
+          },
+        ],
+      },
+    });
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const { createTeachingPackagePersistenceSink } =
+      await import('@/lib/server/teaching-package/stage-persistence-sink');
+    const generated = await generateClassroom(
+      {
+        requirement: 'W3 submit-gate run',
+        pdfContent: { text: 'pdf body', images: [] },
+        teachingFlow: flow,
+        governed: {
+          contract: 'kafuo.teaching-skills.v1',
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          flow,
+        },
+      },
+      { baseUrl: '', persistence: createTeachingPackagePersistenceSink('tpa-w3') },
+    );
+
+    // The post-generation mutation a delegated writer could make: a
+    // variant-valid laser pointing at nothing (the write barrier accepts it —
+    // references are exactly what it never checked).
+    const store = makeStore();
+    const document = (await store.loadDocument(generated.id))!;
+    const mutated = document.scenes[0]!;
+    await store.putScene(generated.id, {
+      ...mutated,
+      actions: [
+        ...mutated.actions!,
+        { id: 'a-laser-x', type: 'laser', elementId: 'el-not-in-any-canvas' },
+      ],
+    });
+
+    const item = { type: 'lesson' as const, id: nextId('li') };
+    const versionId = nextId('tpv');
+    const attemptId = nextId('tpa');
+    await insertVersion(qp(), {
+      id: versionId,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
+      version: 1,
+      status: 'draft',
+      currentStageId: generated.id,
+      currentAttemptId: attemptId,
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      now: 1,
+    });
+    await insertAttempt(qp(), {
+      id: attemptId,
+      aggregate: { tenantId: 'tenant-test', learningItem: item },
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'actor-1',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingSkillsContract: 'kafuo.teaching-skills.v1',
+      inputSnapshot: {
+        learningItem: item,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'p',
+        pdfContentSummary: null,
+        requestedAt: 1,
+        teachingFlow: flow,
+      },
+      now: 1,
+    });
+
+    const rejection = await submit(versionId).then(
+      () => {
+        throw new Error('expected a refusal');
+      },
+      (error: unknown) => error as TeachingPackageError,
+    );
+    expect(rejection.code).toBe('ACTION_REFERENCE_INVALID');
+    expect(rejection.status).toBe(422);
+    expect((rejection.details as { offendingSceneIds: string[] }).offendingSceneIds).toEqual([
+      mutated.id,
+    ]);
+  });
+
+  it('gate independence (TAE-AC-006): exact-flow error first; the Action refusal still stands after the flow repair', async () => {
+    const unknownAction = [{ id: 'a-legacy', type: 'legacy_teleport' }];
+    const scenesBreakingFlowAndActions = (stageId: string): AppScene[] => [
+      interactiveSceneWithActions('s1', stageId, 1, 0, unknownAction),
+      // Position 2 never covered → exact-flow fails; the unknown Action also
+      // fails — flow precedence must win.
+      interactiveSceneWithActions('s-again', stageId, 3, 0, []),
+    ];
+    const { versionId: brokenId } = await seedVersion({
+      scenes: scenesBreakingFlowAndActions,
+    });
+    const flowError = await expectTpError(submit(brokenId), 'TEACHING_MODEL_FLOW_MISMATCH', 409);
+    expect(flowError.code).not.toMatch(/^ACTION_/);
+
+    // Flow repaired (position 2 now covered): the SAME unknown Action must
+    // still refuse — no gate's success satisfies another.
+    const { versionId: flowFixedId } = await seedVersion({
+      scenes: (stageId) => [
+        interactiveSceneWithActions('s1', stageId, 1, 0, unknownAction),
+        interactiveSceneWithActions('s2', stageId, 2, 1, []),
+      ],
+    });
+    const actionError = await expectTpError(submit(flowFixedId), 'ACTION_TYPE_UNKNOWN', 422);
+    expect((actionError.details as { offendingSceneIds: string[] }).offendingSceneIds).toEqual([
+      's1',
+    ]);
+  });
+
+  describe('the §9.3 applicability matrix (TAE-RQ-034)', () => {
+    const unknownActions = [{ id: 'a-legacy', type: 'legacy_teleport' }];
+
+    /** A tier-B scene set covering the flow, one scene carrying unknown Actions. */
+    const legacyScenes = (stageId: string): AppScene[] => [
+      interactiveSceneWithActions('ls-1', stageId, 1, 0, unknownActions),
+      {
+        ...makeSlideScene('ls-2', stageId, 2),
+        teachingStage: { key: flow[1]!.stage, flowIndex: 1 },
+      },
+    ];
+
+    async function snapshotDocument(stageId: string): Promise<string> {
+      return JSON.stringify((await makeStore().loadDocument(stageId))!.scenes);
+    }
+
+    it('historical approved package: loads and answers INVALID_TRANSITION — Action codes are never evaluated', async () => {
+      const stageId = nextId('stage');
+      await makeStore().saveDocument(makeDocument(stageId, 'Hist', legacyScenes(stageId)));
+      const item = { type: 'lesson' as const, id: nextId('li') };
+      const versionId = nextId('tpv');
+      await insertVersion(qp(), {
+        id: versionId,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        version: 1,
+        status: 'approved',
+        currentStageId: stageId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+      // Loads (read path never validates Actions)…
+      expect((await makeStore().loadDocument(stageId))!.scenes).toHaveLength(2);
+      // …and submit answers the lifecycle refusal, never an Action code.
+      const error = await expectTpError(submit(versionId), 'INVALID_TRANSITION', 409);
+      expect(error.code).not.toMatch(/^ACTION_/);
+    });
+
+    it('tier-B legacy version, no successor: unknown Actions are skipped and submit passes', async () => {
+      const { versionId } = await seedVersion({ contract: null, scenes: legacyScenes });
+      const updated = await submit(versionId);
+      expect(updated.status).toBe('in_review');
+    });
+
+    it('tier-A legacy version (no flow anywhere): unknown Actions are skipped', async () => {
+      const stageId = nextId('stage');
+      const { teachingStage: _stripped, ...carrierless } = interactiveSceneWithActions(
+        'ta-1',
+        stageId,
+        1,
+        0,
+        unknownActions,
+      );
+      void _stripped;
+      await makeStore().saveDocument(makeDocument(stageId, 'TierA', [carrierless]));
+      const item = { type: 'lesson' as const, id: nextId('li') };
+      const versionId = nextId('tpv');
+      const attemptId = nextId('tpa');
+      await insertVersion(qp(), {
+        id: versionId,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        version: 1,
+        status: 'draft',
+        currentStageId: stageId,
+        currentAttemptId: attemptId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+      await insertAttempt(qp(), {
+        id: attemptId,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        kind: 'initial',
+        status: 'succeeded',
+        requestedByActorRef: 'actor-1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        inputSnapshot: {
+          learningItem: item,
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          learningObjectives: [],
+          contentUnitRefs: [],
+          sourceRefs: [],
+          generationContext: {},
+          generationOptions: {},
+          requirementDigest: '0'.repeat(64),
+          requirementPreview: 'p',
+          pdfContentSummary: null,
+          requestedAt: 1,
+        },
+        now: 1,
+      });
+      const updated = await submit(versionId);
+      expect(updated.status).toBe('in_review');
+    });
+
+    it('clone-only legacy successor: unknown types remain, submit passes, predecessor byte-unchanged', async () => {
+      const stageId = nextId('stage');
+      await makeStore().saveDocument(makeDocument(stageId, 'Legacy v1', legacyScenes(stageId)));
+      const item = { type: 'lesson' as const, id: nextId('li') };
+      const v1 = nextId('tpv');
+      const attemptId = nextId('tpa');
+      await insertVersion(qp(), {
+        id: v1,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        version: 1,
+        status: 'approved',
+        currentStageId: stageId,
+        currentAttemptId: attemptId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+      await insertAttempt(qp(), {
+        id: attemptId,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        kind: 'initial',
+        status: 'succeeded',
+        requestedByActorRef: 'actor-1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        inputSnapshot: {
+          learningItem: item,
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          learningObjectives: [],
+          contentUnitRefs: [],
+          sourceRefs: [],
+          generationContext: {},
+          generationOptions: {},
+          requirementDigest: '0'.repeat(64),
+          requirementPreview: 'p',
+          pdfContentSummary: null,
+          requestedAt: 1,
+          teachingFlow: flow,
+        },
+        now: 1,
+      });
+      const predecessorBefore = await snapshotDocument(stageId);
+
+      const { createSuccessor } = await import('@/lib/server/teaching-package/lifecycle');
+      const successor = await createSuccessor(txPool(), {
+        versionId: v1,
+        tenantId: 'tenant-test',
+        actorRef: 'reviewer-1',
+      });
+      const updated = await submit(successor.id);
+      expect(updated.status).toBe('in_review');
+      // The clone kept the unknown types, and the predecessor is byte-unchanged.
+      expect(await snapshotDocument(stageId)).toBe(predecessorBefore);
+      const successorDoc = (await makeStore().loadDocument(successor.currentStageId))!;
+      expect((successorDoc.scenes[0]!.actions as Array<{ type: string }>)[0]!.type).toBe(
+        'legacy_teleport',
+      );
+    });
+
+    it('materially edited legacy successor: the established clone-only refusal precedes any Action gate', async () => {
+      const stageId = nextId('stage');
+      await makeStore().saveDocument(makeDocument(stageId, 'Legacy v1b', legacyScenes(stageId)));
+      const item = { type: 'lesson' as const, id: nextId('li') };
+      const v1 = nextId('tpv');
+      const attemptId = nextId('tpa');
+      await insertVersion(qp(), {
+        id: v1,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        version: 1,
+        status: 'approved',
+        currentStageId: stageId,
+        currentAttemptId: attemptId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+      await insertAttempt(qp(), {
+        id: attemptId,
+        aggregate: { tenantId: 'tenant-test', learningItem: item },
+        kind: 'initial',
+        status: 'succeeded',
+        requestedByActorRef: 'actor-1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        inputSnapshot: {
+          learningItem: item,
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          learningObjectives: [],
+          contentUnitRefs: [],
+          sourceRefs: [],
+          generationContext: {},
+          generationOptions: {},
+          requirementDigest: '0'.repeat(64),
+          requirementPreview: 'p',
+          pdfContentSummary: null,
+          requestedAt: 1,
+          teachingFlow: flow,
+        },
+        now: 1,
+      });
+      const predecessorBefore = await snapshotDocument(stageId);
+
+      const { createSuccessor } = await import('@/lib/server/teaching-package/lifecycle');
+      const successor = await createSuccessor(txPool(), {
+        versionId: v1,
+        tenantId: 'tenant-test',
+        actorRef: 'reviewer-1',
+      });
+      // A material edit on the clone — with an unknown Action riding along,
+      // which must NOT change the outcome or the code.
+      const successorStore = makeStore();
+      const successorDoc = (await successorStore.loadDocument(successor.currentStageId))!;
+      await successorStore.putScene(successor.currentStageId, {
+        ...successorDoc.scenes[1]!,
+        title: 'Materially different',
+      });
+
+      const error = await expectTpError(submit(successor.id), 'STALE_STATE', 409);
+      expect((error.details as { reason?: string }).reason).toBe(
+        'legacy_successor_materially_edited',
+      );
+      expect(error.code).not.toMatch(/^ACTION_/);
+      expect(await snapshotDocument(stageId)).toBe(predecessorBefore);
+    });
+
+    it('governed version: the submit-refusable codes are enforced (unknown, reference)', async () => {
+      // Structural violations of KNOWN types cannot reach the submit gate
+      // through any real write seam — the write barrier's variant validation
+      // refuses them first (fail-closed earlier, different code), so the
+      // submit-refusable codes are the unknown type and the reference
+      // category. Structure is covered at unit level and at the generation
+      // gate (which classifies pre-persistence results directly).
+      const reference = [{ id: 'a-laser', type: 'laser', elementId: 'el-missing' }];
+      const withActions =
+        (actions: unknown[]) =>
+        (stageId: string): AppScene[] => [
+          interactiveSceneWithActions('gs-1', stageId, 1, 0, actions),
+          {
+            ...makeSlideScene('gs-2', stageId, 2),
+            teachingStage: { key: flow[1]!.stage, flowIndex: 1 },
+          },
+        ];
+
+      await expectTpError(
+        submit((await seedVersion({ scenes: withActions(unknownActions) })).versionId),
+        'ACTION_TYPE_UNKNOWN',
+        422,
+      );
+      await expectTpError(
+        submit((await seedVersion({ scenes: withActions(reference) })).versionId),
+        'ACTION_REFERENCE_INVALID',
+        422,
+      );
+    });
+  });
 });

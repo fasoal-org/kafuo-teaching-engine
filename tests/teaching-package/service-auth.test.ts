@@ -165,6 +165,9 @@ describe('teaching package service auth', () => {
       GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
       GOVERNED_SCENE_GENERATION_FAILED: 422,
       GOVERNED_ACTION_GENERATION_FAILED: 422,
+      ACTION_STRUCTURE_INVALID: 422,
+      ACTION_TYPE_UNKNOWN: 422,
+      ACTION_REFERENCE_INVALID: 422,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {
