@@ -1,5 +1,5 @@
 /**
- * PUT /api/stages/[stageId]/scene-alignment-confirmations — the Editor's
+ * PUT /api/stages/[id]/scene-alignment-confirmations — the Editor's
  * reviewer confirmation entry (Module 2 W16, plan §P Step 17 · FR-TS-045/071 ·
  * AC-TS-032). Body: `{ confirmations: [{ sceneId }] }`.
  *
@@ -25,12 +25,12 @@ import { teachingPackageErrorResponse } from '@/lib/server/teaching-package/rout
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type Params = { params: Promise<{ stageId: string }> };
+type Params = { params: Promise<{ id: string }> };
 
 export async function PUT(req: NextRequest, { params }: Params) {
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
   try {
-    const { stageId } = await params;
+    const { id: stageId } = await params;
     const grant = readEditorGrant(req.headers, stageId);
     if (!grant) return new Response('Not found', { status: 404 });
     if (grant.capability !== 'write') {

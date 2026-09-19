@@ -5,7 +5,7 @@
  * §7.5, TAE-RQ-025/027, the C-8 reuse decision).
  *
  * The marker is sourced from the SAME inspection GET the Teaching Skills
- * panel reads (`/api/stages/[stageId]/teaching-skills`), so there is one
+ * panel reads (`/api/stages/[id]/teaching-skills`), so there is one
  * governance projection and no second Action rendering: the timeline already
  * renders Action identity, type, narration and targeting — this file adds
  * only an identity-keyed marker on rows the inspection flags.

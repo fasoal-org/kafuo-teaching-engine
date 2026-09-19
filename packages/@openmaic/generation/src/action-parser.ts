@@ -10,7 +10,7 @@
  */
 
 import type { Action, ActionType } from '@openmaic/dsl';
-import { SLIDE_ONLY_ACTIONS } from '@openmaic/dsl';
+import { isActionType, SLIDE_ONLY_ACTIONS } from '@openmaic/dsl';
 import { nanoid } from 'nanoid';
 import { parse as parsePartialJson, Allow } from 'partial-json';
 import { jsonrepair } from 'jsonrepair';
@@ -110,10 +110,30 @@ export function parseActionsFromStructuredOutput(
           string,
           unknown
         >;
+        // The LLM is free to omit `name`/`tool_name` entirely, or to invent one.
+        // Nothing downstream re-checks it: `processActions` copies `type` through,
+        // the slide-only and allowedActions filters both fall through on a
+        // non-member, and the document store's validator is the first thing to
+        // look — by which point the untyped action has already been written into
+        // the Scene, so `@openmaic/storage` refuses the whole Scene and the entire
+        // package generation fails (`/actions/N/type: unknown action type:
+        // undefined`). One malformed item out of dozens must not cost the package,
+        // so it is dropped here, at the boundary where model output first becomes
+        // an `Action`. Identity only in the log — never the action's content.
+        if (!isActionType(actionName)) {
+          log.warn(
+            `Dropping action item with unknown type: ${JSON.stringify(actionName ?? null)}`,
+          );
+          continue;
+        }
+        // Params spread FIRST: `id` and `type` are the action's identity, and a
+        // `params` object that happens to carry either of them must not silently
+        // replace the id we minted or the type we just validated. No action
+        // variant declares an `id` or `type` field, so nothing legitimate is lost.
         const action = {
-          id: (typedItem.action_id || typedItem.tool_id || `action_${nanoid(8)}`) as string,
-          type: actionName as Action['type'],
           ...actionParams,
+          id: (typedItem.action_id || typedItem.tool_id || `action_${nanoid(8)}`) as string,
+          type: actionName,
         } as Action;
         // `widget_setState.state` is required by the type, but the LLM may omit it.
         // The former TeacherAction→Action converter always defaulted it to `{}`;

@@ -2,7 +2,7 @@
  * W16 — the reviewer's Teaching Skills inspection routes (teaching-skills plan
  * §P Step 17 · §J · FR-TS-038/045/053 · AC-TS-026).
  *
- * GET /api/stages/[stageId]/teaching-skills returns all eight per-Scene fields
+ * GET /api/stages/[id]/teaching-skills returns all eight per-Scene fields
  * for every Scene type — interactive and PBL explicitly included, the exact
  * exclusion the plan warns the surfaces/ layer would cause. PUT applies the
  * policy-constrained mutation through the W14 service; the confirmation route
@@ -266,18 +266,18 @@ describe('W16 stage teaching-skills inspection routes', () => {
   const loadRoute = async (path: 'teaching-skills' | 'scene-alignment-confirmations') =>
     (await import(
       path === 'teaching-skills'
-        ? '@/app/api/stages/[stageId]/teaching-skills/route'
-        : '@/app/api/stages/[stageId]/scene-alignment-confirmations/route'
+        ? '@/app/api/stages/[id]/teaching-skills/route'
+        : '@/app/api/stages/[id]/scene-alignment-confirmations/route'
     )) as {
-      GET?: typeof import('@/app/api/stages/[stageId]/teaching-skills/route').GET;
-      PUT: (req: NextRequest, ctx: { params: Promise<{ stageId: string }> }) => Promise<Response>;
+      GET?: typeof import('@/app/api/stages/[id]/teaching-skills/route').GET;
+      PUT: (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
     };
 
   it('GET answers 404 without a grant (non-enumerating)', async () => {
     const { stageId } = await seedVersion({});
     const route = await loadRoute('teaching-skills');
     const response = await route.GET!(request(stageId), {
-      params: Promise.resolve({ stageId }),
+      params: Promise.resolve({ id: stageId }),
     });
     expect(response.status).toBe(404);
   });
@@ -286,7 +286,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
     const { versionId, stageId } = await seedVersion({});
     const route = await loadRoute('teaching-skills');
     const response = await route.GET!(grantedRequest(stageId, versionId), {
-      params: Promise.resolve({ stageId }),
+      params: Promise.resolve({ id: stageId }),
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -333,7 +333,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
     const { versionId, stageId } = await seedVersion({ contract: null });
     const route = await loadRoute('teaching-skills');
     const response = await route.GET!(grantedRequest(stageId, versionId), {
-      params: Promise.resolve({ stageId }),
+      params: Promise.resolve({ id: stageId }),
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ governed: false });
@@ -355,7 +355,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
           ],
         },
       }),
-      { params: Promise.resolve({ stageId }) },
+      { params: Promise.resolve({ id: stageId }) },
     );
     expect(readRefusal.status).toBe(403);
 
@@ -372,7 +372,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
           ],
         },
       }),
-      { params: Promise.resolve({ stageId }) },
+      { params: Promise.resolve({ id: stageId }) },
     );
     expect(accepted.status).toBe(200);
     const document = await makeStore().loadDocument(stageId);
@@ -401,7 +401,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
           ],
         },
       }),
-      { params: Promise.resolve({ stageId: draft.stageId }) },
+      { params: Promise.resolve({ id: draft.stageId }) },
     );
     expect(outOfPolicy.status).toBe(422);
     expect(((await outOfPolicy.json()) as { error: { code: string } }).error.code).toBe(
@@ -422,7 +422,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
           ],
         },
       }),
-      { params: Promise.resolve({ stageId: inReview.stageId }) },
+      { params: Promise.resolve({ id: inReview.stageId }) },
     );
     expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
       'INVALID_TRANSITION',
@@ -438,7 +438,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
         capability: 'write',
         body: { confirmations: [{ sceneId: 's-slide' }] },
       }),
-      { params: Promise.resolve({ stageId }) },
+      { params: Promise.resolve({ id: stageId }) },
     );
     expect(response.status).toBe(200);
     const document = await makeStore().loadDocument(stageId);
@@ -456,7 +456,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
         capability: 'write',
         body: { confirmations: [{ sceneId: 's-slide' }] },
       }),
-      { params: Promise.resolve({ stageId: approved.stageId }) },
+      { params: Promise.resolve({ id: approved.stageId }) },
     );
     expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
       'INVALID_TRANSITION',
@@ -502,7 +502,7 @@ describe('W16 stage teaching-skills inspection routes', () => {
       const route = await loadRoute('teaching-skills');
       const response = await route.GET!(
         grantedRequest(stageId, versionId, { capability: 'read' }),
-        { params: Promise.resolve({ stageId }) },
+        { params: Promise.resolve({ id: stageId }) },
       );
       expect(response.status).toBe(200);
       const payload = (await response.json()) as {
@@ -561,14 +561,14 @@ describe('W16 stage teaching-skills inspection routes', () => {
             assignments: [{ sceneId: 's-slide-actions', teachingSkills: { primary: LECTURE } }],
           },
         }),
-        { params: Promise.resolve({ stageId }) },
+        { params: Promise.resolve({ id: stageId }) },
       );
       expect(refused.status).toBe(403);
 
       const legacy = await seedVersion({ contract: null, scenes: scenesWithActions });
       const legacyResponse = await route.GET!(
         grantedRequest(legacy.stageId, legacy.versionId, { capability: 'read' }),
-        { params: Promise.resolve({ stageId: legacy.stageId }) },
+        { params: Promise.resolve({ id: legacy.stageId }) },
       );
       expect(legacyResponse.status).toBe(200);
       expect(await legacyResponse.json()).toEqual({ governed: false });

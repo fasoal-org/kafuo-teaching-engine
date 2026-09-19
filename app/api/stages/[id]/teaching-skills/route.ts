@@ -1,5 +1,5 @@
 /**
- * /api/stages/[stageId]/teaching-skills — the reviewer's per-Scene Teaching
+ * /api/stages/[id]/teaching-skills — the reviewer's per-Scene Teaching
  * Skills inspection surface (Module 2 W16, plan §P Step 17 · §J · FR-TS-038/
  * 045/053 · AC-TS-26).
  *
@@ -39,7 +39,7 @@ import { teachingPackageErrorResponse } from '@/lib/server/teaching-package/rout
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type Params = { params: Promise<{ stageId: string }> };
+type Params = { params: Promise<{ id: string }> };
 
 /** Resolve the grant's version and prove it still owns this Stage. */
 async function resolveGrantVersion(
@@ -71,7 +71,7 @@ async function resolveGrantVersion(
 export async function GET(req: NextRequest, { params }: Params) {
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
   try {
-    const { stageId } = await params;
+    const { id: stageId } = await params;
     const grant = await resolveGrantVersion(req, stageId);
     if (!grant.ok) return grant.response;
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
@@ -118,7 +118,7 @@ export async function GET(req: NextRequest, { params }: Params) {
 export async function PUT(req: NextRequest, { params }: Params) {
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
   try {
-    const { stageId } = await params;
+    const { id: stageId } = await params;
     const grant = await resolveGrantVersion(req, stageId);
     if (!grant.ok) return grant.response;
     if (grant.capability !== 'write') {
