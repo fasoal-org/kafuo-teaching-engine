@@ -29,6 +29,17 @@ import { cn } from '@/lib/utils';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { WidgetType } from '@/lib/types/widgets';
 import { changeOutlineType } from '@openmaic/generation';
+import {
+  SLIDE_ASSISTANCE_TIERS,
+  SLIDE_CONTENT_KINDS_BY_ROLE,
+  SLIDE_CONTENT_ROLES,
+  SLIDE_TYPES,
+  slideRoleAllowsAssistance,
+  slideSemanticsRequireAssistance,
+  type SlideContentKind,
+  type SlideContentRole,
+  type SlideType,
+} from '@openmaic/dsl';
 import { countBlockingOutlines, validateOutline } from '@/lib/edit/content-validation';
 
 type SceneType = SceneOutline['type'];
@@ -621,6 +632,9 @@ function SceneRow({
             <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
               {/* Cascading control: type-specific config (left) joined to the type selector (right) */}
               <div className="inline-flex items-center overflow-hidden rounded-full">
+                {!disabled && outline.type === 'slide' && (
+                  <SlideSemanticsDisclosure outline={outline} onUpdate={onUpdate} theme={theme} />
+                )}
                 {!disabled && outline.type === 'quiz' && (
                   <QuizConfigDisclosure outline={outline} onUpdate={onUpdate} theme={theme} />
                 )}
@@ -640,7 +654,7 @@ function SceneRow({
                   disabled={disabled}
                   label={sceneTypeLabel(outline.type)}
                   theme={theme}
-                  connected={!disabled && outline.type !== 'slide'}
+                  connected={!disabled}
                 />
               </div>
               {!disabled && <DeleteSceneButton onConfirm={onRemove} />}
@@ -1016,6 +1030,153 @@ function cascadeSegmentClass(theme: (typeof TYPE_THEME)[SceneType]) {
     'inline-flex items-center gap-1 border-r border-black/[0.07] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors dark:border-white/10',
     theme.chip,
     theme.chipHover,
+  );
+}
+
+/** Authoring tokens shown to the OpenMAIC author (never to a learner). */
+const humanizeToken = (token: string) => token.replace(/_/g, ' ');
+
+/**
+ * Slide classification for a manually added / retyped slide outline. The
+ * OpenMAIC author is the Teaching Engine operator, so this is authoring — the
+ * values are chosen here, never defaulted or inferred from the text. An
+ * unclassified slide blocks generation (see `validateOutline`).
+ */
+function SlideSemanticsDisclosure({
+  outline,
+  onUpdate,
+  theme,
+}: {
+  outline: SceneOutline;
+  onUpdate: (updates: Partial<SceneOutline>) => void;
+  theme: (typeof TYPE_THEME)[SceneType];
+}) {
+  const { t } = useI18n();
+  const role = outline.contentRole;
+  const kinds: readonly SlideContentKind[] = role ? SLIDE_CONTENT_KINDS_BY_ROLE[role] : [];
+  const classified = validateOutline(outline).every((issue) => issue.kind !== 'unclassifiedSlide');
+  const summary = classified
+    ? [outline.contentRole, outline.contentKind]
+        .filter(Boolean)
+        .map((v) => humanizeToken(v!))
+        .join(' · ') || humanizeToken(outline.slideType ?? '')
+    : t('generation.slideClassificationChoose');
+  const selectClass =
+    'h-7 max-w-[10rem] rounded-md border border-border bg-background px-1.5 text-xs text-foreground';
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(cascadeSegmentClass(theme), !classified && 'text-destructive')}
+        >
+          <span className="max-w-[10rem] truncate">{summary}</span>
+          <ChevronDown className="size-3 opacity-70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={6} className="w-72 space-y-2.5 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('generation.slideClassificationSlideType')}
+          </span>
+          <select
+            className={selectClass}
+            value={outline.slideType ?? ''}
+            onChange={(event) =>
+              onUpdate({ slideType: (event.target.value || undefined) as SlideType | undefined })
+            }
+          >
+            <option value="">{t('generation.slideClassificationChoose')}</option>
+            {SLIDE_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {humanizeToken(value)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground">
+            {t('generation.slideClassificationRole')}
+          </span>
+          <select
+            className={selectClass}
+            value={role ?? ''}
+            onChange={(event) =>
+              // A kind belongs to its role: changing the role clears it, and
+              // an assistance plan survives only on a role that allows one.
+              onUpdate({
+                contentRole: (event.target.value || undefined) as SlideContentRole | undefined,
+                contentKind: undefined,
+                ...(slideRoleAllowsAssistance(event.target.value)
+                  ? {}
+                  : { assistancePlan: undefined }),
+              })
+            }
+          >
+            <option value="">{t('generation.slideClassificationNone')}</option>
+            {SLIDE_CONTENT_ROLES.map((value) => (
+              <option key={value} value={value}>
+                {humanizeToken(value)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {kinds.length > 0 && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('generation.slideClassificationKind')}
+            </span>
+            <select
+              className={selectClass}
+              value={outline.contentKind ?? ''}
+              onChange={(event) =>
+                onUpdate({
+                  contentKind: (event.target.value || undefined) as SlideContentKind | undefined,
+                })
+              }
+            >
+              <option value="">{t('generation.slideClassificationChoose')}</option>
+              {kinds.map((value) => (
+                <option key={value} value={value}>
+                  {humanizeToken(value)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {slideRoleAllowsAssistance(role) && (
+          <div className="space-y-1.5 rounded-md border border-dashed border-border p-2">
+            <p className="text-[11px] font-medium leading-snug text-muted-foreground">
+              {t('generation.assistancePlanTitle')}
+              {slideSemanticsRequireAssistance(role, outline.contentKind) ? ' *' : ''}
+            </p>
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              {t('generation.assistancePlanNotLearnerVisible')}
+            </p>
+            {SLIDE_ASSISTANCE_TIERS.map((tier) => (
+              <textarea
+                key={tier}
+                rows={2}
+                value={outline.assistancePlan?.[tier] ?? ''}
+                placeholder={t(`generation.assistancePlan_${tier}`)}
+                onChange={(event) => {
+                  const next = { ...outline.assistancePlan, [tier]: event.target.value };
+                  if (!event.target.value.trim()) delete next[tier];
+                  onUpdate({
+                    assistancePlan: Object.keys(next).length > 0 ? next : undefined,
+                  });
+                }}
+                className="block w-full resize-y rounded-md border border-border bg-background p-1.5 text-xs"
+              />
+            ))}
+          </div>
+        )}
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {t('generation.slideClassificationHint')}
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -39,6 +39,15 @@ export const API_ERROR_CODES = {
   PARSE_FAILED: 'PARSE_FAILED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   STAGE_LOCKED: 'STAGE_LOCKED',
+  // Generation contracts (Role-Specific Slide System): an unclassified /
+  // misclassified slide outline, and the typed planning conflicts that replace
+  // every silent runtime-scene → slide conversion.
+  OUTLINE_SLIDE_SEMANTICS_INVALID: 'OUTLINE_SLIDE_SEMANTICS_INVALID',
+  OUTLINE_SCENE_CONFIG_INVALID: 'OUTLINE_SCENE_CONFIG_INVALID',
+  SCENE_RUNTIME_UNAVAILABLE: 'SCENE_RUNTIME_UNAVAILABLE',
+  SCENE_CAP_CONFLICT: 'SCENE_CAP_CONFLICT',
+  /** A generated visual did not earn an `approved` compliance verdict (fail closed). */
+  VISUAL_COMPLIANCE_WITHHELD: 'VISUAL_COMPLIANCE_WITHHELD',
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];

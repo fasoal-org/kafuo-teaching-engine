@@ -23,6 +23,18 @@ function isMissingFileError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
+/**
+ * Load a packaged prompt asset that is resolved in TypeScript rather than via
+ * `{{snippet:…}}` (e.g. the per-role guidance under `snippets/slide-roles/`).
+ * `relativePath` is relative to the package's prompt root.
+ */
+export function loadPromptAsset(
+  relativePath: string,
+  promptsDir: string = DEFAULT_PROMPTS_DIR,
+): string {
+  return readFileSync(join(promptsDir, relativePath), 'utf-8').trim();
+}
+
 /** Load a snippet by ID. */
 export function loadSnippet(
   snippetId: SnippetId,

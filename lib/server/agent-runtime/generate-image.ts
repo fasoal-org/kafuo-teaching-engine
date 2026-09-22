@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { screenVisualWithDefaults, type ComplianceVerdict } from '@/lib/server/visual-compliance';
+import { applyImagePromptPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -122,6 +124,14 @@ async function fetchGeneratedImage(url: string, signal: AbortSignal): Promise<Re
   }
 }
 
+/** A generated visual that did not earn an `approved` verdict; never written. */
+export class VisualComplianceWithheldError extends Error {
+  constructor(readonly verdict: ComplianceVerdict) {
+    super(`visual compliance ${verdict.verdict}: ${verdict.reasons.join('; ') || 'no reason'}`);
+    this.name = 'VisualComplianceWithheldError';
+  }
+}
+
 async function imageBytes(
   result: ImageGenerationResult,
   signal: AbortSignal,
@@ -165,6 +175,12 @@ export async function defaultPersistGeneratedImage({
 }: PersistImageInput): Promise<string> {
   const { bytes, mime } = await imageBytes(result, signal);
   const hash = createHash('sha256').update(bytes).digest('hex');
+  throwIfAborted(signal);
+
+  // Generate → screen → approve or reject: only an approved visual is written
+  // to stage media. Anything else is discarded here (fail closed).
+  const verdict = await screenVisualWithDefaults(bytes, { origin: 'generated', mimeType: mime });
+  if (verdict.verdict !== 'approved') throw new VisualComplianceWithheldError(verdict);
   throwIfAborted(signal);
 
   const mediaDir = path.join(CLASSROOMS_DIR, stageId, 'media');
@@ -304,12 +320,14 @@ export function buildGenerateImageTool(
         );
       }
 
-      const options = resolveImageSize({
-        prompt: params.styleHint
-          ? `${prompt}\nStyle direction: ${params.styleHint.trim()}`
-          : prompt,
-        aspectRatio: params.aspectRatio ?? '16:9',
-      });
+      const options = resolveImageSize(
+        applyImagePromptPolicy({
+          prompt: params.styleHint
+            ? `${prompt}\nStyle direction: ${params.styleHint.trim()}`
+            : prompt,
+          aspectRatio: params.aspectRatio ?? '16:9',
+        }),
+      );
       const ioSignal = combineSignals(callerSignal, deps.timeoutMs ?? GENERATE_IMAGE_TIMEOUT_MS);
 
       try {
@@ -356,6 +374,13 @@ export function buildGenerateImageTool(
             stageId,
             reason: MEDIA_TOOL_ERROR_REASONS.timeout,
           });
+        }
+        if (error instanceof VisualComplianceWithheldError) {
+          log.warn(`[${toolCallId}] Generated image withheld: ${error.message}`);
+          return errorResult(
+            'The generated image was withheld by visual compliance screening and was not saved. Try a different prompt (a plain educational illustration with no logos, seals or watermarks), or express the idea with native slide elements instead.',
+            { stageId, reason: MEDIA_TOOL_ERROR_REASONS.complianceWithheld },
+          );
         }
         const message = error instanceof Error ? error.message : String(error);
         log.error(

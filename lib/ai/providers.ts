@@ -209,6 +209,25 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
           },
         },
       },
+      {
+        // Kafuo R1 subject-routing fallback model (contracts §1). Registered so
+        // the policy resolves without an operator pin; its `minimal` reasoning
+        // effort is what the benchmark runs used (run_gpt5nano.py).
+        id: 'gpt-5-nano',
+        name: 'GPT-5 Nano',
+        contextWindow: 400000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
     ],
   },
 
@@ -791,6 +810,27 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
             toggleable: true,
             budgetAdjustable: true,
             defaultEnabled: true,
+          },
+        },
+      },
+      {
+        // Kafuo R1 subject-routing primary model (contracts §1). Thinking is
+        // toggleable and OFF by default: the policy sends `enable_thinking:
+        // false` (the benchmark's "nothink" configuration). `vision: false`
+        // per AMB-08 — a lesson with source visuals falls back deterministically
+        // to the subject's vision-capable target before any call is made.
+        id: 'qwen3.7-flash',
+        name: 'Qwen3.7 Flash',
+        contextWindow: 1000000,
+        outputWindow: 64000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: false,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: false,
           },
         },
       },

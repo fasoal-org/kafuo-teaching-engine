@@ -237,6 +237,10 @@ ALTER TABLE teaching_package_generation_attempts ALTER COLUMN tenant_id SET NOT 
 -- marker and inferring one would fabricate governance history (AC-TS-034).
 ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS teaching_skills_contract TEXT;
 ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS skill_policy_digest TEXT;
+-- Subject routing (Kafuo R1 plan §5.1): the subject code the attempt ran
+-- under, written by the runner once the policy resolved. NULL = the attempt
+-- predates routing, is legacy, or ran with TEACHING_SUBJECT_ROUTING=off.
+ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS subject_code TEXT;
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -264,6 +268,40 @@ ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS content_re
 ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS parse_run_id TEXT;
 ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS structure_profile_id TEXT;
 ALTER TABLE teaching_package_source_contexts ADD COLUMN IF NOT EXISTS structure_profile_version_id TEXT;
+`;
+
+/**
+ * Per-attempt Content Unit retention (Kafuo R1 plan §5.1, HLP-01/02). The
+ * approved units of the normalized package an attempt was grounded in, kept
+ * so Scene-grounded Help can later resolve a Scene's `sourceContentUnitIds`
+ * to the exact text the lesson was generated from — through version lineage
+ * (`readContentUnitsForVersion`), never from anything Kafuo resends.
+ *
+ * Written by `runKafuoAttempt` right after `upsertSourceContext`, only for
+ * `kafuo_normalized` sources (a PDF fallback has no units). `ON DELETE
+ * RESTRICT`, like the source context: an attempt with retained units is
+ * never silently deleted from under a version.
+ */
+const CONTENT_UNIT_TABLES = `
+CREATE TABLE IF NOT EXISTS teaching_package_content_units (
+  attempt_id TEXT NOT NULL
+    REFERENCES teaching_package_generation_attempts(id) ON DELETE RESTRICT,
+  ${TENANT_CHECK},
+  unit_id TEXT NOT NULL CHECK (length(unit_id) > 0),
+  order_index INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  subtype TEXT,
+  title TEXT,
+  normalized_text TEXT NOT NULL,
+  text_length INTEGER NOT NULL,
+  content_revision_id TEXT,
+  approved_snapshot_id TEXT,
+  created_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (attempt_id, unit_id)
+);
+
+CREATE INDEX IF NOT EXISTS tpcu_tenant_attempt_idx
+  ON teaching_package_content_units (tenant_id, attempt_id);
 `;
 
 /** Canonical indexes — tenant-scoped unique constraints in their ONLY form. */
@@ -342,6 +380,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(SOURCE_CONTEXT_EVOLUTION)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(CONTENT_UNIT_TABLES)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique
@@ -1673,4 +1714,206 @@ export async function readRetainedVersionContext(
     currentId = row.predecessor_version_id;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Content Unit retention and lineage (Kafuo R1 plan §5.1, §8.3)
+// ---------------------------------------------------------------------------
+
+export interface ContentUnitInput {
+  unitId: string;
+  orderIndex: number;
+  role: string;
+  subtype?: string | null;
+  title?: string | null;
+  normalizedText: string;
+  contentRevisionId?: string | null;
+  approvedSnapshotId?: string | null;
+}
+
+export interface ContentUnitRow {
+  attemptId: string;
+  tenantId: string;
+  unitId: string;
+  orderIndex: number;
+  role: string;
+  subtype: string | null;
+  title: string | null;
+  normalizedText: string;
+  textLength: number;
+  contentRevisionId: string | null;
+  approvedSnapshotId: string | null;
+  createdAt: number;
+}
+
+/**
+ * Retain the manifest's Content Units for one attempt. Idempotent per
+ * `(attempt_id, unit_id)`: a re-run of Layer A for the same attempt rewrites
+ * the same rows. Rows belonging to a different tenant are never overwritten
+ * (the `WHERE` on the conflict path mirrors `upsertSourceContext`).
+ */
+export async function upsertContentUnits(
+  queryable: Queryable,
+  input: { tenantId: string; attemptId: string; units: ContentUnitInput[] },
+): Promise<void> {
+  const now = Date.now();
+  for (const unit of input.units) {
+    await queryable.query(
+      `INSERT INTO teaching_package_content_units
+         (attempt_id, tenant_id, unit_id, order_index, role, subtype, title,
+          normalized_text, text_length, content_revision_id, approved_snapshot_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (attempt_id, unit_id) DO UPDATE SET
+         order_index = EXCLUDED.order_index,
+         role = EXCLUDED.role,
+         subtype = EXCLUDED.subtype,
+         title = EXCLUDED.title,
+         normalized_text = EXCLUDED.normalized_text,
+         text_length = EXCLUDED.text_length,
+         content_revision_id = EXCLUDED.content_revision_id,
+         approved_snapshot_id = EXCLUDED.approved_snapshot_id
+       WHERE teaching_package_content_units.tenant_id = EXCLUDED.tenant_id`,
+      [
+        input.attemptId,
+        input.tenantId,
+        unit.unitId,
+        unit.orderIndex,
+        unit.role,
+        unit.subtype ?? null,
+        unit.title ?? null,
+        unit.normalizedText,
+        unit.normalizedText.length,
+        unit.contentRevisionId ?? null,
+        unit.approvedSnapshotId ?? null,
+        now,
+      ],
+    );
+  }
+}
+
+function rowToContentUnit(row: Record<string, unknown>): ContentUnitRow {
+  return {
+    attemptId: String(row.attempt_id),
+    tenantId: String(row.tenant_id),
+    unitId: String(row.unit_id),
+    orderIndex: Number(row.order_index),
+    role: String(row.role),
+    subtype: typeof row.subtype === 'string' ? row.subtype : null,
+    title: typeof row.title === 'string' ? row.title : null,
+    normalizedText: String(row.normalized_text),
+    textLength: Number(row.text_length),
+    contentRevisionId: typeof row.content_revision_id === 'string' ? row.content_revision_id : null,
+    approvedSnapshotId:
+      typeof row.approved_snapshot_id === 'string' ? row.approved_snapshot_id : null,
+    createdAt: Number(row.created_at),
+  };
+}
+
+/** All retained units of one attempt, in manifest order (tenant-scoped). */
+export async function readContentUnitsForAttempt(
+  queryable: Queryable,
+  attemptId: string,
+  scope: { tenantId: string },
+): Promise<ContentUnitRow[]> {
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT * FROM teaching_package_content_units
+      WHERE attempt_id = $1 AND ${TENANT_SCOPE_PARAM}
+      ORDER BY order_index ASC`,
+    [attemptId, scope.tenantId],
+  );
+  return result.rows.map(rowToContentUnit);
+}
+
+export type ContentUnitLineageStatus =
+  | 'own_attempt'
+  | 'predecessor_attempt'
+  | 'partial'
+  | 'unavailable';
+
+export interface ContentUnitsForVersion {
+  /**
+   * `own_attempt`: the version's own `current_attempt_id` holds every cited
+   * unit; `predecessor_attempt`: an ancestor's attempt does (an edit-only
+   * successor); `partial`: the resolved attempt holds some cited ids but not
+   * all; `unavailable`: no reachable attempt with retained units
+   * (pdf_fallback, pre-retention, unknown version, tenant mismatch, or none
+   * of the cited ids resolve).
+   */
+  lineageStatus: ContentUnitLineageStatus;
+  /** The attempt whose units were read, or null when unavailable. */
+  resolvedAttemptId: string | null;
+  /** The cited units that resolved, in manifest order. */
+  units: ContentUnitRow[];
+}
+
+/**
+ * Resolve a Scene's cited Content Units for the version a learner grant PINS
+ * (plan §8.3, F7). The walk is exactly `readRetainedVersionContext`'s: start
+ * at `versionId`; a version with `current_attempt_id` resolves to that
+ * attempt, otherwise follow `predecessor_version_id`; every hop is
+ * tenant-scoped and cycle-guarded. The resolved attempt must be a
+ * `kafuo_normalized` source with retained rows — a `pdf_fallback` attempt
+ * has no units and is `unavailable`, never "the nearest one that has some".
+ *
+ * Which lifecycle case produced the version does not matter here: a
+ * regeneration (`current_attempt_id = attempt.id`) resolves to its own
+ * attempt; a review-edit successor (`currentAttemptId: null`, scenes cloned
+ * with their ids) resolves through its predecessor; a pinned superseded
+ * version resolves through ITS chain even when a newer approved version
+ * cites different units.
+ */
+export async function readContentUnitsForVersion(
+  queryable: Queryable,
+  versionId: string,
+  unitIds: readonly string[],
+  scope: { tenantId: string },
+): Promise<ContentUnitsForVersion> {
+  const unavailable: ContentUnitsForVersion = {
+    lineageStatus: 'unavailable',
+    resolvedAttemptId: null,
+    units: [],
+  };
+  const visited = new Set<string>();
+  let currentId: string | null = versionId;
+  let hops = 0;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const versionResult: { rows: Array<Record<string, unknown>> } = await queryable.query(
+      `SELECT current_attempt_id, predecessor_version_id
+         FROM teaching_package_versions
+        WHERE id = $1 AND ${TENANT_SCOPE_PARAM}`,
+      [currentId, scope.tenantId],
+    );
+    const row = versionResult.rows[0] as
+      | { current_attempt_id: string | null; predecessor_version_id: string | null }
+      | undefined;
+    if (!row) return unavailable;
+    if (row.current_attempt_id) {
+      const attempt = await queryable.query<{ id: string; source_kind: string | null }>(
+        `SELECT a.id, c.source_kind
+           FROM teaching_package_generation_attempts a
+           LEFT JOIN teaching_package_source_contexts c
+             ON c.attempt_id = a.id AND c.tenant_id = a.tenant_id
+          WHERE a.id = $1 AND a.tenant_id = $2`,
+        [row.current_attempt_id, scope.tenantId],
+      );
+      const hit = attempt.rows[0];
+      if (!hit || hit.source_kind !== 'kafuo_normalized') return unavailable;
+      const retained = await readContentUnitsForAttempt(queryable, hit.id, scope);
+      if (retained.length === 0) return unavailable;
+      const cited = new Set(unitIds);
+      const units = retained.filter((unit) => cited.has(unit.unitId));
+      if (units.length === 0) return { ...unavailable, resolvedAttemptId: hit.id };
+      const resolvedIds = new Set(units.map((unit) => unit.unitId));
+      const missing = unitIds.some((id) => !resolvedIds.has(id));
+      return {
+        lineageStatus: missing ? 'partial' : hops === 0 ? 'own_attempt' : 'predecessor_attempt',
+        resolvedAttemptId: hit.id,
+        units,
+      };
+    }
+    currentId = row.predecessor_version_id;
+    hops += 1;
+  }
+  return unavailable;
 }

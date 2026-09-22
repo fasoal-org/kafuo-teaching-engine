@@ -35,6 +35,7 @@ import type { CanvasPagerProps } from '@/components/edit/EditShell/CanvasPager';
 import type { SceneType } from '@/lib/types/stage';
 import { EditDockProvider } from './dock-context';
 import { DockEditBar, DOCK_EDIT_BAR_HEIGHT } from './DockEditBar';
+import { SlideSemanticsReadout } from './SlideSemanticsReadout';
 import { TeachingSkillsPanel } from './TeachingSkillsPanel';
 
 /**
@@ -112,6 +113,8 @@ export function EditDock({
           and this panel must render for interactive and PBL Scenes too. It
           self-hides on non-package and legacy classrooms. */}
       <TeachingSkillsPanel sceneId={sceneId} />
+      {/* Read-only slide classification inspector (RSS §7.11). */}
+      <SlideSemanticsReadout sceneId={sceneId} />
       <DockEditBar sceneId={sceneId} canPickElements={canPickElements} pager={pager} />
 
       <div data-testid="edit-dock-timeline" className="flex min-h-0 flex-1 flex-col">

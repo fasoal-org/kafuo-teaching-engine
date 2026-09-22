@@ -13,6 +13,11 @@ import {
   sortDocumentImagesForVision,
 } from './outline-formatters.js';
 import { uniquifyMediaElementIds } from './outline-media.js';
+import {
+  formatOutlineSemanticsIssues,
+  stripEmptyOutlineSemantics,
+  validateOutlineSlideSemantics,
+} from './outline-semantics.js';
 import type {
   ImageMapping,
   PdfImage,
@@ -20,6 +25,18 @@ import type {
   TeachingFlowEntry,
   UserRequirements,
 } from './outline-types.js';
+import {
+  OutlineSceneConfigError,
+  SceneCapConflictError,
+  SceneRuntimeUnavailableError,
+  assertSceneHardLimits,
+  assertSceneRuntimesAvailable,
+  describeUnavailableRuntimes,
+  formatOutlineSceneConfigIssues,
+  validateOutlineSceneConfigs,
+  type AvailableSceneRuntimes,
+  type SceneHardLimits,
+} from './outline-runtime.js';
 import type { AICallFn, GenerationResult } from './pipeline-types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
 
@@ -27,6 +44,27 @@ export const DEFAULT_LANGUAGE_DIRECTIVE =
   'Teach in the language that matches the user requirement.';
 
 export interface OutlinePromptContext {
+  /**
+   * Which runtime scene families this generation can deliver. The planner is
+   * told up front, so it does not plan an unavailable runtime; a plan that
+   * still requires one is a typed `SCENE_RUNTIME_UNAVAILABLE` conflict, never a
+   * slide. Absent → every family is available and the prompt is unchanged.
+   */
+  availableRuntimes?: AvailableSceneRuntimes;
+  /**
+   * The rejection reason of the previous attempt, fed back on a bounded
+   * re-roll so the model corrects that answer instead of repeating it.
+   */
+  correctiveContext?: string;
+  /**
+   * The lesson's AUTHORITATIVE language (BCP-47) and base text direction —
+   * copied from lesson metadata, never inferred from content. They drive the
+   * embedded-text policy for generated images: a right-to-left lesson gets
+   * text-free images (labels are authored as native slide text, which every
+   * renderer shapes correctly). Absent → today's wording, unchanged.
+   */
+  language?: string;
+  textDirection?: 'ltr' | 'rtl';
   pdfText?: string;
   pdfImages?: PdfImage[];
   visionEnabled?: boolean;
@@ -70,6 +108,12 @@ export interface OutlineGenerationOptions extends Omit<
   'pdfText' | 'pdfImages'
 > {
   logger?: GenerationLogger;
+  /**
+   * Operator-configured hard limits on runtime scene families. None exists by
+   * default; when set and exceeded, generation stops with `SCENE_CAP_CONFLICT`
+   * rather than trimming or converting scenes.
+   */
+  sceneHardLimits?: SceneHardLimits;
 }
 
 export interface OutlineFallbackOptions {
@@ -139,6 +183,24 @@ function buildSkillPolicyText(teachingFlow: TeachingFlowEntry[] | undefined): st
     .join('\n');
 }
 
+/**
+ * The embedded-text policy sentence for generated images — ALWAYS defined (the
+ * loader leaves an undefined variable as a literal placeholder). Resolved from
+ * authoritative lesson metadata only.
+ */
+export function resolveImageTextPolicyText(
+  language: string | undefined,
+  textDirection: 'ltr' | 'rtl' | undefined,
+): string {
+  if (textDirection === 'rtl') {
+    return 'This lesson is written right-to-left, so generated images MUST be text-free: the prompt must say "no text, letters, numbers or labels in the image". Every label, title, legend or caption is authored as native slide text next to the image, never inside it.';
+  }
+  if (language) {
+    return `Prefer text-free images; labelled diagrams are better built from native slide elements. If an image must contain text, the prompt must explicitly require all text to be in the lesson language (${language}).`;
+  }
+  return 'If the image contains text, labels, or annotations, the prompt must explicitly specify that all text in the image should be in the course language (for example, "all labels in Chinese" for zh-CN courses, "all labels in English" for en-US courses). For purely visual images without text, language does not matter';
+}
+
 /** Build the byte-stable system and user prompts for outline generation. */
 export function buildOutlinePrompt(
   requirements: UserRequirements,
@@ -172,6 +234,8 @@ export function buildOutlinePrompt(
   const hasSkillPolicy = context.skillPolicy === true;
   const skillPolicyText = hasSkillPolicy ? buildSkillPolicyText(teachingFlow) : '';
 
+  const unavailableRuntimesText = describeUnavailableRuntimes(context.availableRuntimes);
+
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     requirement: requirements.requirement,
     pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
@@ -188,13 +252,29 @@ export function buildOutlinePrompt(
     normalizedGrounding: context.normalizedGrounding ?? false,
     hasSkillPolicy,
     skillPolicyText,
+    hasUnavailableRuntimes: unavailableRuntimesText !== '',
+    unavailableRuntimesText,
+    imageTextPolicy: resolveImageTextPolicyText(context.language, context.textDirection),
   });
 
   if (!prompts) {
     throw new Error('Prompt template not found');
   }
 
-  return prompts;
+  return context.correctiveContext
+    ? {
+        system: prompts.system,
+        user: withCorrectiveContext(prompts.user, context.correctiveContext),
+      }
+    : prompts;
+}
+
+/**
+ * Append the previous attempt's rejection to a re-roll's user prompt. The model
+ * is asked to correct that answer; nothing is repaired on its behalf.
+ */
+export function withCorrectiveContext(userPrompt: string, correctiveContext: string): string {
+  return `${userPrompt}\n\n---\n\n## Correction Required\n\nYour previous answer was REJECTED by validation:\n\n${correctiveContext}\n\nAnswer again with the complete JSON object, fixing every issue above. Do not change a scene's \`type\` to avoid an issue — supply what is missing.`;
 }
 
 /** Generate scene outlines from user requirements. */
@@ -250,15 +330,45 @@ export async function generateSceneOutlinesFromRequirements(
     }
 
     const enriched = rawOutlines.map((outline, index) => ({
-      ...outline,
+      ...stripEmptyOutlineSemantics(outline),
       id: outline.id || nanoid(),
       order: index + 1,
     }));
+
+    // Slide-semantics gate: every slide outline must come back explicitly and
+    // validly classified (slideType + contentRole + a role-valid contentKind).
+    // A violation is a bad model answer, reported as an ordinary generation
+    // failure so the caller's existing re-roll applies — a missing or invalid
+    // classification is never repaired by guessing one here.
+    const semanticsIssues = validateOutlineSlideSemantics(enriched);
+    if (semanticsIssues.length > 0) {
+      const message = formatOutlineSemanticsIssues(semanticsIssues);
+      logger.warn(message);
+      return { success: false, error: message };
+    }
+
+    // Runtime-scene integrity: an interactive / pbl outline without its config
+    // is a malformed plan — the same class of bad model answer, re-rolled with
+    // its type intact. It is never downgraded to a slide.
+    const configIssues = validateOutlineSceneConfigs(enriched);
+    if (configIssues.length > 0) {
+      const message = formatOutlineSceneConfigIssues(configIssues);
+      logger.warn(message);
+      return { success: false, error: message };
+    }
+
+    // Planning conflicts are not bad answers to re-roll blindly: they throw
+    // their typed, non-retryable error for the operator to resolve.
+    assertSceneRuntimesAvailable(enriched, options?.availableRuntimes);
+    assertSceneHardLimits(enriched, options?.sceneHardLimits);
 
     const result = uniquifyMediaElementIds(enriched);
 
     return { success: true, data: { languageDirective, courseTitle, outlines: result } };
   } catch (error) {
+    if (error instanceof SceneRuntimeUnavailableError || error instanceof SceneCapConflictError) {
+      throw error;
+    }
     return { success: false, error: String(error) };
   }
 }
@@ -289,8 +399,6 @@ export function applyOutlineFallbacks(
   options: OutlineFallbackOptions = {},
 ): SceneOutline {
   const logger = options.logger ?? noopGenerationLogger;
-  const hasWidgetConfig = outline.widgetType && outline.widgetOutline;
-
   if (outline.widgetType === 'procedural-skill' && !options.allowProceduralSkill) {
     logger.warn(
       `Procedural-skill outline "${outline.title}" is not enabled, falling back to diagram`,
@@ -298,17 +406,22 @@ export function applyOutlineFallbacks(
     return sanitizeProceduralSkillOutline(outline);
   }
 
-  if (outline.type === 'interactive' && !outline.interactiveConfig && !hasWidgetConfig) {
-    logger.warn(
-      `Interactive outline "${outline.title}" missing interactiveConfig and widget config, falling back to slide`,
+  // A runtime scene is never downgraded to a slide. By generation time the
+  // outline gate has already re-rolled malformed plans, so reaching either
+  // branch means an edited / client-supplied outline or an unavailable runtime:
+  // both stop with their typed error and the scene keeps its type.
+  const configIssues = validateOutlineSceneConfigs([outline]);
+  if (configIssues.length > 0) {
+    throw new OutlineSceneConfigError(
+      configIssues.map((issue) => ({ ...issue, index: (outline.order ?? 1) - 1 })),
     );
-    return { ...outline, type: 'slide' };
   }
-  if (outline.type === 'pbl' && (!outline.pblConfig || !hasLanguageModel)) {
-    logger.warn(
-      `PBL outline "${outline.title}" missing pblConfig or languageModel, falling back to slide`,
+  if (outline.type === 'pbl' && !hasLanguageModel) {
+    throw new SceneRuntimeUnavailableError(
+      (outline.order ?? 1) - 1,
+      'pbl',
+      'no language model is configured for project generation',
     );
-    return { ...outline, type: 'slide' };
   }
   return outline;
 }

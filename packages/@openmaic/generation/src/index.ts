@@ -28,7 +28,7 @@ export type {
   SceneSkillPromptContext,
 } from './scene-generator.js';
 export { buildSceneFlowContext } from './scene-generator.js';
-export { buildCompleteScene } from './scene-builder.js';
+export { assertGeneratedSlideScene, buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';
 export {
   isAbortError,
@@ -82,6 +82,8 @@ export type {
 export {
   DEFAULT_LANGUAGE_DIRECTIVE,
   applyOutlineFallbacks,
+  resolveImageTextPolicyText,
+  withCorrectiveContext,
   buildOutlinePrompt,
   generateSceneOutlinesFromRequirements,
   sanitizeProceduralSkillOutline,
@@ -92,6 +94,61 @@ export type {
   OutlinePromptContext,
 } from './outline-generator.js';
 export { changeOutlineType } from './outline-type.js';
+export {
+  OUTLINE_SLIDE_SEMANTICS_ERROR,
+  OUTLINE_SLIDE_TYPES,
+  formatOutlineSemanticsIssues,
+  slideSemanticsFromOutline,
+  stripEmptyOutlineSemantics,
+  validateOutlineSlideSemantics,
+} from './outline-semantics.js';
+export type { OutlineSemanticsIssue } from './outline-semantics.js';
+export {
+  OUTLINE_SCENE_CONFIG_ERROR,
+  SCENE_CAP_CONFLICT,
+  SCENE_RUNTIME_UNAVAILABLE,
+  OutlineSceneConfigError,
+  SceneCapConflictError,
+  SceneRuntimeUnavailableError,
+  assertSceneHardLimits,
+  assertSceneRuntimesAvailable,
+  describeUnavailableRuntimes,
+  formatOutlineSceneConfigIssues,
+  validateOutlineSceneConfigs,
+} from './outline-runtime.js';
+export type {
+  AvailableSceneRuntimes,
+  OutlineSceneConfigIssue,
+  RuntimeSceneFamily,
+  SceneHardLimits,
+} from './outline-runtime.js';
+export {
+  toAssistancePlan,
+  toPlannerGuidance,
+  toVisibleSlideInput,
+} from './slide-generation-inputs.js';
+export type { PlannerGuidance, VisibleSlideInput } from './slide-generation-inputs.js';
+export {
+  SLIDE_ROLE_VARIANTS,
+  buildSlideNarrationRoleContext,
+  buildSlideRoleContext,
+} from './slide-role-guidance.js';
+export type { SlideRoleContext, SlideRoleGuidanceInput } from './slide-role-guidance.js';
+export {
+  generateSlideAssistance,
+  sanitizeAssistanceHtml,
+  visibleCanvasText,
+} from './slide-assistance.js';
+export type { SlideAssistanceOptions } from './slide-assistance.js';
+export { explanationLeakedOntoCanvas, findInternalLeaks } from './learner-facing.js';
+export { buildMediaRegistry, unauthorizedConcreteSource } from './media-registry.js';
+export {
+  NATIVE_VISUAL_DIRECTIVE,
+  ORIENTATION_VISUAL_MISSING,
+  OrientationVisualMissingError,
+  plannedVisualIssue,
+} from './visual-plan.js';
+export type { MediaRegistry, UnauthorizedMediaReason } from './media-registry.js';
 export { uniquifyMediaElementIds } from './outline-media.js';
 export { partitionImagesForVision } from './outline-formatters.js';
 export type { VisionImagePartition } from './outline-formatters.js';
@@ -112,9 +169,12 @@ export type {
   ImageMapping,
   MediaGenerationRequest,
   PdfImage,
+  AssistancePlan,
+  VisualPlan,
   SceneOutline,
   SceneSkillRef,
   SceneTeachingSkills,
+  SlideOutlineSemantics,
   TeachingFlowEntry,
   TeachingRequiredSkillRule,
   TeachingSkillCombinationRestriction,

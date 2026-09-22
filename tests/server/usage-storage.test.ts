@@ -26,6 +26,13 @@ const llmInput: UsageRecordInput = {
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
     reasoningTokens: 0,
+    reported: {
+      inputTokens: true,
+      outputTokens: true,
+      cacheReadTokens: true,
+      cacheCreationTokens: true,
+      reasoningTokens: true,
+    },
   },
 };
 
@@ -62,6 +69,13 @@ describe('recordUsage — LLM', () => {
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
           reasoningTokens: 0,
+          reported: {
+            inputTokens: true,
+            outputTokens: true,
+            cacheReadTokens: true,
+            cacheCreationTokens: true,
+            reasoningTokens: true,
+          },
         },
       },
       { baseDir: tmpDir },

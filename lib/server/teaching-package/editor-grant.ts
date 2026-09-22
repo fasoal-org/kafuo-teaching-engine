@@ -11,7 +11,13 @@
  * key for rotation independence). The service owner principal is never written
  * to any cookie or response — the grant is the browser's only credential.
  */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
+
+import { decodeSigned, encodeSigned, grantSecret } from '@/lib/server/teaching-package/signed-token';
+import {
+  isLearnerStudentContext,
+  type LearnerStudentContext,
+} from '@/lib/server/tutor/student-context';
 
 export const TEACHING_PACKAGE_GRANT_COOKIE = 'teaching_package_grant';
 export const TEACHING_PACKAGE_LEARNER_COOKIE = 'teaching_package_learner_key';
@@ -46,6 +52,13 @@ export interface EditorHandoffPayload {
    * stable across redeems of the same learner session.
    */
   learnerRef?: string;
+  /**
+   * Kafuo R1 learner context (contracts §3.2): the student, academic scope,
+   * the version's subject and the Help entitlement, embedded at mint and
+   * carried onto the grant at redeem. Optional so tokens minted before the
+   * field existed still verify; Help refuses a grant without it.
+   */
+  student?: LearnerStudentContext;
 }
 
 export interface EditorGrantPayload {
@@ -58,6 +71,15 @@ export interface EditorGrantPayload {
   capability: EditorGrantCapability;
   learnerKey: string;
   exp: number;
+  /**
+   * Why the grant exists, carried from the handoff at redeem time. Only
+   * `learner` changes behaviour: planner documents (`outline`) are not learner
+   * delivery and are omitted from document responses under it. Absent on
+   * grants minted before the field existed → treated as not-learner.
+   */
+  purpose?: EditorHandoffPurpose;
+  /** Learner context carried from the handoff (see `EditorHandoffPayload.student`). */
+  student?: LearnerStudentContext;
 }
 
 export interface VerifiedEditorGrant {
@@ -67,45 +89,18 @@ export interface VerifiedEditorGrant {
   capability: EditorGrantCapability;
   learnerKey: string;
   exp: number;
+  purpose?: EditorHandoffPurpose;
+  /** Present only on learner grants minted with the Kafuo R1 student context. */
+  student?: LearnerStudentContext;
 }
 
 const HANDOFF_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_SESSION_SECONDS = 28800; // 8h
 const MAX_GRANT_ENTRIES = 5;
 
-function grantSecret(): string {
-  const override = process.env.TEACHING_PACKAGE_GRANT_SECRET?.trim();
-  return override || process.env.TEACHING_ENGINE_SERVICE_KEY?.trim() || '';
-}
-
 export function editorSessionSeconds(): number {
   const raw = Number(process.env.TEACHING_PACKAGE_EDITOR_SESSION_SECONDS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_SESSION_SECONDS;
-}
-
-function sign(payloadJson: string): string {
-  return createHmac('sha256', grantSecret()).update(payloadJson).digest('hex');
-}
-
-function encodeSigned<T extends object>(payload: T): string {
-  const payloadJson = JSON.stringify(payload);
-  return `${Buffer.from(payloadJson, 'utf8').toString('base64url')}.${sign(payloadJson)}`;
-}
-
-function decodeSigned<T>(token: string): T | null {
-  const dot = token.indexOf('.');
-  if (dot <= 0) return null;
-  const payloadJson = Buffer.from(token.slice(0, dot), 'base64url').toString('utf8');
-  const signature = token.slice(dot + 1);
-  const expected = sign(payloadJson);
-  const left = createHash('sha256').update(signature).digest();
-  const right = createHash('sha256').update(expected).digest();
-  if (!timingSafeEqual(left, right)) return null;
-  try {
-    return JSON.parse(payloadJson) as T;
-  } catch {
-    return null;
-  }
 }
 
 /** Handoff lifetime: short-lived and configurable, never a permanent constant. */
@@ -122,6 +117,8 @@ export function mintEditorHandoffToken(input: {
   capability: EditorGrantCapability;
   purpose?: EditorHandoffPurpose;
   learnerRef?: string;
+  /** Learner handoffs only (contracts §3.2); ignored for other purposes. */
+  student?: LearnerStudentContext;
   now?: number;
 }): { token: string; expiresAt: number } {
   const now = input.now ?? Date.now();
@@ -137,6 +134,7 @@ export function mintEditorHandoffToken(input: {
     exp: expiresAt,
     ...(input.purpose ? { purpose: input.purpose } : {}),
     ...(input.learnerRef ? { learnerRef: input.learnerRef } : {}),
+    ...(input.purpose === 'learner' && input.student ? { student: input.student } : {}),
   };
   return { token: encodeSigned(payload), expiresAt };
 }
@@ -146,6 +144,7 @@ export function verifyEditorHandoffToken(token: string): EditorHandoffPayload | 
   if (!payload || payload.v !== 1 || payload.kind !== 'handoff') return null;
   if (typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
   if (typeof payload.tenantId !== 'string' || payload.tenantId === '') return null;
+  if (payload.student !== undefined && !isLearnerStudentContext(payload.student)) return null;
   return payload;
 }
 
@@ -162,6 +161,14 @@ function grantFromPayload(payload: EditorGrantPayload): VerifiedEditorGrant | nu
     capability: payload.capability,
     learnerKey: payload.learnerKey,
     exp: payload.exp,
+    ...(payload.purpose === 'edit' || payload.purpose === 'preview' || payload.purpose === 'learner'
+      ? { purpose: payload.purpose }
+      : {}),
+    // Only a structurally complete block is surfaced: a grant with a partial
+    // or malformed one behaves exactly like a grant without it.
+    ...(payload.purpose === 'learner' && isLearnerStudentContext(payload.student)
+      ? { student: payload.student }
+      : {}),
   };
 }
 
@@ -173,6 +180,10 @@ export function buildEditorGrantPayload(input: {
   capability: EditorGrantCapability;
   /** When present, the runtime learner key is derived (stable) instead of random. */
   learnerRef?: string;
+  /** The handoff's purpose, carried onto the grant (see `EditorGrantPayload.purpose`). */
+  purpose?: EditorHandoffPurpose;
+  /** The handoff's learner context, carried onto the grant (learner purpose only). */
+  student?: LearnerStudentContext;
   now?: number;
 }): { payload: EditorGrantPayload; token: string } {
   const now = input.now ?? Date.now();
@@ -187,6 +198,8 @@ export function buildEditorGrantPayload(input: {
       ? stableLearnerKey(input.tenantId, input.versionId, input.learnerRef)
       : `tp:${randomBytes(12).toString('base64url')}`,
     exp: now + editorSessionSeconds() * 1000,
+    ...(input.purpose ? { purpose: input.purpose } : {}),
+    ...(input.purpose === 'learner' && input.student ? { student: input.student } : {}),
   };
   return { payload, token: encodeSigned(payload) };
 }

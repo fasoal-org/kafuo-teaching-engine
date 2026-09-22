@@ -1,0 +1,41 @@
+{
+  "policyVersion": "r1-2026-09",
+  "description": "Approved R1 Subject -> Primary -> Fallback teaching model policy (FRD section 14). Code-owned in OpenMAIC (lib/server/teaching-model/subject-policy.ts) and mirrored in Kafuo Backend (master_subjects.routing_key). Both repos pin their code to this file by test. Never edited without a product decision.",
+  "subjects": {
+    "MATH": {
+      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
+      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+    },
+    "PHYSICS": {
+      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
+      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+    },
+    "BIOLOGY": {
+      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
+      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+    },
+    "ARABIC": {
+      "primary": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" },
+      "fallback": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" }
+    },
+    "SOCIAL_STUDIES": {
+      "primary": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" },
+      "fallback": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" }
+    },
+    "CHEMISTRY": {
+      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
+      "fallback": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" }
+    }
+  },
+  "masterSubjectCodeMapping": {
+    "description": "AMB-01 resolution (data check on the dev database, 22 Sep 2026: master_subjects rows G1-MTH-SA, G1-PHY-SA, G10-ARA-SA, G10-EHG-SA). master_subjects.code has the shape <GRADE>-<TOKEN>-<REGION>; routing_key is derived from the middle TOKEN. Unknown tokens (e.g. EHG/ENG = English) stay NULL = not routed. Migration 263 applies this mapping; it is idempotent and never overwrites a non-NULL routing_key.",
+    "tokens": {
+      "MTH": "MATH", "MATH": "MATH",
+      "PHY": "PHYSICS", "PHS": "PHYSICS", "PHYSICS": "PHYSICS",
+      "BIO": "BIOLOGY", "BIOLOGY": "BIOLOGY",
+      "ARA": "ARABIC", "ARB": "ARABIC", "ARABIC": "ARABIC",
+      "SOC": "SOCIAL_STUDIES", "SST": "SOCIAL_STUDIES", "SOCIAL": "SOCIAL_STUDIES",
+      "CHM": "CHEMISTRY", "CHE": "CHEMISTRY", "CHEM": "CHEMISTRY", "CHEMISTRY": "CHEMISTRY"
+    }
+  }
+}

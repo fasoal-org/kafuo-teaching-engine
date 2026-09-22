@@ -84,6 +84,8 @@ function governedScene(id: string, stageId: string, order: number): AppScene {
     teachingStage: { key: FLOW[0]!.stage, flowIndex: 0 },
     teachingSkills: { classification: 'instructional' as const, primary: FEYNMAN },
     learningObjectives: [],
+    // Kafuo R1 P4: the Scene → Content Unit binding travels as lineage too.
+    sourceContentUnitIds: ['2900', '2901'],
     alignmentBaseline: {
       primary: FEYNMAN,
       classification: 'instructional',
@@ -96,7 +98,7 @@ function governedScene(id: string, stageId: string, order: number): AppScene {
 
 describe('scene lineage carry-forward (W4.2)', () => {
   describe('the pure helper', () => {
-    it('carries all four carriers when the incoming Scene omits them', () => {
+    it('carries all five carriers when the incoming Scene omits them', () => {
       const stored = governedScene('s1', 'st', 1);
       const incoming = makeSlideScene('s1', 'st', 1) as AppScene;
       const merged = carryForwardSceneLineage(stored, incoming);
@@ -104,6 +106,7 @@ describe('scene lineage carry-forward (W4.2)', () => {
       expect(merged.teachingSkills).toEqual(stored.teachingSkills);
       expect(merged.learningObjectives).toEqual(stored.learningObjectives);
       expect(merged.alignmentBaseline).toEqual(stored.alignmentBaseline);
+      expect(merged.sourceContentUnitIds).toEqual(['2900', '2901']);
     });
 
     it('fabricates nothing for a non-governed stored Scene', () => {
@@ -115,9 +118,19 @@ describe('scene lineage carry-forward (W4.2)', () => {
         'teachingSkills',
         'learningObjectives',
         'alignmentBaseline',
+        'sourceContentUnitIds',
       ] as const) {
         expect(key in merged).toBe(false);
       }
+    });
+
+    it('an incoming Content Unit binding wins over the stored one (a regenerated Scene re-cites)', () => {
+      const stored = governedScene('s1', 'st', 1);
+      const incoming = {
+        ...makeSlideScene('s1', 'st', 1),
+        sourceContentUnitIds: ['3100'],
+      } as AppScene;
+      expect(carryForwardSceneLineage(stored, incoming).sourceContentUnitIds).toEqual(['3100']);
     });
 
     it('an incoming carrier wins over the stored one', () => {

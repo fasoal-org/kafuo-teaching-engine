@@ -280,6 +280,40 @@ describe('generateClassroom Stage-1 outline gate', () => {
     expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
   });
 
+  it('re-rolls a gate-rejected outline plan with corrective context, bounded at 3 (RSS W2)', async () => {
+    const rejection =
+      'OUTLINE_SCENE_CONFIG_INVALID: 1 scene config issue(s): #1 scene is "interactive" but has no widgetType';
+    mocks.generateSceneOutlinesFromRequirements
+      .mockResolvedValueOnce({ success: false, error: rejection })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { languageDirective: 'Use English.', outlines: [outline] },
+      });
+    await generateWith({});
+    const calls = mocks.generateSceneOutlinesFromRequirements.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![4]).not.toHaveProperty('correctiveContext');
+    expect(calls[1]![4]).toMatchObject({ correctiveContext: rejection });
+
+    // Exhausted: the run fails with the gate error — no Stage, no converted slide.
+    mocks.generateSceneOutlinesFromRequirements.mockReset();
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: false,
+      error: rejection,
+    });
+    await expect(generateWith({})).rejects.toThrow(/OUTLINE_SCENE_CONFIG_INVALID/);
+    expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(3);
+
+    // A non-gate failure is not re-rolled here (the run-level retry owns it).
+    mocks.generateSceneOutlinesFromRequirements.mockReset();
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: false,
+      error: 'Failed to parse scene outlines response',
+    });
+    await expect(generateWith({})).rejects.toThrow(/Failed to parse/);
+    expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
+  });
+
   it('awaits an async validator before continuing', async () => {
     const { sink, calls } = makeRecordingSink();
     let resolved = false;

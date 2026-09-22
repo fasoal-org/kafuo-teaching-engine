@@ -88,6 +88,8 @@ const governedOutlines = [
   {
     id: 'ac1',
     type: 'slide' as const,
+    slideType: 'content' as const,
+    contentRole: 'example' as const,
     title: 'Opening',
     description: 'Introduce the topic.',
     keyPoints: ['Anchor the goal'],
@@ -102,6 +104,8 @@ const governedOutlines = [
   {
     id: 'ac2',
     type: 'slide' as const,
+    slideType: 'content' as const,
+    contentRole: 'example' as const,
     title: 'Cards',
     description: 'Structural consolidation.',
     keyPoints: ['Recap'],

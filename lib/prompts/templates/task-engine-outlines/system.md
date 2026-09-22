@@ -107,11 +107,13 @@ Rules:
 - For non-vocational fallback outlines, ordinary MAIC widget types are allowed, but `procedural-skill` is still forbidden.
 - If a final scene is needed, make it hands-on review, error handling, GO/STOP judgment, completion checking, or handoff confirmation.
 
+{{snippet:slide-classification-contract}}
+
 ## Allowed Scene Contracts
 
 ### Required First Scene: Course Briefing Slide
 
-The first scene must be `type: "slide"` and must not include `widgetType` or `widgetOutline`.
+The first scene must be `type: "slide"` with `"slideType": "cover"`, `"contentRole": "orientation"` and a `visualPlan` (see The lesson opening), and must not include `widgetType` or `widgetOutline`.
 
 Use it as the task briefing / course overview. It must include:
 
@@ -166,12 +168,17 @@ Use `type: "slide"` for stable PPT-style explanation:
 {
   "id": "scene_1",
   "type": "slide",
+  "slideType": "content",
+  "contentRole": "explanation",
+  "contentKind": "rule",
   "title": "risk boundary or judgment basis",
   "description": "explain the standard, threshold, risk principle, or operation rationale",
   "keyPoints": ["why the rule exists", "what threshold matters", "what decision it supports"],
   "order": 1
 }
 ```
+
+The classification shown is an example: choose `contentRole` / `contentKind` by what the slide actually does (e.g. `explanation` + `rule`, `procedure`, `worked_example`, `summary`).
 
 Explanation slides must support the vocational task workflow. They must not become ordinary concept lectures.
 
@@ -353,6 +360,7 @@ Before finalizing, verify that:
 - If the request is not suitable for vocational procedural practice, the outline contains no procedural-skill scenes.
 - If the request is not suitable, the outline uses normal MAIC-style slide and interactive scenes instead of forcing vocational task training.
 - The first scene is a `slide`.
+- Every `slide` scene carries `slideType`, and every instructional slide a `contentRole` (plus `contentKind` for `explanation` / `activity` / `practice`), chosen by pedagogical intent as defined in Slide Classification. A scene that must capture and check answers is a `quiz`, never a slide.
 - The first scene is a course briefing / task overview.
 - The first slide covers task purpose, training objectives, key training steps, safety boundary / risk reminder, and completion criteria / GO-STOP standard.
 - The first slide uses a stable PPT-style layout with exactly 3 information cards, 4-6 macro training stages, and one compact GO/STOP standard.

@@ -51,6 +51,38 @@ export type TeachingPackageErrorCode =
    * package/request lineage mismatch — a bad model answer is not a bad package.
    */
   | 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID'
+  // --- Role-Specific Slide System: no silent runtime-scene → slide conversion ---
+  /**
+   * A runtime scene (`interactive` / `pbl`) was planned without the config its
+   * family needs and the bounded outline re-roll did not fix it. The scene
+   * keeps its type; it is never downgraded to a slide.
+   */
+  | 'OUTLINE_SCENE_CONFIG_INVALID'
+  /**
+   * The plan requires a scene runtime this generation cannot deliver (e.g. no
+   * language model for PBL, a family disabled by configuration). A planning
+   * conflict for the operator — non-retryable, never a converted slide.
+   */
+  | 'SCENE_RUNTIME_UNAVAILABLE'
+  /**
+   * An operator-configured hard limit is lower than the number of runtime
+   * scenes the lesson requires. Non-retryable: raise the limit or narrow the
+   * lesson scope — scenes are never trimmed or converted.
+   */
+  | 'SCENE_CAP_CONFLICT'
+  // --- Role-Specific Slide System: visual pipeline (Wave 4) ---
+  /**
+   * A slide's PLANNED visual (the lesson opening's, above all) is still absent
+   * after the bounded native-elements regeneration. A typed quality failure —
+   * never downgraded to a log line, never a bare opening.
+   */
+  | 'ORIENTATION_VISUAL_MISSING'
+  /**
+   * A governed package carries a learner-visible image without an `approved`
+   * visual-compliance verdict (rejected, or unresolved — fail closed). Blocks
+   * submit / approve with the offending scene + element list.
+   */
+  | 'VISUAL_COMPLIANCE_UNAPPROVED'
   // --- Kafuo question-flow closure (B1) ---
   | 'TEACHING_PACKAGE_NOT_APPROVED'
   | 'QUESTION_SOURCE_CONTEXT_UNAVAILABLE'
@@ -146,7 +178,54 @@ export type TeachingPackageErrorCode =
    */
   | 'ACTION_TYPE_UNKNOWN'
   /** A deterministic reference (element / media / agent) resolves against nothing persisted (TAE-RQ-023). */
-  | 'ACTION_REFERENCE_INVALID';
+  | 'ACTION_REFERENCE_INVALID'
+  // --- Kafuo R1 subject routing (contracts §1/§3.4/§6, plan §7.1) ---
+  /**
+   * The subject code is not in the code-owned policy table, or one of its two
+   * targets cannot be resolved against the registry. Non-retryable: an
+   * unrouted subject never falls back to a generic model (ROUTE-01).
+   */
+  | 'SUBJECT_ROUTE_UNAVAILABLE'
+  /** Both routes of the subject pair failed for one teaching call (retryable). */
+  | 'TEACHING_MODEL_UNAVAILABLE'
+  /** The ledger's started row could not be written, so no model call was made (retryable). */
+  | 'ACCOUNTING_UNAVAILABLE'
+  /** A conversational request exceeded the target counter's effective cap at the executor (retryable). */
+  | 'BUDGET_ASSERTION_FAILED'
+  // --- Kafuo R1 student / learner grants (contracts §5, plan §9.3) ---
+  /** The bearer/cookie grant is missing, malformed, mis-signed, or of the wrong kind. */
+  | 'GRANT_INVALID'
+  /** The grant was valid but its `exp` has passed: the client must re-bootstrap. */
+  | 'GRANT_EXPIRED'
+  /** The per-grant turn token bucket is empty (`TUTOR_TURNS_PER_MINUTE`). */
+  | 'RATE_LIMITED'
+  // --- Kafuo R1 conversational runtime (contracts §3.4, §5; plan §6.4, P6) ---
+  /** The requested subject is not in the student grant's allowed list. */
+  | 'SUBJECT_NOT_ALLOWED'
+  /** The conversation's pinned subject is no longer in the current grant (send only). */
+  | 'SUBJECT_NO_LONGER_AVAILABLE'
+  /** Ownership mismatch or unknown id: a non-enumerating 404. */
+  | 'CONVERSATION_NOT_FOUND'
+  /** The same logical turn is still generating (younger than the route deadline). */
+  | 'TURN_IN_PROGRESS'
+  /** A legacy help-turn replay carried a different `requestDigest` for the same `turnId`. */
+  | 'TURN_DIGEST_CONFLICT'
+  /** Kafuo refused the meter reservation (`{ window, resetAt, reason }` in details). */
+  | 'ALLOWANCE_EXHAUSTED'
+  /** Kafuo could not be reached for the reservation: no model call was made (retryable). */
+  | 'METER_UNAVAILABLE'
+  /** Rules + academic block + the student message alone exceed the input budget. */
+  | 'REQUEST_TOO_LARGE'
+  /** Legacy help-turn grounding units exceed the 10,000-char ceiling. */
+  | 'GROUNDING_TOO_LARGE'
+  /** The experiment safety guard replaced the reply with the boundary message. */
+  | 'SAFETY_BOUNDARY'
+  /** Help: Scene Content Unit authority cannot be established (P7). */
+  | 'HELP_GROUNDING_UNAVAILABLE'
+  /** Help: the question is outside the current Scene (P7). */
+  | 'OUTSIDE_SCENE_SCOPE'
+  /** The client disconnected before the turn completed. */
+  | 'ABORTED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -183,6 +262,11 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NORMALIZED_CONTENT_MEDIA_INVALID: 422,
   NORMALIZED_CONTENT_EMPTY: 422,
   OUTLINE_CONTENT_UNIT_GROUNDING_INVALID: 422,
+  OUTLINE_SCENE_CONFIG_INVALID: 422,
+  SCENE_RUNTIME_UNAVAILABLE: 409,
+  SCENE_CAP_CONFLICT: 409,
+  ORIENTATION_VISUAL_MISSING: 422,
+  VISUAL_COMPLIANCE_UNAPPROVED: 422,
   TEACHING_PACKAGE_NOT_APPROVED: 409,
   QUESTION_SOURCE_CONTEXT_UNAVAILABLE: 409,
   OBJECTIVE_NOT_IN_PACKAGE: 422,
@@ -205,6 +289,26 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   ACTION_STRUCTURE_INVALID: 422,
   ACTION_TYPE_UNKNOWN: 422,
   ACTION_REFERENCE_INVALID: 422,
+  SUBJECT_ROUTE_UNAVAILABLE: 422,
+  TEACHING_MODEL_UNAVAILABLE: 503,
+  ACCOUNTING_UNAVAILABLE: 503,
+  BUDGET_ASSERTION_FAILED: 503,
+  GRANT_INVALID: 401,
+  GRANT_EXPIRED: 401,
+  RATE_LIMITED: 429,
+  SUBJECT_NOT_ALLOWED: 403,
+  SUBJECT_NO_LONGER_AVAILABLE: 403,
+  CONVERSATION_NOT_FOUND: 404,
+  TURN_IN_PROGRESS: 409,
+  TURN_DIGEST_CONFLICT: 409,
+  ALLOWANCE_EXHAUSTED: 429,
+  METER_UNAVAILABLE: 503,
+  REQUEST_TOO_LARGE: 422,
+  GROUNDING_TOO_LARGE: 422,
+  SAFETY_BOUNDARY: 200,
+  HELP_GROUNDING_UNAVAILABLE: 422,
+  OUTSIDE_SCENE_SCOPE: 422,
+  ABORTED: 499,
 };
 
 export class TeachingPackageError extends Error {

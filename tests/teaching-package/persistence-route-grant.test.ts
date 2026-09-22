@@ -39,12 +39,17 @@ const STAGE_X = 'stage-grant-x';
 const STAGE_Y = 'stage-grant-y';
 const OWNER_COOKIE = '44444444-4444-4444-8444-444444444444';
 
-function grantCookie(stageId: string, capability: 'read' | 'write'): string {
+function grantCookie(
+  stageId: string,
+  capability: 'read' | 'write',
+  purpose?: 'edit' | 'preview' | 'learner',
+): string {
   const { token } = buildEditorGrantPayload({
     tenantId: 'tenant-test',
     versionId: `tpv-${stageId}`,
     stageId,
     capability,
+    ...(purpose ? { purpose } : {}),
   });
   return `teaching_package_grant=${encodeURIComponent(
     grantCookieValueForRedeem(new Headers(), token, stageId),
@@ -214,6 +219,32 @@ describe('persistence route editor grant', () => {
     await expect(other.json()).resolves.toMatchObject({
       error: { code: 'PERSISTENCE_DEV_TOKEN_MISSING' },
     });
+  });
+
+  it('omits the planner outline from a LEARNER grant only; stage and scenes are returned as stored (RSS W5A)', async () => {
+    const stored = await (
+      await call(`/documents/${STAGE_X}`, {
+        headers: { cookie: grantCookie(STAGE_X, 'read', 'preview') },
+      })
+    ).json();
+    expect(stored).toHaveProperty('outline');
+
+    const learner = await (
+      await call(`/documents/${STAGE_X}`, {
+        headers: { cookie: grantCookie(STAGE_X, 'read', 'learner') },
+      })
+    ).json();
+    expect(learner).not.toHaveProperty('outline');
+    expect(learner.stage).toEqual(stored.stage);
+    expect(learner.scenes).toEqual(stored.scenes);
+
+    // A grant minted before `purpose` existed is not a learner grant.
+    const legacy = await (
+      await call(`/documents/${STAGE_X}`, {
+        headers: { cookie: grantCookie(STAGE_X, 'read') },
+      })
+    ).json();
+    expect(legacy).toHaveProperty('outline');
   });
 
   it('serves a write grant: drafts are editable, deletes guarded, other stages untouched', async () => {

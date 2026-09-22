@@ -22,9 +22,14 @@
  * still get a running app, and the warnings name exactly what is broken.
  */
 
-import { getProvider, warnBareModelIdDeprecation } from '@/lib/ai/providers';
-import { isAgentRuntimeEnabled } from '@/lib/config/feature-flags';
+import { getModelInfo, getProvider, warnBareModelIdDeprecation } from '@/lib/ai/providers';
+import { isAgentRuntimeEnabled, isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { LLM_STAGES } from '@/lib/server/model-routes';
+import {
+  policyModelStrings,
+  POLICY_VERSION,
+  readRoutingMode,
+} from '@/lib/server/teaching-model/subject-policy';
 import {
   isServerConfiguredProvider,
   LLM_ENV_MAP,
@@ -164,6 +169,69 @@ function validateAgentRuntime(): void {
       'OPENMAIC_AGENT_RUNTIME_ENABLED is set but DATABASE_URL is not — the agent runtime is enabled but unusable: its probe reports disabled, its routes answer 404, and no runner starts. Set DATABASE_URL or disable the flag.',
     );
   }
+}
+
+/**
+ * Every problem that would make a policy target unresolvable at request time:
+ * the model string is not in the registry, or its provider requires a key
+ * none is configured for. Pure and exported so the boot check is testable
+ * without spying on `console`.
+ */
+export function subjectRoutingConfigProblems(): string[] {
+  const problems: string[] = [];
+  for (const modelString of policyModelStrings()) {
+    const colonIndex = modelString.indexOf(':');
+    const providerId = modelString.slice(0, colonIndex);
+    const modelId = modelString.slice(colonIndex + 1);
+    const provider = getProvider(providerId as ProviderId);
+    if (!provider) {
+      problems.push(`policy model "${modelString}": provider "${providerId}" is not registered`);
+      continue;
+    }
+    if (!getModelInfo(providerId as ProviderId, modelId)) {
+      problems.push(`policy model "${modelString}": model "${modelId}" is not registered`);
+    }
+    if (provider.requiresApiKey && !resolveApiKey(providerId)) {
+      problems.push(
+        `policy model "${modelString}": provider "${providerId}" has no API key configured — add a <PREFIX>_API_KEY env var (or server-providers.yml)`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Kafuo R1 subject routing fail-fast (plan §7.1). Unlike `validateServerConfig`
+ * this THROWS: with `TEACHING_SUBJECT_ROUTING=enforced` (the default) every
+ * teaching call resolves the policy table, so a policy model that is
+ * unregistered or unkeyed would refuse every generation and every student turn
+ * with `SUBJECT_ROUTE_UNAVAILABLE`. Refusing to boot names the problem once
+ * instead of failing per request.
+ *
+ * The throw is scoped to deployments that have the Kafuo integration enabled
+ * (`isTeachingPackageApiConfigured()`, the same gate the Teaching Package
+ * routes and the webhook fail-fast key on). A plain OpenMAIC deployment with no
+ * Teaching Package API cannot make a teaching call at all, so an unkeyed policy
+ * provider there is dead config, not a broken route: it is reported as a
+ * `[config]` warning and the server still starts — the pre-existing behaviour
+ * of every non-Kafuo path is unchanged. `off` is a no-op in every deployment.
+ */
+export function validateSubjectRoutingConfig(options?: {
+  /** Override the enforceability gate (tests). Defaults to the Kafuo gate. */
+  enforceable?: boolean;
+}): void {
+  if (readRoutingMode() === 'off') return;
+  const problems = subjectRoutingConfigProblems();
+  if (problems.length === 0) return;
+  const enforceable = options?.enforceable ?? isTeachingPackageApiConfigured();
+  const summary = `Subject routing ${POLICY_VERSION} is enforced (TEACHING_SUBJECT_ROUTING=enforced) but the policy cannot resolve:\n  - ${problems.join('\n  - ')}`;
+  if (!enforceable) {
+    warn(`${summary}\n  (Teaching Package API not configured — reported, not fatal.)`);
+    return;
+  }
+  throw new Error(
+    `${WARN_PREFIX} ${summary}\n  Fix the registry/key, or set TEACHING_SUBJECT_ROUTING=off.`,
+  );
 }
 
 /**

@@ -97,6 +97,47 @@ const fullBody = {
   requestId: 'kafuo-req-9',
 };
 
+/** A routed subject (R1 contracts §6): `code` is the Backend's routing key. */
+const ROUTED_SUBJECT = {
+  id: '10',
+  name: 'Science',
+  code: 'BIOLOGY',
+  nameAr: 'العلوم',
+  nameEn: 'Science',
+  academicLanguage: 'ar',
+};
+
+/** A Kafuo-shaped body carrying a routed subject (the default routing mode is enforced). */
+function kafuoShapedBody(overrides: Record<string, unknown> = {}) {
+  return {
+    requestId: 'kafuo-req-77',
+    tenantContext: { tenantId: 'tenant-77' },
+    actorRef: 'actor-1',
+    learningItem: {
+      type: 'lesson',
+      id: '901',
+      title: 'Photosynthesis',
+      unit: { id: '12', title: 'Unit 3' },
+      curriculum: { id: '5', name: 'Science 5' },
+      curriculumVersion: { id: '8', versionLabel: '2026-A' },
+      subjectOffering: ROUTED_SUBJECT,
+      language: 'ar',
+    },
+    learningObjectives: [
+      { objectiveRef: '7001', snapshot: { statement: 'Explain photosynthesis.' } },
+    ],
+    teachingModel: {
+      key: 'g5',
+      version: 'g5.v1',
+      flow: [{ stage: 'lesson_introduction', instructions: 'Introduce once.' }],
+    },
+    contentResource: { id: 'cs-1', url: 'https://r2/pdf' },
+    // Kafuo requests carry capability switches only (no provider passthrough).
+    generation: { enableTTS: true },
+    ...overrides,
+  };
+}
+
 function post(body: unknown): Promise<Response> {
   return POST(
     new NextRequest('http://localhost/api/teaching-packages/generate', {
@@ -193,7 +234,10 @@ describe('POST /api/teaching-packages/generate', () => {
   });
 
   it('refuses a Kafuo-shaped body without tenantContext with 400 TENANT_REQUIRED', async () => {
-    const response = await post({ ...fullBody, contentResource: { id: 'cs-1', url: 'https://r2/pdf' } });
+    const response = await post({
+      ...fullBody,
+      contentResource: { id: 'cs-1', url: 'https://r2/pdf' },
+    });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'TENANT_REQUIRED' } });
     expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
@@ -205,33 +249,96 @@ describe('POST /api/teaching-packages/generate', () => {
       execution: fullBody.generation,
       created: true,
     });
-    const response = await post({
-      requestId: 'kafuo-req-77',
-      tenantContext: { tenantId: 'tenant-77' },
-      actorRef: 'actor-1',
-      learningItem: {
-        type: 'lesson',
-        id: '901',
-        title: 'Photosynthesis',
-        unit: { id: '12', title: 'Unit 3' },
-        curriculum: { id: '5', name: 'Science 5' },
-        curriculumVersion: { id: '8', versionLabel: '2026-A' },
-        language: 'ar',
-      },
-      learningObjectives: [
-        { objectiveRef: '7001', snapshot: { statement: 'Explain photosynthesis.' } },
-      ],
-      teachingModel: {
-        key: 'g5',
-        version: 'g5.v1',
-        flow: [{ stage: 'lesson_introduction', instructions: 'Introduce once.' }],
-      },
-      contentResource: { id: 'cs-1', url: 'https://r2/pdf' },
-      // Kafuo requests carry capability switches only (no provider passthrough).
-      generation: { enableTTS: true },
-    });
+    const response = await post(kafuoShapedBody());
     expect(response.status).toBe(202);
     expect(mocks.startGenerationAttempt.mock.calls[0]![1].tenantId).toBe('tenant-77');
+    // The runner receives the normalised subject route and the offering meta.
+    mocks.afterCallbacks[0]!();
+    const kafuo = mocks.runGenerationAttempt.mock.calls[0]![2];
+    expect(kafuo).toMatchObject({ subjectCode: 'BIOLOGY', subjectOffering: ROUTED_SUBJECT });
+  });
+
+  describe('subject routing at the request boundary (R1 contracts §6, AMB-04)', () => {
+    it('refuses `code: null` (an unrouted master subject) with 422 SUBJECT_ROUTE_UNAVAILABLE before any attempt exists', async () => {
+      const response = await post(
+        kafuoShapedBody({
+          learningItem: {
+            ...kafuoShapedBody().learningItem,
+            subjectOffering: { ...ROUTED_SUBJECT, id: '11', name: 'English', code: null },
+          },
+        }),
+      );
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'SUBJECT_ROUTE_UNAVAILABLE' },
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('refuses an absent subjectOffering and a code outside the policy table the same way', async () => {
+      const { subjectOffering: _absent, ...withoutOffering } = kafuoShapedBody().learningItem;
+      for (const learningItem of [
+        withoutOffering,
+        {
+          ...kafuoShapedBody().learningItem,
+          subjectOffering: { ...ROUTED_SUBJECT, code: 'ENGLISH' },
+        },
+      ]) {
+        const response = await post(kafuoShapedBody({ learningItem }));
+        expect(response.status).toBe(422);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: 'SUBJECT_ROUTE_UNAVAILABLE' },
+        });
+      }
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('normalises the code (trim + upper-case) before the policy lookup', async () => {
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(
+        kafuoShapedBody({
+          learningItem: {
+            ...kafuoShapedBody().learningItem,
+            subjectOffering: { ...ROUTED_SUBJECT, code: ' math ' },
+          },
+        }),
+      );
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({ subjectCode: 'MATH' });
+    });
+
+    it("accepts an unrouted subject only with TEACHING_SUBJECT_ROUTING=off (today's behaviour)", async () => {
+      vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'off');
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const { subjectOffering: _absent, ...withoutOffering } = kafuoShapedBody().learningItem;
+      const response = await post(kafuoShapedBody({ learningItem: withoutOffering }));
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        subjectCode: null,
+        subjectOffering: null,
+      });
+    });
+
+    it('the legacy body shape is not subject-routed', async () => {
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(fullBody);
+      expect(response.status).toBe(202);
+    });
   });
 
   it('rejects a learningItem that tries to carry tenantId', async () => {
@@ -247,48 +354,28 @@ describe('POST /api/teaching-packages/generate', () => {
 
   describe('idempotency replays are returned, never re-executed', () => {
     /** A Kafuo-shaped body, so both route paths can be driven from one place. */
-    const kafuoBody = {
-      requestId: 'kafuo-req-replay',
-      tenantContext: { tenantId: 'tenant-77' },
-      actorRef: 'actor-1',
-      learningItem: {
-        type: 'lesson',
-        id: '901',
-        title: 'Photosynthesis',
-        unit: { id: '12', title: 'Unit 3' },
-        curriculum: { id: '5', name: 'Science 5' },
-        curriculumVersion: { id: '8', versionLabel: '2026-A' },
-        language: 'ar',
-      },
-      learningObjectives: [
-        { objectiveRef: '7001', snapshot: { statement: 'Explain photosynthesis.' } },
-      ],
-      teachingModel: {
-        key: 'g5',
-        version: 'g5.v1',
-        flow: [{ stage: 'lesson_introduction', instructions: 'Introduce once.' }],
-      },
-      contentResource: { id: 'cs-1', url: 'https://r2/pdf' },
-      generation: { enableTTS: true },
-    };
+    const kafuoBody = kafuoShapedBody({ requestId: 'kafuo-req-replay' });
 
     it.each([
       ['legacy', () => fullBody],
       ['Kafuo-shaped', () => kafuoBody],
-    ])('schedules exactly one runner callback for a newly created attempt (%s)', async (_label, body) => {
-      mocks.startGenerationAttempt.mockResolvedValue({
-        attempt: attempt(),
-        execution: fullBody.generation,
-        created: true,
-      });
+    ])(
+      'schedules exactly one runner callback for a newly created attempt (%s)',
+      async (_label, body) => {
+        mocks.startGenerationAttempt.mockResolvedValue({
+          attempt: attempt(),
+          execution: fullBody.generation,
+          created: true,
+        });
 
-      const response = await post(body());
-      expect(response.status).toBe(202);
-      await expect(response.json()).resolves.toMatchObject({ attempt: { id: 'tpa-route-1' } });
-      expect(mocks.afterCallbacks).toHaveLength(1);
-      mocks.afterCallbacks[0]!();
-      expect(mocks.runGenerationAttempt).toHaveBeenCalledTimes(1);
-    });
+        const response = await post(body());
+        expect(response.status).toBe(202);
+        await expect(response.json()).resolves.toMatchObject({ attempt: { id: 'tpa-route-1' } });
+        expect(mocks.afterCallbacks).toHaveLength(1);
+        mocks.afterCallbacks[0]!();
+        expect(mocks.runGenerationAttempt).toHaveBeenCalledTimes(1);
+      },
+    );
 
     // The confirmed production failure: the Admin replayed one idempotency key,
     // Kafuo replayed the requestId, and the route re-ran the FAILED attempt —

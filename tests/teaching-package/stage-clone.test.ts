@@ -96,6 +96,10 @@ function richDocument(stageId: string): AppDocument {
     },
   ] as never;
   narrated.outlineId = 'outline-narrated';
+  // Kafuo R1 P4: the Scene → Content Unit binding is copied by spread like
+  // every other scene field; a review-edit successor keeps citing the units
+  // its predecessor's attempt retained.
+  narrated.sourceContentUnitIds = ['2900', '2901'];
   const outline: AppDocumentOutline = {
     ...makeOutline('Teach the thing'),
     outlines: [{ id: 'outline-narrated', title: 'Narrated', sceneType: 'slide' } as never],
@@ -199,6 +203,11 @@ describe('cloneStageForSuccessor', () => {
     expect(clonedNarrated.outlineId).toBe('outline-narrated');
     expect(clonedNarrated.actions).toEqual(source.scenes[4]!.actions);
     expect(clonedNarrated.whiteboards).toEqual(source.scenes[4]!.whiteboards);
+    expect(clonedNarrated.sourceContentUnitIds).toEqual(['2900', '2901']);
+    // Scenes without a binding stay without one — never an empty list.
+    expect(
+      'sourceContentUnitIds' in clone!.scenes.find((scene) => scene.id === 'scene-slide')!,
+    ).toBe(false);
     // Media references keep pointing at the SOURCE stage's files, verbatim.
     const clonedSlide = clone!.scenes.find((scene) => scene.id === 'scene-slide')! as {
       content: { canvas: { elements: Array<{ src?: string }> } };

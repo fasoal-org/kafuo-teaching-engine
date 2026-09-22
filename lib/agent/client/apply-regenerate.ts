@@ -31,6 +31,7 @@ const DEFAULT_THEME = {
 export function toRuntimeSlideContent(
   gen: GeneratedSlideContent,
   existingCanvas?: Record<string, unknown>,
+  existingSemantics?: { contentRole?: unknown; contentKind?: unknown; assistance?: unknown },
 ): SceneContent {
   const base = existingCanvas ?? {
     id: nanoid(),
@@ -44,6 +45,21 @@ export function toRuntimeSlideContent(
     // where slide-defaults / createBlankSlideScene put it and migrateSlideContent
     // reads it — not inside the canvas object.
     schemaVersion: CURRENT_SLIDE_CONTENT_SCHEMA_VERSION,
+    // The slide's pedagogical classification sits beside the canvas, so a
+    // regenerate that rebuilds this object must carry it over verbatim (the
+    // canvas's own `type` already rides `base`). Never re-derived from the
+    // regenerated elements; a legacy slide with none keeps none.
+    ...(existingSemantics?.contentRole !== undefined
+      ? { contentRole: existingSemantics.contentRole }
+      : {}),
+    ...(existingSemantics?.contentKind !== undefined
+      ? { contentKind: existingSemantics.contentKind }
+      : {}),
+    // On-demand assistance sits beside the canvas too; freshly authored
+    // assistance wins, otherwise the slide keeps what it had.
+    ...((gen.assistance ?? existingSemantics?.assistance) !== undefined
+      ? { assistance: gen.assistance ?? existingSemantics?.assistance }
+      : {}),
     canvas: {
       ...base,
       elements: gen.elements,
@@ -129,10 +145,16 @@ export function planRegenerateApply(
 
   if (contentAllowed && details.content && Array.isArray(details.content.elements)) {
     const sceneContent = scene?.content as
-      | { type?: string; canvas?: Record<string, unknown> }
+      | {
+          type?: string;
+          canvas?: Record<string, unknown>;
+          contentRole?: unknown;
+          contentKind?: unknown;
+          assistance?: unknown;
+        }
       | undefined;
-    const existingCanvas = sceneContent?.type === 'slide' ? sceneContent.canvas : undefined;
-    const runtime = toRuntimeSlideContent(details.content, existingCanvas);
+    const existingSlide = sceneContent?.type === 'slide' ? sceneContent : undefined;
+    const runtime = toRuntimeSlideContent(details.content, existingSlide?.canvas, existingSlide);
     const patch: ScenePatch = {
       content: runtime,
       ...(actions.length > 0 ? { actions } : {}),

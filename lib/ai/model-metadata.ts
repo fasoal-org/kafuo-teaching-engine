@@ -303,6 +303,14 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
     ['none', 'low', 'medium', 'high', 'xhigh'],
     'none',
   ),
+  // GPT-5 Nano cannot switch reasoning off; `minimal` is its lightest effort
+  // and the Kafuo R1 policy's setting. No `none`, so the capability is not
+  // toggleable and a `mode: 'disabled'` request degrades to `minimal`.
+  [getModelMetadataKey('openai', 'gpt-5-nano')]: effortCapability(
+    'openai',
+    ['minimal', 'low', 'medium', 'high'],
+    'minimal',
+  ),
 
   [getModelMetadataKey('anthropic', 'claude-fable-5')]: anthropicFable5Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-5')]: anthropicClaude5Effort,
@@ -367,6 +375,8 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
 
   [getModelMetadataKey('qwen', 'qwen3.7-plus')]: qwenBudgetEnabled,
   [getModelMetadataKey('qwen', 'qwen3.7-max')]: qwenBudgetEnabled,
+  // Kafuo R1 primary: thinking off by default (`enable_thinking: false`).
+  [getModelMetadataKey('qwen', 'qwen3.7-flash')]: qwenBudgetDisabled,
   [getModelMetadataKey('qwen', 'qwen3.6-max-preview')]: qwenBudgetDisabled,
   [getModelMetadataKey('qwen', 'qwen3.6-plus')]: qwenBudgetEnabled,
   [getModelMetadataKey('qwen', 'qwen3.6-plus-2026-04-02')]: qwenBudgetEnabled,

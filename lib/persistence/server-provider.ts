@@ -10,9 +10,13 @@ import { Pool } from 'pg';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { lazyAssetByteStore } from '@/lib/persistence/asset-byte-store';
 import { resolveAssetQuotaBytes } from '@/lib/persistence/asset-quota';
+import { ensureLegacyHelpTurnsSchema } from '@/lib/persistence/legacy-help-turns';
+import { ensureMeterFinalizeOutboxSchema } from '@/lib/persistence/meter-finalize-outbox';
 import { ensureOwnerMaterialSchema } from '@/lib/persistence/owner-materials';
 import { ensureStageMetaSchema } from '@/lib/persistence/stage-meta';
+import { ensureTeachingModelAttemptsSchema } from '@/lib/persistence/teaching-model-attempts';
 import { ensureTeachingPackageSchema } from '@/lib/persistence/teaching-package';
+import { ensureTutorRuntimeSchema } from '@/lib/persistence/tutor-runtime';
 import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators';
 
 export type PersistencePoolFactory = (connectionString: string) => Pool;
@@ -54,6 +58,19 @@ async function createServerPersistenceProvider(
     // After ensureDocumentSchema: the teaching package tables carry FKs to
     // document_stages, so the document schema must exist first.
     await ensureTeachingPackageSchema(queryable);
+    // Kafuo R1 teaching model ledger (attempts, worker heartbeats, calibration).
+    // Standalone tables — no FK into the package tables — so order is free.
+    await ensureTeachingModelAttemptsSchema(queryable);
+    // Kafuo R1 student runtime (conversations, messages, help sessions,
+    // groundings). After the package schema: help sessions reference
+    // teaching_package_versions.
+    await ensureTutorRuntimeSchema(queryable);
+    // Kafuo R1 meter finalize outbox — standalone, transactional with the
+    // turn completion (plan §8.6).
+    await ensureMeterFinalizeOutboxSchema(queryable);
+    // Kafuo R1 legacy Help model-turn results (plan §5.1 `legacy_help_turns`):
+    // standalone, 7-day retention through the accounting sweeper.
+    await ensureLegacyHelpTurnsSchema(queryable);
     await ensureAssetSchema(queryable);
     const withTransaction = nodePostgresTransaction(queryable);
     const byteStore = lazyAssetByteStore(process.env.ASSET_S3_BUCKET, queryable);

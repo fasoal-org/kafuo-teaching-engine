@@ -24,6 +24,7 @@ type _SceneContentKeys = Assert<
     | 'resolvedSkills'
     | 'agents'
     | 'languageDirective'
+    | 'textDirection'
     | 'targetLanguage'
     | 'userRequirements'
     | 'allowProceduralSkill'

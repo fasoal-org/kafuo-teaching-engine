@@ -41,6 +41,48 @@ export type {
   QuizContent,
 } from '@openmaic/dsl';
 
+// Pedagogical metadata carried by slide content (`SlideContent.contentRole` /
+// `contentKind`). The vocabulary, the role -> kinds table and the pairing rule
+// are owned by `@openmaic/dsl`; they are re-exported here so Teaching Package
+// and app code share that single definition rather than restating the unions.
+// Not to be confused with `SceneType` (scene kind), the canvas's `Slide.type`
+// (deck-structural page kind), or the app-layer `teachingStage` annotation
+// (per-teaching-model flow position).
+export type {
+  SlideContentRole,
+  SlideContentKind,
+  SlideContentKindOf,
+  SlideContentKindByRole,
+  SlideContentSemantics,
+  ExplanationContentKind,
+  ActivityContentKind,
+  PracticeContentKind,
+  SlideAssistance,
+} from '@openmaic/dsl';
+export {
+  SLIDE_TYPES,
+  isSlideType,
+  SLIDE_ASSISTANCE_TIERS,
+  SLIDE_ASSISTANCE_ROLES,
+  slideRoleAllowsAssistance,
+  slideSemanticsRequireAssistance,
+  validateGeneratedSlideSemantics,
+  SLIDE_CONTENT_ROLES,
+  SLIDE_CONTENT_KINDS,
+  SLIDE_CONTENT_KINDS_BY_ROLE,
+  isSlideContentRole,
+  isSlideContentKind,
+  isSlideContentKindForRole,
+  validateSlideContentSemantics,
+} from '@openmaic/dsl';
+
+// Stage-level content language + base text direction (`Stage.language` /
+// `Stage.textDirection`). Owned by `@openmaic/dsl`: the language tag comes from
+// the requester's authoritative lesson metadata and the direction is resolved
+// from it once, at generation — never from generated text.
+export type { TextDirection } from '@openmaic/dsl';
+export { TEXT_DIRECTIONS, isTextDirection, resolveTextDirection } from '@openmaic/dsl';
+
 // The two discriminant guards are runtime functions, so they must be value
 // re-exported — a bare `export type {}` erases them and leaves the import as
 // `undefined` at runtime / "cannot be used as a value" at the type level.

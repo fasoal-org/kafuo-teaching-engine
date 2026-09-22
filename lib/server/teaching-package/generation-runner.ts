@@ -27,9 +27,14 @@ import {
   claimQueuedAttemptForRun,
   incrementGenerationRuns,
   updateAttempt,
+  upsertContentUnits,
   upsertSourceContext,
 } from '@/lib/persistence/teaching-package';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
+import {
+  screenSourceImages,
+  withheldSourceVisualsNote,
+} from '@/lib/server/teaching-package/source-visual-compliance';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import { resolveModel } from '@/lib/server/resolve-model';
@@ -46,8 +51,16 @@ import {
   completeGenerationAttempt,
   failGenerationAttempt,
   recordResolvedLlmModel,
+  recordSubjectRoute,
 } from '@/lib/server/teaching-package/generation';
+import { retainableContentUnits } from '@/lib/server/teaching-package/content-units';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
+import {
+  resolveSubjectModelPolicy,
+  type ResolvedSubjectPolicy,
+} from '@/lib/server/teaching-model/resolve-policy';
+import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { assertOutlineContentUnitGrounding } from '@/lib/server/teaching-package/outline-grounding';
@@ -108,6 +121,53 @@ async function compensateRun(pool: ConnectableQueryable, stageId: string | null)
   await removeStageMediaDir(stageId);
 }
 
+/**
+ * Subject routing for a Kafuo attempt (Kafuo R1 plan §7.4, ROUTE-01): under
+ * `TEACHING_SUBJECT_ROUTING=enforced` the policy is resolved ONCE per attempt
+ * from `subjectCode`, before Layer A and before any model call, and recorded
+ * on the attempt (snapshot + `subject_code`). An unrouted subject — null
+ * code, a code outside the policy, or a target the registry cannot resolve —
+ * fails the attempt terminally with `SUBJECT_ROUTE_UNAVAILABLE`: no Layer A,
+ * no run, no version, and never a fall-through to `DEFAULT_MODEL` (AMB-04).
+ * With routing `off` the attempt runs exactly as before (stage routes,
+ * `resolvedLlmModel`), and `null` is returned.
+ */
+async function resolveAttemptSubjectRoute(
+  attemptId: string,
+  kafuo: KafuoGenerationContext,
+  pool: ConnectableQueryable,
+): Promise<{ policy: ResolvedSubjectPolicy | null; failed: boolean }> {
+  if (readRoutingMode() === 'off') return { policy: null, failed: false };
+  let policy: ResolvedSubjectPolicy;
+  try {
+    policy = await resolveSubjectModelPolicy(kafuo.subjectCode);
+  } catch (error) {
+    const refusal =
+      error instanceof TeachingPackageError && error.code === 'SUBJECT_ROUTE_UNAVAILABLE'
+        ? error
+        : new TeachingPackageError(
+            'SUBJECT_ROUTE_UNAVAILABLE',
+            `subject route could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+            { subjectCode: kafuo.subjectCode },
+          );
+    log.warn(
+      `Teaching package attempt ${attemptId} refused: no subject route for ${JSON.stringify(kafuo.subjectCode)}`,
+    );
+    await failGenerationAttempt(pool, attemptId, refusal.message, {
+      code: refusal.code,
+      retryable: false,
+    });
+    return { policy: null, failed: true };
+  }
+  await recordSubjectRoute(pool, attemptId, {
+    subjectCode: policy.subjectCode,
+    policyVersion: policy.policyVersion,
+    primaryModel: policy.primary.modelString,
+    fallbackModel: policy.fallback.modelString,
+  });
+  return { policy, failed: false };
+}
+
 /** The Kafuo two-layer execution path. */
 async function runKafuoAttempt(
   attemptId: string,
@@ -115,6 +175,12 @@ async function runKafuoAttempt(
   pool: ConnectableQueryable,
   onProgress: (progress: ClassroomGenerationProgress) => Promise<void>,
 ): Promise<void> {
+  // Subject route FIRST (plan §7.4): resolved once, before Layer A spends a
+  // download and before any model call. A refusal has already failed the
+  // attempt; nothing below runs for it.
+  const route = await resolveAttemptSubjectRoute(attemptId, kafuo, pool);
+  if (route.failed) return;
+
   // Layer A — one bounded acquisition per attempt, shared by every run.
   // Presence is authoritative: normalized failures never enter the PDF fallback.
   const source = kafuo.normalizedContentResource
@@ -151,6 +217,35 @@ async function runKafuoAttempt(
         }
       : { sourceKind: 'pdf_fallback' as const }),
   });
+  // Kafuo R1 plan §5.1 (HLP-01/02): retain the approved Content Units this
+  // attempt was grounded in — the same units, under the same skip rule, that
+  // `adaptNormalizedText` rendered to the model — so Scene-grounded Help can
+  // later resolve `sourceContentUnitIds` through version lineage. A PDF
+  // fallback has no units and writes nothing.
+  if (kafuo.normalizedContentResource) {
+    const normalized =
+      source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource;
+    await upsertContentUnits(pool, {
+      tenantId: kafuo.aggregate.tenantId,
+      attemptId,
+      units: retainableContentUnits({
+        contentUnits: normalized.manifest.contentUnits,
+        contentRevisionId:
+          normalized.manifest.contentRevisionId ??
+          kafuo.normalizedContentResource.contentRevisionId,
+      }),
+    });
+  }
+
+  // RSS 7.5.4 — screen source visuals ONCE per attempt, before they are offered.
+  // Only approved visuals reach the outline model, materialisation, or a slide;
+  // everything else is withheld (fail closed) and the planner is told so.
+  const screenedVisuals = await screenSourceImages(source.normalizedImages);
+  const approvedVisualIds = new Set(screenedVisuals.approved.map((image) => image.id));
+  const approvedVisionImages = source.visionImages.filter((image) =>
+    approvedVisualIds.has(image.id),
+  );
+  const withheldVisualsNote = withheldSourceVisualsNote(screenedVisuals.withheld);
 
   // The W6-derived governance mode, consumed as a VALUE (§B.13): the
   // `teachingSkills` marker was parsed once at the single detection point and
@@ -159,15 +254,19 @@ async function runKafuoAttempt(
 
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
-      ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.`
-      : kafuo.requirement,
+      ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
+      : `${kafuo.requirement}${withheldVisualsNote}`,
     pdfContent: {
       text: source.text,
       images: source.images,
-      pdfImages: source.visionImages,
+      // Only screened-and-approved source visuals are ever offered.
+      pdfImages: approvedVisionImages,
     },
     ...kafuo.generation,
     teachingFlow: kafuo.teachingFlow,
+    // The authoritative lesson language (`learningItem.language`): generation
+    // stamps it on the Stage with the base text direction resolved from it.
+    language: kafuo.language,
     // The prompt contract itself, not just prose on the requirement: this is
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.
@@ -182,6 +281,24 @@ async function runKafuoAttempt(
             contract: kafuo.teachingSkillsContract as string,
             teachingModel: kafuo.teachingModel,
             flow: kafuo.teachingFlow,
+          },
+        }
+      : {}),
+    // Kafuo R1 plan §7.4: the subject policy resolved ONCE above travels as a
+    // value; `input.modelPolicy !== undefined` is generation's single
+    // "subject-routed" predicate, under which every teaching stage runs
+    // through the executor and `MODEL_ROUTES` has no effect. The attribution
+    // keys every ledger row to this attempt (the run number is stamped per
+    // run below); `versionId` stays null because no version is bound yet.
+    ...(route.policy
+      ? {
+          modelPolicy: route.policy,
+          attribution: {
+            tenantId: kafuo.aggregate.tenantId,
+            generationAttemptId: attemptId,
+            generationRun: 0,
+            learningItemType: kafuo.aggregate.learningItem.type,
+            learningItemId: kafuo.aggregate.learningItem.id,
           },
         }
       : {}),
@@ -213,7 +330,10 @@ async function runKafuoAttempt(
         scenesGenerated: 0,
       });
 
-      const result = await generateClassroom(execution, {
+      const runExecution: GenerationExecutionInput = execution.attribution
+        ? { ...execution, attribution: { ...execution.attribution, generationRun: run } }
+        : execution;
+      const result = await generateClassroom(runExecution, {
         baseUrl: '',
         persistence: trackingSink,
         // Stage-1 gate — the BR-TS-048 fail-closed point (Module 2 W8). The gate
@@ -254,9 +374,9 @@ async function runKafuoAttempt(
             }
           : {}),
         sourceVisuals: {
-          images: source.visionImages,
+          images: approvedVisionImages,
           materialize: async (stageId, selected) => {
-            const selectedNormalized = source.normalizedImages.filter((image) =>
+            const selectedNormalized = screenedVisuals.approved.filter((image) =>
               selected.some((pdfImage) => pdfImage.id === image.id),
             );
             const { servingMapping, manifest } = await materializeSourceImages(
@@ -361,7 +481,17 @@ async function runKafuoAttempt(
       //
       // Module 3/4 W3: the three Action-validation codes join them — a
       // malformed Action is the same class of model-answer defect.
+      //
+      // Kafuo R1 plan §7.4: `TEACHING_MODEL_UNAVAILABLE` — both routes of the
+      // subject pair failed for one teaching call — fails THIS run and the
+      // existing re-roll applies to the run, never to the individual call
+      // (the executor already spent Primary → Fallback). The executor marks a
+      // safety refusal or our own bad request non-retryable; those terminate.
+      const routeUnavailable =
+        code === 'TEACHING_MODEL_UNAVAILABLE' &&
+        (error as { retryable?: boolean }).retryable !== false;
       const retryable =
+        routeUnavailable ||
         code === 'CLASSROOM_GENERATION_FAILED' ||
         code === 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID' ||
         code === 'GOVERNED_SCENE_GENERATION_FAILED' ||
@@ -415,12 +545,18 @@ export function runGenerationAttempt(
 
       // Record the resolved LLM model string (the one runner-writable snapshot
       // key) for debugging; resolution failure lets generation fail on its own.
-      try {
-        const { modelString } = await resolveModel({ stage: 'generate-classroom' });
-        await recordResolvedLlmModel(pool, attemptId, modelString);
-      } catch {
-        // resolveModel throws only when no model is configured; the run below
-        // surfaces the same failure through the generation pipeline itself.
+      // A subject-routed Kafuo attempt records its policy pair instead
+      // (`recordSubjectRoute` in runKafuoAttempt): the stage route is not an
+      // input to it, so recording one would only mislead (ROUTE-01).
+      const subjectRouted = kafuo !== undefined && readRoutingMode() === 'enforced';
+      if (!subjectRouted) {
+        try {
+          const { modelString } = await resolveModel({ stage: 'generate-classroom' });
+          await recordResolvedLlmModel(pool, attemptId, modelString);
+        } catch {
+          // resolveModel throws only when no model is configured; the run below
+          // surfaces the same failure through the generation pipeline itself.
+        }
       }
 
       const reportProgress = async (progress: unknown) => {

@@ -155,6 +155,7 @@ export interface WidgetOutline {
  * Gives AI more freedom, only requiring intent description and key points
  */
 import type { SceneTeachingSkills, TeachingStageRef } from '@/lib/types/teaching-package';
+import type { SlideAssistance, SlideContentKind, SlideContentRole, SlideType } from '@openmaic/dsl';
 
 export interface SceneOutline {
   id: string;
@@ -166,6 +167,22 @@ export interface SceneOutline {
   estimatedDuration?: number; // seconds
   order: number;
   languageNote?: string; // LLM-inferred language note for this scene
+  // Planned slide classification, decided at outline generation by pedagogical
+  // intent: the intended `Slide.type`, the pedagogical `contentRole`, and the
+  // role's `contentKind` (explanation / activity / practice only). Every newly
+  // generated `slide` outline carries them (the outline generator rejects a
+  // response that does not); never present on quiz/interactive/pbl outlines.
+  // Optional so outlines persisted before the classification existed still
+  // load — absence there means "unclassified", never a default.
+  slideType?: SlideType;
+  contentRole?: SlideContentRole;
+  contentKind?: SlideContentKind;
+  // Planner-only plan for the slide's on-demand assistance (what the hint /
+  // help / full explanation should convey). Slide outlines only, beside
+  // `practice` / `check_understanding`; required for `practice`/`independent`.
+  // Never rendered and never an input to canvas or narration generation — the
+  // solution path lives here, not in `description` / `keyPoints`.
+  assistancePlan?: { hint?: string; help?: string; explanation?: string };
   // Teaching Skills assignment + instructional classification (Module 2 W9
   // carrier, populated by W10's generation-time selection). Absent on legacy
   // and non-governed runs — that absence is explicit, never fabricated.
@@ -223,6 +240,9 @@ export interface GeneratedSlideContent {
   elements: PPTElement[];
   background?: SlideBackground;
   remark?: string;
+  // On-demand assistance authored separately from the canvas; the scene
+  // builder places it on `SlideContent.assistance` for roles that allow it.
+  assistance?: SlideAssistance;
 }
 
 /**

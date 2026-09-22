@@ -37,6 +37,8 @@ import type { TTSProviderId } from '@/lib/audio/types';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { isGeneratedMediaPlaceholder } from '@/lib/media/media-ref';
 import { resolveImageSize } from '@/lib/server/image-sizing';
+import { screenVisualWithDefaults, type ImageTextPolicy } from '@/lib/server/visual-compliance';
+import { applyImagePromptPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 
 const log = createLogger('ClassroomMedia');
@@ -82,11 +84,34 @@ function mediaServingUrl(baseUrl: string, classroomId: string, subPath: string):
 // Image / Video generation
 // ---------------------------------------------------------------------------
 
+/** Regenerations with a reinforced prompt after a non-approved attempt. */
+const MAX_COMPLIANCE_REGENERATIONS = 2;
+
+export interface ClassroomMediaOptions {
+  /** Embedded-text policy resolved from the Stage's authoritative direction. */
+  textPolicy?: ImageTextPolicy;
+  /**
+   * Governed Teaching Packages never use a video that could not be screened
+   * (frame extraction is not available in this runtime → `unresolved`).
+   */
+  withholdUnscreenedVideo?: boolean;
+  /** Test seam; defaults to the deployment's store + vision client. */
+  screen?: typeof screenVisualWithDefaults;
+}
+
+/**
+ * Generate → screen → approve or reject. Only an `approved` visual is written
+ * to stage media and mapped; a rejected / unresolved one is never written, and
+ * its placeholder stays unmapped so assembly drops the element.
+ */
 export async function generateMediaForClassroom(
   outlines: SceneOutline[],
   classroomId: string,
   baseUrl: string,
+  options: ClassroomMediaOptions = {},
 ): Promise<Record<string, string>> {
+  const screen = options.screen ?? screenVisualWithDefaults;
+  const textPolicy = options.textPolicy ?? 'unrestricted';
   const mediaDir = path.join(CLASSROOMS_DIR, classroomId, 'media');
   await ensureDir(mediaDir);
 
@@ -128,30 +153,53 @@ export async function generateMediaForClassroom(
         // failure mode.
         const model = resolveImageModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
-        const result = await generateImage(
-          { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-          resolveImageSize(
-            { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
-            { providerId, modelId: model },
-          ),
-        );
+        let approved: { buf: Buffer; ext: string } | undefined;
+        for (let attempt = 0; attempt <= MAX_COMPLIANCE_REGENERATIONS && !approved; attempt += 1) {
+          const result = await generateImage(
+            { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
+            resolveImageSize(
+              applyImagePromptPolicy(
+                { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
+                textPolicy,
+                attempt > 0,
+              ),
+              { providerId, modelId: model },
+            ),
+          );
 
-        let buf: Buffer;
-        let ext: string;
-        if (result.base64) {
-          buf = Buffer.from(result.base64, 'base64');
-          ext = 'png';
-        } else if (result.url) {
-          buf = await downloadToBuffer(result.url);
-          const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
-          ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
-        } else {
-          log.warn(`Image generation returned no data for ${req.elementId}`);
+          let buf: Buffer;
+          let ext: string;
+          if (result.base64) {
+            buf = Buffer.from(result.base64, 'base64');
+            ext = 'png';
+          } else if (result.url) {
+            buf = await downloadToBuffer(result.url);
+            const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
+            ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
+          } else {
+            log.warn(`Image generation returned no data for ${req.elementId}`);
+            break;
+          }
+
+          const verdict = await screen(buf, {
+            origin: 'generated',
+            textPolicy,
+            mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+            metadata: { description: req.prompt },
+          });
+          if (verdict.verdict === 'approved') approved = { buf, ext };
+          else
+            log.warn(
+              `Generated image ${req.elementId} attempt ${attempt + 1} not approved (${verdict.verdict}); bytes discarded`,
+            );
+        }
+        if (!approved) {
+          log.warn(`No approved image for ${req.elementId}; its placeholder stays unmapped`);
           continue;
         }
 
-        const filename = `${req.elementId}.${ext}`;
-        await fs.writeFile(path.join(mediaDir, filename), buf);
+        const filename = `${req.elementId}.${approved.ext}`;
+        await fs.writeFile(path.join(mediaDir, filename), approved.buf);
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated image: ${filename}`);
       } catch (err) {
@@ -188,6 +236,12 @@ export async function generateMediaForClassroom(
           normalized,
         );
 
+        if (options.withholdUnscreenedVideo) {
+          // Frame extraction is unavailable here, so the video cannot be
+          // screened: `unresolved` → withheld from a governed package.
+          log.warn(`Generated video ${req.elementId} withheld: video frames cannot be screened`);
+          continue;
+        }
         const buf = await downloadToBuffer(result.url);
         const filename = `${req.elementId}.mp4`;
         await fs.writeFile(path.join(mediaDir, filename), buf);
@@ -323,4 +377,37 @@ export async function generateTTSForClassroom(
       }
     }
   }
+}
+
+/**
+ * Drop image / video elements whose generated-media placeholder never received
+ * an approved mapping (generation failed, or every attempt was rejected /
+ * unresolved). An unmapped placeholder must never survive into a persisted
+ * Stage — it would render as a permanent skeleton. Returns the removed
+ * placeholder ids per scene id.
+ */
+export function dropUnmappedMediaPlaceholders(scenes: Scene[]): Map<string, string[]> {
+  const removed = new Map<string, string[]>();
+  for (const scene of scenes) {
+    if (scene.type !== 'slide') continue;
+    const canvas = (
+      scene.content as {
+        canvas?: {
+          elements?: Array<{ id: string; src?: string; mediaRef?: string; type?: string }>;
+        };
+      }
+    )?.canvas;
+    if (!canvas?.elements) continue;
+    const dropped: string[] = [];
+    canvas.elements = canvas.elements.filter((el) => {
+      if (el.type !== 'image' && el.type !== 'video') return true;
+      const pending =
+        (typeof el.src === 'string' && isGeneratedMediaPlaceholder(el.src)) ||
+        (el.type === 'video' && !el.src && typeof el.mediaRef === 'string');
+      if (pending) dropped.push(el.src || el.mediaRef || el.id);
+      return !pending;
+    });
+    if (dropped.length > 0) removed.set(scene.id, dropped);
+  }
+  return removed;
 }

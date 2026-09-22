@@ -15,6 +15,11 @@ vi.mock('@/lib/server/usage-storage', () => ({
 }));
 vi.mock('node:fs', () => ({ promises: { mkdir: mocks.mkdir, writeFile: mocks.writeFile } }));
 vi.mock('@/lib/server/ssrf-guard', () => ({ validateUrlForSSRF: async () => null }));
+// RSS W4: generated visuals are screened before they are written / returned;
+// these tests exercise the provider path, so the screener approves.
+vi.mock('@/lib/server/visual-compliance', () => ({
+  screenVisualWithDefaults: vi.fn(async () => ({ verdict: 'approved', reasons: [] })),
+}));
 vi.mock('@/lib/logger', () => ({ createLogger: () => mocks.log }));
 
 import {
@@ -174,7 +179,10 @@ describe('generate_image tool', () => {
         model: 'gpt-image-1',
       }),
       expect.objectContaining({
-        prompt: 'A microscope\nStyle direction: editorial photo',
+        // RSS W4: the execution-time policy suffix is appended (defence in depth).
+        prompt: expect.stringMatching(
+          /^A microscope\nStyle direction: editorial photo\n\nDo not depict or imitate any Ministry of Education/,
+        ),
         aspectRatio: '16:9',
         stageId: 'stage-owner',
         signal: expect.any(AbortSignal),

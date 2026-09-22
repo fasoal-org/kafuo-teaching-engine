@@ -1,4 +1,4 @@
-import type { WidgetType } from '@openmaic/dsl';
+import type { SlideContentKind, SlideContentRole, SlideType, WidgetType } from '@openmaic/dsl';
 
 export type { WidgetType } from '@openmaic/dsl';
 
@@ -160,6 +160,71 @@ export interface TeachingSkillPolicy {
   combinationRestrictions: TeachingSkillCombinationRestriction[];
 }
 
+/**
+ * The planned semantic classification of a `type: 'slide'` outline — decided at
+ * outline generation from the slide's pedagogical intent, BEFORE any scene
+ * content exists, and never inferred later from titles, descriptions, stage
+ * names, or rendered elements.
+ *
+ * Three concepts, kept apart exactly as in `@openmaic/dsl`'s slide semantics:
+ * `slideType` is the intended deck-structural `Slide.type` of the canvas,
+ * `contentRole` the pedagogical purpose, `contentKind` the role's
+ * specialization. The role/kind vocabulary and pairing table are owned by
+ * `@openmaic/dsl` (`SLIDE_CONTENT_KINDS_BY_ROLE`); nothing is restated here.
+ * Teaching Model stage names are per-model data and are never values of these
+ * fields.
+ */
+export interface SlideOutlineSemantics {
+  /** Intended `Slide.type` of the generated canvas. */
+  slideType: SlideType;
+  /**
+   * Pedagogical purpose of the slide. Required on instructional slides
+   * (`cover` / `content`); a purely structural `contents` / `transition` /
+   * `end` slide with no teaching purpose omits it rather than inventing one.
+   */
+  contentRole?: SlideContentRole;
+  /**
+   * Specialization of `contentRole`. Present exactly when the role defines
+   * kinds (`explanation`, `activity`, `practice`); absent on every other role.
+   */
+  contentKind?: SlideContentKind;
+}
+
+/**
+ * The planner's hidden plan for a slide's on-demand assistance: WHAT the hint,
+ * the help and the full explanation should convey. It is a planning contract
+ * only — persisted with outlines, never part of the Stage/Slide schema and
+ * never rendered. The solution path lives here and nowhere else on the
+ * outline: `description` and `keyPoints` feed student-facing generation and
+ * must not carry it. Its sole consumer is the assistance-authoring step, which
+ * turns it into `SlideContent.assistance`; see `./slide-generation-inputs.ts`.
+ */
+export interface AssistancePlan {
+  /** What a nudge should point the learner toward. */
+  hint?: string;
+  /** The approach / partial structure to offer. */
+  help?: string;
+  /** The full solution path and reasoning. */
+  explanation?: string;
+}
+
+/**
+ * The planner's decision about a slide's visual. A PLANNING contract only —
+ * persisted with outlines, never part of the Stage/Slide schema, never rendered
+ * or delivered as learner content. Required on the lesson opening (`cover` +
+ * `orientation`), where a visual is enforced rather than hoped for:
+ *
+ * - `image`   — an approved source or generated image carries the visual;
+ * - `native`  — the visual is composed from native slide elements (diagram /
+ *   chart / illustrative shape group), e.g. when media generation is disabled;
+ * - `omitted` — no visual would improve understanding, framing or engagement;
+ *   `omissionReason` says why, specifically for this lesson.
+ */
+export interface VisualPlan {
+  mode: 'image' | 'native' | 'omitted';
+  omissionReason?: string;
+}
+
 /** A generation-ready description of one course scene. */
 export interface SceneOutline {
   id: string;
@@ -171,6 +236,28 @@ export interface SceneOutline {
   estimatedDuration?: number;
   order: number;
   languageNote?: string;
+  /**
+   * Planned slide classification ({@link SlideOutlineSemantics}). Every NEWLY
+   * generated `type: 'slide'` outline carries `slideType`, and every
+   * instructional one (`cover` / `content`) a `contentRole` (plus `contentKind`
+   * when the role defines kinds) — the outline generator rejects a response
+   * that does not. A purely structural `contents` / `transition` / `end` slide
+   * may omit the role. Never present on quiz/interactive/pbl outlines.
+   * Optional in the type only so outlines persisted before the classification
+   * existed still load: absence there means "unclassified", never a default.
+   */
+  slideType?: SlideType;
+  contentRole?: SlideContentRole;
+  contentKind?: SlideContentKind;
+  /**
+   * Planner-only {@link AssistancePlan}. Slide outlines only, and only beside
+   * `contentRole` `practice` / `check_understanding`; required (`hint` +
+   * `explanation`) for `practice` / `independent`. The outline gate rejects it
+   * anywhere else — it is never silently dropped from a slide outline.
+   */
+  assistancePlan?: AssistancePlan;
+  /** Planner-only {@link VisualPlan}. Slide outlines only; required on `cover` + `orientation`. */
+  visualPlan?: VisualPlan;
   /** Kafuo Teaching Model Flow identity; functionally mandatory on Kafuo runs. */
   teachingStage?: TeachingStageRef;
   /**

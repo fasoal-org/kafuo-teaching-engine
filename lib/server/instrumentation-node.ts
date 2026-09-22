@@ -45,8 +45,16 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // surfaces here as [config] warnings instead of failing at request time.
   // Imported dynamically so the Edge bundle never pulls in the fs/js-yaml
   // backed provider config it reads.
-  const { validateServerConfig } = await import('@/lib/server/config-validation');
+  const { validateServerConfig, validateSubjectRoutingConfig } = await import(
+    '@/lib/server/config-validation'
+  );
   validateServerConfig();
+  // Kafuo R1 subject routing (plan §7.1): THROWS, unlike the warn-only check
+  // above, when routing is enforced, the Teaching Package API is configured
+  // and a policy model is unregistered or unkeyed — every teaching call would
+  // otherwise refuse with SUBJECT_ROUTE_UNAVAILABLE. No-op with
+  // TEACHING_SUBJECT_ROUTING=off.
+  validateSubjectRoutingConfig();
 
   // Kafuo-facing deployment fail-fast (plan §4.4.6): throwing here makes a
   // misconfigured deployment fail to start instead of failing to work.
@@ -78,6 +86,26 @@ export async function registerNodeInstrumentation(): Promise<void> {
     '@/lib/server/teaching-package/webhook-delivery'
   );
   const webhookSchedule = startWebhookDeliverySchedule();
+
+  // Kafuo R1 ledger accounting sweeper (plan §7.7 step 4, §9.4): boot pass +
+  // 60 s sweep + 30 s worker heartbeat, in every instance. Same gate as the
+  // webhook schedule; `undefined` when the Teaching Package API is off.
+  const { startAccountingSweeper } = await import(
+    '@/lib/server/teaching-model/accounting-sweeper'
+  );
+  // Retention passes ride the same sweep (P6: legacy_help_turns, 7 days).
+  const { registerLegacyHelpRetention } = await import('@/lib/server/tutor/legacy-help-service');
+  registerLegacyHelpRetention();
+  const accountingSweeper = startAccountingSweeper();
+
+  // Kafuo R1 meter finalize outbox sweeper (plan §8.6, §9.4): boot pass +
+  // 30 s sweep in every instance, lease-claimed so instances are replaceable.
+  // Same gate; registers itself with the sweep registry for the internal
+  // sweep route and the health block.
+  const { startMeterOutboxSweeper } = await import(
+    '@/lib/server/teaching-model/meter-outbox-sweeper'
+  );
+  const meterOutboxSweeper = startMeterOutboxSweeper();
 
   let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
   let extractionRunner:
@@ -135,6 +163,31 @@ export async function registerNodeInstrumentation(): Promise<void> {
         await webhookSchedule?.stop();
       } catch (error) {
         console.error('[instrumentation] Webhook delivery drain failed', error);
+      }
+      // Ledger accounting, BEFORE the pool is ended: the retry queue's drain
+      // is the last chance for a deferred completion write to land (plan
+      // §7.7 step 3), and the sweeper's timers must not fire against a
+      // closed pool.
+      try {
+        const { drainOnShutdown } = await import(
+          '@/lib/server/teaching-model/ledger-retry-queue'
+        );
+        await drainOnShutdown();
+      } catch (error) {
+        console.error('[instrumentation] Ledger retry queue drain failed', error);
+      }
+      try {
+        await accountingSweeper?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Accounting sweeper stop failed', error);
+      }
+      // Meter outbox, BEFORE the pool is ended: `stop()` waits for an
+      // in-flight pass and releases this worker's leases (plan §9.4 item 4)
+      // so a successor picks the rows up without waiting out the lease.
+      try {
+        await meterOutboxSweeper?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Meter outbox sweeper stop failed', error);
       }
       const connectionString = process.env.DATABASE_URL?.trim();
       if (connectionString) {

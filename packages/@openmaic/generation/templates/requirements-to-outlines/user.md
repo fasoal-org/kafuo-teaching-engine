@@ -93,6 +93,11 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 {
   "id": "scene_1",
   "type": "slide" | "quiz" | "interactive" | "pbl",
+  "slideType": "cover" | "contents" | "transition" | "content" | "end",
+  "contentRole": "orientation" | "explanation" | "example" | "worked_example" | "procedure" | "activity" | "practice" | "check_understanding" | "summary",
+  "contentKind": "<only for explanation / activity / practice>",
+  "assistancePlan": "<only for practice / check_understanding: { hint, help, explanation }>",
+  "visualPlan": "<required on the cover + orientation opening: { mode: image | native | omitted, omissionReason? }>",
   "title": "Scene Title",
   "description": "Teaching purpose description",
   "keyPoints": ["Point 1", "Point 2", "Point 3"],
@@ -104,6 +109,8 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 
 ### Special Notes
 
+- **Slide classification (slide scenes only)**: every `"type": "slide"` scene MUST carry `slideType`, and every instructional slide MUST carry `contentRole`, chosen by pedagogical intent as defined in the system prompt's Slide Classification section; a purely structural `contents` / `transition` / `end` slide with no teaching purpose omits `contentRole` — never invent a role to satisfy validation. `contentKind` is required for `explanation` (`concept` | `definition` | `rule` | `observation`), `activity` (`investigation` | `source_analysis` | `reflection` | `production`) and `practice` (`guided` | `independent` | `higher_order`), and must be omitted for every other role. `practice` + `independent` MUST also carry the planner-only `assistancePlan` (`hint` and `explanation` at minimum; never shown to the learner, and the only place the solution path may appear); it is allowed only with `practice` / `check_understanding`. Never put these fields on `quiz`, `interactive` or `pbl` scenes.
+- **Lesson opening**: the first instructional slide is normally `"slideType": "cover"` + `"contentRole": "orientation"` and carries the title, hook, short context, concise learning objectives and the big idea together. Do not plan a separate learning-objectives slide, and do not plan a `contents` slide for a normal single lesson.
 - **quiz scenes must include quizConfig**:
    ```json
    "quizConfig": {
@@ -115,7 +122,7 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 {{#if hasSourceImages}}
 - **If source images are available**, add `suggestedImageIds` to relevant slide scenes. Only use image IDs listed under Available Images.
 {{/if}}
-- **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use `"type": "interactive"` with `widgetType` and `widgetOutline` fields. Limit to 1-2 per course.
+- **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use `"type": "interactive"` with `widgetType` and `widgetOutline` fields. Aim for 1-2 discretionary ones per course; a scene whose learner behaviour requires interaction stays `interactive` even beyond that — never restate it as a slide to fit a number.
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
    - Provide appropriate widgetOutline for the widget type
 - **Scene count**: Based on inferred duration, typically 1-2 scenes per minute

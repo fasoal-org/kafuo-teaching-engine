@@ -21,6 +21,7 @@ export const PROMPT_IDS = {
   VISUALIZATION3D_CONTENT: 'visualization3d-content',
   PROCEDURAL_SKILL_CONTENT: 'procedural-skill-content',
   SLIDE_ACTIONS: 'slide-actions',
+  SLIDE_ASSISTANCE: 'slide-assistance',
   QUIZ_ACTIONS: 'quiz-actions',
   INTERACTIVE_ACTIONS: 'interactive-actions',
   PBL_ACTIONS: 'pbl-actions',

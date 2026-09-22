@@ -89,6 +89,10 @@ const CONTENT_REPLY = JSON.stringify({
   background: { type: 'solid', color: '#ffffff' },
   remark: '',
 });
+const ASSISTANCE_REPLY = JSON.stringify({
+  hint: '<p>Check the units.</p>',
+  explanation: '<p>Divide the distance by the time.</p>',
+});
 const ACTIONS_REPLY = JSON.stringify([{ type: 'text', content: 'Governed narration.' }]);
 
 interface Captured {
@@ -161,6 +165,7 @@ describe('generation tools on a governed Stage (W4)', () => {
       })),
       aiCall: (async (system: string, user: string) => {
         calls.push({ system, user });
+        if (system.includes('Slide Assistance Author')) return ASSISTANCE_REPLY;
         return ACTIONS_PROMPT.test(system) ? ACTIONS_REPLY : CONTENT_REPLY;
       }) as never,
     });
@@ -369,6 +374,173 @@ describe('generation tools on a governed Stage (W4)', () => {
     expect(after.teachingSkills).toEqual(before.teachingSkills);
     expect(after.alignmentBaseline?.origin).toBe('generation');
     expect(deriveSceneAlignment(after)).toMatchObject({ state: 'current' });
+  });
+
+  it('generate_scene keeps the replaced slide classification verbatim and gives a legacy slide none', async () => {
+    const { stageId } = await seedGovernedStage();
+    const store = makeStore();
+    const seeded = (await store.loadDocument(stageId))!;
+    const [first] = seeded.scenes;
+    // The first slide is classified (as Phase-2 generation leaves it); the
+    // second stays a historical, unclassified slide.
+    await store.putScene(stageId, {
+      ...first!,
+      content: {
+        ...(first!.content as object),
+        canvas: { ...(first!.content as { canvas: object }).canvas, type: 'content' },
+        contentRole: 'explanation',
+        contentKind: 'definition',
+      },
+    } as never);
+    // A non-governed Stage hosts the historical, unclassified slide (scene 2
+    // carries no teachingStage, so a governed Stage would refuse it).
+    const { stageId: legacyStageId } = await seedGovernedStage({ contract: null });
+    const { generateScene } = tools();
+
+    for (const [target, order] of [
+      [stageId, 1],
+      [legacyStageId, 2],
+    ] as const) {
+      const outcome = await generateScene.execute(
+        `call-sem-${order}`,
+        // A brief that reads like a summary: the classification must not move.
+        {
+          stageId: target,
+          order,
+          title: 'Summary',
+          brief: 'Summarize the lesson',
+          type: 'slide',
+        } as never,
+        undefined,
+      );
+      expect((outcome.details as { error?: unknown }).error).toBeUndefined();
+    }
+
+    const after = (await store.loadDocument(stageId))!.scenes;
+    const classified = after.find((scene) => scene.order === 1)!.content as {
+      canvas: { type?: string };
+      contentRole?: string;
+      contentKind?: string;
+    };
+    expect(classified.canvas.type).toBe('content');
+    expect(classified.contentRole).toBe('explanation');
+    expect(classified.contentKind).toBe('definition');
+
+    const legacyAfter = (await store.loadDocument(legacyStageId))!.scenes;
+    const legacy = legacyAfter.find((scene) => scene.order === 2)!.content as unknown as {
+      canvas: Record<string, unknown>;
+    };
+    expect(legacy.canvas).not.toHaveProperty('type');
+    expect(legacy).not.toHaveProperty('contentRole');
+    expect(legacy).not.toHaveProperty('contentKind');
+  });
+
+  it('generate_scene refuses an unclassified NEW slide page with an actionable error, and accepts a classified one', async () => {
+    const { stageId: target } = await seedGovernedStage({ contract: null });
+    const store = makeStore();
+    const { generateScene } = tools();
+    const page = {
+      stageId: target,
+      order: 9,
+      title: 'Worked problem',
+      brief: 'Solve it',
+      type: 'slide',
+    };
+
+    const refused = await generateScene.execute('call-new-1', page as never, undefined);
+    expect(refused).toMatchObject({
+      isError: true,
+      details: { error: 'OUTLINE_SLIDE_SEMANTICS_INVALID' },
+    });
+    expect(JSON.stringify(refused.content)).toContain('worked_example');
+    expect((await store.loadDocument(target))!.scenes.some((scene) => scene.order === 9)).toBe(
+      false,
+    );
+
+    // A mismatched pair is refused too — never remapped.
+    const mismatched = await generateScene.execute(
+      'call-new-2',
+      {
+        ...page,
+        slideType: 'content',
+        contentRole: 'worked_example',
+        contentKind: 'concept',
+      } as never,
+      undefined,
+    );
+    expect(mismatched).toMatchObject({ isError: true });
+
+    const accepted = await generateScene.execute(
+      'call-new-3',
+      { ...page, slideType: 'content', contentRole: 'worked_example' } as never,
+      undefined,
+    );
+    expect((accepted.details as { error?: unknown }).error).toBeUndefined();
+    const created = (await store.loadDocument(target))!.scenes.find((scene) => scene.order === 9)!;
+    expect(created.content).toMatchObject({
+      canvas: { type: 'content' },
+      contentRole: 'worked_example',
+    });
+    expect(created.content).not.toHaveProperty('contentKind');
+  });
+
+  it('generate_scene authors independent-practice assistance from the hidden plan, and keeps it on an in-place replacement', async () => {
+    const { stageId: target } = await seedGovernedStage({ contract: null });
+    const store = makeStore();
+    const { generateScene } = tools();
+    const page = {
+      stageId: target,
+      order: 9,
+      title: 'Try it yourself',
+      brief: 'A runner covers 12 km in 1.5 hours. Find the speed.',
+      type: 'slide',
+      slideType: 'content',
+      contentRole: 'practice',
+      contentKind: 'independent',
+    };
+
+    // No plan → refused; the error tells the agent what is missing.
+    const refused = await generateScene.execute('call-ip-1', page as never, undefined);
+    expect(refused).toMatchObject({ isError: true });
+    expect(JSON.stringify(refused.content)).toContain('assistancePlan');
+
+    const PLAN = { hint: 'PLAN-SENTINEL-HINT', explanation: 'PLAN-SENTINEL-EXPLANATION' };
+    calls.length = 0;
+    const accepted = await generateScene.execute(
+      'call-ip-2',
+      { ...page, assistancePlan: PLAN } as never,
+      undefined,
+    );
+    expect((accepted.details as { error?: unknown }).error).toBeUndefined();
+    const created = (await store.loadDocument(target))!.scenes.find((scene) => scene.order === 9)!;
+    expect(created.content).toMatchObject({
+      assistance: { hint: '<p>Check the units.</p>' },
+    });
+    // The plan reached the assistance step only — never canvas or narration.
+    for (const call of calls) {
+      const sees = (call.system + call.user).includes('PLAN-SENTINEL');
+      expect(sees).toBe(call.system.includes('Slide Assistance Author'));
+    }
+    expect(JSON.stringify(created)).not.toContain('PLAN-SENTINEL');
+
+    // Replacing it in place without a new plan keeps the authored assistance.
+    const replaced = await generateScene.execute(
+      'call-ip-3',
+      {
+        stageId: target,
+        order: 9,
+        title: 'Try it yourself',
+        brief: 'Same task',
+        type: 'slide',
+      } as never,
+      undefined,
+    );
+    expect((replaced.details as { error?: unknown }).error).toBeUndefined();
+    const after = (await store.loadDocument(target))!.scenes.find((scene) => scene.order === 9)!;
+    expect(after.content).toMatchObject({
+      contentKind: 'independent',
+      assistance: { explanation: '<p>Divide the distance by the time.</p>' },
+    });
   });
 
   it('refuses on a governed Stage whose context cannot be resolved, writing nothing', async () => {

@@ -154,6 +154,7 @@ export async function fetchSceneContent(
       name: string;
       description?: string;
       language?: string;
+      textDirection?: 'ltr' | 'rtl';
       style?: string;
     };
     agents?: AgentInfo[];
@@ -689,6 +690,7 @@ export interface GenerationParams {
     name: string;
     description?: string;
     language?: string;
+    textDirection?: 'ltr' | 'rtl';
     style?: string;
   };
   agents?: AgentInfo[];

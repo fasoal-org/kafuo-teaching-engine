@@ -437,3 +437,181 @@ describe('editor handoff tenancy (plan §4.4.5)', () => {
     expect(names).not.toContain('openmaic_access');
   });
 });
+
+describe('learner student context (Kafuo R1 contracts §3.2)', () => {
+  const STUDENT = {
+    studentRef: 'abcdefghijklmnopqrstuvwx',
+    academic: { curriculumName: 'National', curriculumVersionLabel: '2026', gradeLabel: 'Grade 9' },
+    subject: { code: 'PHYSICS', nameAr: 'الفيزياء', nameEn: 'Physics', academicLanguage: 'ar' },
+    localeHint: 'ar',
+    entitlements: { help: true },
+  };
+  const LEARNER_REF = 'learner-ref-0123456789abcdef';
+
+  it('rides from a learner handoff onto the grant, and only for learner purposes', () => {
+    const { token } = mintEditorHandoffToken({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'read',
+      purpose: 'learner',
+      learnerRef: LEARNER_REF,
+      student: STUDENT,
+    });
+    const handoff = verifyEditorHandoffToken(token)!;
+    expect(handoff.student).toEqual(STUDENT);
+
+    const { payload, token: grantToken } = buildEditorGrantPayload({
+      tenantId: handoff.tenantId,
+      versionId: handoff.versionId,
+      stageId: handoff.stageId,
+      capability: handoff.capability,
+      purpose: handoff.purpose,
+      learnerRef: handoff.learnerRef,
+      student: handoff.student,
+    });
+    expect(payload.student).toEqual(STUDENT);
+    const headers = new Headers({
+      cookie: `teaching_package_grant=${encodeURIComponent(JSON.stringify([grantToken]))}`,
+    });
+    expect(readEditorGrant(headers, 'stage-x')).toMatchObject({ purpose: 'learner', student: STUDENT });
+
+    // A preview handoff never carries it, whatever the caller passed.
+    const preview = mintEditorHandoffToken({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'read',
+      purpose: 'preview',
+      student: STUDENT,
+    });
+    expect(verifyEditorHandoffToken(preview.token)!.student).toBeUndefined();
+    const previewGrant = buildEditorGrantPayload({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'read',
+      purpose: 'preview',
+      student: STUDENT,
+    });
+    expect(previewGrant.payload.student).toBeUndefined();
+  });
+
+  it('tokens minted without the block still verify (pre-P5 compatibility)', () => {
+    const { token } = mintEditorHandoffToken({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'read',
+      purpose: 'learner',
+      learnerRef: LEARNER_REF,
+    });
+    const payload = verifyEditorHandoffToken(token)!;
+    expect(payload.purpose).toBe('learner');
+    expect(payload.student).toBeUndefined();
+    const headers = grantHeaders({ stageId: 'stage-x', capability: 'read' });
+    const grant = readEditorGrant(headers, 'stage-x')!;
+    expect(grant.student).toBeUndefined();
+  });
+
+  it('the mint route embeds a complete block, refuses a partial one, tolerates none', async () => {
+    const { POST } = await import('@/app/api/teaching-packages/[id]/editor-handoff/route');
+    routeMocks.getVersion.mockResolvedValue({
+      id: 'tpv-1',
+      tenantId: 'tenant-grant',
+      status: 'approved',
+      currentStageId: 'stage-x',
+    });
+    const mint = (extra: Record<string, unknown>) =>
+      POST(
+        new NextRequest('http://localhost/api/teaching-packages/tpv-1/editor-handoff', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${SERVICE_KEY}` },
+          body: JSON.stringify({
+            tenantContext: { tenantId: 'tenant-grant' },
+            mode: 'learner',
+            learnerRef: LEARNER_REF,
+            actorRef: 'actor-1',
+            ...extra,
+          }),
+        }),
+        { params: Promise.resolve({ id: 'tpv-1' }) },
+      );
+    const tokenOf = async (response: Response) => {
+      const { url } = (await response.json()) as { url: string };
+      return decodeURIComponent(url.split('token=')[1]!);
+    };
+
+    const complete = await mint(STUDENT);
+    expect(complete.status).toBe(200);
+    expect(verifyEditorHandoffToken(await tokenOf(complete))!.student).toEqual(STUDENT);
+
+    const none = await mint({});
+    expect(none.status).toBe(200);
+    expect(verifyEditorHandoffToken(await tokenOf(none))!.student).toBeUndefined();
+
+    const partial = await mint({ studentRef: STUDENT.studentRef, academic: STUDENT.academic });
+    expect(partial.status).toBe(400);
+    await expect(partial.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST', details: { missing: ['subject', 'entitlements'] } },
+    });
+
+    const malformed = await mint({ ...STUDENT, subject: { code: 'PHYSICS' } });
+    expect(malformed.status).toBe(400);
+
+    // Edit mode ignores the block entirely (no learner context on an editor grant).
+    routeMocks.getVersion.mockResolvedValue({
+      id: 'tpv-1',
+      tenantId: 'tenant-grant',
+      status: 'draft',
+      currentStageId: 'stage-x',
+    });
+    const edit = await POST(
+      new NextRequest('http://localhost/api/teaching-packages/tpv-1/editor-handoff', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${SERVICE_KEY}` },
+        body: JSON.stringify({
+          tenantContext: { tenantId: 'tenant-grant' },
+          mode: 'edit',
+          actorRef: 'actor-1',
+          studentRef: STUDENT.studentRef,
+        }),
+      }),
+      { params: Promise.resolve({ id: 'tpv-1' }) },
+    );
+    expect(edit.status).toBe(200);
+    expect(verifyEditorHandoffToken(await tokenOf(edit))!.student).toBeUndefined();
+  });
+
+  it('the redeem route carries the block onto the cookie grant', async () => {
+    const { token } = mintEditorHandoffToken({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'read',
+      purpose: 'learner',
+      learnerRef: LEARNER_REF,
+      student: STUDENT,
+    });
+    routeMocks.getVersion.mockResolvedValue({
+      id: 'tpv-1',
+      tenantId: 'tenant-grant',
+      status: 'approved',
+      currentStageId: 'stage-x',
+    });
+    const { GET } = await import('@/app/api/teaching-packages/editor-handoff/route');
+    const response = await GET(
+      new NextRequest(
+        `http://localhost/api/teaching-packages/editor-handoff?token=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(response.status).toBe(302);
+    const grantCookie = response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('teaching_package_grant='))!;
+    const headers = new Headers({ cookie: grantCookie.split(';')[0]! });
+    const grant = readEditorGrant(headers, 'stage-x')!;
+    expect(grant).toMatchObject({ purpose: 'learner', student: STUDENT });
+    expect(grant.learnerKey).toMatch(/^tp:/);
+  });
+});

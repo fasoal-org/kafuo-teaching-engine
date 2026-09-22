@@ -35,7 +35,7 @@ import { authenticateServiceRequest } from '@/lib/server/teaching-package/servic
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
 export const runtime = 'nodejs';
-// One role-set model call (with one validation retry) per request.
+// One role-set model call (with up to two validation retries) per request.
 export const maxDuration = 300;
 
 function invalid(message: string): never {

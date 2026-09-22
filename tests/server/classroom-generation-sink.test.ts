@@ -208,6 +208,46 @@ describe('generateClassroom persistence sink', () => {
     expect(calls.release).toEqual([]);
   });
 
+  it('stamps the authoritative language and its resolved direction on the Stage, and hands the direction to slide generation', async () => {
+    for (const [language, textDirection] of [
+      ['ar', 'rtl'],
+      ['en-US', 'ltr'],
+    ] as const) {
+      mocks.generateSceneContent.mockClear();
+      const { sink } = makeRecordingSink();
+      const persist = vi.fn(sink.persist);
+      await generateWith({ persistence: { ...sink, persist }, input: { language } });
+
+      const [data] = persist.mock.calls[0]!;
+      expect(data.stage).toMatchObject({ language, textDirection });
+      // The LLM-written directive says "Use English." in BOTH runs: direction
+      // follows the lesson metadata, never the directive or generated text.
+      expect(data.stage.languageDirective).toBe('Use English.');
+      expect(mocks.generateSceneContent.mock.calls[0]![2]).toMatchObject({ textDirection });
+    }
+  });
+
+  it('records neither field when the caller supplies no language (legacy / non-Kafuo)', async () => {
+    const { sink } = makeRecordingSink();
+    const persist = vi.fn(sink.persist);
+    await generateWith({ persistence: { ...sink, persist } });
+
+    const [data] = persist.mock.calls[0]!;
+    expect(data.stage).not.toHaveProperty('language');
+    expect(data.stage).not.toHaveProperty('textDirection');
+    expect(mocks.generateSceneContent.mock.calls[0]![2]).not.toHaveProperty('textDirection');
+  });
+
+  it('records an unreadable language tag without guessing a direction', async () => {
+    const { sink } = makeRecordingSink();
+    const persist = vi.fn(sink.persist);
+    await generateWith({ persistence: { ...sink, persist }, input: { language: 'Arabic' } });
+
+    const [data] = persist.mock.calls[0]!;
+    expect(data.stage.language).toBe('Arabic');
+    expect(data.stage).not.toHaveProperty('textDirection');
+  });
+
   it('calls release on the sink only when generation fails after reserve', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,

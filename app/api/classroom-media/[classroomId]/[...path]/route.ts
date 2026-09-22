@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
 import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
+import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
+import { getVerdictStore } from '@/lib/server/visual-compliance';
+import { checksumOfFile, isHeldChecksum } from '@/lib/server/visual-compliance/delivery-hold';
 
 const log = createLogger('ClassroomMedia');
 
@@ -78,6 +81,22 @@ export async function GET(
     const ext = path.extname(realPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
+    // RSS 7.5.8 — hold. An image whose bytes carry a `rejected` compliance
+    // verdict is not served to learners: 404 unless the request holds a `write`
+    // grant for this Stage (an editor remediating it), and then never with the
+    // public, immutable cache header.
+    let cacheHeaders: Record<string, string> = CACHE_HEADERS;
+    if (subDir === 'media' && contentType.startsWith('image/')) {
+      const checksum = await checksumOfFile(realPath);
+      if (checksum && (await isHeldChecksum(await getVerdictStore(), checksum))) {
+        const canEdit = readEditorGrants(req.headers).some(
+          (grant) => grant.stageId === classroomId && grant.capability === 'write',
+        );
+        if (!canEdit) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        cacheHeaders = { 'Cache-Control': 'private, no-store' };
+      }
+    }
+
     // Range requests enable progressive playback and seeking for hosted media
     // (e.g. <video> streams the moov atom first, then fetches on seek).
     const range = parseRangeHeader(req.headers.get('range'), stat.size);
@@ -99,7 +118,7 @@ export async function GET(
       return new NextResponse(toWebStream(stream), {
         status: 206,
         headers: {
-          ...CACHE_HEADERS,
+          ...cacheHeaders,
           'Content-Type': contentType,
           'Content-Length': String(range.end - range.start + 1),
           'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
@@ -112,7 +131,7 @@ export async function GET(
     return new NextResponse(toWebStream(createReadStream(realPath)), {
       status: 200,
       headers: {
-        ...CACHE_HEADERS,
+        ...cacheHeaders,
         'Content-Type': contentType,
         'Content-Length': String(stat.size),
         'Accept-Ranges': 'bytes',

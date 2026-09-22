@@ -25,6 +25,14 @@ import { readRetainedVersionContext, readVersion } from '@/lib/persistence/teach
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import {
+  AccountingUnavailableError,
+  executeTeachingCall,
+  TeachingModelUnavailableError,
+} from '@/lib/server/teaching-model/execute';
+import { resolveSubjectModelPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
+import { envelopeViolations } from '@/lib/server/teaching-package/question-envelope';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
   QUESTION_ENVELOPE_VERSION,
@@ -122,12 +130,40 @@ export interface QuestionSetGenerationResult {
   envelope: Record<string, unknown>;
 }
 
-/** Test seam: the model call. Production uses `resolveModel` + `callLLM`. */
+/**
+ * Test seam: the model call. Production uses the subject-routed teaching
+ * executor (`TEACHING_SUBJECT_ROUTING=enforced`, the default) or, with
+ * routing `off`, `resolveModel` + `callLLM` on the `question-generation` stage.
+ *
+ * `accept` says whether an output is worth returning. A port that can retry
+ * retries while it answers false; one that cannot may ignore it — the caller
+ * re-checks the output it is handed either way.
+ */
 export interface QuestionModelPort {
-  generate(system: string, prompt: string): Promise<{ text: string; model: string }>;
+  generate(
+    system: string,
+    prompt: string,
+    accept?: (text: string) => boolean,
+  ): Promise<{ text: string; model: string }>;
 }
 
-async function defaultModelPort(): Promise<QuestionModelPort> {
+/** What the routed port needs to attribute its ledger rows (contracts §1, §7). */
+interface QuestionRouteScope {
+  pool: Queryable;
+  tenantId: string;
+  versionId: string;
+  attemptId: string;
+  learningItem: LearningItemRef;
+  questionSetRef: string;
+  /** `subjectCode` of the producing attempt's snapshot; undefined ⇒ unrouted. */
+  subjectCode: string | undefined;
+}
+
+/**
+ * The stage-routed port of the pre-routing era, kept verbatim for
+ * `TEACHING_SUBJECT_ROUTING=off`.
+ */
+async function stageRoutedModelPort(): Promise<QuestionModelPort> {
   let resolved;
   try {
     resolved = await resolveModel({ stage: 'question-generation' });
@@ -139,19 +175,109 @@ async function defaultModelPort(): Promise<QuestionModelPort> {
     );
   }
   return {
-    async generate(system, prompt) {
+    async generate(system, prompt, accept) {
       const result = await callLLM(
         { model: resolved.model, system, prompt },
         'question-generation',
         {
-          retries: 1,
-          validate: (text: string) => parseJsonResponse<Record<string, unknown>>(text) !== null,
+          // Two retries: envelope drift is independent per call, and a drifted
+          // envelope that reaches Kafuo fails a whole generation run there, where
+          // a schema mismatch is deliberately not retried.
+          retries: 2,
+          validate:
+            accept ?? ((text: string) => parseJsonResponse<Record<string, unknown>>(text) !== null),
         },
         resolved.thinkingConfig,
       );
       return { text: result.text, model: resolved.modelString };
     },
   };
+}
+
+/**
+ * The subject-routed port (Kafuo R1 plan §7.2/§7.4, ROUTE-01). The subject
+ * comes from the producing attempt's retained snapshot — the version was
+ * generated under that route, so its questions are too — never from the
+ * request. A version whose snapshot records no subject (generated before
+ * routing, or with routing off) is refused: questions for it cannot follow
+ * the route, and `DEFAULT_MODEL` is never a silent substitute.
+ *
+ * Retry semantics: the old port's two same-model retries are REPLACED by the
+ * executor's Primary → Fallback. An output `accept` refuses (unparsable, or a
+ * drifted envelope Kafuo would refuse whole) is classified `unusable_output`
+ * on that attempt's ledger row and the call moves to the Fallback; the same
+ * on the Fallback ends the call with `TEACHING_MODEL_UNAVAILABLE`. There is
+ * no same-model retry because every provider attempt must be one ledger row
+ * with one outcome (plan §7.3), and a second identical request to a model
+ * that just produced an unusable envelope is what the fallback is for.
+ */
+async function subjectRoutedModelPort(scope: QuestionRouteScope): Promise<QuestionModelPort> {
+  if (!scope.subjectCode) {
+    throw new TeachingPackageError(
+      'SUBJECT_ROUTE_UNAVAILABLE',
+      'this approved version records no routed subject (generated before subject routing); regenerate and approve it to enable routed question generation',
+      { versionId: scope.versionId, attemptId: scope.attemptId },
+    );
+  }
+  const policy = await resolveSubjectModelPolicy(scope.subjectCode);
+  return {
+    async generate(system, prompt, accept) {
+      const usable = accept ?? ((text: string) => parseJsonResponse(text) !== null);
+      try {
+        const result = await executeTeachingCall(
+          policy,
+          {
+            tenantId: scope.tenantId,
+            capability: 'question_generation',
+            stage: 'question-generation',
+            origin: 'openmaic_runtime',
+            association: {
+              kind: 'generation',
+              generationAttemptId: scope.attemptId,
+              generationRun: null,
+              versionId: scope.versionId,
+              learningItemType: scope.learningItem.type,
+              learningItemId: scope.learningItem.id,
+              questionSetRef: scope.questionSetRef,
+            },
+          },
+          {
+            system,
+            prompt,
+            output: {
+              kind: 'json',
+              validate: (text) => {
+                if (!usable(text)) {
+                  throw new Error('the output is not an acceptable question role-set envelope');
+                }
+                return parseJsonResponse<Record<string, unknown>>(text);
+              },
+            },
+          },
+          { queryable: scope.pool },
+        );
+        const target = result.servedBy === 'fallback' ? policy.fallback : policy.primary;
+        return { text: result.text, model: target.modelString };
+      } catch (error) {
+        if (error instanceof TeachingModelUnavailableError) {
+          throw new TeachingPackageError('TEACHING_MODEL_UNAVAILABLE', error.message, {
+            subjectCode: policy.subjectCode,
+            attemptIds: error.attemptIds,
+            outcomes: error.outcomes,
+            retryable: error.retryable,
+          });
+        }
+        if (error instanceof AccountingUnavailableError) {
+          throw new TeachingPackageError('ACCOUNTING_UNAVAILABLE', error.message);
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+async function defaultModelPort(scope: QuestionRouteScope): Promise<QuestionModelPort> {
+  return readRoutingMode() === 'off' ? stageRoutedModelPort() : subjectRoutedModelPort(scope);
 }
 
 // --------------------------------------------------------------------------
@@ -186,7 +312,9 @@ export function renderSceneText(scene: AppScene): string {
           if (!Array.isArray(row)) continue;
           const cells = row
             .map((cell) =>
-              typeof cell === 'object' && cell !== null && typeof (cell as { text?: unknown }).text === 'string'
+              typeof cell === 'object' &&
+              cell !== null &&
+              typeof (cell as { text?: unknown }).text === 'string'
                 ? stripHtml((cell as { text: string }).text)
                 : '',
             )
@@ -387,10 +515,24 @@ export async function generateTeachingQuestionSet(
   }
   const focus = [objective.snapshot.statement, ...teachingScenes.map((s) => s.content)].join('\n');
   const sourceExcerpts: PromptSection[] = selectSourceExcerpts(context.sourceText, focus).map(
-    (content, index) => ({ anchor: `S${index + 1}`, title: `Lesson source excerpt ${index + 1}`, content }),
+    (content, index) => ({
+      anchor: `S${index + 1}`,
+      title: `Lesson source excerpt ${index + 1}`,
+      content,
+    }),
   );
 
-  const port = modelPort ?? (await defaultModelPort());
+  const port =
+    modelPort ??
+    (await defaultModelPort({
+      pool,
+      tenantId: request.tenantId,
+      versionId: version.id,
+      attemptId: context.attemptId,
+      learningItem: version.learningItem,
+      questionSetRef: request.requestId,
+      subjectCode: context.inputSnapshot.subjectCode,
+    }));
   const userPrompt = buildQuestionUserPrompt({
     lessonTitle: document.stage.name ?? '',
     language: request.language,
@@ -402,7 +544,15 @@ export async function generateTeachingQuestionSet(
     findings: request.findings,
     siblingMeasurements: request.siblingMeasurements,
   });
-  const { text, model } = await port.generate(QUESTION_SYSTEM_PROMPT, userPrompt);
+  // The envelope's shape is only *described* to the model, and Kafuo refuses a
+  // drifted one whole. Checking it here turns that drift into a retry of this
+  // call instead of a failed generation run on the other side.
+  const conforms = (candidate: string): boolean => {
+    const json = parseJsonResponse<Record<string, unknown>>(candidate);
+    if (!json || typeof json !== 'object' || !Array.isArray(json.slots)) return false;
+    return envelopeViolations(normalizeEnvelope(json, request.objectiveRef)).length === 0;
+  };
+  const { text, model } = await port.generate(QUESTION_SYSTEM_PROMPT, userPrompt, conforms);
   const parsed = parseJsonResponse<Record<string, unknown>>(text);
   if (!parsed || typeof parsed !== 'object') {
     throw new TeachingPackageError(
@@ -411,6 +561,19 @@ export async function generateTeachingQuestionSet(
     );
   }
   const envelope = normalizeEnvelope(parsed, request.objectiveRef);
+
+  // Retries exhausted and still off-shape: hand it to Kafuo anyway. Kafuo is the
+  // validator of record and records the refusal against its own run; failing
+  // here would replace that record with an opaque TE error.
+  const violations = envelopeViolations(envelope);
+  if (violations.length > 0) {
+    log.warn('teaching question envelope does not match the strict shape', {
+      requestId: request.requestId,
+      versionId: version.id,
+      objectiveRef: request.objectiveRef,
+      violations: violations.slice(0, 10),
+    });
+  }
 
   log.info('teaching question set generated', {
     requestId: request.requestId,

@@ -258,6 +258,9 @@ export default function ClassroomDetailPage() {
             name: stage.name || '',
             description: stage.description,
             style: stage.style,
+            // Authoritative Stage metadata only — never inferred from text.
+            ...(stage.language ? { language: stage.language } : {}),
+            ...(stage.textDirection ? { textDirection: stage.textDirection } : {}),
           },
           agents: params.agents,
           userProfile: params.userProfile,

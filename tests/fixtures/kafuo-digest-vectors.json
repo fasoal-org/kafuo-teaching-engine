@@ -23,6 +23,14 @@
             "id": "8",
             "versionLabel": "2026-A"
           },
+          "subjectOffering": {
+            "id": "10",
+            "name": "Science",
+            "code": "BIOLOGY",
+            "nameAr": "العلوم",
+            "nameEn": "Science",
+            "academicLanguage": "ar"
+          },
           "language": "ar"
         },
         "learningObjectives": [
@@ -61,7 +69,7 @@
         },
         "actorRef": "42"
       },
-      "digest": "ee124aac3a1d92547dca5c1654cb5259a2d72f27446ce56273a2cf2a4a58a382"
+      "digest": "88731ad71b014154abb261b2db82c479168878527b7525b361851af54a1ee29f"
     },
     {
       "request": {
@@ -84,6 +92,14 @@
           "curriculumVersion": {
             "id": "8",
             "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "11",
+            "name": "English",
+            "code": null,
+            "nameAr": "اللغة الإنجليزية",
+            "nameEn": "English",
+            "academicLanguage": "en"
           },
           "language": "ar"
         },
@@ -141,7 +157,7 @@
         "actorRef": "42",
         "versionId": "tpv-existing-1"
       },
-      "digest": "6fee91a22956165a22557963520400c69ce70c64ada1db0d3507c7f3e1f958f4"
+      "digest": "26a6311e8a6603a622e152199529397109733128efd38eef06152ab640a02337"
     },
     {
       "request": {
@@ -164,6 +180,14 @@
           "curriculumVersion": {
             "id": "8",
             "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "12",
+            "name": "Math",
+            "code": "MATH",
+            "nameAr": "الرياضيات",
+            "nameEn": "Math",
+            "academicLanguage": "ar"
           },
           "language": "ar"
         },
@@ -288,7 +312,7 @@
         "actorRef": "42",
         "teachingSkills": "kafuo.teaching-skills.v1"
       },
-      "digest": "4716d1c1de1950c51e2cf4870a8a48ae107cd7e44d5189ecc32781bb347c8eca"
+      "digest": "cafe1bee8cf3b8a6df9602198406f3c161535d2c62f0ec56935586a2a9e16328"
     }
   ]
 }

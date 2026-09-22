@@ -523,6 +523,32 @@ export async function recordResolvedLlmModel(
 }
 
 /**
+ * Record the subject route a Kafuo attempt runs under (Kafuo R1 plan §5.1,
+ * §7.4): the snapshot's `subjectCode` / `policyVersion` / `primaryModel` /
+ * `fallbackModel` and the first-class `subject_code` column, written ONCE by
+ * the runner after the policy resolved and before any model call. A routed
+ * run records the policy pair instead of `resolvedLlmModel`.
+ */
+export async function recordSubjectRoute(
+  pool: ConnectableQueryable,
+  attemptId: string,
+  route: {
+    subjectCode: string;
+    policyVersion: string;
+    primaryModel: string;
+    fallbackModel: string;
+  },
+): Promise<void> {
+  await pool.query(
+    `UPDATE teaching_package_generation_attempts
+        SET input_snapshot = input_snapshot || $2::jsonb,
+            subject_code = $3
+      WHERE id = $1`,
+    [attemptId, JSON.stringify(route), route.subjectCode],
+  );
+}
+
+/**
  * The completion transaction (§8.3 step 3), run after the Stage save committed
  * in its own owner-bound transaction. Links version history and marks the
  * attempt succeeded; on a version-side failure the Stage is tombstoned and the

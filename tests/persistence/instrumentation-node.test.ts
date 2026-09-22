@@ -23,6 +23,9 @@ interface Harness {
   validateTeachingEngineIntegrationConfig: ReturnType<typeof vi.fn>;
   startAssetCollectorSchedule: ReturnType<typeof vi.fn>;
   startWebhookDeliverySchedule: ReturnType<typeof vi.fn>;
+  startAccountingSweeper: ReturnType<typeof vi.fn>;
+  startMeterOutboxSweeper: ReturnType<typeof vi.fn>;
+  drainOnShutdown: ReturnType<typeof vi.fn>;
   isAgentRuntimeConfigured: ReturnType<typeof vi.fn>;
   poolEnd: ReturnType<typeof vi.fn>;
   getServerPersistenceProvider: ReturnType<typeof vi.fn>;
@@ -41,6 +44,9 @@ function mockInstrumentationSeams(options?: { agentRuntime?: boolean }): Harness
     validateTeachingEngineIntegrationConfig: vi.fn(),
     startAssetCollectorSchedule: vi.fn(() => ({ stop: vi.fn(record('asset-collector')) })),
     startWebhookDeliverySchedule: vi.fn(() => ({ stop: vi.fn(record('webhook-schedule')) })),
+    startAccountingSweeper: vi.fn(() => ({ stop: vi.fn(record('accounting-sweeper')) })),
+    startMeterOutboxSweeper: vi.fn(() => ({ stop: vi.fn(record('meter-outbox-sweeper')) })),
+    drainOnShutdown: vi.fn(record('ledger-retry-drain')),
     isAgentRuntimeConfigured: vi.fn(() => options?.agentRuntime ?? false),
     poolEnd: vi.fn(record('postgres-pool')),
     getServerPersistenceProvider: vi.fn(),
@@ -55,6 +61,16 @@ function mockInstrumentationSeams(options?: { agentRuntime?: boolean }): Harness
   }));
   vi.doMock('@/lib/server/config-validation', () => ({
     validateServerConfig: harness.validateServerConfig,
+    validateSubjectRoutingConfig: vi.fn(),
+  }));
+  vi.doMock('@/lib/server/teaching-model/accounting-sweeper', () => ({
+    startAccountingSweeper: harness.startAccountingSweeper,
+  }));
+  vi.doMock('@/lib/server/teaching-model/meter-outbox-sweeper', () => ({
+    startMeterOutboxSweeper: harness.startMeterOutboxSweeper,
+  }));
+  vi.doMock('@/lib/server/teaching-model/ledger-retry-queue', () => ({
+    drainOnShutdown: harness.drainOnShutdown,
   }));
   vi.doMock('@/lib/server/teaching-package/safe-error', () => ({
     validateTeachingEngineIntegrationConfig: harness.validateTeachingEngineIntegrationConfig,
@@ -159,6 +175,9 @@ describe('node instrumentation', () => {
       'event-notify-bus',
       'asset-collector',
       'webhook-schedule',
+      'ledger-retry-drain',
+      'accounting-sweeper',
+      'meter-outbox-sweeper',
       'postgres-pool',
     ]);
   });
@@ -183,6 +202,9 @@ describe('node instrumentation', () => {
       'event-notify-bus',
       'asset-collector',
       'webhook-schedule',
+      'ledger-retry-drain',
+      'accounting-sweeper',
+      'meter-outbox-sweeper',
       'postgres-pool',
     ]);
     expect(harness.poolEnd).toHaveBeenCalledTimes(1);
@@ -199,7 +221,14 @@ describe('node instrumentation', () => {
 
     // The runner seams were never started, so they contribute no teardown step;
     // the remaining order is unchanged.
-    expect(harness.order).toEqual(['asset-collector', 'webhook-schedule', 'postgres-pool']);
+    expect(harness.order).toEqual([
+      'asset-collector',
+      'webhook-schedule',
+      'ledger-retry-drain',
+      'accounting-sweeper',
+      'meter-outbox-sweeper',
+      'postgres-pool',
+    ]);
   });
 
   it('does not close a pool it never opened', async () => {
@@ -214,6 +243,45 @@ describe('node instrumentation', () => {
 
     expect(harness.getServerPersistenceProvider).not.toHaveBeenCalled();
     expect(harness.order).not.toContain('postgres-pool');
+  });
+
+  it('starts both Kafuo R1 sweepers at boot and stops them before the pool (plan §9.4)', async () => {
+    const harness = mockInstrumentationSeams();
+    const signals = captureSignalHandlers();
+
+    const { registerNodeInstrumentation } = await import('@/lib/server/instrumentation-node');
+    await registerNodeInstrumentation();
+    expect(harness.startAccountingSweeper).toHaveBeenCalledOnce();
+    expect(harness.startMeterOutboxSweeper).toHaveBeenCalledOnce();
+
+    signals.handlerFor('SIGTERM')();
+    await vi.waitFor(() => expect(harness.poolEnd).toHaveBeenCalled());
+    // The meter outbox stop (which releases this worker's leases) runs after the
+    // ledger drain and the accounting sweeper, and strictly before the pool ends.
+    expect(harness.order.indexOf('meter-outbox-sweeper')).toBeGreaterThan(
+      harness.order.indexOf('accounting-sweeper'),
+    );
+    expect(harness.order.indexOf('meter-outbox-sweeper')).toBeLessThan(
+      harness.order.indexOf('postgres-pool'),
+    );
+  });
+
+  it('tolerates the sweepers being gated off (Teaching Package API unconfigured)', async () => {
+    const harness = mockInstrumentationSeams();
+    harness.startAccountingSweeper.mockReturnValue(undefined);
+    harness.startMeterOutboxSweeper.mockReturnValue(undefined);
+    const signals = captureSignalHandlers();
+
+    const { registerNodeInstrumentation } = await import('@/lib/server/instrumentation-node');
+    await registerNodeInstrumentation();
+    signals.handlerFor('SIGTERM')();
+    await vi.waitFor(() => expect(harness.poolEnd).toHaveBeenCalled());
+    expect(harness.order).toEqual([
+      'asset-collector',
+      'webhook-schedule',
+      'ledger-retry-drain',
+      'postgres-pool',
+    ]);
   });
 
   it('keeps the production fail-fast validation on the startup path', async () => {

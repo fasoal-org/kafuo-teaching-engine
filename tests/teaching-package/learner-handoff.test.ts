@@ -23,6 +23,7 @@ import {
   mintEditorHandoffToken,
   stableLearnerKey,
   verifyEditorHandoffToken,
+  readEditorGrants,
 } from '@/lib/server/teaching-package/editor-grant';
 
 const SERVICE_KEY = 'learner-handoff-test-key';
@@ -58,11 +59,12 @@ async function mint(body: Record<string, unknown>) {
   );
 }
 
-async function redeem(token: string) {
+async function redeem(token: string, headers: Record<string, string> = {}) {
   const { GET } = await import('@/app/api/teaching-packages/editor-handoff/route');
   return GET(
     new NextRequest(
       `http://te.test/api/teaching-packages/editor-handoff?token=${encodeURIComponent(token)}`,
+      { headers },
     ),
   );
 }
@@ -132,7 +134,40 @@ describe('learner handoff redeem', () => {
       );
     expect(learnerKey(first)).toMatch(/^tp:/);
     expect(learnerKey(first)).toBe(learnerKey(second));
-    expect(learnerKey(first)).toBe(stableLearnerKey('tenant-l', 'tpv-test-opaque-001', LEARNER_REF));
+    expect(learnerKey(first)).toBe(
+      stableLearnerKey('tenant-l', 'tpv-test-opaque-001', LEARNER_REF),
+    );
+  });
+
+  it('answers a native client with JSON — identical cookies, a learner-purpose grant, no redirect (RSS W5A)', async () => {
+    const { token } = mintEditorHandoffToken({
+      tenantId: 'tenant-l',
+      versionId: 'tpv-test-opaque-001',
+      stageId: 'stage-approved',
+      capability: 'read',
+      purpose: 'learner',
+      learnerRef: LEARNER_REF,
+    });
+    routeMocks.getVersion.mockResolvedValue(version('approved'));
+    const response = await redeem(token, { accept: 'application/json' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toMatchObject({
+      stageId: 'stage-approved',
+      capability: 'read',
+      documentPath: '/api/persistence/documents/stage-approved',
+    });
+    const grantCookie = response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('teaching_package_grant='))!
+      .split(';')[0]!;
+    const [grant] = readEditorGrants(new Headers({ cookie: grantCookie }));
+    // The purpose rides the grant, so the persistence route can omit `outline`.
+    expect(grant).toMatchObject({
+      stageId: 'stage-approved',
+      capability: 'read',
+      purpose: 'learner',
+    });
   });
 
   it('refuses a learner token whose version was discarded after minting', async () => {

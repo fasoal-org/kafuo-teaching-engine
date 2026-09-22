@@ -37,6 +37,8 @@ import {
   readEditorGrants,
   type VerifiedEditorGrant,
 } from '@/lib/server/teaching-package/editor-grant';
+import { getVerdictStore } from '@/lib/server/visual-compliance';
+import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 
 export const runtime = 'nodejs';
@@ -372,7 +374,9 @@ async function evaluateEditorGrant(
     // behaves exactly like an absent one.
     const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
     const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
-    const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(() => false);
+    const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(
+      () => false,
+    );
     if (!belongs) return { covered: false };
     const method = request.method.toUpperCase();
     const mutating = method !== 'GET' && method !== 'HEAD';
@@ -422,7 +426,9 @@ async function evaluateEditorGrant(
     if (grant) {
       const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
       const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
-      const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(() => false);
+      const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(
+        () => false,
+      );
       if (!belongs) {
         return {
           covered: true,
@@ -559,8 +565,21 @@ export async function handlePersistenceRequest(
               ),
               request,
             );
-      for (const [name, value] of responseHeaders.entries()) response.headers.append(name, value);
-      return response;
+      // RSS 7.5.8 — the learner delivery boundary. A document READ served under
+      // a `read` grant (learner and preview) passes through the compliance
+      // overlay, which blanks a confirmed MOE-prohibited visual. The stored
+      // document is untouched and `write`-grant editors see the original. It is
+      // the only read-time transformation of the authoritative document.
+      const overlaid =
+        request.method === 'GET' &&
+        grantEvaluation.covered &&
+        !grantEvaluation.refusal &&
+        grantEvaluation.mode === 'documents' &&
+        grantEvaluation.grant.capability === 'read'
+          ? await withLearnerDelivery(response, grantEvaluation.grant.purpose === 'learner')
+          : response;
+      for (const [name, value] of responseHeaders.entries()) overlaid.headers.append(name, value);
+      return overlaid;
     } catch (error) {
       console.error('Embedded persistence route initialization failed', error);
       const response = jsonError(
@@ -572,6 +591,35 @@ export async function handlePersistenceRequest(
       return response;
     }
   });
+}
+
+/**
+ * The two read-time behaviours of a document served under a `read` grant,
+ * applied in a fixed order: (1) omit the planner `outline` for a LEARNER grant —
+ * planner documents (which also hold `assistancePlan` / `visualPlan`) are not
+ * learner delivery; edit and preview grants keep receiving it — then (2) the
+ * compliance overlay. `stage` and `scenes` are otherwise returned as stored.
+ */
+async function withLearnerDelivery(response: Response, learner: boolean): Promise<Response> {
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+    return response;
+  }
+  const body: unknown = await response
+    .clone()
+    .json()
+    .catch(() => undefined);
+  if (body === undefined) return response;
+  let delivered = body;
+  if (learner && typeof body === 'object' && body !== null && 'outline' in body) {
+    const { outline: _planner, ...learnerDocument } = body as Record<string, unknown>;
+    delivered = learnerDocument;
+  }
+  const overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
+  if (overlaid === body) return response;
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  headers.delete('etag');
+  return new Response(JSON.stringify(overlaid), { status: response.status, headers });
 }
 
 export const GET = (request: Request) => handlePersistenceRequest(request);

@@ -299,6 +299,25 @@ describe('instrumentation registration', () => {
     vi.doMock('@/lib/server/teaching-package/webhook-delivery', () => ({
       startWebhookDeliverySchedule,
     }));
+    // Kafuo R1: `register()` also fail-fasts on the subject routing policy and
+    // starts the accounting/meter sweepers; both are the instrumentation
+    // test's subject, not this one's (the WEBHOOK schedule decision).
+    vi.doMock('@/lib/server/config-validation', () => ({
+      validateServerConfig: vi.fn(),
+      validateSubjectRoutingConfig: vi.fn(),
+    }));
+    vi.doMock('@/lib/server/teaching-model/accounting-sweeper', () => ({
+      startAccountingSweeper: vi.fn(() => ({ stop: vi.fn().mockResolvedValue(undefined) })),
+    }));
+    vi.doMock('@/lib/server/teaching-model/meter-outbox-sweeper', () => ({
+      startMeterOutboxSweeper: vi.fn(() => ({ stop: vi.fn().mockResolvedValue(undefined) })),
+    }));
+    vi.doMock('@/lib/server/teaching-model/ledger-retry-queue', () => ({
+      drainOnShutdown: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.doMock('@/lib/server/tutor/legacy-help-service', () => ({
+      registerLegacyHelpRetention: vi.fn(),
+    }));
     vi.doMock('pg', () => ({
       Pool: class {
         end = vi.fn().mockResolvedValue(undefined);
@@ -321,6 +340,11 @@ describe('instrumentation registration', () => {
     vi.doUnmock('pg');
     vi.doUnmock('@/lib/server/teaching-package/webhook-delivery');
     vi.doUnmock('@/lib/persistence/asset-collector-schedule');
+    vi.doUnmock('@/lib/server/config-validation');
+    vi.doUnmock('@/lib/server/teaching-model/accounting-sweeper');
+    vi.doUnmock('@/lib/server/teaching-model/meter-outbox-sweeper');
+    vi.doUnmock('@/lib/server/teaching-model/ledger-retry-queue');
+    vi.doUnmock('@/lib/server/tutor/legacy-help-service');
   });
 
   /**

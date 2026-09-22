@@ -10,6 +10,7 @@ import { NextRequest } from 'next/server';
 import { callLLM } from '@/lib/ai/llm';
 import {
   generateSceneActions,
+  assertGeneratedSlideScene,
   buildCompleteScene,
   buildVisionUserContent,
   type SceneGenerationContext,
@@ -27,6 +28,7 @@ import type { PBLContent } from '@/lib/types/stage';
 import { createLogger } from '@/lib/logger';
 import { normalizeLegacyPBLContent } from '@/lib/pbl/legacy/read';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { rejectInvalidSlideOutline } from '@/lib/server/generation-contract';
 import { llmApiError } from '@/lib/server/llm-error-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 
@@ -78,6 +80,8 @@ export async function POST(req: NextRequest) {
     if (!content) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'content is required');
     }
+    const invalidOutline = rejectInvalidSlideOutline(outline);
+    if (invalidOutline) return invalidOutline;
     if (!stageId) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageId is required');
     }
@@ -174,6 +178,10 @@ export async function POST(req: NextRequest) {
 
       return apiError('GENERATION_FAILED', 500, `Failed to build scene: ${outline.title}`);
     }
+    // Fail instead of drop: a newly generated scene with missing or invalid
+    // slide semantics — or independent practice whose content arrived without
+    // the assistance `/scene-content` authored — is refused, never shipped.
+    assertGeneratedSlideScene(scene);
 
     // ── Extract speeches for cross-scene coherence ──
     const outputPreviousSpeeches = (scene.actions || [])

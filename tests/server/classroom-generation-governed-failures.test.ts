@@ -72,6 +72,8 @@ const outlines = [
   {
     id: 'w2o1',
     type: 'slide' as const,
+    slideType: 'content' as const,
+    contentRole: 'example' as const,
     title: 'Opening',
     description: 'Introduce the topic.',
     keyPoints: ['Anchor'],
@@ -82,6 +84,8 @@ const outlines = [
   {
     id: 'w2o2',
     type: 'slide' as const,
+    slideType: 'content' as const,
+    contentRole: 'example' as const,
     title: 'Cards',
     description: 'Consolidate.',
     keyPoints: ['Recap'],

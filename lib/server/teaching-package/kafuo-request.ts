@@ -20,6 +20,7 @@ import type {
   KafuoContentResource,
   KafuoGenerationRequest,
   KafuoNormalizedContentResource,
+  KafuoSubjectOffering,
   LearningObjectiveRef,
   TeachingFlowEntry,
   TeachingModelLineage,
@@ -298,6 +299,54 @@ function parseFlow(raw: unknown): TeachingFlowEntry[] {
   });
 }
 
+/**
+ * `learningItem.subjectOffering` (R1 contracts §6). `code`, `nameAr`, `nameEn`
+ * and `academicLanguage` are copied AS RECEIVED — string or null — and only
+ * when the wire carried the key: the canonical digest covers `learningItem`
+ * whole on both sides, so a parse-time normalisation here would silently
+ * diverge from the Backend's `canonical_request_digest`. The routing code is
+ * normalised separately (`subjectCodeOf`). A `code` of another type is a
+ * malformed request, never coerced.
+ */
+function parseSubjectOffering(raw: unknown): KafuoSubjectOffering {
+  const record = raw as Record<string, unknown>;
+  const optionalText = (key: 'code' | 'nameAr' | 'nameEn' | 'academicLanguage') => {
+    if (!(key in record)) return {};
+    const value = record[key];
+    if (value !== null && typeof value !== 'string') {
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `learningItem.subjectOffering.${key} must be a string or null when present`,
+      );
+    }
+    return { [key]: value };
+  };
+  return {
+    id: String(record.id ?? ''),
+    name: String(record.name ?? ''),
+    ...optionalText('code'),
+    ...optionalText('nameAr'),
+    ...optionalText('nameEn'),
+    ...optionalText('academicLanguage'),
+  };
+}
+
+/**
+ * The routing subject code for a request: `subjectOffering.code` trimmed and
+ * upper-cased, or `null` when the offering is absent, carries no code, or the
+ * Backend sent `code: null` (an unrouted master subject). Null is a legal
+ * parse result; whether it is ACCEPTED is the routing mode's decision at the
+ * generate route (`SUBJECT_ROUTE_UNAVAILABLE` when enforced).
+ */
+export function subjectCodeOf(
+  request: Pick<KafuoGenerationRequest, 'learningItem'>,
+): string | null {
+  const code = request.learningItem.subjectOffering?.code;
+  if (typeof code !== 'string') return null;
+  const normalized = code.trim().toUpperCase();
+  return normalized === '' ? null : normalized;
+}
+
 function parseContentResource(raw: unknown): KafuoContentResource {
   const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
   if (!record) {
@@ -492,12 +541,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
         }
       : {}),
     ...(learningItem.subjectOffering && typeof learningItem.subjectOffering === 'object'
-      ? {
-          subjectOffering: {
-            id: String((learningItem.subjectOffering as Record<string, unknown>).id ?? ''),
-            name: String((learningItem.subjectOffering as Record<string, unknown>).name ?? ''),
-          },
-        }
+      ? { subjectOffering: parseSubjectOffering(learningItem.subjectOffering) }
       : {}),
     ...(learningItem.level && typeof learningItem.level === 'object'
       ? {
@@ -785,10 +829,25 @@ export interface KafuoGenerationContext {
   teachingModel: TeachingModelLineage;
   learningObjectives: LearningObjectiveRef[];
   requirement: string;
+  /**
+   * `learningItem.language` — the authoritative language of instruction. The
+   * runner hands it to generation, which stamps the Stage's `language` and the
+   * `textDirection` resolved from it.
+   */
+  language: string;
   contentResource: KafuoContentResource;
   normalizedContentResource?: KafuoNormalizedContentResource;
   generation: KafuoGenerationRequest['generation'];
   versionId: string | null;
+  /**
+   * The routing subject (R1 plan §7.4): `subjectOffering.code` normalised by
+   * `subjectCodeOf`, or null for an unrouted/absent offering. Under
+   * `TEACHING_SUBJECT_ROUTING=enforced` the generate route refuses a null
+   * before any attempt exists; the runner resolves the policy from it ONCE.
+   */
+  subjectCode: string | null;
+  /** The offering as received (display names, academic language) — never a routing input. */
+  subjectOffering: KafuoSubjectOffering | null;
 }
 
 /** Assemble the StartGenerationAttemptRequest for a parsed Kafuo request. */
@@ -802,6 +861,7 @@ export function buildKafuoStartRequest(
     requirement,
     ...request.generation,
     teachingFlow: request.teachingModel.flow,
+    language: request.learningItem.language,
   };
   return {
     start: {
@@ -839,12 +899,15 @@ export function buildKafuoStartRequest(
       },
       learningObjectives: request.learningObjectives,
       requirement,
+      language: request.learningItem.language,
       contentResource: request.contentResource,
       ...(request.normalizedContentResource
         ? { normalizedContentResource: request.normalizedContentResource }
         : {}),
       generation: request.generation,
       versionId: request.versionId ?? null,
+      subjectCode: subjectCodeOf(request),
+      subjectOffering: request.learningItem.subjectOffering ?? null,
     },
   };
 }

@@ -9,6 +9,8 @@ function outline(type: SceneOutline['type']): SceneOutline {
   return {
     id: `outline-${type}`,
     type,
+    // A newly generated slide must be classified; other families carry none.
+    ...(type === 'slide' && { slideType: 'content', contentRole: 'example' }),
     title: `${type} title`,
     description: `${type} description`,
     order: 2,

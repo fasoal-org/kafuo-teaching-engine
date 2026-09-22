@@ -315,6 +315,8 @@ describe('W17 submit gate', () => {
           {
             id: 'po1',
             type: 'slide' as const,
+            slideType: 'content' as const,
+            contentRole: 'example' as const,
             title: 'Opening',
             description: 'Introduce the topic.',
             keyPoints: ['Anchor the goal'],
@@ -325,6 +327,8 @@ describe('W17 submit gate', () => {
           {
             id: 'po2',
             type: 'slide' as const,
+            slideType: 'content' as const,
+            contentRole: 'example' as const,
             title: 'Cards',
             description: 'Structural consolidation.',
             keyPoints: ['Recap'],
@@ -680,6 +684,8 @@ describe('W17 submit gate', () => {
           {
             id: 'w3o1',
             type: 'slide',
+            slideType: 'content',
+            contentRole: 'example',
             title: 'Opening',
             description: 'd',
             keyPoints: [],
@@ -690,6 +696,8 @@ describe('W17 submit gate', () => {
           {
             id: 'w3o2',
             type: 'slide',
+            slideType: 'content',
+            contentRole: 'example',
             title: 'Cards',
             description: 'd',
             keyPoints: [],

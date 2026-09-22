@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   DEFAULT_LANGUAGE_DIRECTIVE,
   applyOutlineFallbacks,
+  buildOutlinePrompt,
   generateSceneOutlinesFromRequirements,
   sanitizeProceduralSkillOutline,
   type AICallFn,
@@ -15,6 +16,9 @@ import {
 const baseOutline: SceneOutline = {
   id: 'scene_1',
   type: 'slide',
+  slideType: 'content',
+  contentRole: 'explanation',
+  contentKind: 'concept',
   title: 'Photosynthesis',
   description: 'How plants make food',
   keyPoints: ['light', 'water', 'carbon dioxide'],
@@ -52,6 +56,8 @@ describe('generateSceneOutlinesFromRequirements', () => {
       "outlines": [{
         "id": "scene_1",
         "type": "slide",
+        "slideType": "content",
+        "contentRole": "summary",
         "title": "Repairable",
         "description": "A repaired response",
         "keyPoints": ["one"],
@@ -110,6 +116,132 @@ describe('generateSceneOutlinesFromRequirements', () => {
     expect(capturedPrompt).not.toContain('{{');
   });
 
+  test('keeps a valid slide classification verbatim on the enriched outline', async () => {
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Photosynthesis',
+          outlines: [
+            {
+              ...baseOutline,
+              id: 's1',
+              slideType: 'cover',
+              contentRole: 'orientation',
+              contentKind: undefined,
+              visualPlan: { mode: 'native' },
+            },
+            { ...baseOutline, id: 's2' },
+          ],
+        }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines[0]).toMatchObject({
+      slideType: 'cover',
+      contentRole: 'orientation',
+    });
+    expect(result.data?.outlines[1]).toMatchObject({
+      slideType: 'content',
+      contentRole: 'explanation',
+      contentKind: 'concept',
+    });
+  });
+
+  test.each([
+    ['an unclassified slide', { slideType: undefined, contentRole: undefined }],
+    ['example + concept', { contentRole: 'example', contentKind: 'concept' }],
+    ['summary + guided', { contentRole: 'summary', contentKind: 'guided' }],
+    ['procedure + observation', { contentRole: 'procedure', contentKind: 'observation' }],
+    ['a Teaching Model stage name as a role', { contentRole: 'lesson_introduction' }],
+  ])('rejects %s instead of guessing a classification', async (_label, patch) => {
+    const warn = vi.fn();
+    const logger: GenerationLogger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    const aiCall: AICallFn = vi.fn(async () =>
+      JSON.stringify({
+        languageDirective: 'Teach in English.',
+        courseTitle: 'Photosynthesis',
+        outlines: [{ ...baseOutline, contentKind: undefined, ...patch }],
+      }),
+    );
+
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      aiCall,
+      { logger },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+    expect(result.error).toContain('OUTLINE_SLIDE_SEMANTICS_INVALID');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OUTLINE_SLIDE_SEMANTICS_INVALID'));
+    // No hidden repair loop: the caller's re-roll is the only remedy.
+    expect(aiCall).toHaveBeenCalledTimes(1);
+  });
+
+  test('leaves quiz / interactive / pbl outlines unclassified and available', async () => {
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Photosynthesis',
+          outlines: [
+            {
+              ...baseOutline,
+              id: 'q1',
+              type: 'quiz',
+              // Stray semantics on a non-slide outline are dropped, not judged.
+              contentRole: 'check_understanding',
+              quizConfig: { questionCount: 2, difficulty: 'easy', questionTypes: ['single'] },
+            },
+            {
+              id: 'i1',
+              type: 'interactive',
+              title: 'Explore',
+              description: 'Simulate light intensity',
+              keyPoints: ['light'],
+              order: 2,
+              widgetType: 'simulation',
+              widgetOutline: { concept: 'Photosynthesis', keyVariables: ['light'] },
+            },
+            {
+              id: 'p1',
+              type: 'pbl',
+              title: 'Garden project',
+              description: 'Design a school garden',
+              keyPoints: ['plan'],
+              order: 3,
+              pblConfig: {
+                projectTopic: 'School garden',
+                projectDescription: 'Design it',
+                targetSkills: ['planning'],
+              },
+            },
+          ],
+        }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines.map((outline) => outline.type)).toEqual([
+      'quiz',
+      'interactive',
+      'pbl',
+    ]);
+    for (const outline of result.data!.outlines) {
+      expect(outline).not.toHaveProperty('slideType');
+      expect(outline).not.toHaveProperty('contentRole');
+      expect(outline).not.toHaveProperty('contentKind');
+    }
+  });
+
   const requirements: UserRequirements = { requirement: 'Teach photosynthesis' };
   async function runWith(raw: unknown) {
     return generateSceneOutlinesFromRequirements(requirements, undefined, undefined, async () =>
@@ -138,20 +270,92 @@ describe('generateSceneOutlinesFromRequirements', () => {
   });
 });
 
+describe('no runtime scene degrades to a slide (RSS W2, T-05)', () => {
+  const requirements = { requirement: 'Teach photosynthesis' };
+  const interactive = (order: number): SceneOutline => ({
+    id: `i${order}`,
+    type: 'interactive',
+    title: 'Explore',
+    description: 'D',
+    keyPoints: ['k'],
+    order,
+    widgetType: 'simulation',
+    widgetOutline: { concept: 'Light' },
+  });
+  const pbl: SceneOutline = {
+    id: 'p1',
+    type: 'pbl',
+    title: 'Project',
+    description: 'D',
+    keyPoints: ['k'],
+    order: 2,
+    pblConfig: { projectTopic: 'Garden', projectDescription: 'Grow it', targetSkills: [] },
+  };
+  const run = (outlines: unknown[], options = {}) =>
+    generateSceneOutlinesFromRequirements(
+      requirements,
+      undefined,
+      undefined,
+      async () => JSON.stringify({ languageDirective: 'English', outlines }),
+      options,
+    );
+
+  test('a config-less interactive outline is rejected for re-roll, never converted', async () => {
+    const { widgetType: _w, widgetOutline: _o, ...bare } = interactive(1);
+    const result = await run([baseOutline, bare]);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/OUTLINE_SCENE_CONFIG_INVALID.*#1/);
+  });
+
+  test('a plan that requires an unavailable runtime stops with the typed conflict', async () => {
+    await expect(
+      run([baseOutline, pbl], { availableRuntimes: { pbl: false } }),
+    ).rejects.toMatchObject({
+      code: 'SCENE_RUNTIME_UNAVAILABLE',
+      requiredType: 'pbl',
+      sceneIndex: 1,
+    });
+  });
+
+  test('required runtime scenes beyond the prompt budget are kept; only a configured hard limit conflicts', async () => {
+    const plan = [interactive(1), interactive(2), interactive(3)];
+    const kept = await run(plan);
+    expect(kept.data?.outlines.map((outline) => outline.type)).toEqual(
+      Array(3).fill('interactive'),
+    );
+    await expect(run(plan, { sceneHardLimits: { interactive: 2 } })).rejects.toMatchObject({
+      code: 'SCENE_CAP_CONFLICT',
+      family: 'interactive',
+      required: 3,
+      limit: 2,
+    });
+  });
+
+  test('a re-roll carries the rejection back as corrective context', () => {
+    const prompts = buildOutlinePrompt(requirements, { correctiveContext: 'SENTINEL-ISSUE' });
+    expect(prompts.user).toContain('SENTINEL-ISSUE');
+    expect(buildOutlinePrompt(requirements).user).not.toContain('Correction Required');
+  });
+});
+
 describe('outline fallbacks', () => {
-  test('downgrades incomplete interactive and PBL outlines', () => {
-    expect(applyOutlineFallbacks({ ...baseOutline, type: 'interactive' }, true).type).toBe('slide');
-    expect(applyOutlineFallbacks({ ...baseOutline, type: 'pbl' }, true).type).toBe('slide');
-    expect(
-      applyOutlineFallbacks(
-        {
-          ...baseOutline,
-          type: 'pbl',
-          pblConfig: { projectTopic: 'Garden', projectDescription: 'Grow it', targetSkills: [] },
-        },
-        false,
-      ).type,
-    ).toBe('slide');
+  // RSS W2: a runtime scene is never downgraded to a slide. (This test pinned
+  // the old fallback-to-slide behaviour and was rewritten to the new contract.)
+  test('refuses incomplete or undeliverable interactive / PBL outlines instead of downgrading them', () => {
+    expect(() => applyOutlineFallbacks({ ...baseOutline, type: 'interactive' }, true)).toThrow(
+      /OUTLINE_SCENE_CONFIG_INVALID/,
+    );
+    expect(() => applyOutlineFallbacks({ ...baseOutline, type: 'pbl' }, true)).toThrow(
+      /OUTLINE_SCENE_CONFIG_INVALID/,
+    );
+    const pbl = {
+      ...baseOutline,
+      type: 'pbl' as const,
+      pblConfig: { projectTopic: 'Garden', projectDescription: 'Grow it', targetSkills: [] },
+    };
+    expect(() => applyOutlineFallbacks(pbl, false)).toThrow(
+      expect.objectContaining({ code: 'SCENE_RUNTIME_UNAVAILABLE', requiredType: 'pbl' }),
+    );
   });
 
   test('keeps configured interactive and PBL outlines when a language model is present', () => {
@@ -170,15 +374,19 @@ describe('outline fallbacks', () => {
     expect(applyOutlineFallbacks(pbl, true)).toBe(pbl);
   });
 
-  test('logs a fallback through the injected structural logger', () => {
+  test('logs the procedural-skill fallback through the injected structural logger', () => {
     const warn = vi.fn();
-    const logger: GenerationLogger = {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn,
-      error: vi.fn(),
-    };
-    applyOutlineFallbacks({ ...baseOutline, type: 'interactive' }, true, { logger });
+    const logger: GenerationLogger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    applyOutlineFallbacks(
+      {
+        ...baseOutline,
+        type: 'interactive',
+        widgetType: 'procedural-skill',
+        widgetOutline: { concept: 'Wiring' },
+      },
+      true,
+      { logger },
+    );
     expect(warn).toHaveBeenCalledOnce();
   });
 });

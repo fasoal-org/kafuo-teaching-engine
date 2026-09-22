@@ -1,0 +1,688 @@
+[
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "orientation-x",
+      "type": "slide",
+      "slideType": "cover",
+      "contentRole": "orientation",
+      "title": "Average Speed",
+      "description": "Open the lesson on average speed.",
+      "keyPoints": [
+        "Hook: who is faster — a cheetah for 10 s or a cyclist for an hour?",
+        "Context: comparing motion needs one measure",
+        "Objectives: define average speed; compute it; compare journeys",
+        "Big idea: speed = distance shared out over time"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "explanation-concept",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "What average speed means",
+      "description": "Teach the single concept of average speed.",
+      "keyPoints": [
+        "Average speed describes a whole journey, not each moment",
+        "It shares total distance evenly over total time",
+        "A car may stop and start yet have one average speed",
+        "Takeaway: one number that summarises a journey"
+      ],
+      "order": 2,
+      "contentKind": "concept"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "explanation-definition",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "Average speed",
+      "description": "Define the term.",
+      "keyPoints": [
+        "Term: average speed",
+        "Definition: total distance travelled divided by total time taken",
+        "Used to compare journeys of different lengths",
+        "Micro-example: 120 km in 2 h is 60 km/h"
+      ],
+      "order": 2,
+      "contentKind": "definition"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "explanation-rule",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "The speed formula",
+      "description": "State and explain the rule.",
+      "keyPoints": [
+        "Rule: speed = distance ÷ time",
+        "Distance and time must use matching units",
+        "Applies to the whole journey, including stops",
+        "Exception: it does not give the speed at one instant"
+      ],
+      "order": 2,
+      "contentKind": "rule"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "explanation-observation",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "Reading a distance–time graph",
+      "description": "Ground the observation in the graph.",
+      "keyPoints": [
+        "Observe: a distance–time graph of a bus journey",
+        "Notice: steeper sections cover more distance per minute",
+        "Observation: steepness shows speed",
+        "Why it matters: we can compare speeds without calculating"
+      ],
+      "order": 2,
+      "contentKind": "observation"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "example-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "example",
+      "title": "A train journey",
+      "description": "Illustrate with one case.",
+      "keyPoints": [
+        "Case: a train covers 240 km in 3 hours",
+        "Approach: identify total distance and total time",
+        "Reasoning: share 240 km evenly over 3 h → 80 km/h",
+        "Link: this is the speed rule applied once"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "worked_example-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "worked_example",
+      "title": "Solving a two-part journey",
+      "description": "Fully solved problem with reasoning.",
+      "keyPoints": [
+        "Problem: 60 km in 1 h, then 90 km in 2 h — find the average speed",
+        "Step 1: add distances (150 km) — the rule needs TOTAL distance",
+        "Step 2: add times (3 h) — the rule needs TOTAL time",
+        "Step 3: divide 150 ÷ 3 = 50 km/h",
+        "Result: 50 km/h; takeaway: never average the two speeds"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "procedure-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "procedure",
+      "title": "How to find average speed",
+      "description": "Reusable method.",
+      "keyPoints": [
+        "Goal: find the average speed of any journey",
+        "Step 1: find the total distance",
+        "Step 2: find the total time in one unit",
+        "Step 3: divide distance by time",
+        "Warning: convert minutes to hours first",
+        "Expected result: a speed with a unit such as km/h"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "activity-investigation",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "How fast do you walk?",
+      "description": "Learner investigation.",
+      "keyPoints": [
+        "Question: what is your average walking speed?",
+        "Actions: measure a 20 m path, time three walks",
+        "Record: each time in a table",
+        "Interpret: compute each speed and compare"
+      ],
+      "order": 2,
+      "contentKind": "investigation"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "activity-source_analysis",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "A bus timetable",
+      "description": "Learner analyses the source.",
+      "keyPoints": [
+        "Source: a timetable showing stops, distances and times",
+        "Prompt: which leg is fastest — what is your evidence?",
+        "Prompt: what might explain the slowest leg?",
+        "Prompt: justify your answer with figures from the table"
+      ],
+      "order": 2,
+      "contentKind": "source_analysis"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "activity-reflection",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "Speed in your day",
+      "description": "Reflection.",
+      "keyPoints": [
+        "Focus: where average speed matters in your own life",
+        "Prompt: when did a journey take longer than expected, and why?",
+        "Prompt: how would knowing average speed have helped you plan?"
+      ],
+      "order": 2,
+      "contentKind": "reflection"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "activity-production",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "Design a journey planner card",
+      "description": "Learner produces an output.",
+      "keyPoints": [
+        "Output: a one-page journey planner card",
+        "Purpose: help a friend estimate arrival times",
+        "Requirements: three journeys, distances, times, speeds with units",
+        "Success criteria: correct calculations, clear layout, units shown"
+      ],
+      "order": 2,
+      "contentKind": "production"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "practice-guided",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "Guided practice",
+      "description": "Practice with visible scaffolding.",
+      "keyPoints": [
+        "Task: a cyclist rides 45 km in 3 hours — find the average speed",
+        "Scaffold: total distance = ___ km; total time = ___ h",
+        "Scaffold: speed = ___ ÷ ___",
+        "Expected response: a speed in km/h"
+      ],
+      "order": 2,
+      "contentKind": "guided"
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "practice-independent",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "Try it yourself",
+      "description": "Independent practice — task only.",
+      "keyPoints": [
+        "A runner covers 12 km in 1.5 hours. Find the average speed in km/h."
+      ],
+      "order": 2,
+      "contentKind": "independent",
+      "assistancePlan": {
+        "hint": "Point to identifying total distance and total time",
+        "help": "Use distance divided by time with hours as the unit",
+        "explanation": "12 divided by 1.5 equals 8, so the average speed is 8 km/h"
+      }
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "practice-higher_order",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "Who is right?",
+      "description": "Higher-order practice.",
+      "keyPoints": [
+        "Sam says the average of 40 km/h and 60 km/h over equal distances is 50 km/h. Evaluate Sam's claim.",
+        "Explain your reasoning with a calculation."
+      ],
+      "order": 2,
+      "contentKind": "higher_order",
+      "assistancePlan": {
+        "hint": "Ask whether equal distances mean equal times",
+        "help": "Frame: compute total distance and total time for a chosen distance",
+        "explanation": "For 120 km each way the times are 3 h and 2 h, so 240 km in 5 h gives 48 km/h, not 50"
+      }
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "check_understanding-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "check_understanding",
+      "title": "Quick check",
+      "description": "Light formative check.",
+      "keyPoints": [
+        "A car travels 150 km in 3 hours. What is its average speed?"
+      ],
+      "order": 2,
+      "assistancePlan": {
+        "hint": "Think about sharing the distance over the time",
+        "explanation": "150 divided by 3 is 50 km/h"
+      }
+    }
+  },
+  {
+    "language": "en",
+    "languageDirective": "Deliver the entire lesson in English.",
+    "outline": {
+      "id": "summary-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "summary",
+      "title": "What we learned",
+      "description": "Consolidate.",
+      "keyPoints": [
+        "Average speed summarises a whole journey",
+        "Speed = total distance ÷ total time",
+        "Units must match",
+        "Never average two speeds directly",
+        "Takeaway: one rule, applied to totals"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "orientation-x",
+      "type": "slide",
+      "slideType": "cover",
+      "contentRole": "orientation",
+      "title": "السرعة المتوسطة",
+      "description": "افتتاح درس السرعة المتوسطة.",
+      "keyPoints": [
+        "تساؤل: من الأسرع — فهد يركض ١٠ ثوانٍ أم دراج يقود ساعة؟",
+        "السياق: مقارنة الحركة تحتاج إلى مقياس واحد",
+        "الأهداف: تعريف السرعة المتوسطة؛ حسابها؛ مقارنة الرحلات",
+        "الفكرة الكبرى: السرعة هي المسافة موزعة على الزمن"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "explanation-concept",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "معنى السرعة المتوسطة",
+      "description": "شرح مفهوم واحد.",
+      "keyPoints": [
+        "السرعة المتوسطة تصف الرحلة كلها لا كل لحظة",
+        "توزع المسافة الكلية بالتساوي على الزمن الكلي",
+        "قد تتوقف السيارة وتتحرك ولها سرعة متوسطة واحدة",
+        "الخلاصة: رقم واحد يلخص الرحلة"
+      ],
+      "order": 2,
+      "contentKind": "concept"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "explanation-definition",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "السرعة المتوسطة",
+      "description": "تعريف المصطلح.",
+      "keyPoints": [
+        "المصطلح: السرعة المتوسطة",
+        "التعريف: المسافة الكلية المقطوعة مقسومة على الزمن الكلي",
+        "تُستخدم لمقارنة رحلات مختلفة الطول",
+        "مثال مصغر: ١٢٠ كم في ساعتين تساوي ٦٠ كم/س"
+      ],
+      "order": 2,
+      "contentKind": "definition"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "explanation-rule",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "قانون السرعة",
+      "description": "ذكر القاعدة وشرحها.",
+      "keyPoints": [
+        "القاعدة: السرعة = المسافة ÷ الزمن",
+        "يجب أن تتوافق وحدات المسافة والزمن",
+        "تنطبق على الرحلة كلها بما فيها التوقفات",
+        "استثناء: لا تعطي السرعة عند لحظة معينة"
+      ],
+      "order": 2,
+      "contentKind": "rule"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "explanation-observation",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "title": "قراءة منحنى المسافة–الزمن",
+      "description": "ملاحظة مبنية على المنحنى.",
+      "keyPoints": [
+        "لاحظ: منحنى المسافة–الزمن لرحلة حافلة",
+        "انتبه: الأجزاء الأشد ميلاً تقطع مسافة أكبر في الدقيقة",
+        "الملاحظة: الميل يدل على السرعة",
+        "الأهمية: نقارن السرعات دون حساب"
+      ],
+      "order": 2,
+      "contentKind": "observation"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "example-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "example",
+      "title": "رحلة قطار",
+      "description": "مثال توضيحي.",
+      "keyPoints": [
+        "الحالة: قطار يقطع ٢٤٠ كم في ٣ ساعات",
+        "الطريقة: تحديد المسافة الكلية والزمن الكلي",
+        "التعليل: توزيع ٢٤٠ كم على ٣ ساعات ← ٨٠ كم/س",
+        "الربط: تطبيق واحد لقانون السرعة"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "worked_example-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "worked_example",
+      "title": "حل رحلة من جزأين",
+      "description": "مثال محلول بالكامل.",
+      "keyPoints": [
+        "المسألة: ٦٠ كم في ساعة ثم ٩٠ كم في ساعتين — أوجد السرعة المتوسطة",
+        "الخطوة ١: نجمع المسافات (١٥٠ كم) لأن القانون يحتاج المسافة الكلية",
+        "الخطوة ٢: نجمع الأزمنة (٣ س) لأن القانون يحتاج الزمن الكلي",
+        "الخطوة ٣: نقسم ١٥٠ ÷ ٣ = ٥٠ كم/س",
+        "الناتج: ٥٠ كم/س؛ الخلاصة: لا نحسب متوسط السرعتين"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "procedure-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "procedure",
+      "title": "كيف نحسب السرعة المتوسطة",
+      "description": "طريقة قابلة لإعادة الاستخدام.",
+      "keyPoints": [
+        "الهدف: إيجاد السرعة المتوسطة لأي رحلة",
+        "الخطوة ١: أوجد المسافة الكلية",
+        "الخطوة ٢: أوجد الزمن الكلي بوحدة واحدة",
+        "الخطوة ٣: اقسم المسافة على الزمن",
+        "تنبيه: حوّل الدقائق إلى ساعات أولاً",
+        "الناتج المتوقع: سرعة بوحدة مثل كم/س"
+      ],
+      "order": 2
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "activity-investigation",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "ما سرعة مشيك؟",
+      "description": "استقصاء يقوم به المتعلم.",
+      "keyPoints": [
+        "السؤال: ما سرعة مشيك المتوسطة؟",
+        "الإجراءات: قِس مساراً طوله ٢٠ م ووقّت ثلاث مرات",
+        "سجّل: كل زمن في جدول",
+        "فسّر: احسب كل سرعة وقارن"
+      ],
+      "order": 2,
+      "contentKind": "investigation"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "activity-source_analysis",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "جدول مواعيد الحافلات",
+      "description": "تحليل مصدر يقوم به المتعلم.",
+      "keyPoints": [
+        "المصدر: جدول يبين المحطات والمسافات والأزمنة",
+        "سؤال: أي مقطع هو الأسرع — وما دليلك؟",
+        "سؤال: ما الذي قد يفسر أبطأ مقطع؟",
+        "سؤال: برّر إجابتك بأرقام من الجدول"
+      ],
+      "order": 2,
+      "contentKind": "source_analysis"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "activity-reflection",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "السرعة في يومك",
+      "description": "تأمل.",
+      "keyPoints": [
+        "المحور: أين تهمك السرعة المتوسطة في حياتك",
+        "سؤال: متى استغرقت رحلة أطول مما توقعت ولماذا؟",
+        "سؤال: كيف كانت معرفة السرعة المتوسطة ستساعدك في التخطيط؟"
+      ],
+      "order": 2,
+      "contentKind": "reflection"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "activity-production",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "activity",
+      "title": "صمّم بطاقة تخطيط رحلات",
+      "description": "ناتج يعدّه المتعلم.",
+      "keyPoints": [
+        "الناتج: بطاقة تخطيط رحلات من صفحة واحدة",
+        "الغرض: مساعدة صديق على تقدير أوقات الوصول",
+        "المتطلبات: ثلاث رحلات بالمسافات والأزمنة والسرعات مع الوحدات",
+        "معايير النجاح: حسابات صحيحة وتنسيق واضح ووحدات ظاهرة"
+      ],
+      "order": 2,
+      "contentKind": "production"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "practice-guided",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "تدريب موجّه",
+      "description": "تدريب مع دعم ظاهر.",
+      "keyPoints": [
+        "المهمة: دراج يقطع ٤٥ كم في ٣ ساعات — أوجد السرعة المتوسطة",
+        "دعم: المسافة الكلية = ___ كم؛ الزمن الكلي = ___ س",
+        "دعم: السرعة = ___ ÷ ___",
+        "الاستجابة المتوقعة: سرعة بوحدة كم/س"
+      ],
+      "order": 2,
+      "contentKind": "guided"
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "practice-independent",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "جرّب بنفسك",
+      "description": "تدريب مستقل — المهمة فقط.",
+      "keyPoints": [
+        "عدّاء يقطع ١٢ كم في ساعة ونصف. أوجد سرعته المتوسطة بوحدة كم/س."
+      ],
+      "order": 2,
+      "contentKind": "independent",
+      "assistancePlan": {
+        "hint": "وجّه إلى تحديد المسافة الكلية والزمن الكلي",
+        "help": "استخدم المسافة مقسومة على الزمن بوحدة الساعة",
+        "explanation": "١٢ مقسومة على ١٫٥ تساوي ٨، إذن السرعة المتوسطة ٨ كم/س"
+      }
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "practice-higher_order",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "practice",
+      "title": "من على صواب؟",
+      "description": "تدريب مهارات عليا.",
+      "keyPoints": [
+        "يقول سامي إن متوسط ٤٠ كم/س و٦٠ كم/س لمسافتين متساويتين هو ٥٠ كم/س. قيّم ادعاء سامي.",
+        "اشرح تعليلك بحساب."
+      ],
+      "order": 2,
+      "contentKind": "higher_order",
+      "assistancePlan": {
+        "hint": "اسأل: هل تساوي المسافتين يعني تساوي الزمنين؟",
+        "help": "إطار: احسب المسافة الكلية والزمن الكلي لمسافة تختارها",
+        "explanation": "لمسافة ١٢٠ كم في كل اتجاه يكون الزمنان ٣ س و٢ س، أي ٢٤٠ كم في ٥ س فتكون السرعة ٤٨ كم/س لا ٥٠"
+      }
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "check_understanding-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "check_understanding",
+      "title": "تحقق سريع",
+      "description": "تحقق تكويني خفيف.",
+      "keyPoints": [
+        "سيارة تقطع ١٥٠ كم في ٣ ساعات. ما سرعتها المتوسطة؟"
+      ],
+      "order": 2,
+      "assistancePlan": {
+        "hint": "فكّر في توزيع المسافة على الزمن",
+        "explanation": "١٥٠ مقسومة على ٣ تساوي ٥٠ كم/س"
+      }
+    }
+  },
+  {
+    "language": "ar",
+    "languageDirective": "قدِّم الدرس كاملاً باللغة العربية الفصحى المبسطة.",
+    "outline": {
+      "id": "summary-x",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "summary",
+      "title": "ماذا تعلمنا",
+      "description": "تلخيص.",
+      "keyPoints": [
+        "السرعة المتوسطة تلخص الرحلة كلها",
+        "السرعة = المسافة الكلية ÷ الزمن الكلي",
+        "يجب توافق الوحدات",
+        "لا نحسب متوسط سرعتين مباشرة",
+        "الخلاصة: قاعدة واحدة تطبق على المجاميع"
+      ],
+      "order": 2
+    }
+  }
+]

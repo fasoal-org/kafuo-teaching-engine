@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 
 import { fetchBytesSecurely, type SecureBytesOptions } from '@/lib/server/agent-runtime/fetch-url';
 import { ContentResourceAcquisitionError } from '@/lib/server/teaching-package/content-resource';
+import { retainableUnitText, unitMaySkipText } from '@/lib/server/teaching-package/content-units';
 import {
   toVisionPdfImages,
   type NormalizedSource,
@@ -236,21 +237,9 @@ function ordered<T extends { id: string; orderIndex: number }>(values: T[], code
   return [...values].sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
-/**
- * Content Unit roles that are allowed to carry no teaching text at all.
- *
- * Kafuo's own readiness facts (`book_grounded_readiness_facts.py`) treat
- * `{REFERENCE, UNCLASSIFIED}` as non-instructional; its metadata use case
- * (`generate_lesson_metadata.py`) carves out only `{REFERENCE}`. The wider set
- * is adopted here deliberately: this projection must not fail acquisition of a
- * package Kafuo itself considers approvable.
- */
-const NON_INSTRUCTIONAL_UNIT_ROLES = new Set(['REFERENCE', 'UNCLASSIFIED']);
-
-/** Does any of this unit's blocks associate a visual? (internal evidence only). */
-function unitCarriesVisuals(unit: ManifestUnit): boolean {
-  return (unit.blocks ?? []).some((block) => (block.associatedVisualIds ?? []).length > 0);
-}
+// The skip rule (non-instructional roles, figure-only units) is shared with
+// per-attempt Content Unit retention and lives in `content-units.ts` so the
+// prompt projection and the retained rows can never disagree.
 
 /**
  * Project the approved package onto the text the LLM actually receives.
@@ -270,13 +259,12 @@ export function adaptNormalizedText(manifest: NormalizedLessonManifest): string 
   const lines: string[] = [];
   let rendered = 0;
   for (const unit of ordered(manifest.contentUnits, 'NORMALIZED_CONTENT_ARCHIVE_INVALID')) {
-    const text = unit.normalizedText?.trim();
+    const text = retainableUnitText(unit);
     if (!text) {
       // A figure-only or reference unit legitimately teaches nothing in prose:
       // it is skipped, not failed. Its visuals still reach the model through
       // the vision channel, associated by this unit's id.
-      if (unitCarriesVisuals(unit) || NON_INSTRUCTIONAL_UNIT_ROLES.has(unit.role?.toUpperCase()))
-        continue;
+      if (unitMaySkipText(unit)) continue;
       fail(
         'NORMALIZED_CONTENT_EMPTY',
         `approved content unit ${unit.id} carries no usable normalized text`,

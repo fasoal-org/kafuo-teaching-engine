@@ -49,10 +49,12 @@ const NORMALIZED_IMAGE: PdfImage = {
 };
 
 describe('non-normalized outline prompts are unchanged', () => {
-  // The golden files are the prompt bytes from BEFORE the grounding contract
-  // existed. The conditional blocks are written so a false condition consumes
-  // its own newline — a stray blank line here would be a real regression for
-  // every PDF and non-Kafuo course.
+  // The golden files are the prompt bytes WITHOUT the grounding contract. The
+  // conditional blocks are written so a false condition consumes its own
+  // newline — a stray blank line here would be a real regression for every PDF
+  // and non-Kafuo course. (Re-baselined once for the unconditional slide
+  // classification contract, which every outline prompt now carries; the
+  // grounding/flow/skill conditionals are still pinned byte-for-byte.)
   it('renders the PDF prompt byte-for-byte as before', () => {
     const prompts = buildOutlinePrompt(REQUIREMENT, {
       pdfText: 'some pdf text',

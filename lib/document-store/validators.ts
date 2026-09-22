@@ -110,6 +110,26 @@ function validateTeachingStage(value: Record<string, unknown>, errors: Validatio
 }
 
 /**
+ * Validate the contract's `sourceContentUnitIds` binding (Kafuo R1 plan
+ * §5.1) on the app write boundary for the scene kinds the DSL validator does
+ * not see here (interactive / PBL): absent → untouched (unknown, never
+ * fabricated); present → a list of non-empty strings.
+ */
+function validateSourceContentUnitIds(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.sourceContentUnitIds === undefined) return;
+  const ids = value.sourceContentUnitIds;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || id === '')) {
+    errors.push({
+      path: '/sourceContentUnitIds',
+      message: '`sourceContentUnitIds` must be an array of non-empty strings when present',
+    });
+  }
+}
+
+/**
  * Validate the app-layer `alignmentBaseline` annotation (Module 2 W15):
  * absent → untouched (legacy compatible); present → the durable per-Scene
  * alignment baseline shape — identity and state only. The fingerprint is an
@@ -335,6 +355,7 @@ export const validateAppScene: SceneValidator = (scene) => {
   validateLearningObjectives(value, errors);
   validateTeachingStage(value, errors);
   validateAlignmentBaseline(value, errors);
+  validateSourceContentUnitIds(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

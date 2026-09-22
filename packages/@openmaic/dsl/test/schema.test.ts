@@ -221,6 +221,54 @@ describe('generated JSON Schema — SerializedScene', () => {
   it('rejects a scene missing required fields', () => {
     expect(v({ id: 'sc' })).toBe(false);
   });
+  it('accepts the optional sourceContentUnitIds binding on every scene kind and rejects a malformed one', () => {
+    const typed = schemas.SerializedScene as unknown as GeneratedSchema;
+    // Emitted on the contract's scene definitions (SceneCore is inlined per kind).
+    const carrying = Object.entries(typed.definitions).filter(
+      ([, def]) => def.properties && 'sourceContentUnitIds' in def.properties,
+    );
+    expect(carrying.length).toBeGreaterThan(0);
+    for (const [, def] of carrying) {
+      expect(def.properties!.sourceContentUnitIds).toMatchObject({
+        type: 'array',
+        items: { type: 'string' },
+      });
+    }
+    expect(v({ ...slideScene, sourceContentUnitIds: ['2900'] })).toBe(true);
+    expect(v({ ...slideScene, sourceContentUnitIds: [2900] })).toBe(false);
+    expect(v({ ...slideScene, sourceContentUnitIds: '2900' })).toBe(false);
+  });
+  it('accepts slide content with and without the optional pedagogical metadata', () => {
+    const withSemantics = (extra: Record<string, unknown>) => ({
+      ...slideScene,
+      content: { ...slideScene.content, ...extra },
+    });
+    // Legacy documents carry neither field (nor a canvas `type`).
+    expect(v(slideScene)).toBe(true);
+    expect(v(withSemantics({ contentRole: 'orientation' }))).toBe(true);
+    expect(v(withSemantics({ contentRole: 'explanation', contentKind: 'concept' }))).toBe(true);
+    // On-demand assistance is an additive, closed object beside the canvas.
+    const practice = { contentRole: 'practice', contentKind: 'independent' };
+    expect(v(withSemantics({ ...practice, assistance: { hint: 'h', explanation: 'e' } }))).toBe(
+      true,
+    );
+    expect(v(withSemantics({ ...practice, assistance: { answer: 'x' } }))).toBe(false);
+    // The schema checks each field's vocabulary; the role<->kind pairing is a
+    // value-level rule owned by `validateScene`.
+    expect(v(withSemantics({ contentRole: 'learning_objectives' }))).toBe(false);
+    expect(v(withSemantics({ contentRole: 'practice', contentKind: 'bogus' }))).toBe(false);
+  });
+  it('keeps the pedagogical metadata off the canvas and off non-slide content', () => {
+    const typed = schemas.SerializedScene as unknown as GeneratedSchema;
+    expect(Object.keys(typed.definitions.SlideContent.properties ?? {})).toEqual(
+      expect.arrayContaining(['contentRole', 'contentKind']),
+    );
+    for (const name of ['Slide', 'QuizContent']) {
+      const props = Object.keys(typed.definitions[name].properties ?? {});
+      expect(props).not.toContain('contentRole');
+      expect(props).not.toContain('contentKind');
+    }
+  });
   it('accepts a realistic legacy PBL scene with opaque v1 projectConfig', () => {
     expect(v(legacyPBLScene), JSON.stringify(v.errors)).toBe(true);
   });

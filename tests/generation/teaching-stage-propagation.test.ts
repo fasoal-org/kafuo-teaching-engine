@@ -81,14 +81,12 @@ describe('teachingStage propagation (Kafuo integration plan §4.2.2)', () => {
     expect(result[0]?.teachingStage).toEqual(STAGE);
   });
 
-  it('applyOutlineFallbacks preserves teachingStage through fallback rewrites', () => {
-    // interactive without widget config falls back to slide via a spread.
+  it('applyOutlineFallbacks never rewrites a config-less interactive outline into a slide', () => {
+    // RSS W2: rewritten — the old fallback-to-slide spread no longer exists.
     const interactive = { ...outline('interactive', STAGE) } as SceneOutline;
     delete (interactive as Partial<SceneOutline>).interactiveConfig;
     delete (interactive as Partial<SceneOutline>).widgetType;
     delete (interactive as Partial<SceneOutline>).widgetOutline;
-    const fallback = applyOutlineFallbacks(interactive, true);
-    expect(fallback.type).toBe('slide');
-    expect(fallback.teachingStage).toEqual(STAGE);
+    expect(() => applyOutlineFallbacks(interactive, true)).toThrow(/OUTLINE_SCENE_CONFIG_INVALID/);
   });
 });

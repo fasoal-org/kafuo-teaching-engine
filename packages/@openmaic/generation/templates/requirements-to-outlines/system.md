@@ -138,6 +138,9 @@ Selection rules — NON-NEGOTIABLE:
 {{/if}}
 ---
 
+{{snippet:slide-classification-contract}}
+---
+
 ## Default Assumption Rules
 
 When user requirements don't specify, use these defaults:
@@ -207,7 +210,7 @@ Use `interactive` type when a concept benefits significantly from hands-on inter
 
 **Constraints**:
 
-- Limit to **1-2 interactive scenes per course** (they are resource-intensive)
+- Aim for **1-2 interactive scenes per course** (they are resource-intensive). This is a budget for DISCRETIONARY enrichment, never a ceiling on required behaviour: a scene whose learner behaviour needs this runtime keeps it even beyond the budget — reduce discretionary scenes first, consolidate several small learner-active moments into one runtime scene where pedagogically sound, and never restate a runtime-dependent experience as a slide to fit the number
 - Interactive scenes **require** an `interactiveConfig` object
 - Do NOT use interactive for purely textual/conceptual content - use slides instead
 - The `interactiveConfig.designIdea` should describe the specific interactive elements and user interactions
@@ -271,7 +274,7 @@ Use `pbl` type when the course involves complex, multi-step project work that be
 
 **Constraints**:
 
-- Limit to **at most 1 PBL scene per course** (they are comprehensive and long)
+- Aim for **at most 1 PBL scene per course** (they are comprehensive and long). This is a budget for DISCRETIONARY enrichment, never a ceiling on required behaviour: a scene whose learner behaviour needs this runtime keeps it even beyond the budget — reduce discretionary scenes first, consolidate several small learner-active moments into one runtime scene where pedagogically sound, and never restate a runtime-dependent experience as a slide to fit the number
 - PBL scenes **require** a `pblConfig` object with: projectTopic, projectDescription, targetSkills, issueCount
 - PBL is for substantial project work - do NOT use for simple exercises or single-step tasks
 - The `pblConfig.targetSkills` should list 2-5 specific skills students will develop
@@ -320,20 +323,36 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
+      "slideType": "cover",
+      "contentRole": "orientation",
+      "visualPlan": { "mode": "native" },
       "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
+      "description": "Open the lesson on one slide: title, a framing question, brief context, the learning objectives and the big idea.",
+      "keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],
       "order": 1{{#if normalizedGrounding}},
       "sourceContentUnitIds": ["2900"]{{/if}}{{#if hasSkillPolicy}},
       "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }{{/if}}
     },
     {
       "id": "scene_2",
+      "type": "slide",
+      "slideType": "content",
+      "contentRole": "explanation",
+      "contentKind": "concept",
+      "title": "The Core Concept",
+      "description": "Explain what the concept is and why it behaves the way it does.",
+      "keyPoints": ["What it is", "How it works", "Why it matters"],
+      "order": 2{{#if normalizedGrounding}},
+      "sourceContentUnitIds": ["2901"]{{/if}}{{#if hasSkillPolicy}},
+      "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }{{/if}}
+    },
+    {
+      "id": "scene_3",
       "type": "interactive",
       "title": "Interactive Exploration",
       "description": "Students explore the concept via a hands-on simulation.",
       "keyPoints": ["Observe variable 1", "Observe variable 2"],
-      "order": 2,{{#if normalizedGrounding}}
+      "order": 3,{{#if normalizedGrounding}}
       "sourceContentUnitIds": ["2901", "2902"],{{/if}}
       "widgetType": "simulation",
       "widgetOutline": {
@@ -342,12 +361,12 @@ Rules:
       }
     },
     {
-      "id": "scene_3",
+      "id": "scene_4",
       "type": "quiz",
       "title": "Knowledge Check",
       "description": "Test student understanding of the key concepts.",
       "keyPoints": ["Test point 1", "Test point 2"],
-      "order": 3,{{#if normalizedGrounding}}
+      "order": 4,{{#if normalizedGrounding}}
       "sourceContentUnitIds": ["2903"],{{/if}}{{#if hasSkillPolicy}}
       "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" }, "supporting": [{ "skillId": "social-emotional-learning", "version": "v1" }] },{{/if}}
       "quizConfig": {
@@ -366,9 +385,14 @@ Rules:
 | ----------------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------ |
 | id                | string                   | ✅       | Unique identifier, format: `scene_1`, `scene_2`...                                               |
 | type              | string                   | ✅       | `"slide"`, `"quiz"`, `"interactive"`, or `"pbl"`                                                 |
+| slideType         | string                   | ✅ (for slide) | `"cover"`, `"contents"`, `"transition"`, `"content"`, or `"end"` — slide scenes only (see Slide Classification) |
+| contentRole       | string                   | ✅ (for instructional slides) | The slide's pedagogical purpose — slide scenes only; omitted only on a purely structural `contents` / `transition` / `end` slide (see Slide Classification) |
+| contentKind       | string                   | ✅ (for `explanation` / `activity` / `practice`) | The role's specialization; omitted entirely for every other role          |
+| visualPlan        | object                   | ✅ (for the `cover` + `orientation` opening) | Planner-only `{ mode: "image" \| "native" \| "omitted", omissionReason? }` (see The lesson opening) |
+| assistancePlan    | object                   | ✅ (for `practice` + `independent`) | Planner-only `{ hint, help, explanation }`; allowed only with `practice` / `check_understanding` (see Slide Classification) |
 | title             | string                   | ✅       | Scene title, concise and clear                                                                   |
 | description       | string                   | ✅       | 1-2 sentences describing teaching purpose                                                        |
-| keyPoints         | string[]                 | ✅       | 3-5 core points                                                                                  |
+| keyPoints         | string[]                 | ✅       | Typically 3-5 core points; as many as the slide's role genuinely needs (see Slide Classification, Step 4) |
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
@@ -447,10 +471,12 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 **Scene-level rules:**
 
 4. `type` is one of `"slide"`, `"quiz"`, `"interactive"`, `"pbl"`.
+   - Every `slide` scene carries `slideType`, and every instructional slide a `contentRole`, chosen by pedagogical intent (only a purely structural `contents` / `transition` / `end` slide omits the role); `explanation`, `activity` and `practice` also carry a `contentKind` from their own list, and every other role omits `contentKind`. `practice` + `independent` also carries an `assistancePlan` with `hint` and `explanation`, and its `description` / `keyPoints` hold the task only. `quiz`, `interactive` and `pbl` scenes carry none of these fields. A missing, unknown or mismatched classification invalidates the entire response.
+   - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.
-8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
+8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use discretionary interactive scenes sparingly (typically 1-2 per course); a scene whose learner behaviour requires a runtime keeps it regardless of that budget. Quiz scenes have no budget.
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.{{#if hasTeachingFlow}}

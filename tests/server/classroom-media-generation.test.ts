@@ -174,13 +174,71 @@ describe('generateMediaForClassroom model fallback', () => {
       },
     ] as unknown as SceneOutline[];
 
-    const mediaMap = await generateMediaForClassroom(outlines, 'cls-fallback', 'http://localhost');
+    const mediaMap = await generateMediaForClassroom(outlines, 'cls-fallback', 'http://localhost', {
+      // RSS W4: only a screened-and-approved visual is written and mapped.
+      screen: async () => ({ verdict: 'approved' }) as never,
+    });
 
     expect(mediaMap['gen_img_1']).toBe(
       'http://localhost/api/classroom-media/cls-fallback/media/gen_img_1.png',
     );
     const genBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(genBody.model).toBe('doubao-seedream-5-0-260128');
+  });
+
+  test('generate → screen → approve or reject: a rejected image is never written; a reinforced retry can pass (RSS W4)', async () => {
+    vi.stubEnv('IMAGE_SEEDREAM_API_KEY', 'sk-seedream');
+    vi.resetModules();
+    const generation = () => ({
+      ok: true,
+      json: async () => ({ data: [{ url: 'https://cdn.example.com/x.png' }] }),
+    });
+    const download = () => ({
+      ok: true,
+      headers: { get: () => null },
+      arrayBuffer: async () => new ArrayBuffer(8),
+    });
+    const fetchMock = vi.fn(async (url: string, _init?: { body: string }) =>
+      String(url).includes('cdn.example.com') ? download() : generation(),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const fs = await import('fs');
+    const writeFile = vi.mocked(fs.promises.writeFile);
+    writeFile.mockClear();
+    const { generateMediaForClassroom } = await import('@/lib/server/classroom-media-generation');
+    const outlines = [
+      {
+        id: 'outline_1',
+        type: 'slide',
+        title: 'Scene 1',
+        description: 'd',
+        order: 1,
+        mediaGenerations: [{ type: 'image', prompt: 'a crest', elementId: 'gen_img_1' }],
+      },
+    ] as unknown as SceneOutline[];
+
+    // Rejected once, approved on the reinforced regeneration.
+    const verdicts = ['rejected', 'approved'];
+    const mapped = await generateMediaForClassroom(outlines, 'cls-screen', 'http://localhost', {
+      textPolicy: 'text-free',
+      screen: async () => ({ verdict: verdicts.shift(), reasons: [] }) as never,
+    });
+    expect(mapped['gen_img_1']).toContain('/media/gen_img_1.png');
+    expect(writeFile).toHaveBeenCalledTimes(1);
+    const prompts = fetchMock.mock.calls
+      .filter(([url]) => !String(url).includes('cdn.example.com'))
+      .map(([, init]) => JSON.parse(init!.body).prompt as string);
+    expect(prompts[0]).toContain('Ministry of Education');
+    expect(prompts[0]).toContain('NO text');
+    expect(prompts[1]).toContain('a previous attempt was rejected');
+
+    // Never approved (e.g. vision outage → unresolved): nothing written, nothing mapped.
+    writeFile.mockClear();
+    const withheld = await generateMediaForClassroom(outlines, 'cls-screen', 'http://localhost', {
+      screen: async () => ({ verdict: 'unresolved', reasons: ['vision outage'] }) as never,
+    });
+    expect(withheld).toEqual({});
+    expect(writeFile).not.toHaveBeenCalled();
   });
 
   test('uses the server-pinned model when IMAGE_<PREFIX>_MODELS is set', async () => {

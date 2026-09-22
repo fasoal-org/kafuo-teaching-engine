@@ -53,6 +53,8 @@ import {
 } from '@/lib/server/teaching-package/successor-model';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
+import { collectStageVisualFindings } from '@/lib/server/visual-compliance/stage-gate';
+import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 import {
   toTeachingPackageError,
   validateFlowPolicySatisfiability,
@@ -476,6 +478,22 @@ async function prepareSubmitValidation(
             category: finding.category,
             code: finding.code,
           })),
+        },
+      );
+    }
+    // RSS 7.5.6 — the visual approval gate. Every learner-visible image must
+    // hold an `approved` compliance verdict; `rejected` / `unresolved` blocks
+    // the transition (fail closed) with an actionable scene + element list.
+    const visualFindings = await collectStageVisualFindings(document.scenes, {
+      textPolicy: resolveImageTextPolicy(document.stage.textDirection),
+    });
+    if (visualFindings.length > 0) {
+      throw new TeachingPackageError(
+        'VISUAL_COMPLIANCE_UNAPPROVED',
+        `${visualFindings.length} learner-visible image(s) do not hold an approved visual-compliance verdict; replace or regenerate them before submitting`,
+        {
+          offendingSceneIds: [...new Set(visualFindings.map((finding) => finding.sceneId))],
+          findings: visualFindings,
         },
       );
     }

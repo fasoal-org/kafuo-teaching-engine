@@ -249,8 +249,22 @@ export interface GenerationInputSnapshot {
     imageCount: number;
     textDigest?: string;
   } | null;
-  /** Model string from resolveModel; patched in by the runner after resolution. */
+  /**
+   * Model string from resolveModel; patched in by the runner after resolution.
+   * Legacy (non-Kafuo) runs and Kafuo runs with `TEACHING_SUBJECT_ROUTING=off`
+   * only — a subject-routed run records the policy below instead.
+   */
   resolvedLlmModel?: string;
+  /** ---- Subject routing (Kafuo R1 plan §5.1, §7.4) — patched by the runner ---- */
+  /** The routed subject (`learningItem.subjectOffering.code`) the attempt ran under. */
+  subjectCode?: string;
+  /** The policy version the pair below was taken from. */
+  policyVersion?: string;
+  /** Canonical `provider:model` strings of the subject's Primary and Fallback. */
+  primaryModel?: string;
+  fallbackModel?: string;
+  /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
+  ledgerIncomplete?: boolean;
   requestedAt: number;
   /** ---- Kafuo integration additions (FRD §9.2/§17.1) ---- */
   /** Effective Kafuo tenant; `LEGACY_TENANT_ID` for pre-tenant rows. */
@@ -419,6 +433,20 @@ export interface KafuoGenerationSwitches {
   agentMode?: 'default' | 'generate';
 }
 
+/**
+ * `learningItem.subjectOffering` as Kafuo sends it (R1 contracts §6). The
+ * optional keys are present exactly when the wire carried them (null values
+ * included) so the shared canonical digest stays byte-compatible.
+ */
+export interface KafuoSubjectOffering {
+  id: string;
+  name: string;
+  code?: string | null;
+  nameAr?: string | null;
+  nameEn?: string | null;
+  academicLanguage?: string | null;
+}
+
 /** Hierarchy/context block of the Kafuo Learning Item (FRD §9.2). */
 export interface KafuoLearningItemContext {
   type: 'lesson' | 'section';
@@ -429,7 +457,14 @@ export interface KafuoLearningItemContext {
   logicalSectionId?: string;
   unit: { id: string; title: string };
   academicPeriod?: { id: string; name: string };
-  subjectOffering?: { id: string; name: string };
+  /**
+   * The Kafuo subject offering (R1 contracts §6). `code` is the routing key
+   * (`master_subjects.routing_key`); the Backend sends `code: null` for an
+   * unrouted subject — kept as received here (the digest covers the wire
+   * shape byte-for-byte), normalised separately into
+   * `KafuoGenerationContext.subjectCode`.
+   */
+  subjectOffering?: KafuoSubjectOffering;
   level?: { id: string; name: string };
   curriculum: { id: string; name: string };
   curriculumVersion: { id: string; versionLabel: string };

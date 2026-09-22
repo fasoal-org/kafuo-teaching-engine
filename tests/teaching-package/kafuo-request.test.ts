@@ -254,6 +254,10 @@ describe('buildKafuoStartRequest', () => {
     expect(JSON.stringify(start.contentResource)).not.toContain('https://');
     expect(start.generation.teachingFlow).toHaveLength(3);
     expect(start.generation.requirement).toContain('lesson_introduction');
+    // The authoritative lesson language travels as structured data — not only
+    // as prose inside the requirement — so generation can stamp the Stage.
+    expect(start.generation.language).toBe('ar');
+    expect(kafuo.language).toBe('ar');
     // The signed URL lives ONLY in the in-memory Kafuo context — and appears
     // nowhere in the persisted start request.
     expect(kafuo.contentResource.url).toContain('X-Amz-Signature');

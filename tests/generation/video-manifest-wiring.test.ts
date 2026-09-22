@@ -125,10 +125,9 @@ describe('video manifest wiring', () => {
     expect(content).not.toBeNull();
     const slideContent = content as GeneratedSlideContent;
     const video = slideContent.elements.find((el) => el.type === 'video');
-    expect(video).toMatchObject({
-      type: 'video',
-      src: 'https://example.com/direct.mp4',
-    });
-    expect(Object.prototype.hasOwnProperty.call(video, 'mediaRef')).toBe(false);
+    // RSS W4: rewritten. An address the model invented is unauthorized — it is
+    // dropped, and the planned generated clip is kept.
+    expect(video).toMatchObject({ type: 'video', mediaRef: 'gen_vid_real123' });
+    expect(Object.prototype.hasOwnProperty.call(video, 'src')).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import type {
   QuizContent,
   QuizQuestion,
   Scene,
+  SlideAssistance,
   SlideBackground,
   SlideContent,
   WidgetConfigBase,
@@ -18,6 +19,12 @@ export interface GeneratedSlideContent {
   elements: PPTElement[];
   background?: SlideBackground;
   remark?: string;
+  /**
+   * On-demand assistance authored for this slide, separately from the canvas.
+   * Placed on `SlideContent.assistance` by the scene builder, and only for a
+   * role that allows it.
+   */
+  assistance?: SlideAssistance;
 }
 
 /** AI-generated quiz payload before it is assembled into a scene. */
@@ -57,9 +64,10 @@ export type CompleteSceneContent = SlideContent | QuizContent | InteractiveConte
 
 /**
  * Scene assembled by the package, including the originating outline identity
- * and — when the outline carried one — its teaching-stage reference and its
- * Teaching Skills carrier, each copied exactly (never re-derived) from outline
- * to scene.
+ * and — when the outline carried one — its teaching-stage reference, its
+ * Teaching Skills carrier and its Content Unit citations
+ * (`sourceContentUnitIds`, a `SceneCore` field of the contract), each copied
+ * exactly (never re-derived) from outline to scene.
  */
 export type CompleteScene = Scene<Action, CompleteSceneContent> & {
   outlineId: string;

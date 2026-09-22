@@ -321,9 +321,10 @@ describe('generateClassroom source visuals', () => {
         content: { canvas: { elements: Array<{ src: string }> } };
       }
     ).content.canvas.elements;
+    // RSS W4: the media phase (mocked here) mapped nothing for `gen_img_extra`,
+    // and an unmapped placeholder never survives into the persisted Stage.
     expect(elements.map((el) => el.src)).toEqual([
       '/api/classroom-media/stage-sv-1/media/src-1.png',
-      'gen_img_extra',
     ]);
     // The unrelated request reached media generation untouched.
     const outlinesToMedia = mocks.generateMediaForClassroom.mock.calls[0]![0];

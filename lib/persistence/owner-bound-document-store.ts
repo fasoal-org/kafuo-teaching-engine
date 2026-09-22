@@ -76,6 +76,10 @@ const SCENE_LINEAGE_FIELDS = [
   'teachingSkills',
   'learningObjectives',
   'alignmentBaseline',
+  // Kafuo R1 (plan §5.1/§8.3): the Scene → Content Unit binding is lineage
+  // too — a lineage-less whole-Scene write must not erase what the Scene was
+  // generated from, or Help loses its grounding after a review edit.
+  'sourceContentUnitIds',
 ] as const;
 
 /**

@@ -29,6 +29,11 @@ import {
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import {
+  isSubjectCode,
+  POLICY_VERSION,
+  readRoutingMode,
+} from '@/lib/server/teaching-model/subject-policy';
 import { LEGACY_TENANT_ID, type GenerationExecutionInput } from '@/lib/types/teaching-package';
 
 export const runtime = 'nodejs';
@@ -94,6 +99,21 @@ export async function POST(req: NextRequest) {
       // memory only from here on.
       const { request, aggregate } = parseKafuoGenerationRequest(body);
       const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+      // Subject routing (Kafuo R1 contracts §6, AMB-04): under
+      // TEACHING_SUBJECT_ROUTING=enforced an unrouted subject — `code: null`
+      // from the Backend, or a code outside the policy table — is refused
+      // HERE, 422 and non-retryable, before any attempt row exists. The
+      // runner re-checks against the registry, but an operator must see the
+      // refusal on the request, not as a failed attempt.
+      if (readRoutingMode() === 'enforced' && !isSubjectCode(kafuo.subjectCode)) {
+        throw new TeachingPackageError(
+          'SUBJECT_ROUTE_UNAVAILABLE',
+          kafuo.subjectCode === null
+            ? 'learningItem.subjectOffering.code is required: the subject has no routing key, so no teaching model route exists for it'
+            : `learningItem.subjectOffering.code ${JSON.stringify(kafuo.subjectCode)} is not in the routing policy ${POLICY_VERSION}`,
+          { subjectCode: kafuo.subjectCode, subjectOffering: kafuo.subjectOffering },
+        );
+      }
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay

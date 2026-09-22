@@ -144,7 +144,9 @@ describe('teaching skills governance — persistence', () => {
     await ensureTeachingPackageSchema(oldQp());
     // Then REPLACE the attempts table with its pre-W6 shape (the FK to
     // teaching_package_versions stays satisfied) and seed a legacy row.
-    // source_contexts holds an FK to attempts; drop both, ensure recreates them.
+    // source_contexts and content_units (Kafuo R1 P4) hold FKs to attempts;
+    // drop all three, ensure recreates them.
+    await oldPool.query(`DROP TABLE teaching_package_content_units`);
     await oldPool.query(`DROP TABLE teaching_package_source_contexts`);
     await oldPool.query(`DROP TABLE teaching_package_generation_attempts`);
     for (const statement of splitSqlStatements(PRE_W6_ATTEMPTS_TABLE)) {

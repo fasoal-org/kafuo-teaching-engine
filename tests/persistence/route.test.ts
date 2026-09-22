@@ -22,6 +22,20 @@ describe('embedded persistence route', () => {
     vi.doMock('@/lib/persistence/teaching-package', () => ({
       ensureTeachingPackageSchema: vi.fn().mockResolvedValue(undefined),
     }));
+    // Kafuo R1 schemas registered by the same bootstrap: like the package
+    // schema above, stubbed so these tests stay about the asset route boundary.
+    vi.doMock('@/lib/persistence/teaching-model-attempts', () => ({
+      ensureTeachingModelAttemptsSchema: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.doMock('@/lib/persistence/tutor-runtime', () => ({
+      ensureTutorRuntimeSchema: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.doMock('@/lib/persistence/meter-finalize-outbox', () => ({
+      ensureMeterFinalizeOutboxSchema: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.doMock('@/lib/persistence/legacy-help-turns', () => ({
+      ensureLegacyHelpTurnsSchema: vi.fn().mockResolvedValue(undefined),
+    }));
   });
 
   it('returns a clear 404 when DATABASE_URL is unset', async () => {

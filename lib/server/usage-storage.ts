@@ -76,6 +76,14 @@ const ZERO_USAGE: NormalizedUsage = {
   cacheReadTokens: 0,
   cacheCreationTokens: 0,
   reasoningTokens: 0,
+  // Nothing was reported: the JSONL row is skipped anyway (no billable tokens).
+  reported: {
+    inputTokens: false,
+    outputTokens: false,
+    cacheReadTokens: false,
+    cacheCreationTokens: false,
+    reasoningTokens: false,
+  },
 };
 
 /**

@@ -31,6 +31,8 @@ import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { resolveImageSize } from '@/lib/server/image-sizing';
+import { screenVisualWithDefaults } from '@/lib/server/visual-compliance';
+import { applyImagePromptPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 
 const log = createLogger('ImageGeneration API');
 
@@ -101,7 +103,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const sizedOptions = resolveImageSize(body, { providerId, modelId: model });
+    const sizedOptions = resolveImageSize(applyImagePromptPolicy(body), {
+      providerId,
+      modelId: model,
+    });
 
     log.info(
       `Generating image: provider=${providerId}, model=${model || 'default'}, ` +
@@ -117,6 +122,28 @@ export async function POST(request: NextRequest) {
       modelId: model,
       quantity: 1,
     });
+
+    // Generate → screen → approve or reject. The bytes are pulled into a buffer
+    // exactly as the server path does; only an approved visual is returned to
+    // the browser. Anything else fails closed — the client gets no image.
+    const bytes = result.base64
+      ? Buffer.from(result.base64, 'base64')
+      : result.url
+        ? Buffer.from(
+            await (await fetch(result.url, { signal: AbortSignal.timeout(120_000) })).arrayBuffer(),
+          )
+        : undefined;
+    const verdict = bytes
+      ? await screenVisualWithDefaults(bytes, { origin: 'generated' })
+      : undefined;
+    if (verdict?.verdict !== 'approved') {
+      return apiError(
+        'VISUAL_COMPLIANCE_WITHHELD',
+        422,
+        'The generated image was withheld by visual compliance screening',
+        verdict ? `${verdict.verdict}: ${verdict.reasons.join('; ')}` : 'no image bytes',
+      );
+    }
 
     return apiSuccess({ result });
   } catch (error) {

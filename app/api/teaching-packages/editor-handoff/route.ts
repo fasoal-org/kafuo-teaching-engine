@@ -38,7 +38,10 @@ export async function GET(req: NextRequest) {
     // tenant behaves exactly like an absent one (non-enumerating NOT_FOUND).
     const version = await getTeachingPackageVersionByToken(payload.versionId);
     if (version.tenantId !== payload.tenantId) {
-      throw new TeachingPackageError('NOT_FOUND', `teaching package ${payload.versionId} not found`);
+      throw new TeachingPackageError(
+        'NOT_FOUND',
+        `teaching package ${payload.versionId} not found`,
+      );
     }
     if (
       payload.capability === 'write' &&
@@ -77,12 +80,33 @@ export async function GET(req: NextRequest) {
       ...(payload.purpose === 'learner' && payload.learnerRef
         ? { learnerRef: payload.learnerRef }
         : {}),
+      ...(payload.purpose ? { purpose: payload.purpose } : {}),
+      // Kafuo R1 (contracts §3.2): the student block rides from handoff to grant.
+      ...(payload.purpose === 'learner' && payload.student ? { student: payload.student } : {}),
     });
     const cookieValue = grantCookieValueForRedeem(req.headers, grantToken, grant.stageId);
-    const response = NextResponse.redirect(
-      new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin),
-      { status: 302, headers: { 'Referrer-Policy': 'no-referrer' } },
-    );
+    // A native client asks for JSON: the IDENTICAL verification and cookies,
+    // answered as `200 { stageId, capability, documentPath, expiresAt }` rather
+    // than a redirect it would have to refuse to follow. Browser behaviour is
+    // byte-for-byte unchanged.
+    const wantsJson = (req.headers.get('accept') ?? '').includes('application/json');
+    const response = wantsJson
+      ? NextResponse.json(
+          {
+            stageId: grant.stageId,
+            capability: grant.capability,
+            documentPath: `/api/persistence/documents/${grant.stageId}`,
+            expiresAt: grant.exp,
+          },
+          {
+            status: 200,
+            headers: { 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' },
+          },
+        )
+      : NextResponse.redirect(new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin), {
+          status: 302,
+          headers: { 'Referrer-Policy': 'no-referrer' },
+        });
     for (const cookie of editorGrantCookieHeaders(cookieValue, grant.learnerKey)) {
       response.headers.append('Set-Cookie', cookie);
     }

@@ -285,6 +285,15 @@ function sanitizeValue(value: unknown): unknown {
     out.data = out.data.map(sanitizeCell);
   } else if (out.type === 'latex' && typeof out.html === 'string') {
     out.html = sanitizeLatexHtml(out.html);
+  } else if (out.type === 'slide' && isRecord(out.assistance)) {
+    // On-demand assistance tiers are the same renderer-managed rich text as
+    // text elements, held beside the canvas — same prose policy.
+    out.assistance = Object.fromEntries(
+      Object.entries(out.assistance).map(([tier, html]) => [
+        tier,
+        typeof html === 'string' ? sanitizeProseHtml(html) : html,
+      ]),
+    );
   }
 
   return out;

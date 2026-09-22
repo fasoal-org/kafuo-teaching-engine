@@ -902,6 +902,26 @@ export interface SectionTag {
 
 export type SlideType = 'cover' | 'contents' | 'transition' | 'content' | 'end';
 
+/** Frozen set of every valid {@link SlideType}, for cheap membership checks. */
+export const SLIDE_TYPES = [
+  'cover',
+  'contents',
+  'transition',
+  'content',
+  'end',
+] as const satisfies readonly SlideType[];
+
+// Compile-time exhaustiveness: every SlideType must appear in SLIDE_TYPES
+// (`satisfies` above proves the converse).
+type _SlideTypesExhaustive = [SlideType] extends [(typeof SLIDE_TYPES)[number]] ? true : never;
+const _slideTypesExhaustive: _SlideTypesExhaustive = true;
+void _slideTypesExhaustive;
+
+/** Narrow an unknown value to a valid {@link SlideType}. */
+export function isSlideType(value: unknown): value is SlideType {
+  return typeof value === 'string' && (SLIDE_TYPES as readonly string[]).includes(value);
+}
+
 /**
  * 幻灯片主题
  *

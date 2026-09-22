@@ -23,6 +23,14 @@ import {
   buildOutlinePrompt,
   uniquifyMediaElementIds,
   formatTeacherPersonaForPrompt,
+  formatOutlineSemanticsIssues,
+  stripEmptyOutlineSemantics,
+  validateOutlineSlideSemantics,
+  validateOutlineSceneConfigs,
+  formatOutlineSceneConfigIssues,
+  withCorrectiveContext,
+  resolveImageTextPolicyText,
+  SCENE_RUNTIME_UNAVAILABLE,
 } from '@openmaic/generation';
 import type { AgentInfo } from '@openmaic/generation';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from '@openmaic/generation';
@@ -229,6 +237,11 @@ function normalizeTaskEngineOutline(outline: SceneOutline, requirement: string):
     return normalizeTaskEngineSlideOutline(outline);
   }
 
+  // The native quiz runtime is always available: a quiz stays a quiz.
+  if (outline.type === 'quiz') {
+    return outline;
+  }
+
   if (outline.type === 'interactive' && outline.widgetType === 'procedural-skill') {
     return normalizeTaskEngineProceduralOutline(outline, requirement);
   }
@@ -241,7 +254,62 @@ function normalizeTaskEngineOutline(outline: SceneOutline, requirement: string):
     return outline;
   }
 
-  return normalizeTaskEngineSlideOutline(outline);
+  // Anything else (pbl, a widget this mode does not offer) is a runtime the
+  // Task Engine cannot deliver. It KEEPS its type — never restated as a slide —
+  // and the runtime gate below turns it into a re-roll / typed conflict.
+  return outline;
+}
+
+/** Task-Engine outlines that require a runtime this mode cannot deliver. */
+function taskEngineRuntimeIssues(outlines: SceneOutline[]): string[] {
+  return outlines.flatMap((outline, index) => {
+    if (outline.type === 'pbl') {
+      return [`#${index} "pbl" scenes are unavailable in Task Engine mode`];
+    }
+    if (
+      outline.type === 'interactive' &&
+      outline.widgetType !== 'procedural-skill' &&
+      !(outline.widgetType && ORDINARY_WIDGET_TYPES.has(outline.widgetType))
+    ) {
+      return [
+        `#${index} interactive widgetType ${JSON.stringify(outline.widgetType ?? null)} is unavailable in Task Engine mode`,
+      ];
+    }
+    return [];
+  });
+}
+
+/**
+ * The outline gate shared by every mode: slide classification, runtime-scene
+ * config, and (Task Engine) runtime availability. Returns the formatted issues
+ * and the code the terminal `error` event carries if re-rolls are exhausted.
+ */
+function outlinePlanIssues(
+  outlines: SceneOutline[],
+  taskEngineMode: boolean,
+): { messages: string[]; code?: string } {
+  const semantics = validateOutlineSlideSemantics(outlines);
+  if (semantics.length > 0) {
+    return {
+      messages: [formatOutlineSemanticsIssues(semantics)],
+      code: 'OUTLINE_SLIDE_SEMANTICS_INVALID',
+    };
+  }
+  const runtime = taskEngineMode ? taskEngineRuntimeIssues(outlines) : [];
+  if (runtime.length > 0) {
+    return {
+      messages: [`${SCENE_RUNTIME_UNAVAILABLE}: ${runtime.join('; ')}`],
+      code: SCENE_RUNTIME_UNAVAILABLE,
+    };
+  }
+  const configs = validateOutlineSceneConfigs(outlines);
+  if (configs.length > 0) {
+    return {
+      messages: [formatOutlineSceneConfigIssues(configs)],
+      code: 'OUTLINE_SCENE_CONFIG_INVALID',
+    };
+  }
+  return { messages: [] };
 }
 
 function sanitizeNonTaskEngineOutline(outline: SceneOutline): SceneOutline {
@@ -429,6 +497,10 @@ export async function POST(req: NextRequest) {
       teacherContext,
     });
 
+    // Every mode's template carries the shared slide-classification contract
+    // (the `slide-classification-contract` snippet), so every mode's outlines
+    // are stripped, gated and re-rolled by the same rules below.
+
     if (taskEngineMode || interactiveMode) {
       const promptId = taskEngineMode
         ? PROMPT_IDS.TASK_ENGINE_OUTLINES
@@ -444,6 +516,8 @@ export async function POST(req: NextRequest) {
         mediaEnabled: mediaGenerationEnabled,
         teacherContext,
         userProfile: userProfileText,
+        // Always defined: the shared image snippet renders it in every mode.
+        imageTextPolicy: resolveImageTextPolicyText(undefined, undefined),
       });
     }
 
@@ -488,28 +562,33 @@ export async function POST(req: NextRequest) {
         try {
           startHeartbeat();
 
-          const streamParams = visionImages?.length
-            ? {
-                model: languageModel,
-                system: prompts.system,
-                messages: [
-                  {
-                    role: 'user' as const,
-                    content: buildVisionUserContent(prompts.user, visionImages),
-                  },
-                ],
-                maxOutputTokens: modelInfo?.outputWindow,
-                // Tear down the upstream LLM request when the client disconnects,
-                // instead of letting it run to completion for a dead connection.
-                abortSignal: req.signal,
-              }
-            : {
-                model: languageModel,
-                system: prompts.system,
-                prompt: prompts.user,
-                maxOutputTokens: modelInfo?.outputWindow,
-                abortSignal: req.signal,
-              };
+          // A re-roll after a rejected plan carries the rejection back to the
+          // model as corrective context; the first attempt is byte-identical.
+          const buildStreamParams = (userPrompt: string) =>
+            visionImages?.length
+              ? {
+                  model: languageModel,
+                  system: prompts.system,
+                  messages: [
+                    {
+                      role: 'user' as const,
+                      content: buildVisionUserContent(userPrompt, visionImages),
+                    },
+                  ],
+                  maxOutputTokens: modelInfo?.outputWindow,
+                  // Tear down the upstream LLM request when the client disconnects,
+                  // instead of letting it run to completion for a dead connection.
+                  abortSignal: req.signal,
+                }
+              : {
+                  model: languageModel,
+                  system: prompts.system,
+                  prompt: userPrompt,
+                  maxOutputTokens: modelInfo?.outputWindow,
+                  abortSignal: req.signal,
+                };
+          let correctiveContext: string | undefined;
+          let lastErrorCode: string | undefined;
 
           let parsedOutlines: SceneOutline[] = [];
           let languageDirective: string | null = null;
@@ -525,7 +604,11 @@ export async function POST(req: NextRequest) {
               courseTitle = null;
               const usedOutlineIds = new Set<string>();
               const textStream = streamLLM(
-                streamParams,
+                buildStreamParams(
+                  correctiveContext
+                    ? withCorrectiveContext(prompts.user, correctiveContext)
+                    : prompts.user,
+                ),
                 'scene-outlines-stream',
                 thinkingConfig,
               ).textStream;
@@ -587,7 +670,10 @@ export async function POST(req: NextRequest) {
                   const normalized = taskEngineMode
                     ? normalizeTaskEngineOutline(enrichedBase, requirements.requirement)
                     : sanitizeNonTaskEngineOutline(enrichedBase);
-                  const enriched = ensureUniqueOutlineId(normalized, usedOutlineIds);
+                  const enriched = ensureUniqueOutlineId(
+                    stripEmptyOutlineSemantics(normalized),
+                    usedOutlineIds,
+                  );
                   parsedOutlines.push(enriched);
 
                   const event = JSON.stringify({
@@ -599,8 +685,17 @@ export async function POST(req: NextRequest) {
                 }
               }
 
+              // Outline gate — every mode, the same checks the package generator
+              // applies. Every slide outline must come back explicitly and
+              // validly classified, and every runtime scene must carry its
+              // config and be deliverable in this mode. A violation is a bad
+              // model answer: the attempt is discarded and re-rolled with the
+              // issues as corrective context. Nothing is guessed or converted.
+              const planIssues = outlinePlanIssues(parsedOutlines, taskEngineMode);
+              const semanticsIssues = planIssues.messages;
+
               // Validate: got outlines?
-              if (parsedOutlines.length > 0) {
+              if (parsedOutlines.length > 0 && semanticsIssues.length === 0) {
                 if (!courseTitle) {
                   // The head-bound streaming scan can miss a title the model
                   // placed after the outlines array or past the 8KB head window;
@@ -610,17 +705,29 @@ export async function POST(req: NextRequest) {
                 break;
               }
 
-              // Empty result — retry if we have attempts left
-              lastError = fullText.trim()
-                ? 'LLM response could not be parsed into outlines'
-                : 'LLM returned empty response';
+              // Empty or misclassified result — retry if we have attempts left
+              lastErrorCode = semanticsIssues.length > 0 ? planIssues.code : undefined;
+              correctiveContext =
+                semanticsIssues.length > 0 ? semanticsIssues.join('\n') : undefined;
+              lastError =
+                semanticsIssues.length > 0
+                  ? semanticsIssues.join('; ')
+                  : fullText.trim()
+                    ? 'LLM response could not be parsed into outlines'
+                    : 'LLM returned empty response';
+              if (semanticsIssues.length > 0) {
+                log.warn(`Outlines attempt ${attempt} rejected: ${lastError}`);
+                // The outlines were already streamed; the `retry` event below
+                // (or the terminal `error`) makes the client drop them.
+                parsedOutlines = [];
+              }
               log.warn(
                 `Outlines attempt ${attempt} diagnostics: textLen=${fullText.length}, outlines=${parsedOutlines.length}, languageDirective=${languageDirective ? 'yes' : 'no'}, preview=${JSON.stringify(fullText.slice(0, 240))}`,
               );
 
               if (attempt <= MAX_STREAM_RETRIES) {
                 log.warn(
-                  `Empty outlines (attempt ${attempt}/${MAX_STREAM_RETRIES + 1}), retrying...`,
+                  `No usable outlines (attempt ${attempt}/${MAX_STREAM_RETRIES + 1}), retrying...`,
                 );
                 // Notify client a retry is happening
                 const retryEvent = JSON.stringify({
@@ -658,6 +765,17 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // A stream error on the last attempt leaves partial outlines that
+          // never reached the in-loop gate; they must not finalize unchecked.
+          if (parsedOutlines.length > 0) {
+            const residual = outlinePlanIssues(parsedOutlines, taskEngineMode);
+            if (residual.messages.length > 0) {
+              lastError = residual.messages.join('; ');
+              lastErrorCode = residual.code;
+              parsedOutlines = [];
+            }
+          }
+
           if (parsedOutlines.length > 0) {
             // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
             const uniquifiedOutlines = uniquifyMediaElementIds(parsedOutlines);
@@ -677,6 +795,7 @@ export async function POST(req: NextRequest) {
             );
             const errorEvent = JSON.stringify({
               type: 'error',
+              ...(lastErrorCode ? { code: lastErrorCode } : {}),
               error: lastError || 'Failed to generate outlines',
             });
             controller.enqueue(encoder.encode(`data: ${errorEvent}\n\n`));

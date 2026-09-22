@@ -162,6 +162,8 @@ beforeEach(() => {
         {
           id: 'o1',
           type: 'slide',
+          slideType: 'content',
+          contentRole: 'example',
           title: 'The Figure',
           description: 'Walk through the handout figure.',
           keyPoints: ['Read the axes'],

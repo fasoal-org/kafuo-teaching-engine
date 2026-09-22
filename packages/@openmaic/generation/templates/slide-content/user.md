@@ -1,11 +1,20 @@
 # Generation Requirements
 
-## Scene Information
+## LEARNER CONTENT — may appear on the slide
 
 - **Title**: {{title}}
-- **Description**: {{description}}
 - **Key Points**:
   {{keyPoints}}
+
+## PLANNING GUIDANCE — for your understanding only; nothing in this block is slide text
+
+- **Planner's note**: {{description}}
+{{#if hasRoleGuidance}}
+
+### What this slide is for
+
+{{roleGuidance}}
+{{/if}}
 
 {{teacherContext}}
 

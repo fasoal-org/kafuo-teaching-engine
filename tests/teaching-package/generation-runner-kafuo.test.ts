@@ -249,6 +249,7 @@ function kafuoContext(): NonNullable<
     teachingModel: { key: 'g5', version: 'g5.v1' },
     learningObjectives: [{ objectiveRef: 'o1', snapshot: { statement: 's' } }],
     requirement: 'req',
+    language: 'ar',
     contentResource: {
       id: 'cs-1',
       url: 'https://r2.example.test/lesson.pdf?sig=abc',
@@ -256,6 +257,17 @@ function kafuoContext(): NonNullable<
     } satisfies KafuoContentResource,
     generation: {},
     versionId: null,
+    // Kafuo R1 P4: the default routing mode is `enforced`, so every Kafuo
+    // context carries a routed subject unless a test says otherwise.
+    subjectCode: 'MATH',
+    subjectOffering: {
+      id: '10',
+      name: 'Math',
+      code: 'MATH',
+      nameAr: 'الرياضيات',
+      nameEn: 'Math',
+      academicLanguage: 'ar',
+    },
   };
 }
 
@@ -375,6 +387,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(after.generationRuns).toBe(1);
     expect(mocks.acquireContentResource).toHaveBeenCalledTimes(1);
     expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+    // The runner hands generation the lesson's authoritative language.
+    expect(mocks.generateClassroom.mock.calls[0]![0]).toMatchObject({ language: 'ar' });
     const version = (await readVersion(qp(), after.versionId!, {
       tenantId: 'tenant-k',
     }))!;
@@ -1625,6 +1639,275 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const [kafuoHalf, legacyHalf] = [source.slice(0, splitAt), source.slice(splitAt)];
       expect(kafuoHalf).toContain('validateSceneActionStructure(');
       expect(legacyHalf).not.toContain('validateSceneActionStructure');
+    });
+  });
+
+  describe('Kafuo R1 P4 — generation on the subject route', () => {
+    const POLICY_CALLS = () =>
+      mocks.resolveModel.mock.calls.map((call) => call[0] as Record<string, unknown>);
+
+    async function snapshotOf(attemptId: string) {
+      const raw = await pool.query<{
+        input_snapshot: Record<string, unknown>;
+        subject_code: string | null;
+      }>(
+        `SELECT input_snapshot, subject_code FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      return raw.rows[0]!;
+    }
+
+    it('resolves the subject policy ONCE before Layer A, records it on the attempt, and hands generation the policy + attribution', async () => {
+      const attemptId = await startKafuo();
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      expect((await readAttemptById(qp(), attemptId))!.status).toBe('succeeded');
+
+      // Exactly the policy pair, with NO stage: the stage route can never win.
+      expect(POLICY_CALLS()).toEqual([
+        { modelString: 'qwen:qwen3.7-flash' },
+        { modelString: 'openai:gpt-5-nano' },
+      ]);
+      expect(POLICY_CALLS().some((call) => 'stage' in call)).toBe(false);
+
+      // Snapshot: the route, not `resolvedLlmModel`; first-class subject_code.
+      const row = await snapshotOf(attemptId);
+      expect(row.subject_code).toBe('MATH');
+      expect(row.input_snapshot).toMatchObject({
+        subjectCode: 'MATH',
+        policyVersion: 'r1-2026-09',
+        primaryModel: 'qwen:qwen3.7-flash',
+        fallbackModel: 'openai:gpt-5-nano',
+      });
+      expect(row.input_snapshot.resolvedLlmModel).toBeUndefined();
+
+      // Execution input: the policy value + ledger attribution for run 1.
+      const execution = mocks.generateClassroom.mock.calls[0]![0];
+      expect(execution.modelPolicy).toMatchObject({
+        subjectCode: 'MATH',
+        primary: { role: 'primary', modelString: 'qwen:qwen3.7-flash' },
+        fallback: { role: 'fallback', modelString: 'openai:gpt-5-nano' },
+      });
+      expect(execution.attribution).toEqual({
+        tenantId: 'tenant-k',
+        generationAttemptId: attemptId,
+        generationRun: 1,
+        learningItemType: 'lesson',
+        learningItemId: expect.stringMatching(/^li-k-/),
+      });
+    });
+
+    it('resolves the policy once per ATTEMPT, not per run; every run is attributed by its number', async () => {
+      let call = 0;
+      mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+        call += 1;
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'G',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        const indices = call === 1 ? [0] : [0, 1];
+        const scenes = indices.map((flowIndex, index) => flowScene(index + 1, flowIndex));
+        scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
+        const outlines = indices.map((flowIndex, index) => flowOutline(index + 1, flowIndex));
+        await options.persistence.persist(
+          {
+            id: reserved.id,
+            stage: reserved.stage,
+            scenes: scenes as never,
+            outlines: outlines as never,
+          },
+          options.baseUrl,
+        );
+        return {
+          id: reserved.id,
+          url: '',
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+          scenesCount: scenes.length,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      const attemptId = await startKafuo();
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      expect((await readAttemptById(qp(), attemptId))!.generationRuns).toBe(2);
+      expect(POLICY_CALLS()).toHaveLength(2);
+      const runs = mocks.generateClassroom.mock.calls.map((c) => c[0].attribution.generationRun);
+      expect(runs).toEqual([1, 2]);
+      // The same policy object serves both runs.
+      expect(mocks.generateClassroom.mock.calls[0]![0].modelPolicy).toBe(
+        mocks.generateClassroom.mock.calls[1]![0].modelPolicy,
+      );
+    });
+
+    it.each([
+      ['a null code (unrouted master subject)', null],
+      ['a code outside the policy table', 'ENGLISH'],
+    ])(
+      '%s fails the attempt with SUBJECT_ROUTE_UNAVAILABLE: no Layer A, no run, no version',
+      async (_label, subjectCode) => {
+        const attemptId = await startKafuo({ ...kafuoContext(), subjectCode });
+        const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+        const after = (await readAttemptById(qp(), attemptId))!;
+        expect(after.status).toBe('failed');
+        expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
+        expect(after.errorRetryable).toBe(false);
+        expect(after.versionId).toBeNull();
+        expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+        expect(mocks.generateClassroom).not.toHaveBeenCalled();
+        expect(mocks.resolveModel).not.toHaveBeenCalled();
+        const versions = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM teaching_package_versions`,
+        );
+        expect((versions.rows[0] as { n: number }).n).toBe(0);
+        expect((await snapshotOf(attemptId)).subject_code).toBeNull();
+      },
+    );
+
+    it('a policy target the registry cannot resolve fails the attempt the same way — never DEFAULT_MODEL', async () => {
+      mocks.resolveModel.mockRejectedValue(new Error('qwen: no API key configured'));
+      const attemptId = await startKafuo();
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      const after = (await readAttemptById(qp(), attemptId))!;
+      expect(after.status).toBe('failed');
+      expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
+      expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+      expect(mocks.generateClassroom).not.toHaveBeenCalled();
+    });
+
+    it('TEACHING_SUBJECT_ROUTING=off keeps today’s behaviour: stage route recorded, no policy handed down', async () => {
+      vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'off');
+      const attemptId = await startKafuo({
+        ...kafuoContext(),
+        subjectCode: null,
+        subjectOffering: null,
+      });
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      expect((await readAttemptById(qp(), attemptId))!.status).toBe('succeeded');
+      expect(POLICY_CALLS()).toEqual([{ stage: 'generate-classroom' }]);
+      const row = await snapshotOf(attemptId);
+      expect(row.subject_code).toBeNull();
+      expect(row.input_snapshot.resolvedLlmModel).toBe('test:model');
+      expect(row.input_snapshot.subjectCode).toBeUndefined();
+      const execution = mocks.generateClassroom.mock.calls[0]![0];
+      expect(execution.modelPolicy).toBeUndefined();
+      expect(execution.attribution).toBeUndefined();
+    });
+
+    it('TEACHING_MODEL_UNAVAILABLE (both routes failed for one call) fails the RUN and re-rolls it; a non-retryable one ends the attempt', async () => {
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      let calls = 0;
+      const valid = mocks.generateClassroom.getMockImplementation()!;
+      mocks.generateClassroom.mockImplementation(async (execution, options) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new TeachingModelUnavailableError(
+            'subject MATH (scene-content:slide): primary=timeout, fallback=rate_limited',
+            {
+              attemptIds: ['tma-1', 'tma-2'],
+              outcomes: [
+                { role: 'primary', outcome: 'timeout' },
+                { role: 'fallback', outcome: 'rate_limited' },
+              ],
+              retryable: true,
+            },
+          );
+        }
+        return valid(execution, options);
+      });
+      const attemptId = await startKafuo();
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      const after = (await readAttemptById(qp(), attemptId))!;
+      expect(after.status).toBe('succeeded');
+      expect(after.generationRuns).toBe(2);
+
+      // A safety refusal is not "try again later": one run, then the attempt fails.
+      mocks.generateClassroom.mockImplementation(async () => {
+        throw new TeachingModelUnavailableError(
+          'subject MATH (scene-actions): primary=safety_refused',
+          {
+            attemptIds: ['tma-3'],
+            outcomes: [{ role: 'primary', outcome: 'safety_refused' }],
+            retryable: false,
+          },
+        );
+      });
+      const refusedId = await startKafuo();
+      const refused = (await readAttemptById(qp(), refusedId))!;
+      expect(refused.status).toBe('failed');
+      expect(refused.errorCode).toBe('TEACHING_MODEL_UNAVAILABLE');
+      expect(refused.generationRuns).toBe(1);
+      expect(refused.versionId).toBeNull();
+    });
+
+    it('retains the manifest’s Content Units for a normalized attempt under the prompt’s skip rule; a PDF attempt retains none', async () => {
+      mocks.acquireNormalizedContentResource.mockResolvedValue({
+        text: '[[CONTENT_UNIT id=cu-1]] normalized text',
+        images: [],
+        normalizedImages: [],
+        visionImages: [],
+        visionMapping: {},
+        measuredBytes: 100,
+        measuredSha256: 'b'.repeat(64),
+        manifest: {
+          contentRevisionId: 'rev-1',
+          contentUnits: [
+            // Out of order on purpose: retention follows the manifest ORDER.
+            {
+              id: 'cu-2',
+              orderIndex: 2,
+              role: 'CONCEPT',
+              subtype: 'definition',
+              title: 'Two',
+              normalizedText: 'second text',
+              blocks: [],
+            },
+            {
+              id: 'cu-1',
+              orderIndex: 1,
+              role: 'CONCEPT',
+              normalizedText: '  first text  ',
+              blocks: [],
+            },
+            // Figure-only: no text, a visual — skipped from the prompt AND from retention.
+            {
+              id: 'cu-fig',
+              orderIndex: 3,
+              role: 'FIGURE',
+              blocks: [{ id: 'b1', associatedVisualIds: ['v1'] }],
+            },
+            // Non-instructional: no text — skipped.
+            { id: 'cu-ref', orderIndex: 4, role: 'reference', blocks: [] },
+          ],
+        },
+        blockCount: 1,
+      });
+      const attemptId = await startKafuo(normalizedKafuoContext());
+      const { readAttemptById, readContentUnitsForAttempt } =
+        await import('@/lib/persistence/teaching-package');
+      expect((await readAttemptById(qp(), attemptId))!.status).toBe('succeeded');
+      const units = await readContentUnitsForAttempt(qp(), attemptId, { tenantId: 'tenant-k' });
+      expect(units.map((unit) => [unit.unitId, unit.orderIndex, unit.normalizedText])).toEqual([
+        ['cu-1', 1, 'first text'],
+        ['cu-2', 2, 'second text'],
+      ]);
+      expect(units[1]).toMatchObject({
+        tenantId: 'tenant-k',
+        attemptId,
+        role: 'CONCEPT',
+        subtype: 'definition',
+        title: 'Two',
+        textLength: 'second text'.length,
+        contentRevisionId: 'rev-1',
+      });
+      // Retained rows are tenant-scoped reads.
+      expect(await readContentUnitsForAttempt(qp(), attemptId, { tenantId: 'other' })).toEqual([]);
+
+      const pdfAttemptId = await startKafuo();
+      expect(
+        await readContentUnitsForAttempt(qp(), pdfAttemptId, { tenantId: 'tenant-k' }),
+      ).toEqual([]);
     });
   });
 });
