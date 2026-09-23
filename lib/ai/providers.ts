@@ -256,7 +256,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Qwen3.5 Flash',
         contextWindow: 1000000,
         outputWindow: 67072,
-        capabilities: { streaming: true, tools: false, vision: false },
+        capabilities: { streaming: true, tools: false, vision: true  },
       },
       {
         id: 'deepseek-ai/deepseek-v4-pro',
@@ -268,7 +268,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: true,
@@ -805,7 +805,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: true,
@@ -826,7 +826,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: true,
