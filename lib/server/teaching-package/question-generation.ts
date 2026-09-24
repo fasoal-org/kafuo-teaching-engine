@@ -148,7 +148,7 @@ export interface QuestionModelPort {
 }
 
 /** What the routed port needs to attribute its ledger rows (contracts §1, §7). */
-interface QuestionRouteScope {
+export interface QuestionRouteScope {
   pool: Queryable;
   tenantId: string;
   versionId: string;
@@ -276,7 +276,7 @@ async function subjectRoutedModelPort(scope: QuestionRouteScope): Promise<Questi
   };
 }
 
-async function defaultModelPort(scope: QuestionRouteScope): Promise<QuestionModelPort> {
+export async function defaultModelPort(scope: QuestionRouteScope): Promise<QuestionModelPort> {
   return readRoutingMode() === 'off' ? stageRoutedModelPort() : subjectRoutedModelPort(scope);
 }
 
