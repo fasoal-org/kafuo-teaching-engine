@@ -86,6 +86,8 @@ export { TEXT_DIRECTIONS, isTextDirection, resolveTextDirection } from '@openmai
 // Stage-level narration reading mode (`Stage.speechReadingMode`). Absent means
 // 'natural'. Owned by `@openmaic/dsl`.
 export type { SpeechReadingMode } from '@openmaic/dsl';
+// The spoken-language register policy a Stage was generated under (`Stage.speechRegister`).
+export type { StageSpeechRegister } from '@openmaic/dsl';
 export { SPEECH_READING_MODES, isSpeechReadingMode } from '@openmaic/dsl';
 
 // The two discriminant guards are runtime functions, so they must be value

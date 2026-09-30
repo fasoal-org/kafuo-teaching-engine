@@ -1,7 +1,7 @@
 import { promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { PGlite } from '@electric-sql/pglite';
@@ -412,6 +412,22 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(row).toMatchObject({ tenant_id: 'tenant-k', measured_sha256: 'b'.repeat(64) });
     expect(row.j).not.toContain('sig=abc');
     expect(row.j).not.toContain('http');
+  });
+
+  it('records the server spoken-language register policy on the attempt before generation', async () => {
+    const attemptId = await startKafuo();
+    const { resolveSpeechRegisterPolicy } = await import('@/lib/server/speech/register-policy');
+    const policy = resolveSpeechRegisterPolicy({ language: 'ar', subjectCode: 'MATH' })!;
+    const raw = await pool.query(
+      `SELECT input_snapshot->'speechRegister' AS r FROM teaching_package_generation_attempts WHERE id = $1`,
+      [attemptId],
+    );
+    const recorded = (raw.rows[0] as { r: unknown }).r;
+    expect(typeof recorded === 'string' ? JSON.parse(recorded) : recorded).toEqual({
+      policyVersion: policy.version,
+      register: 'saudi-white-spoken',
+      directiveDigest: createHash('sha256').update(policy.directive, 'utf8').digest('hex'),
+    });
   });
 
   it('uses normalized acquisition exclusively and never calls the PDF path', async () => {
@@ -1322,7 +1338,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       code:
         | 'GOVERNED_ACTION_GENERATION_FAILED'
         | 'GOVERNED_SCENE_GENERATION_FAILED'
-        | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED',
+        | 'GOVERNED_FLOW_CONTEXT_UNRESOLVED'
+        | 'SPEECH_REGISTER_NONCOMPLIANT',
     ) {
       // First: a valid initial generation binds version 1.
       const attemptId = await startKafuo();
@@ -1413,6 +1430,47 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(failed.generationRuns).toBe(1);
       expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
       expect(version.currentStageId).toBe(stageBefore);
+    });
+  });
+
+  describe('spoken-language register policy failures stay scene-scoped', () => {
+    it('SPEECH_REGISTER_NONCOMPLIANT is NON-retryable at the attempt level: one run, no package re-roll', async () => {
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      const attemptId = await startKafuo();
+      const first = (await readAttemptById(qp(), attemptId))!;
+      mocks.generateClassroom.mockReset();
+      const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
+      mocks.generateClassroom.mockImplementation(async () => {
+        throw new TeachingPackageError(
+          'SPEECH_REGISTER_NONCOMPLIANT',
+          'scene narration still breaks the saudi-white-spoken register policy after 3 attempts',
+        );
+      });
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const generationRunner = await freshModules();
+      const regeneration = await startGenerationAttempt(txPool(), {
+        tenantId: 'tenant-k',
+        learningItem: first.learningItem,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        generation: { requirement: 'again', teachingFlow: FLOW },
+        versionId: first.versionId!,
+        actorRef: 'actor-2',
+        requestId: `kafuo-register-${randomUUID()}`,
+        requestDigest: 'd'.repeat(64),
+        teachingFlow: FLOW,
+        contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      });
+      await generationRunner.runGenerationAttempt(regeneration.attempt.id, regeneration.execution, {
+        ...kafuoContext(),
+        aggregate: { tenantId: 'tenant-k', learningItem: first.learningItem },
+        versionId: first.versionId!,
+      });
+      const failed = (await readAttemptById(qp(), regeneration.attempt.id))!;
+      expect(failed.status).toBe('failed');
+      expect(failed.errorCode).toBe('SPEECH_REGISTER_NONCOMPLIANT');
+      // The scene already spent its bounded re-rolls; the package is never regenerated.
+      expect(failed.generationRuns).toBe(1);
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
     });
   });
 

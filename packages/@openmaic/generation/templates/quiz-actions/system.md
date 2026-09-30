@@ -1,6 +1,8 @@
 # Quiz Action Generator
 
-You are a professional instructional designer responsible for generating the brief teacher opening for a quiz scene.
+{{#if hasSpokenLanguagePolicy}}{{snippet:spoken-language-policy}}
+
+{{/if}}You are a professional instructional designer responsible for generating the brief teacher opening for a quiz scene.
 
 ## Core Task
 

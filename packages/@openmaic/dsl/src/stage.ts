@@ -23,6 +23,14 @@ import type { TextDirection } from './language.js';
 /** How generated narration audio verbalises scientific notation. */
 export type SpeechReadingMode = 'natural' | 'accessible';
 
+/** The spoken-language register policy a Stage was generated under (`Stage.speechRegister`). */
+export interface StageSpeechRegister {
+  /** The server policy version, e.g. `ar-speech-register-1`. */
+  policyVersion: string;
+  /** `saudi-white-spoken`: Saudi narration over academic slides; `msa`: Arabic-language lessons. */
+  register: 'saudi-white-spoken' | 'msa';
+}
+
 /** Frozen set of every valid {@link SpeechReadingMode}. */
 export const SPEECH_READING_MODES = [
   'natural',
@@ -189,6 +197,13 @@ export interface Stage {
    * by an owner/editor for Stages marked as needing accessible narration.
    */
   speechReadingMode?: SpeechReadingMode;
+  /**
+   * The server spoken-language register policy the Stage was generated under
+   * (derived from {@link language} and {@link subjectCode}, never from
+   * content). When present, `languageDirective` is that policy's directive,
+   * not a model's. Absent on legacy Stages and non-Arabic lessons.
+   */
+  speechRegister?: StageSpeechRegister;
   style?: string;
   // Whiteboard data
   whiteboard?: Whiteboard[];

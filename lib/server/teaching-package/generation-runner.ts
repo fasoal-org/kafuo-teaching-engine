@@ -17,6 +17,7 @@
  *   retry; exhausted: the attempt fails. Regeneration failure leaves the
  *   previous usable Stage untouched.
  */
+import { createHash } from 'node:crypto';
 import { createLogger } from '@/lib/logger';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import {
@@ -51,8 +52,10 @@ import {
   completeGenerationAttempt,
   failGenerationAttempt,
   recordResolvedLlmModel,
+  recordSpeechRegister,
   recordSubjectRoute,
 } from '@/lib/server/teaching-package/generation';
+import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { retainableContentUnits } from '@/lib/server/teaching-package/content-units';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
@@ -178,6 +181,21 @@ async function runKafuoAttempt(
   // attempt; nothing below runs for it.
   const route = await resolveAttemptSubjectRoute(attemptId, kafuo, pool);
   if (route.failed) return;
+
+  // The spoken-language register the run is generated under: derived from the
+  // same authoritative language + subject code generation receives, and
+  // recorded on the attempt before any model call.
+  const speechRegister = resolveSpeechRegisterPolicy({
+    language: kafuo.language,
+    subjectCode: kafuo.subjectCode,
+  });
+  if (speechRegister) {
+    await recordSpeechRegister(pool, attemptId, {
+      policyVersion: speechRegister.version,
+      register: speechRegister.register,
+      directiveDigest: createHash('sha256').update(speechRegister.directive, 'utf8').digest('hex'),
+    });
+  }
 
   // Layer A — one bounded acquisition per attempt, shared by every run.
   // Presence is authoritative: normalized failures never enter the PDF fallback.

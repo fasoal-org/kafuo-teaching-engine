@@ -549,6 +549,30 @@ export async function recordSubjectRoute(
 }
 
 /**
+ * Record the spoken-language register policy a Kafuo attempt runs under
+ * (`input_snapshot.speechRegister`): the server policy version, the register
+ * and a digest of the exact directive every prompt received. Written ONCE by
+ * the runner before any model call, alongside the subject route, so the
+ * policy that produced a package is explicit on the attempt. It is not part
+ * of the shared canonical request digest (the request payload is unchanged);
+ * every new generation command carries a fresh `requestId`, so a policy
+ * change can never be answered by an old attempt — only an exact replay of
+ * the same command returns the attempt it already created.
+ */
+export async function recordSpeechRegister(
+  pool: ConnectableQueryable,
+  attemptId: string,
+  register: { policyVersion: string; register: string; directiveDigest: string },
+): Promise<void> {
+  await pool.query(
+    `UPDATE teaching_package_generation_attempts
+        SET input_snapshot = input_snapshot || $2::jsonb
+      WHERE id = $1`,
+    [attemptId, JSON.stringify({ speechRegister: register })],
+  );
+}
+
+/**
  * The completion transaction (§8.3 step 3), run after the Stage save committed
  * in its own owner-bound transaction. Links version history and marks the
  * attempt succeeded; on a version-side failure the Stage is tombstoned and the

@@ -208,7 +208,36 @@ export interface SceneActionsOptions {
    * receive the default array exactly as before.
    */
   onFallback?: (info: SceneActionsFallback) => void;
+  /**
+   * The server-owned spoken-language policy (the register every spoken `text`
+   * must use). When present it is rendered as the first, highest-priority
+   * section of every Action system prompt and the templates' own register
+   * wording is withheld, so no instruction contradicts it. Absent → every
+   * Action prompt renders byte-identically to today.
+   */
+  spokenLanguagePolicy?: string;
+  /**
+   * Why the previous answer for this scene was rejected (a bounded re-roll).
+   * Appended to the user prompt; absent → the prompt is unchanged.
+   */
+  correctiveContext?: string;
   logger?: GenerationLogger;
+}
+
+/** Template variables for the spoken-language policy; empty when there is none. */
+function spokenLanguagePolicyVars(policy: string | undefined): Record<string, unknown> {
+  if (!policy) return {};
+  return {
+    hasSpokenLanguagePolicy: true,
+    spokenLanguagePolicy: policy,
+    // The in-template register rule is replaced by the policy, never combined.
+    legacyArabicRegisterRule: false,
+  };
+}
+
+/** Append a validation rejection to an Action prompt's user message. */
+export function withActionsCorrection(userPrompt: string, correctiveContext: string): string {
+  return `${userPrompt}\n\n---\n\n## Correction Required\n\nYour previous answer was REJECTED by validation:\n\n${correctiveContext}\n\nAnswer again with the complete JSON array, fixing every issue above.`;
 }
 
 /**
@@ -2096,6 +2125,7 @@ export async function generateSceneActions(
     const visible = toVisibleSlideInput(outline);
     const guidance = toPlannerGuidance(outline);
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       title: visible.title,
       keyPoints: visible.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: guidance.description,
@@ -2114,7 +2144,12 @@ export async function generateSceneActions(
       return generateDefaultSlideActions(outline, content.elements);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {
@@ -2138,6 +2173,7 @@ export async function generateSceneActions(
     const questionsText = formatQuestionsForPrompt(content.questions);
 
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -2154,7 +2190,12 @@ export async function generateSceneActions(
       return generateDefaultQuizActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {
@@ -2175,6 +2216,7 @@ export async function generateSceneActions(
       (content.html ? extractInteractiveElements(content.html) : '') ||
       '(no interactive elements detected)';
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -2195,7 +2237,12 @@ export async function generateSceneActions(
       return generateDefaultInteractiveActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(
       response,
       outline.type,
@@ -2216,6 +2263,7 @@ export async function generateSceneActions(
     const agentsText = formatAgentsForPrompt(agents);
     const projectV2 = (content as Partial<GeneratedPBLContent>).projectV2;
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -2234,7 +2282,12 @@ export async function generateSceneActions(
       return generateDefaultPBLActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {

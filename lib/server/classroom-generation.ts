@@ -57,6 +57,13 @@ import type {
 } from '@/lib/types/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
+  formatSpeechRegisterCorrection,
+  resolveSpeechRegisterPolicy,
+  validateSpeechRegister,
+  type SpeechRegisterIssue,
+  type SpeechRegisterPolicy,
+} from '@/lib/server/speech/register-policy';
+import {
   executeTeachingCall,
   TeachingModelUnavailableError,
   type TeachingCallContext,
@@ -74,6 +81,60 @@ import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agen
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 
 const log = createLogger('Classroom');
+
+/**
+ * A scene's Action generation, attempts in total, under a spoken-language
+ * register policy: the first answer plus at most two re-rolls of THIS scene.
+ */
+export const SPEECH_REGISTER_MAX_ATTEMPTS = 3;
+
+function spokenTexts(actions: ReadonlyArray<{ type: string; text?: unknown }>): string[] {
+  return actions.flatMap((action) =>
+    action.type === 'speech' && typeof action.text === 'string' ? [action.text] : [],
+  );
+}
+
+/**
+ * Generate one scene's Actions under the server's spoken-language register
+ * policy. A noncompliant narration re-rolls THIS scene only, with the issues
+ * as corrective context, up to {@link SPEECH_REGISTER_MAX_ATTEMPTS} attempts
+ * in total; then the run fails with `SPEECH_REGISTER_NONCOMPLIANT`, which is
+ * not an attempt-level retry code (the package is never regenerated for it).
+ * Model-free default Actions are validated like any answer. Without a policy
+ * the generator runs exactly once, as before.
+ */
+async function generateRegisterCompliantActions<T extends { type: string; text?: unknown }>(
+  generate: (correctiveContext?: string) => Promise<T[]>,
+  policy: SpeechRegisterPolicy | null,
+  scene: { title: string; outlineId: string },
+): Promise<T[]> {
+  if (!policy) return generate();
+  let correctiveContext: string | undefined;
+  let issues: SpeechRegisterIssue[] = [];
+  for (let attempt = 1; attempt <= SPEECH_REGISTER_MAX_ATTEMPTS; attempt += 1) {
+    const actions = await generate(correctiveContext);
+    issues = validateSpeechRegister(spokenTexts(actions), policy);
+    if (issues.length === 0) return actions;
+    log.warn(
+      `Scene "${scene.title}" narration breaks the ${policy.register} register policy (${issues
+        .map((issue) => issue.code)
+        .join(', ')}); attempt ${attempt}/${SPEECH_REGISTER_MAX_ATTEMPTS}`,
+    );
+    correctiveContext = formatSpeechRegisterCorrection(issues, policy);
+  }
+  throw new TeachingPackageError(
+    'SPEECH_REGISTER_NONCOMPLIANT',
+    `scene ${JSON.stringify(scene.title)} narration still breaks the ${policy.register} register policy after ${SPEECH_REGISTER_MAX_ATTEMPTS} attempts (${issues
+      .map((issue) => issue.code)
+      .join(', ')})`,
+    {
+      outlineId: scene.outlineId,
+      policyVersion: policy.version,
+      register: policy.register,
+      issues: issues.map((issue) => ({ code: issue.code, evidence: issue.evidence })),
+    },
+  );
+}
 
 /** Legacy outline attempts per run; governed package generation is single-shot. */
 const MAX_OUTLINE_GATE_ATTEMPTS = 3;
@@ -992,6 +1053,13 @@ export async function generateClassroom(
   // the outer safety net.
   const outlineLanguage = input.language?.trim() || undefined;
   const outlineTextDirection = resolveTextDirection(outlineLanguage);
+  // The spoken-language register is server policy, derived ONCE from the
+  // authoritative language and subject code — never from generated text, and
+  // never the outline model's choice.
+  const registerPolicy = resolveSpeechRegisterPolicy({
+    language: input.language,
+    subjectCode: input.subjectCode,
+  });
   let outlinesResult: Awaited<ReturnType<typeof generateSceneOutlinesFromRequirements>> | undefined;
   let correctiveContext: string | undefined;
   const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
@@ -1019,6 +1087,7 @@ export async function generateClassroom(
         // images (RTL lessons get text-free images with native labels).
         ...(outlineLanguage ? { language: outlineLanguage } : {}),
         ...(outlineTextDirection ? { textDirection: outlineTextDirection } : {}),
+        ...(registerPolicy ? { authoritativeLanguageDirective: registerPolicy.directive } : {}),
       },
     );
 
@@ -1035,7 +1104,10 @@ export async function generateClassroom(
     throw new Error(outlinesResult?.error || 'Failed to generate scene outlines');
   }
 
-  const { languageDirective, courseTitle, outlines } = outlinesResult.data;
+  const { courseTitle, outlines } = outlinesResult.data;
+  // Under a register policy the directive is the server's, whatever the
+  // outline answered; it is what the Stage persists and every prompt receives.
+  const languageDirective = registerPolicy?.directive ?? outlinesResult.data.languageDirective;
   log.info(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
@@ -1102,6 +1174,14 @@ export async function generateClassroom(
     ...(contentLanguage !== undefined ? { language: contentLanguage } : {}),
     ...(textDirection !== undefined ? { textDirection } : {}),
     ...(isSubjectCode(input.subjectCode) ? { subjectCode: input.subjectCode } : {}),
+    ...(registerPolicy
+      ? {
+          speechRegister: {
+            policyVersion: registerPolicy.version,
+            register: registerPolicy.register,
+          },
+        }
+      : {}),
     videoManifest: buildVideoManifestFromOutlines(outlines),
     style: 'interactive',
     createdAt: Date.now(),
@@ -1302,56 +1382,65 @@ export async function generateClassroom(
       // fell back; shouldRetryResult re-rolls while it did, and a fallback
       // surviving the full budget refuses with the run's own code below.
       // Non-governed callers keep today's contract exactly: first result wins.
-      let attemptProducedFallback = false;
-      const actions = await withGenerationRetry(
-        () => {
-          attemptProducedFallback = false;
-          return generateSceneActions(safeOutline, content, actionsAiCall, {
-            // Page position + the previous page's speech, so first/last-page
-            // cues and same-session continuity exist on the server path too.
-            ctx: {
-              pageIndex: index + 1,
-              totalPages: outlines.length,
-              allTitles: outlines.map((planned) => planned.title),
-              previousSpeeches,
+      const actions = await generateRegisterCompliantActions(
+        async (correctiveContext) => {
+          let attemptProducedFallback = false;
+          const generated = await withGenerationRetry(
+            () => {
+              attemptProducedFallback = false;
+              return generateSceneActions(safeOutline, content, actionsAiCall, {
+                // Page position + the previous page's speech, so first/last-page
+                // cues and same-session continuity exist on the server path too.
+                ctx: {
+                  pageIndex: index + 1,
+                  totalPages: outlines.length,
+                  allTitles: outlines.map((planned) => planned.title),
+                  previousSpeeches,
+                },
+                agents,
+                languageDirective,
+                ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+                ...(correctiveContext ? { correctiveContext } : {}),
+                // W1: the ONE resolved Flow position — the generator never sees the
+                // array and never performs the lookup itself.
+                ...(flowContext ? { flowContext } : {}),
+                ...(resolvedSkills ? { resolvedSkills } : {}),
+                ...(input.governed
+                  ? {
+                      onFallback: (info: SceneActionsFallback) => {
+                        attemptProducedFallback = true;
+                        log.warn(
+                          `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
+                        );
+                      },
+                    }
+                  : {}),
+              });
             },
-            agents,
-            languageDirective,
-            // W1: the ONE resolved Flow position — the generator never sees the
-            // array and never performs the lookup itself.
-            ...(flowContext ? { flowContext } : {}),
-            ...(resolvedSkills ? { resolvedSkills } : {}),
-            ...(input.governed
-              ? {
-                  onFallback: (info: SceneActionsFallback) => {
-                    attemptProducedFallback = true;
-                    log.warn(
-                      `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
-                    );
-                  },
-                }
-              : {}),
-          });
+            {
+              label: `scene ${index + 1}/${outlines.length} actions`,
+              ...(input.governed ? { maxRetries: 0 } : {}),
+              ...(input.governed
+                ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
+                : {}),
+              onRetry: (event) => reportSceneRetry('actions', event),
+            },
+          );
+          // The Action generator falls back to a model-free sequence on a call
+          // failure; on a routed run a failed ROUTE must fail the run instead.
+          assertRouteAvailable();
+          if (input.governed && attemptProducedFallback) {
+            throw new TeachingPackageError(
+              'GOVERNED_ACTION_GENERATION_FAILED',
+              `a governed scene's Action generation produced no canonical sequence after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
+              { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
+            );
+          }
+          return generated;
         },
-        {
-          label: `scene ${index + 1}/${outlines.length} actions`,
-          ...(input.governed ? { maxRetries: 0 } : {}),
-          ...(input.governed
-            ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
-            : {}),
-          onRetry: (event) => reportSceneRetry('actions', event),
-        },
+        registerPolicy,
+        { title: safeOutline.title, outlineId: safeOutline.id },
       );
-      // The Action generator falls back to a model-free sequence on a call
-      // failure; on a routed run a failed ROUTE must fail the run instead.
-      assertRouteAvailable();
-      if (input.governed && attemptProducedFallback) {
-        throw new TeachingPackageError(
-          'GOVERNED_ACTION_GENERATION_FAILED',
-          `a governed scene's Action generation produced no canonical sequence after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
-          { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
-        );
-      }
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
       const sceneId = createSceneWithActions(safeOutline, content, actions, api);
@@ -1456,11 +1545,17 @@ export async function generateClassroom(
         );
       }
       canvas.elements = regenerated.elements as never;
-      scene.actions = (await generateSceneActions(
-        nativeOutline,
-        regenerated,
-        await getSceneActionsAiCall(),
-        { agents, languageDirective },
+      const nativeActionsAiCall = await getSceneActionsAiCall();
+      scene.actions = (await generateRegisterCompliantActions(
+        (correctiveContext) =>
+          generateSceneActions(nativeOutline, regenerated, nativeActionsAiCall, {
+            agents,
+            languageDirective,
+            ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+            ...(correctiveContext ? { correctiveContext } : {}),
+          }),
+        registerPolicy,
+        { title: scene.title, outlineId: planned.id },
       )) as never;
       assertRouteAvailable();
     }
@@ -1476,7 +1571,9 @@ export async function generateClassroom(
       });
 
       try {
-        const ttsSummary = await generateTTSForClassroom(scenes, stageId, options.baseUrl, { stage });
+        const ttsSummary = await generateTTSForClassroom(scenes, stageId, options.baseUrl, {
+          stage,
+        });
         log.info('TTS generation complete', ttsSummary ? JSON.stringify(ttsSummary) : '');
       } catch (err) {
         log.warn('TTS generation phase failed, continuing:', err);

@@ -68,6 +68,16 @@ export interface OutlinePromptContext {
    */
   language?: string;
   textDirection?: 'ltr' | 'rtl';
+  /**
+   * The server-owned language/register directive, derived from the lesson's
+   * authoritative language and subject code (never from content). When
+   * present the model is told the directive is fixed, its own
+   * `languageDirective` is discarded in favour of this one, and every
+   * outline's `languageNote` is dropped: the model has no authority over the
+   * register. Absent → the templates render byte-identically and the model's
+   * directive is used as before.
+   */
+  authoritativeLanguageDirective?: string;
   pdfText?: string;
   pdfImages?: PdfImage[];
   visionEnabled?: boolean;
@@ -434,6 +444,8 @@ export function buildOutlinePrompt(
     hasUnavailableRuntimes: unavailableRuntimesText !== '',
     unavailableRuntimesText,
     imageTextPolicy: resolveImageTextPolicyText(context.language, context.textDirection),
+    hasAuthoritativeLanguageDirective: Boolean(context.authoritativeLanguageDirective),
+    authoritativeLanguageDirective: context.authoritativeLanguageDirective ?? '',
   });
 
   if (!prompts) {
@@ -508,11 +520,29 @@ export async function generateSceneOutlinesFromRequirements(
       return { success: false, error: 'Failed to parse scene outlines response' };
     }
 
-    const rawEnriched = rawOutlines.map((outline, index) => ({
-      ...stripEmptyOutlineSemantics(outline),
-      id: outline.id || nanoid(),
-      order: index + 1,
-    }));
+    // The server's register policy is authoritative: the model's directive is
+    // discarded (never persisted), and so is any per-scene language note that
+    // could re-introduce a register of the model's choosing.
+    const authoritative = context.authoritativeLanguageDirective;
+    if (authoritative) {
+      if (languageDirective !== authoritative) {
+        logger.warn(
+          'Outline languageDirective discarded: the server language policy is authoritative',
+        );
+      }
+      languageDirective = authoritative;
+    }
+
+    const rawEnriched = rawOutlines.map((outline, index) => {
+      const enrichedOutline = {
+        ...stripEmptyOutlineSemantics(outline),
+        id: outline.id || nanoid(),
+        order: index + 1,
+      };
+      if (!authoritative) return enrichedOutline;
+      const { languageNote: _discarded, ...withoutNote } = enrichedOutline;
+      return withoutNote;
+    });
     const enriched =
       context.teachingFlow && context.teachingFlow.length > 0
         ? normalizeBookGroundedExplanationVisuals(

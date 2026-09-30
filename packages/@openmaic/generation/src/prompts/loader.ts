@@ -13,6 +13,9 @@ import type { LoadedPrompt, PromptId, PromptVariableDefaults, SnippetId } from '
 const DEFAULT_PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const PROMPT_VARIABLE_DEFAULTS = {
+  // The in-template Arabic register rule renders unless a server spoken-language
+  // policy replaces it (`spokenLanguagePolicyVars`).
+  'slide-actions': { legacyArabicRegisterRule: true },
   'pbl-actions': {
     projectSummary:
       '(No generated milestones are available; introduce the project topic without inventing any.)',

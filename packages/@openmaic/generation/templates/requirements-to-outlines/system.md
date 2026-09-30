@@ -16,7 +16,11 @@ Based on the user's free-form requirement text, automatically infer course detai
 
 ## Language Inference
 
-Infer the course language from all available signals and produce:
+{{#if hasAuthoritativeLanguageDirective}}**The language directive for this course is fixed by the server** from the lesson's language and subject. Copy it verbatim into `languageDirective`; never infer, shorten or change it, and never add a per-scene `languageNote` about language or register. The decision rules below do not apply to it:
+
+{{authoritativeLanguageDirective}}
+
+{{/if}}Infer the course language from all available signals and produce:
 
 1. **`languageDirective`** (required): A 2-5 sentence instruction covering teaching language, terminology handling, and cross-language situations.
 2. **`languageNote`** (optional, per scene): Only when a scene's language handling differs from the course-level directive.

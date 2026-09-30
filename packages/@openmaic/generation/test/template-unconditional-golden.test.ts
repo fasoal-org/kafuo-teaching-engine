@@ -31,6 +31,15 @@
  * the FIRST marker of either family; the bytes before that first marker are
  * exactly the bytes the W11 goldens pinned, so the six stored files stay
  * byte-unchanged and their pre-W11 provenance survives.
+ *
+ * Speech register policy (30 Sep 2026) likewise re-seeds nothing. The four
+ * action templates gained an inline `{{#if hasSpokenLanguagePolicy}}` block
+ * (the server policy, rendered only when a policy is supplied) and
+ * slide-actions wraps its own Arabic register wording in
+ * `{{#if legacyArabicRegisterRule}}`, which renders by default. The recipe
+ * removes the first block and unwraps the second, so the remainder is exactly
+ * what a caller without a policy receives, and it must still equal the
+ * stored goldens byte for byte.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -71,8 +80,14 @@ const FLOW_CARRYING: readonly string[] = [
  * it, the conditionals form one unbroken tail (nothing unconditional between
  * or after them), and the tail ends with `{{/if}}`.
  */
+/** Inline speech-register conditionals: the policy block is removed, the default-on legacy rule unwrapped. */
+const POLICY_BLOCK = /\{\{#if hasSpokenLanguagePolicy\}\}[\s\S]*?\{\{\/if\}\}/g;
+const LEGACY_RULE = /\{\{#if legacyArabicRegisterRule\}\}([\s\S]*?)\{\{\/if\}\}/g;
+
 function stripConditionalFamily(template: (typeof TEMPLATES)[number]): string {
-  const text = readFileSync(join(PKG_ROOT, 'templates', template, 'system.md'), 'utf-8');
+  const text = readFileSync(join(PKG_ROOT, 'templates', template, 'system.md'), 'utf-8')
+    .replace(POLICY_BLOCK, '')
+    .replace(LEGACY_RULE, '$1');
 
   const indices: number[] = [];
   for (const marker of FAMILY_MARKERS) {

@@ -189,6 +189,14 @@ export type TeachingPackageErrorCode =
   | 'ACTION_TYPE_UNKNOWN'
   /** A deterministic reference (element / media / agent) resolves against nothing persisted (TAE-RQ-023). */
   | 'ACTION_REFERENCE_INVALID'
+  /**
+   * A scene's spoken narration still breaks the server's spoken-language
+   * register policy (e.g. formal Arabic where Saudi speech is required, or
+   * foreign script) after its bounded scene-level re-rolls. Deliberately NOT
+   * retryable at the attempt level: the retries belong to the scene, never to
+   * the whole package.
+   */
+  | 'SPEECH_REGISTER_NONCOMPLIANT'
   // --- Kafuo R1 subject routing (contracts §1/§3.4/§6, plan §7.1) ---
   /**
    * The subject code is not in the code-owned policy table, or one of its two
@@ -303,6 +311,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   ACTION_STRUCTURE_INVALID: 422,
   ACTION_TYPE_UNKNOWN: 422,
   ACTION_REFERENCE_INVALID: 422,
+  SPEECH_REGISTER_NONCOMPLIANT: 422,
   SUBJECT_ROUTE_UNAVAILABLE: 422,
   TEACHING_MODEL_UNAVAILABLE: 503,
   ACCOUNTING_UNAVAILABLE: 503,
