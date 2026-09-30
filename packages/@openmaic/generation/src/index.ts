@@ -11,6 +11,7 @@ export {
   extractWidgetConfig,
   generateSceneActions,
   generateSceneContent,
+  GAME_DRAG_MAX_ATTEMPTS,
   generateWidgetContent,
   PBLGenerationError,
   resolveImageIds,
@@ -38,6 +39,15 @@ export {
 export type { GenerationRetryEvent, GenerationRetryOptions } from './generation-retry.js';
 export { parseActionsFromStructuredOutput } from './action-parser.js';
 export { postProcessInteractiveHtml } from './interactive-post-processor.js';
+export {
+  KAFUO_DRAG_RUNTIME_MARKER,
+  formatGameDragCorrection,
+  injectGameDragRuntime,
+  validateGameDragContract,
+  withGameDragCorrection,
+  type GameDragIssue,
+  type GameDragIssueCode,
+} from './game-drag-runtime.js';
 export { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 export type { PlannerSingleCallFn } from './pbl/planner-single-call.js';
 export type { PBLPlannerV2Input, PriorQuizResult } from './pbl/types.js';

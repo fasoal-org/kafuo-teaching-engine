@@ -53,6 +53,11 @@ import type {
 } from './outline-types.js';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator.js';
 import { postProcessInteractiveHtml } from './interactive-post-processor.js';
+import {
+  injectGameDragRuntime,
+  validateGameDragContract,
+  withGameDragCorrection,
+} from './game-drag-runtime.js';
 import { parseActionsFromStructuredOutput } from './action-parser.js';
 import { parseJsonResponse } from './json-repair.js';
 import {
@@ -1599,6 +1604,13 @@ function extractHtml(
 // ==================== Ultra Mode Widget Generation ====================
 
 /**
+ * A game's generation attempts in total under the drag contract: the first
+ * answer plus one corrected re-roll. Kept small because a caller may re-roll
+ * a refused scene again (non-governed content retries).
+ */
+export const GAME_DRAG_MAX_ATTEMPTS = 2;
+
+/**
  * Generate widget content based on widget type (Ultra Mode)
  */
 export async function generateWidgetContent(
@@ -1677,6 +1689,8 @@ export async function generateWidgetContent(
         keyPoints: (outline.keyPoints || []).join('\n'),
         scoring: { correctPoints: 10, speedBonus: 5 },
         languageDirective: languageDirective || '',
+        // The KafuoDrag helper is embedded below; the prompt may rely on it.
+        hasDragRuntime: true,
       };
       break;
 
@@ -1727,12 +1741,38 @@ export async function generateWidgetContent(
 
   log.info(`Generating ${widgetType} widget for: ${outline.title}`);
   const response = await aiCall(prompts.system, prompts.user);
-  const html = extractHtml(response, log);
+  let html = extractHtml(response, log);
 
   if (!html) {
     log.error(`Failed to extract HTML from ${widgetType} response for: ${outline.title}`);
     options.onFailure?.({ code: 'invalid-model-output' });
     return null;
+  }
+
+  if (widgetType === 'game') {
+    // The drag contract: known drag defects re-roll THIS game once with the
+    // issues as a correction; a game that still breaks it is refused, never
+    // shipped unplayable. The helper is embedded only into a compliant game.
+    let issues = validateGameDragContract(html);
+    for (let attempt = 2; issues.length > 0 && attempt <= GAME_DRAG_MAX_ATTEMPTS; attempt += 1) {
+      log.warn(
+        `Game "${outline.title}" breaks the drag contract (${issues.map((issue) => issue.code).join(', ')}); attempt ${attempt}/${GAME_DRAG_MAX_ATTEMPTS}`,
+      );
+      const retried = extractHtml(
+        await aiCall(prompts.system, withGameDragCorrection(prompts.user, issues)),
+        log,
+      );
+      if (!retried) break;
+      html = retried;
+      issues = validateGameDragContract(html);
+    }
+    if (issues.length > 0) {
+      const detail = `game drag contract: ${issues.map((issue) => issue.code).join(', ')}`;
+      log.error(`Game "${outline.title}" refused (${detail})`);
+      options.onFailure?.({ code: 'invalid-model-output', detail });
+      return null;
+    }
+    html = injectGameDragRuntime(html);
   }
 
   // Extract widget config from HTML if present

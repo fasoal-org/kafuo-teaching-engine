@@ -107,7 +107,38 @@ Learning: Player EXPERIENCES F=ma by adjusting thrust and seeing result
 }
 ```
 
-## Technical Requirements
+{{#if hasDragRuntime}}## Drag and Drop (MANDATORY whenever anything is dragged)
+
+A tested drag helper, `window.KafuoDrag`, is already loaded in the page before your scripts. It works with mouse and touch, moves the element with the pointer, highlights the target under it, and returns the element to its place after the gesture.
+
+- Make every draggable element with `KafuoDrag.makeDraggable(element, { targets, onDrop, onMiss })`:
+  - `targets`: a CSS selector, an element, a list of elements, or a function returning them. They are looked up when the drag starts, so targets rendered later still work.
+  - `onDrop(element, target)`: called when the element is released over a target. Decide there whether the answer is right, then place, move or remove the element yourself.
+  - `onMiss(element)` (optional): the element was released outside every target.
+- `KafuoDrag.disable(element)` stops an element from being dragged (for example once it is placed).
+- Never use native HTML5 drag and drop: no `draggable` attribute or property, no `dragstart`, `dragover` or `drop` events. Never write your own pointer, mouse or touch drag code.
+- Keep answer keys in `data-*` attributes written with Western digits (0-9), even when the visible text shows Arabic-Indic digits (٠-٩). Compare values only with `KafuoDrag.sameValue(a, b)`, which treats both digit scripts as equal and ignores extra spaces.
+
+```js
+const card = document.createElement('div');
+card.className = 'card';
+card.textContent = '١٦';          // what the player sees
+card.dataset.value = '16';        // the answer key
+pool.append(card);
+KafuoDrag.makeDraggable(card, {
+  targets: '.slot',
+  onDrop: (el, slot) => {
+    if (KafuoDrag.sameValue(el.dataset.value, slot.dataset.accept)) {
+      slot.textContent = el.textContent;
+      el.remove();
+    } else {
+      showFeedback('try again');
+    }
+  },
+});
+```
+
+{{/if}}## Technical Requirements
 
 - Real-time game loop with `requestAnimationFrame`
 - Touch-friendly controls (sliders, buttons, drag areas)
