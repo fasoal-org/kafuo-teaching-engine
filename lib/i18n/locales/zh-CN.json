@@ -236,7 +236,32 @@
     "doneEditing": "完成编辑",
     "proModeDisabledHint": "本页不支持编辑——打开任意课程页即可使用 Pro 模式编辑。"
   },
+  "aiVoice": {
+    "notice": "This lesson's voice is AI-generated, not a real teacher.",
+    "label": "AI voice",
+    "dismiss": "Got it"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "Pronunciation",
+      "regenerateAllConfirm": "Regenerate all {{total}} lines? {{current}} are already up to date. Choose Cancel to regenerate only the out-of-date lines.",
+      "original": "Original",
+      "prepared": "Spoken form",
+      "warnings": "Warnings",
+      "noWarnings": "No warnings",
+      "preview": "Preview spoken form",
+      "statusCurrent": "Current",
+      "statusStale": "Stale · {{reason}}",
+      "statusLegacy": "Legacy audio",
+      "statusMissing": "No audio",
+      "generalPath": "General narration (no subject rules)",
+      "policy": "Policy {{version}} ({{status}})",
+      "unavailable": "Pronunciation details are unavailable.",
+      "readingMode": "Narration reading mode",
+      "readingModeNatural": "Natural",
+      "readingModeAccessible": "Accessible (explicit structure)",
+      "unvoicedCount": "{{count}} lines have no audio"
+    },
     "proMode": "专业模式",
     "undo": "撤销",
     "redo": "重做",
@@ -1877,7 +1902,7 @@
       "download": "下载",
       "detailFailed": "技能详情加载失败",
       "contentLabel": "正文",
-      "builtinDetailNote": "该技能随 OpenMAIC 提供。下载后可导入其他智能体工作台。",
+      "builtinDetailNote": "该技能随 Teaching Engine 提供。下载后可导入其他智能体工作台。",
       "upload": "上传",
       "uploading": "正在上传…",
       "uploadFailed": "技能上传失败。请检查文件后重试。",

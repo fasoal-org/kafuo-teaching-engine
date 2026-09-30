@@ -90,6 +90,15 @@ export async function GET(req: NextRequest) {
     // than a redirect it would have to refuse to follow. Browser behaviour is
     // byte-for-byte unchanged.
     const wantsJson = (req.headers.get('accept') ?? '').includes('application/json');
+    const classroomUrl = new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin);
+    // An Admin "Edit" handoff is an explicit request to edit. Carry that
+    // intent through the redirect so the classroom opens Pro mode directly;
+    // making the reviewer toggle a second, unrelated control left the
+    // Teaching Skills surface hidden and made a successful handoff look like
+    // read-only preview.
+    if (grant.purpose === 'edit' && grant.capability === 'write') {
+      classroomUrl.searchParams.set('mode', 'edit');
+    }
     const response = wantsJson
       ? NextResponse.json(
           {
@@ -103,7 +112,7 @@ export async function GET(req: NextRequest) {
             headers: { 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' },
           },
         )
-      : NextResponse.redirect(new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin), {
+      : NextResponse.redirect(classroomUrl, {
           status: 302,
           headers: { 'Referrer-Policy': 'no-referrer' },
         });

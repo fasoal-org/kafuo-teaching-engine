@@ -1,0 +1,22 @@
+{
+  "policyVersion": "satts-ar-0.14.1",
+  "status": "experimental",
+  "rendererGrammarVersion": "satts-grammar-17",
+  "options": {
+    "numbersMode": "digits"
+  },
+  "files": [
+    "letters.json",
+    "arabic-letters.json",
+    "greek.json",
+    "functions.json",
+    "fractions.json",
+    "operators.json",
+    "numbers-structural.json",
+    "units.json",
+    "prefixes.json",
+    "chem-letters.json",
+    "states.json"
+  ],
+  "contentHash": "sha256:fcf3749a6d1a8fec58433880fe4e35a8d90873f6eae94b7226c9846e6f871bb7"
+}

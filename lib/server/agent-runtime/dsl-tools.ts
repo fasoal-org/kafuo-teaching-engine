@@ -529,6 +529,8 @@ function clearStaleSpeechAudio(before: Scene, after: Scene): void {
     const legacy = action as typeof action & { audioUrl?: string };
     delete legacy.audioId;
     delete legacy.audioUrl;
+    // Provenance describes the removed audio, so it goes with it.
+    delete legacy.audioProvenance;
   }
 }
 

@@ -7,7 +7,7 @@
  * `MODEL_RATE_CARD_OVERRIDES_JSON` env replaces or adds entries and suffixes
  * the version with `+env`, so a row priced under an override says so.
  *
- * Sources (benchmarks-scripts, 22 Sep 2026):
+ * Sources (benchmarks-scripts, 22 Sep 2026; OpenAI model catalog, 23 Sep 2026):
  *  - Qwen tiers: `qwen_benchmark.py::QWEN_TIERS` — by request input tokens,
  *    ≤32K: 0.03 in / 0.13 out; ≤256K: 0.10 in / 0.40 out. The benchmark
  *    records no cache discount and DashScope reported zero cache in every
@@ -19,9 +19,11 @@
  *    the OpenAI family never reports a write field the executor accounts
  *    (plan §7.6: `cache_write_reported=false`, no write component), so it
  *    contributes nothing to a ledger cost.
+ *  - gpt-6-luna: official OpenAI Standard short-context rates: 0.10 fresh input,
+ *    0.01 cached input, 0.125 cache write, 0.50 output per 1M tokens.
  */
 
-export const RATE_CARD_VERSION = 'rc-2026-09-22';
+export const RATE_CARD_VERSION = 'rc-2026-09-23';
 
 export interface RateTier {
   /** Inclusive upper bound on `input_tokens_total` for this tier. */
@@ -87,6 +89,12 @@ export const BASE_RATE_CARD: RateCard = Object.freeze({
       cachedInputPerM: 0.02,
       cacheWritePerM: 0.25,
       outputPerM: 1.2,
+    },
+    'openai:gpt-6-luna': {
+      inputPerM: 0.1,
+      cachedInputPerM: 0.01,
+      cacheWritePerM: 0.125,
+      outputPerM: 0.5,
     },
   }),
 });

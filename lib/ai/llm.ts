@@ -142,6 +142,12 @@ function buildThinkingProviderOptions(
   modelId: string,
   config: ThinkingConfig,
 ): ProviderOptions | undefined {
+  // @ai-sdk/openai versions released before GPT-6 classify the new family as
+  // non-reasoning and strip `reasoningEffort`. providers.ts injects the same
+  // normalized effort into the native Responses request body at the fetch
+  // boundary until the SDK catalog catches up.
+  if (providerId === 'openai' && /^gpt-6(?:-|$)/.test(modelId)) return undefined;
+
   const lookupModelId = providerId ? getCanonicalModelId(providerId, modelId) : modelId;
   const info = providerId
     ? MODEL_THINKING_MAP.get(getModelMetadataKey(providerId, lookupModelId))

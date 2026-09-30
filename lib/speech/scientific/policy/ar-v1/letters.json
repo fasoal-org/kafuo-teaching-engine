@@ -1,0 +1,376 @@
+{
+  "table": "letters",
+  "description": "Mathematics variable and point names (D-1 Saudi curriculum convention, D-2 MSA). Physics and Chemistry read Latin symbols with chem-letters.json.",
+  "roles": [
+    "variable"
+  ],
+  "domains": [
+    "MATH"
+  ],
+  "entries": [
+    {
+      "key": "a",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write أ"
+    },
+    {
+      "key": "b",
+      "natural": "باء",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ب"
+    },
+    {
+      "key": "c",
+      "natural": "جيم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write جـ"
+    },
+    {
+      "key": "d",
+      "natural": "دال",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write د"
+    },
+    {
+      "key": "e",
+      "natural": "إي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Review finding 5 (30 Sep 2026): the canonical letter name «إي», as for E (was «هاء»). Arabic هـ keeps «هاء». No constant name or numeric value is added"
+    },
+    {
+      "key": "f",
+      "natural": "إف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "g",
+      "natural": "جي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "h",
+      "natural": "إتش",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "i",
+      "natural": "آي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "j",
+      "natural": "جيه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "k",
+      "natural": "كاف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ك"
+    },
+    {
+      "key": "l",
+      "natural": "لام",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ل"
+    },
+    {
+      "key": "m",
+      "natural": "ميم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write م"
+    },
+    {
+      "key": "n",
+      "natural": "نون",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ن"
+    },
+    {
+      "key": "o",
+      "natural": "أو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "p",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm. — P2 item 6: standard Arabic letters (was «پي», which Arabic TTS may not voice); O-5 example «بي لسين»."
+    },
+    {
+      "key": "q",
+      "natural": "كيو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "r",
+      "natural": "راء",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ر"
+    },
+    {
+      "key": "s",
+      "natural": "إس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "t",
+      "natural": "تاء",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ت"
+    },
+    {
+      "key": "u",
+      "natural": "يو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "v",
+      "natural": "ڤي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "w",
+      "natural": "دبليو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "No Arabic textbook letter established for this variable; Latin letter name used. Reviewer to confirm."
+    },
+    {
+      "key": "x",
+      "natural": "سين",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write س"
+    },
+    {
+      "key": "y",
+      "natural": "صاد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ص"
+    },
+    {
+      "key": "z",
+      "natural": "عين",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write ع"
+    },
+    {
+      "key": "A",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Geometry points: textbooks write أ; case is not audible"
+    },
+    {
+      "key": "B",
+      "natural": "باء",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Geometry points: textbooks write ب; case is not audible"
+    },
+    {
+      "key": "C",
+      "natural": "جيم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Geometry points: textbooks write جـ; case is not audible"
+    },
+    {
+      "key": "D",
+      "natural": "دال",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Geometry points: textbooks write د; case is not audible"
+    },
+    {
+      "key": "E",
+      "natural": "إي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "F",
+      "natural": "إف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "G",
+      "natural": "جي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "H",
+      "natural": "إتش",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "I",
+      "natural": "آي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "J",
+      "natural": "جيه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "K",
+      "natural": "كيه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "L",
+      "natural": "إل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "M",
+      "natural": "إم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "N",
+      "natural": "إن",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "O",
+      "natural": "أو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "P",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm. — P2 item 6: standard Arabic letters (was «پي», which Arabic TTS may not voice); O-5 example «بي لسين»."
+    },
+    {
+      "key": "Q",
+      "natural": "كيو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "R",
+      "natural": "آر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "S",
+      "natural": "إس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "T",
+      "natural": "تي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "U",
+      "natural": "يو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "V",
+      "natural": "ڤي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "W",
+      "natural": "دبليو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "X",
+      "natural": "إكس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "Y",
+      "natural": "واي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    },
+    {
+      "key": "Z",
+      "natural": "زد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Latin letter name; case is not audible. Reviewer to confirm."
+    }
+  ]
+}

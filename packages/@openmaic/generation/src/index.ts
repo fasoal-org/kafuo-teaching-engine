@@ -81,6 +81,7 @@ export type {
 
 export {
   DEFAULT_LANGUAGE_DIRECTIVE,
+  OUTLINE_TEACHING_FLOW_ERROR,
   applyOutlineFallbacks,
   resolveImageTextPolicyText,
   withCorrectiveContext,
@@ -94,6 +95,13 @@ export type {
   OutlinePromptContext,
 } from './outline-generator.js';
 export { changeOutlineType } from './outline-type.js';
+export {
+  generatedSlideLayoutIssue,
+  normalizeGeneratedSlideLayout,
+  SLIDE_CANVAS_HEIGHT,
+  SLIDE_CANVAS_WIDTH,
+  SLIDE_SAFE_MARGIN,
+} from './slide-layout.js';
 export {
   OUTLINE_SLIDE_SEMANTICS_ERROR,
   OUTLINE_SLIDE_TYPES,
@@ -147,6 +155,7 @@ export {
   ORIENTATION_VISUAL_MISSING,
   OrientationVisualMissingError,
   plannedVisualIssue,
+  requiredSourceVisualIssue,
 } from './visual-plan.js';
 export type { MediaRegistry, UnauthorizedMediaReason } from './media-registry.js';
 export { uniquifyMediaElementIds } from './outline-media.js';

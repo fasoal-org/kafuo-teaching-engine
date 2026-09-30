@@ -269,15 +269,15 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     vi.stubEnv(
       'MODEL_ROUTES',
       JSON.stringify({
-        'generate-classroom': 'openai:gpt-5.6-luna',
-        'scene-outlines-stream': 'openai:gpt-5.6-luna',
-        'scene-content': 'openai:gpt-5.6-luna',
-        'scene-content:slide': 'openai:gpt-5.6-luna',
-        'scene-actions': 'openai:gpt-5.6-luna',
-        'agent-profiles': 'openai:gpt-5.6-luna',
+        'generate-classroom': 'openai:gpt-6-luna',
+        'scene-outlines-stream': 'openai:gpt-6-luna',
+        'scene-content': 'openai:gpt-6-luna',
+        'scene-content:slide': 'openai:gpt-6-luna',
+        'scene-actions': 'openai:gpt-6-luna',
+        'agent-profiles': 'openai:gpt-6-luna',
       }),
     );
-    const policy = await policyFor('MATH'); // qwen primary → gpt-5-nano fallback
+    const policy = await policyFor('MATH'); // Luna primary → Qwen fallback
 
     const result = await generate({
       modelPolicy: policy,
@@ -294,7 +294,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
       'scene-actions',
     ]);
     for (const call of calls) {
-      expect(call.model).toBe('qwen:qwen3.7-flash');
+      expect(call.model).toBe('openai:gpt-5.6-luna');
       expect(call.maxRetries).toBe(0);
     }
     // The base model is still resolved for utilities, but no teaching stage
@@ -319,7 +319,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
         policy_version: 'r1-2026-09',
         origin: 'openmaic_runtime',
         role: 'primary',
-        model_string: 'qwen:qwen3.7-flash',
+        model_string: 'openai:gpt-5.6-luna',
         accounting_status: 'complete',
         outcome: 'succeeded',
         generation_attempt_id: 'tpa-routed-1',
@@ -373,7 +373,30 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
   });
 
   it('vision-bearing calls are planned onto the vision-capable fallback with fallback_reason=primary_lacks_vision', async () => {
-    const policy = await policyFor('MATH'); // qwen: no vision; gpt-5-nano: vision
+    // No approved R1 route pairs a visionless primary with a vision-capable
+    // fallback anymore, so the AMB-08 planning is exercised by overriding the
+    // resolved targets' vision flags: primary Luna (no vision) → fallback Qwen
+    // (vision). The executor only ever reads these flags from modelInfo.
+    const resolved = await policyFor('MATH');
+    const withoutVision = (t: typeof resolved.primary) => ({
+      ...t,
+      modelInfo: {
+        ...t.modelInfo,
+        capabilities: { ...t.modelInfo.capabilities, vision: false },
+      },
+    });
+    const withVision = (t: typeof resolved.primary) => ({
+      ...t,
+      modelInfo: {
+        ...t.modelInfo,
+        capabilities: { ...t.modelInfo.capabilities, vision: true },
+      },
+    });
+    const policy = {
+      ...resolved,
+      primary: withoutVision(resolved.primary),
+      fallback: withVision(resolved.fallback),
+    };
     const pdfImages = [{ id: 'src-1', src: 'data:image/png;base64,AAAA', pageNumber: 1 }];
     mocks.generateSceneOutlinesFromRequirements.mockImplementation(
       async (_req, _pdf, images, aiCall) => {
@@ -397,14 +420,14 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
 
     const calls = callsBySource();
     expect(calls.find((c) => c.source === 'scene-outlines-stream')).toMatchObject({
-      model: 'openai:gpt-5-nano',
+      model: 'qwen:qwen3.7-flash',
     });
     expect(calls.find((c) => c.source === 'scene-content:slide')).toMatchObject({
-      model: 'openai:gpt-5-nano',
+      model: 'qwen:qwen3.7-flash',
     });
     // Text-only calls stay on the primary.
     expect(calls.find((c) => c.source === 'scene-actions')).toMatchObject({
-      model: 'qwen:qwen3.7-flash',
+      model: 'openai:gpt-5.6-luna',
     });
 
     const rows = await ledgerRows();
@@ -443,8 +466,8 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     const calls = callsBySource();
     // Outline: primary 429 → fallback served (two provider calls, one AICallFn call).
     expect(calls.filter((c) => c.source === 'scene-outlines-stream').map((c) => c.model)).toEqual([
+      'openai:gpt-5.6-luna',
       'qwen:qwen3.7-flash',
-      'openai:gpt-5-nano',
     ]);
     // Content: primary AND fallback failed → exactly two provider calls, then
     // the run fails. The scene-content retry helper did not re-roll the call.
@@ -481,5 +504,32 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     expect(calls[1]).toMatchObject({ model: 'openai:gpt-5.6-luna' });
     expect(calls[0]).toMatchObject({ model: 'test:base-model' });
     expect(await ledgerRows()).toEqual([]);
+  });
+
+  describe('Stage.subjectCode stamping (SATTS W1-4)', () => {
+    const persistedStage = () =>
+      (mocks.persistClassroom.mock.calls.at(-1)?.[0] as { stage: Record<string, unknown> })
+        .stage;
+
+    it('stamps a known Kafuo subject code on the Stage beside the language', async () => {
+      await generate({ subjectCode: 'MATH', language: 'ar-SA' });
+      expect(persistedStage()).toMatchObject({
+        subjectCode: 'MATH',
+        language: 'ar-SA',
+        textDirection: 'rtl',
+      });
+      expect(persistedStage()).not.toHaveProperty('speechReadingMode');
+    });
+
+    it.each([
+      ['null', null],
+      ['empty', ''],
+      ['lower-case', 'math'],
+      ['unknown', 'GEOLOGY'],
+      ['absent', undefined],
+    ])('stamps no subject for a %s code', async (_label, subjectCode) => {
+      await generate(subjectCode === undefined ? {} : { subjectCode });
+      expect(persistedStage()).not.toHaveProperty('subjectCode');
+    });
   });
 });

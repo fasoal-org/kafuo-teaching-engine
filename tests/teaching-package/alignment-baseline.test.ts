@@ -476,6 +476,34 @@ describe('W15 durable confirmation', () => {
   it('the persistence sink stamps generation baselines on the final scene set', async () => {
     const stageId = nextId('stage');
     const governed = governedScenes(stageId)[0]!;
+    // Reproduce the production failure: storage's DSL migration changes a
+    // material canvas field during save. The sink must baseline the migrated
+    // Scene, not this pre-migration input, or it is stale from birth.
+    const legacyLine = {
+      id: 'legacy-line',
+      type: 'line',
+      left: 10,
+      top: 20,
+      width: 100,
+      start: [0, 0],
+      end: [100, 0],
+      style: 'solid',
+      color: '#333333',
+      points: ['', ''],
+      rotate: 15,
+      height: 30,
+    };
+    const governedWithLegacyMaterial = {
+      ...governed,
+      content: {
+        ...governed.content,
+        canvas: {
+          ...(governed.content as unknown as { canvas: Record<string, unknown> }).canvas,
+          elements: [legacyLine],
+        },
+      },
+    } as unknown as AppScene;
+    const preMigrationFingerprint = sceneMaterialFingerprint(governedWithLegacyMaterial);
     const legacyScene = makeSlideScene('legacy', stageId, 3);
     // A carrier without a classification (malformed model output the Stage-1
     // gate would normally refuse): the sink must SKIP it, not stamp a
@@ -491,7 +519,7 @@ describe('W15 durable confirmation', () => {
       {
         id: stageId,
         stage: { id: stageId, name: 'Sink', createdAt: 1, updatedAt: 1 } as never,
-        scenes: [governed, legacyScene, unclassified] as never[],
+        scenes: [governedWithLegacyMaterial, legacyScene, unclassified] as never[],
         outlines: [] as never[],
       },
       '',
@@ -512,6 +540,11 @@ describe('W15 durable confirmation', () => {
     expect(savedGoverned.alignmentBaseline!.fingerprint).toBe(
       sceneMaterialFingerprint(savedGoverned),
     );
+    expect(savedGoverned.alignmentBaseline!.fingerprint).not.toBe(preMigrationFingerprint);
+    expect(
+      (savedGoverned.content as unknown as { canvas: { elements: Record<string, unknown>[] } })
+        .canvas.elements[0],
+    ).not.toHaveProperty('rotate');
     expect(deriveSceneAlignment(savedGoverned)).toMatchObject({ state: 'current', aligned: true });
     expect('alignmentBaseline' in savedLegacy).toBe(false);
     // Unclassified: no baseline, honest validation-required — never a

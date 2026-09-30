@@ -37,6 +37,12 @@ describe('rate card', () => {
       cachedInputPerM: 0.02,
       outputPerM: 1.2,
     });
+    expect(BASE_RATE_CARD.entries['openai:gpt-6-luna']).toMatchObject({
+      inputPerM: 0.1,
+      cachedInputPerM: 0.01,
+      cacheWritePerM: 0.125,
+      outputPerM: 0.5,
+    });
     const qwen = BASE_RATE_CARD.entries['qwen:qwen3.7-flash']!;
     expect(qwen.tiers).toEqual([
       expect.objectContaining({ maxInputTokens: 32_000, inputPerM: 0.03, outputPerM: 0.13 }),

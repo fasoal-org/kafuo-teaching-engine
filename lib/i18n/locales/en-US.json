@@ -236,7 +236,32 @@
     "doneEditing": "Done editing",
     "proModeDisabledHint": "Editing isn't available on this page — open a course slide to edit with Pro mode."
   },
+  "aiVoice": {
+    "notice": "This lesson's voice is AI-generated, not a real teacher.",
+    "label": "AI voice",
+    "dismiss": "Got it"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "Pronunciation",
+      "regenerateAllConfirm": "Regenerate all {{total}} lines? {{current}} are already up to date. Choose Cancel to regenerate only the out-of-date lines.",
+      "original": "Original",
+      "prepared": "Spoken form",
+      "warnings": "Warnings",
+      "noWarnings": "No warnings",
+      "preview": "Preview spoken form",
+      "statusCurrent": "Current",
+      "statusStale": "Stale · {{reason}}",
+      "statusLegacy": "Legacy audio",
+      "statusMissing": "No audio",
+      "generalPath": "General narration (no subject rules)",
+      "policy": "Policy {{version}} ({{status}})",
+      "unavailable": "Pronunciation details are unavailable.",
+      "readingMode": "Narration reading mode",
+      "readingModeNatural": "Natural",
+      "readingModeAccessible": "Accessible (explicit structure)",
+      "unvoicedCount": "{{count}} lines have no audio"
+    },
     "proMode": "Pro",
     "undo": "Undo",
     "redo": "Redo",
@@ -1877,7 +1902,7 @@
       "download": "Download",
       "detailFailed": "Could not load the skill details",
       "contentLabel": "Content",
-      "builtinDetailNote": "This skill ships with OpenMAIC. Download it to import into another agent workspace.",
+      "builtinDetailNote": "This skill ships with Teaching Engine. Download it to import into another agent workspace.",
       "upload": "Upload",
       "uploading": "Uploading…",
       "uploadFailed": "Could not upload the skill. Check the file and try again.",

@@ -72,7 +72,31 @@ function slideScene(order = 1, id = 'scene_slide'): Scene {
         ],
       },
     },
-    actions: [{ id: 'act-1', type: 'speech', text: 'Welcome', audioId: 'asset-old' }],
+    actions: [
+      {
+        id: 'act-1',
+        type: 'speech',
+        text: 'Welcome',
+        audioId: 'asset-old',
+        audioProvenance: {
+          fingerprint: 'fp1:x',
+          policyVersion: null,
+          originalDigest: 'o',
+          responseFormat: 'mp3',
+          providerId: 'openai-tts',
+          modelId: 'gpt-4o-mini-tts',
+          voice: 'alloy',
+          speed: 1,
+          preparedDigest: 'p',
+          segments: 1,
+          preparedChars: 3,
+          originalChars: 3,
+          warningCount: 0,
+          generatedAt: '2026-09-28T00:00:00.000Z',
+          reason: 'initial' as const,
+        },
+      },
+    ],
   } as Scene;
 }
 
@@ -414,6 +438,7 @@ describe('patch_stage', () => {
     expect((scene.content as SlideContent).canvas.elements[0]).not.toHaveProperty('fill');
     expect(scene.actions?.[0]).toMatchObject({ text: 'New narration' });
     expect(scene.actions?.[0]).not.toHaveProperty('audioId');
+    expect(scene.actions?.[0]).not.toHaveProperty('audioProvenance');
     expect(result.details).toMatchObject({
       intent: 'Update title color and narration',
       updated: { ops: 3 },

@@ -109,4 +109,10 @@ The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-onl
 Do **NOT** plan a separate learning-objectives slide: the objectives live on the orientation slide. Plan a separate one only when the user requirement{{#if hasTeachingFlow}} or a Teaching Model Flow position's instructions{{/if}} explicitly demands it — and it is then still `"contentRole": "orientation"`.
 {{#if hasTeachingFlow}}
 The Teaching Model Flow decides which positions exist and their order; classification never changes that. Classify each outline by what it does for the learner inside its flow position — a stage key is context, never a value of `slideType`, `contentRole` or `contentKind`.
+
+For every outline at Teaching Model Flow stage `outcome_visual_explanations`, the visual is mandatory and textbook-grounded:
+
+- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
+- otherwise use `visualPlan: { "mode": "native" }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
+- never add an AI image request to `mediaGenerations` for this stage, and never use decorative filler as its visual.
 {{/if}}

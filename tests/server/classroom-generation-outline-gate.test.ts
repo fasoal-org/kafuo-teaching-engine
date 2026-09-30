@@ -314,6 +314,41 @@ describe('generateClassroom Stage-1 outline gate', () => {
     expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
   });
 
+  it('does not re-roll a gate-rejected governed outline plan', async () => {
+    const rejection =
+      'OUTLINE_TEACHING_FLOW_INVALID: outline #1 must carry the authoritative teachingStage';
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: false,
+      error: rejection,
+    });
+
+    await expect(generateWith({ input: { governed: GOVERNED_CONTEXT } })).rejects.toThrow(
+      /OUTLINE_TEACHING_FLOW_INVALID/,
+    );
+    expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(1);
+  });
+
+  it('corrects a missing teachingStage before reserving a Stage or generating Scenes', async () => {
+    const rejection =
+      'OUTLINE_TEACHING_FLOW_INVALID: outline #1 ("outline-1") must carry teachingStage copied from the authoritative Teaching Model Flow';
+    mocks.generateSceneOutlinesFromRequirements
+      .mockResolvedValueOnce({ success: false, error: rejection })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { languageDirective: 'Use English.', outlines: [outline] },
+      });
+    const { sink, calls } = makeRecordingSink();
+
+    await generateWith({ persistence: sink, input: { teachingFlow: GOVERNED_CONTEXT.flow } });
+
+    expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(2);
+    expect(mocks.generateSceneOutlinesFromRequirements.mock.calls[1]![4]).toMatchObject({
+      correctiveContext: rejection,
+    });
+    expect(calls.reserve).toEqual(['stage-pg-1']);
+    expect(mocks.generateSceneContent).toHaveBeenCalledTimes(1);
+  });
+
   it('awaits an async validator before continuing', async () => {
     const { sink, calls } = makeRecordingSink();
     let resolved = false;

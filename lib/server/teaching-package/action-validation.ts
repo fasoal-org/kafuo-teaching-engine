@@ -159,7 +159,7 @@ export function validateSceneActionStructure(
           message:
             `scene ${JSON.stringify(scene.id)} carries Action ${JSON.stringify(action.id)} of unknown type ` +
             `${JSON.stringify(action.type)}: it must be removed or explicitly replaced with one or more canonical ` +
-            `current OpenMAIC Actions in this successor`,
+            `current Teaching Engine Actions in this successor`,
         });
         continue;
       }

@@ -87,6 +87,23 @@ function richDocument(stageId: string): AppDocument {
       text: 'Welcome',
       audioId: `tts_s5_a-speech`,
       audioUrl: `/api/classroom-media/${stageId}/audio/tts_s5_a-speech.mp3`,
+      audioProvenance: {
+        fingerprint: 'fp1:clone-fixture',
+        policyVersion: null,
+        originalDigest: 'digest-original',
+        responseFormat: 'mp3',
+        providerId: 'openai-tts',
+        modelId: 'gpt-4o-mini-tts',
+        voice: 'alloy',
+        speed: 1,
+        preparedDigest: 'digest-prepared',
+        segments: 1,
+        preparedChars: 7,
+        originalChars: 7,
+        warningCount: 0,
+        generatedAt: '2026-09-28T00:00:00.000Z',
+        reason: 'initial',
+      },
     },
   ] as never;
   narrated.whiteboards = [
@@ -127,6 +144,10 @@ function richDocument(stageId: string): AppDocument {
       updatedAt: FIXED_NOW,
       description: 'desc',
       languageDirective: 'Answer in Egyptian Arabic',
+      language: 'ar-SA',
+      textDirection: 'rtl',
+      subjectCode: 'MATH',
+      speechReadingMode: 'accessible',
       style: 'vivid',
       interactiveMode: true,
       taskEngineMode: false,
@@ -188,6 +209,10 @@ describe('cloneStageForSuccessor', () => {
     });
     expect(clone!.stage.languageDirective).toBe('Answer in Egyptian Arabic');
     expect(clone!.stage.style).toBe('vivid');
+    // Speech metadata survives the clone (SATTS W1-5).
+    expect(clone!.stage.subjectCode).toBe('MATH');
+    expect(clone!.stage.speechReadingMode).toBe('accessible');
+    expect(clone!.stage.language).toBe('ar-SA');
     expect(clone!.stage.interactiveMode).toBe(true);
     expect(clone!.stage.whiteboard).toEqual(source.stage.whiteboard);
     expect(clone!.stage.videoManifest).toEqual(source.stage.videoManifest);

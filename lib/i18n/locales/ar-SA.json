@@ -236,7 +236,32 @@
     "doneEditing": "إنهاء التحرير",
     "proModeDisabledHint": "التحرير غير متاح في هذه الصفحة — افتح شريحة من الدورة للتحرير باستخدام وضع Pro."
   },
+  "aiVoice": {
+    "notice": "الصوت في هذا الدرس مُولَّد بالذكاء الاصطناعي، وليس صوت معلّم حقيقي.",
+    "label": "صوت بالذكاء الاصطناعي",
+    "dismiss": "حسنًا"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "النطق",
+      "regenerateAllConfirm": "إعادة توليد جميع السطور ({{total}})؟ {{current}} منها محدّثة بالفعل. اختر «إلغاء» لإعادة توليد السطور غير المحدّثة فقط.",
+      "original": "النص الأصلي",
+      "prepared": "الصيغة المنطوقة",
+      "warnings": "تنبيهات",
+      "noWarnings": "لا توجد تنبيهات",
+      "preview": "معاينة الصيغة المنطوقة",
+      "statusCurrent": "محدّث",
+      "statusStale": "قديم · {{reason}}",
+      "statusLegacy": "صوت قديم",
+      "statusMissing": "بلا صوت",
+      "generalPath": "سرد عام (بلا قواعد مادة)",
+      "policy": "السياسة {{version}} ({{status}})",
+      "unavailable": "تفاصيل النطق غير متاحة.",
+      "readingMode": "نمط قراءة السرد",
+      "readingModeNatural": "طبيعي",
+      "readingModeAccessible": "ميسّر (بنية صريحة)",
+      "unvoicedCount": "{{count}} سطرًا بلا صوت"
+    },
     "proMode": "احترافي",
     "undo": "تراجع",
     "redo": "إعادة",
@@ -1877,7 +1902,7 @@
       "download": "تنزيل",
       "detailFailed": "تعذّر تحميل تفاصيل المهارة",
       "contentLabel": "المحتوى",
-      "builtinDetailNote": "هذه المهارة مرفقة مع OpenMAIC. نزّلها لاستيرادها إلى مساحة عمل وكيل أخرى.",
+      "builtinDetailNote": "هذه المهارة مرفقة مع Teaching Engine. نزّلها لاستيرادها إلى مساحة عمل وكيل أخرى.",
       "upload": "رفع",
       "uploading": "جارٍ الرفع…",
       "uploadFailed": "تعذّر رفع المهارة. تحقّق من الملف وحاول مرة أخرى.",

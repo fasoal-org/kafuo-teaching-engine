@@ -82,6 +82,22 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     icon: '/logos/openai.svg',
     models: [
       {
+        id: 'gpt-6-luna',
+        name: 'GPT-6 Luna',
+        contextWindow: 1050000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
+      {
         id: 'gpt-5.6',
         name: 'GPT-5.6 Sol',
         contextWindow: 1050000,
@@ -256,7 +272,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Qwen3.5 Flash',
         contextWindow: 1000000,
         outputWindow: 67072,
-        capabilities: { streaming: true, tools: false, vision: true  },
+        capabilities: { streaming: true, tools: false, vision: true },
       },
       {
         id: 'deepseek-ai/deepseek-v4-pro',
@@ -1913,6 +1929,7 @@ function shouldUseOpenAIResponsesApi(providerId: ProviderId, modelId: string): b
   if (providerId !== 'openai') return false;
 
   return (
+    /^gpt-6(?:-|$)/.test(modelId) ||
     /^gpt-5\.\d+-pro(?:-|$)/.test(modelId) ||
     /^gpt-5\.6(?:-|$)/.test(modelId) ||
     /^gpt-5\.5(?:-|$)/.test(modelId) ||
@@ -2377,7 +2394,34 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       } else {
         // Native OpenAI / Responses transport: route requests through the
         // shared transport so they carry the extended-timeout dispatcher too.
-        openaiOptions.fetch = transportFetch;
+        openaiOptions.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+          // The installed AI SDK predates GPT-6 and currently strips its
+          // reasoning provider option. Inject the normalized effort into the
+          // native Responses body at the final request boundary. This can be
+          // removed once the SDK recognizes the GPT-6 family itself.
+          if (/^gpt-6(?:-|$)/.test(config.modelId) && init?.body && typeof init.body === 'string') {
+            const thinkingCtx = (globalThis as Record<string, unknown>).__thinkingContext as
+              | { getStore?: () => unknown }
+              | undefined;
+            const thinking = thinkingCtx?.getStore?.() as ThinkingConfig | undefined;
+            const capability = getCatalogThinkingCapability(config.providerId, config.modelId);
+            const effort = capability && thinking ? pickThinkingEffort(capability, thinking) : null;
+            if (effort) {
+              try {
+                const body = JSON.parse(init.body) as Record<string, unknown>;
+                const existing =
+                  body.reasoning && typeof body.reasoning === 'object'
+                    ? (body.reasoning as Record<string, unknown>)
+                    : {};
+                body.reasoning = { ...existing, effort };
+                init = { ...init, body: JSON.stringify(body) };
+              } catch {
+                /* leave body as-is */
+              }
+            }
+          }
+          return transportFetch(url, init);
+        }) as typeof globalThis.fetch;
       }
 
       const openai = createOpenAI(openaiOptions);

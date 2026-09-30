@@ -24,6 +24,7 @@ import {
   audioArchivePath,
   collectLegacyAudioForExport,
   legacyAudioMediaIndexEntry,
+  manifestStageSpeechMetadata,
 } from './classroom-zip-utils';
 import { createLogger } from '@/lib/logger';
 import { buildStageAssetManifest } from '@/lib/media/asset-manifest';
@@ -138,6 +139,7 @@ export async function buildClassroomExportZip(
       name: latestName,
       description: exportStage.description,
       language: exportStage.languageDirective,
+      ...manifestStageSpeechMetadata(exportStage),
       style: exportStage.style,
       videoManifest: exportStage.videoManifest,
       createdAt: exportStage.createdAt,

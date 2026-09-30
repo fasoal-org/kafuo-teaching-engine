@@ -36,6 +36,8 @@ export interface UsageRecordInput {
   quantity?: number;
   /** Unit for `quantity`. */
   unit?: UsageUnit;
+  /** Optional modality detail (e.g. SATTS narration accounting); readers ignore unknown fields. */
+  meta?: Record<string, unknown>;
 }
 
 /** A persisted usage row — pure usage, no cost. */
@@ -56,6 +58,7 @@ export interface UsageRecord {
   // Non-token usage (e.g. image count, video seconds, TTS characters).
   quantity?: number;
   unit?: UsageUnit;
+  meta?: Record<string, unknown>;
 }
 
 interface RecordOptions {
@@ -133,6 +136,7 @@ export async function recordUsage(
       reasoningTokens: usage.reasoningTokens,
       ...(input.quantity != null ? { quantity: input.quantity } : {}),
       ...(input.unit ? { unit: input.unit } : {}),
+      ...(input.meta ? { meta: input.meta } : {}),
     };
 
     const dir = usageDir(opts.baseDir);
@@ -151,6 +155,8 @@ export interface GenerationUsageInput {
   /** The client-requested model id; falls back to providerId when absent. */
   modelId?: string;
   quantity: number;
+  /** Optional detail stored with the row (SATTS §16.2); omitted when absent. */
+  meta?: Record<string, unknown>;
 }
 
 /**
@@ -169,6 +175,7 @@ export function recordGenerationUsage(input: GenerationUsageInput): Promise<void
     modelId,
     modelString: `${input.providerId}:${modelId}`,
     quantity: input.quantity,
+    ...(input.meta ? { meta: input.meta } : {}),
   });
 }
 

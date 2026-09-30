@@ -106,6 +106,14 @@ function grantReadOnlyError(): Error & { status: number; code: string } {
   });
 }
 
+/** The document-store refusal seen after an edit grant expires in an open tab. */
+function expiredGrantError(): Error & { status: number; code: string } {
+  return Object.assign(new Error('@openmaic/storage: document authorization required'), {
+    status: 403,
+    code: 'FORBIDDEN_DOCUMENTS',
+  });
+}
+
 function seedClassroom(stageId: string, configs?: Stage['generatedAgentConfigs']): void {
   useStageStore.setState({
     stage: makeStage(stageId, configs),
@@ -379,6 +387,36 @@ describe('a queued write refused with GRANT_READ_ONLY is terminal', () => {
   });
 });
 
+describe('an expired Teaching Package edit grant is terminal', () => {
+  it('turns incremental autosave read-only and stops retrying', async () => {
+    enterGrantSession();
+    seedClassroom('stage-expired');
+    useStageStore.getState().setViewerAccess({ isOwner: true, stageId: 'stage-expired' });
+    incrementalSave.mockRejectedValue(expiredGrantError());
+
+    markStagePersistenceDirty([{ kind: 'stage' }]);
+    await expect(flushStageSave()).resolves.toBeUndefined();
+
+    expect(incrementalSave).toHaveBeenCalledOnce();
+    expect(stageDocumentWriteAccess('stage-expired')).toBe('read-only');
+    expect(useStageStore.getState().readOnly).toBe(true);
+    expect(useStageStore.getState().isOwner).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(incrementalSave).toHaveBeenCalledOnce();
+  });
+
+  it('reports an expired-grant aggregate save as not durable', async () => {
+    enterGrantSession();
+    seedClassroom('stage-expired');
+    useStageStore.getState().setViewerAccess({ isOwner: true, stageId: 'stage-expired' });
+    fullSave.mockRejectedValue(expiredGrantError());
+
+    await expect(useStageStore.getState().saveToStorage()).resolves.toBe(false);
+    expect(stageDocumentWriteAccess('stage-expired')).toBe('read-only');
+  });
+});
+
 describe('sessions without a Teaching Package grant are untouched', () => {
   it('keeps an ordinary locally owned classroom immediately writable', async () => {
     // No grant cookie at all — the default must stay the upstream one.
@@ -392,5 +430,16 @@ describe('sessions without a Teaching Package grant are untouched', () => {
 
     expect(incrementalSave).toHaveBeenCalledOnce();
     await expect(useStageStore.getState().saveToStorage()).resolves.toBe(true);
+  });
+
+  it('does not hide an ordinary document authorization failure', async () => {
+    vi.stubGlobal('document', { cookie: '' });
+    resetStageDocumentWriteAccess();
+    seedClassroom('stage-local');
+    incrementalSave.mockRejectedValue(expiredGrantError());
+
+    markStagePersistenceDirty([{ kind: 'stage' }]);
+    await expect(flushStageSave()).rejects.toThrow('document authorization required');
+    expect(stageDocumentWriteAccess('stage-local')).toBe('writable');
   });
 });

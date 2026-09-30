@@ -350,7 +350,6 @@ describe('validateSubjectRoutingConfig — Kafuo R1 subject routing fail-fast', 
     // Both providers of the policy are unkeyed: each must be named exactly once
     // per model so the operator sees the full fix list in one boot failure.
     expect(message).toContain('qwen:qwen3.7-flash');
-    expect(message).toContain('openai:gpt-5-nano');
     expect(message).toContain('openai:gpt-5.6-luna');
     expect(message).toContain('no API key configured');
   });

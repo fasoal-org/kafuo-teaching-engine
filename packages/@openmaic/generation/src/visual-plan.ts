@@ -6,7 +6,7 @@
  * never merely logged.
  */
 import type { PPTElement } from '@openmaic/dsl';
-import type { VisualPlan } from './outline-types.js';
+import type { ImageMapping, PdfImage, VisualPlan } from './outline-types.js';
 
 export const ORIENTATION_VISUAL_MISSING = 'ORIENTATION_VISUAL_MISSING';
 
@@ -43,6 +43,34 @@ export function plannedVisualIssue(
     : 'the planned native visual composition is absent';
 }
 
+/**
+ * A selected textbook visual is a stronger contract than a generic image
+ * plan: one of the exact, pre-authorised source images assigned to this slide
+ * must survive onto the canvas. An AI placeholder or unrelated image cannot
+ * satisfy it merely by having `type: "image"`.
+ */
+export function requiredSourceVisualIssue(
+  assignedImages: readonly PdfImage[] | undefined,
+  imageMapping: ImageMapping | undefined,
+  elements: readonly PPTElement[],
+): string | undefined {
+  if (!assignedImages?.length) return undefined;
+  const requiredSources = new Set(
+    assignedImages
+      .map((image) => imageMapping?.[image.id])
+      .filter((source): source is string => typeof source === 'string' && source.length > 0),
+  );
+  if (requiredSources.size === 0) {
+    return 'the selected textbook visual has no authorised serving source';
+  }
+  const present = elements.some((element) => {
+    if (element.type !== 'image') return false;
+    const source = (element as unknown as { src?: unknown }).src;
+    return typeof source === 'string' && requiredSources.has(source);
+  });
+  return present ? undefined : 'the selected textbook visual is absent from the generated slide';
+}
+
 /** The edit directive that asks for the native-elements fallback. */
 export const NATIVE_VISUAL_DIRECTIVE =
-  'This slide must carry ONE meaningful supporting visual and currently has none. No image is available. Add a visual composed from native slide elements — a simple diagram, a chart, or an illustrative group of shapes and lines with short labels — that expresses the slide’s hook, context or big idea. Do not use any image or video element. Keep all existing teaching content.';
+  'This slide must carry ONE meaningful supporting visual and currently has none. No suitable textbook image is available. Add a visual composed from native slide elements — a simple diagram, a chart, or an illustrative group of shapes and lines with short labels — using ONLY the facts, relationships and sequence already present in the authoritative source content for this slide. Do not invent examples, facts or context, and do not use any image or video element. Keep all existing teaching content.';

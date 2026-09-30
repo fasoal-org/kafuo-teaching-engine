@@ -361,15 +361,36 @@ export const validateAppScene: SceneValidator = (scene) => {
 };
 
 /** Validate canonical app stage metadata and exclude device playback position. */
+/**
+ * App-level shape of `Stage.subjectCode`: an upper-case curriculum code. Any
+ * well-formed code is accepted (a future Kafuo code must never break a save);
+ * only the scientific codes select subject-specific narration.
+ */
+const APP_STAGE_SUBJECT_CODE = /^[A-Z_]{2,32}$/;
+
 export const validateAppStage: StageValidator = (stage) => {
   const base = validateStage(stage);
   const value = objectValue(stage);
-  if (!value || !Object.prototype.hasOwnProperty.call(value, 'currentSceneId')) return base;
-  const issue = {
-    path: '/currentSceneId',
-    message: '`currentSceneId` is device playback state and is not allowed on AppStage',
-  };
+  const issues: ValidationIssue[] = [];
+  if (value && Object.prototype.hasOwnProperty.call(value, 'currentSceneId')) {
+    issues.push({
+      path: '/currentSceneId',
+      message: '`currentSceneId` is device playback state and is not allowed on AppStage',
+    });
+  }
+  if (
+    value &&
+    typeof value.subjectCode === 'string' &&
+    value.subjectCode.trim() &&
+    !APP_STAGE_SUBJECT_CODE.test(value.subjectCode)
+  ) {
+    issues.push({
+      path: '/subjectCode',
+      message: '`subjectCode` must match /^[A-Z_]{2,32}$/',
+    });
+  }
+  if (issues.length === 0) return base;
   return base.valid
-    ? { valid: false, errors: [issue] }
-    : { valid: false, errors: [...base.errors, issue] };
+    ? { valid: false, errors: issues }
+    : { valid: false, errors: [...base.errors, ...issues] };
 };

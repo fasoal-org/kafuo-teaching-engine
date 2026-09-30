@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   generateSceneContent,
   plannedVisualIssue,
+  requiredSourceVisualIssue,
   type GeneratedSlideContent,
   type SceneOutline,
 } from '@openmaic/generation';
@@ -91,6 +92,31 @@ describe('the planned visual is enforced, not logged (RSS 7.5.7)', () => {
     expect(plannedVisualIssue(undefined, [])).toBeUndefined();
     expect(plannedVisualIssue({ mode: 'omitted', omissionReason: 'x' }, [])).toBeUndefined();
     expect(plannedVisualIssue({ mode: 'image' }, [])).toMatch(/planned image is absent/);
+    expect(
+      requiredSourceVisualIssue(
+        [{ id: 'book-1', src: '', pageNumber: 3 }],
+        { 'book-1': '/book-1.png' },
+        [image('/book-1.png') as never],
+      ),
+    ).toBeUndefined();
+  });
+
+  it('fails once when the exact selected textbook visual is not placed', async () => {
+    let calls = 0;
+    await expect(
+      generateSceneContent(
+        { ...opening, visualPlan: { mode: 'image' } },
+        async () => {
+          calls += 1;
+          return native;
+        },
+        {
+          assignedImages: [{ id: 'book-1', src: '', pageNumber: 3 }],
+          imageMapping: { 'book-1': '/book-1.png' },
+        },
+      ),
+    ).rejects.toThrow(/selected textbook visual is absent/);
+    expect(calls).toBe(1);
   });
 
   it('regenerates a bare opening once with the native-elements directive', async () => {

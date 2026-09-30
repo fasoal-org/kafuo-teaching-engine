@@ -15,7 +15,8 @@ export interface BrandConfig {
   shortName: string;
   /** Horizontal logo asset under `public/`. */
   logoSrc: string;
-  /** Whether `logoSrc` already carries the product wordmark. */
+  /** Whether `logoSrc` already carries the product wordmark. When false,
+   *  surfaces render `markSrc` with `productName` beside it (`BrandLockup`). */
   logoHasWordmark: boolean;
   /** Square brand mark under `public/` (favicon, workspace header). */
   markSrc: string;
@@ -23,12 +24,19 @@ export interface BrandConfig {
   themeColor: string;
 }
 
-/** The default brand: the product itself, with no vendor overrides. */
+/**
+ * The default brand: Teaching Engine, with no vendor overrides.
+ *
+ * No approved Teaching Engine logo exists yet. `public/logo-horizontal.png`
+ * carries the upstream OpenMAIC wordmark, so it is no longer shown; until the
+ * final assets land, every surface pairs the standalone mark (temporary, file
+ * name kept for compatibility) with the product name set in app typography.
+ */
 export const DEFAULT_BRAND: BrandConfig = {
-  productName: 'OpenMAIC',
-  shortName: 'OpenMAIC',
-  logoSrc: '/logo-horizontal.png',
-  logoHasWordmark: true,
+  productName: 'Teaching Engine',
+  shortName: 'Teaching Engine',
+  logoSrc: '/openmaic-mark.png',
+  logoHasWordmark: false,
   markSrc: '/openmaic-mark.png',
   themeColor: '#722ed1',
 };

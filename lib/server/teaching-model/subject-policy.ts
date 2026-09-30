@@ -24,15 +24,17 @@ export const SUBJECT_CODES = [
   'ARABIC',
   'SOCIAL_STUDIES',
   'CHEMISTRY',
+  'ENGLISH',
 ] as const;
 
 export type SubjectCode = (typeof SUBJECT_CODES)[number];
 
-/** The three canonical model strings the policy is allowed to name. */
+/** The canonical model strings the policy is allowed to name. */
 export const POLICY_MODEL_STRINGS = [
   'qwen:qwen3.7-flash',
   'openai:gpt-5-nano',
   'openai:gpt-5.6-luna',
+  'openai:gpt-6-luna',
 ] as const;
 
 export type PolicyModelString = (typeof POLICY_MODEL_STRINGS)[number];
@@ -56,12 +58,6 @@ const QWEN_NOTHINK: PolicyTarget = Object.freeze({
   label: 'nothink',
 });
 
-const NANO_MINIMAL: PolicyTarget = Object.freeze({
-  model: 'openai:gpt-5-nano',
-  thinking: Object.freeze({ mode: 'enabled', effort: 'minimal' }) as ThinkingConfig,
-  label: 'minimal',
-});
-
 const LUNA_LOW: PolicyTarget = Object.freeze({
   model: 'openai:gpt-5.6-luna',
   thinking: Object.freeze({ mode: 'enabled', effort: 'low' }) as ThinkingConfig,
@@ -78,12 +74,14 @@ function entry(primary: PolicyTarget, fallback: PolicyTarget): SubjectPolicyEntr
  */
 export const SUBJECT_MODEL_POLICY: Readonly<Record<SubjectCode, SubjectPolicyEntry>> =
   Object.freeze({
-    MATH: entry(QWEN_NOTHINK, NANO_MINIMAL),
-    PHYSICS: entry(QWEN_NOTHINK, NANO_MINIMAL),
-    BIOLOGY: entry(QWEN_NOTHINK, NANO_MINIMAL),
+    MATH: entry(LUNA_LOW, QWEN_NOTHINK),
+    PHYSICS: entry(LUNA_LOW, QWEN_NOTHINK),
+    BIOLOGY: entry(LUNA_LOW, QWEN_NOTHINK),
     ARABIC: entry(LUNA_LOW, QWEN_NOTHINK),
     SOCIAL_STUDIES: entry(LUNA_LOW, QWEN_NOTHINK),
-    CHEMISTRY: entry(QWEN_NOTHINK, LUNA_LOW),
+    CHEMISTRY: entry(LUNA_LOW, QWEN_NOTHINK),
+    // Product decision 28 Sep 2026: English takes the same route as the other six.
+    ENGLISH: entry(LUNA_LOW, QWEN_NOTHINK),
   });
 
 export function isSubjectCode(value: unknown): value is SubjectCode {

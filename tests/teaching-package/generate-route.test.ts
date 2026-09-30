@@ -282,7 +282,7 @@ describe('POST /api/teaching-packages/generate', () => {
         withoutOffering,
         {
           ...kafuoShapedBody().learningItem,
-          subjectOffering: { ...ROUTED_SUBJECT, code: 'ENGLISH' },
+          subjectOffering: { ...ROUTED_SUBJECT, code: 'FRENCH' },
         },
       ]) {
         const response = await post(kafuoShapedBody({ learningItem }));
@@ -311,6 +311,26 @@ describe('POST /api/teaching-packages/generate', () => {
       expect(response.status).toBe(202);
       mocks.afterCallbacks[0]!();
       expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({ subjectCode: 'MATH' });
+    });
+
+    it('accepts ENGLISH (the Kafuo routing key for EHG/ENG master subjects) and routes it', async () => {
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const english = { ...ROUTED_SUBJECT, id: '14', name: 'English', code: 'ENGLISH' };
+      const response = await post(
+        kafuoShapedBody({
+          learningItem: { ...kafuoShapedBody().learningItem, subjectOffering: english },
+        }),
+      );
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        subjectCode: 'ENGLISH',
+        subjectOffering: english,
+      });
     });
 
     it("accepts an unrouted subject only with TEACHING_SUBJECT_ROUTING=off (today's behaviour)", async () => {

@@ -11,7 +11,6 @@ import { createLogger } from '@/lib/logger';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
 import { generateImage } from '@/lib/media/image-providers';
 import { generateVideo, normalizeVideoOptions } from '@/lib/media/video-providers';
-import { generateTTS } from '@/lib/audio/tts-providers';
 import { DEFAULT_TTS_VOICES, DEFAULT_TTS_MODELS, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
 import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
@@ -27,9 +26,18 @@ import {
   resolveVideoModel,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
+  resolveTTSModel,
 } from '@/lib/server/provider-config';
+import { readSpeechConfig } from '@/lib/server/speech/config';
+import {
+  assessNarrationAudio,
+  recordReuse,
+  synthesizeNarration,
+} from '@/lib/server/speech/narration-synthesis';
+import { prepareNarration } from '@/lib/server/speech/prepare';
+import { providerCapability } from '@/lib/server/speech/provider-capabilities';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { Scene } from '@/lib/types/stage';
+import type { Scene, Stage } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
 import type { ImageProviderId } from '@/lib/media/types';
 import type { VideoProviderId } from '@/lib/media/types';
@@ -302,11 +310,25 @@ export function replaceMediaPlaceholders(scenes: Scene[], mediaMap: Record<strin
 // TTS generation
 // ---------------------------------------------------------------------------
 
+/** Per-run narration summary (plan §16.1): counts by outcome, subject and warning code. */
+export interface ClassroomTtsSummary {
+  generated: number;
+  reused: number;
+  skipped: number;
+  failed: number;
+  bySubject: Record<string, number>;
+  warningCodes: Record<string, number>;
+}
+
+/** Stage fields the narration context reads (plan §8.1). */
+export type ClassroomTtsStage = Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode'>;
+
 export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
   baseUrl: string,
-): Promise<void> {
+  options: { stage?: ClassroomTtsStage | null } = {},
+): Promise<ClassroomTtsSummary | void> {
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
@@ -329,18 +351,36 @@ export async function generateTTSForClassroom(
   }
   const ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
   const voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
-  const format = ttsProvider?.supportedFormats?.[0] || 'mp3';
   if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
     log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
     return;
   }
+  // B-1 (approved): operator model pins apply to the batch path too.
+  const modelId =
+    resolveTTSModel(
+      providerId,
+      DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+      voice,
+    ) || '';
+  const speechConfig = readSpeechConfig();
+  const summary: ClassroomTtsSummary = {
+    generated: 0,
+    reused: 0,
+    skipped: 0,
+    failed: 0,
+    bySubject: {},
+    warningCodes: {},
+  };
+  // One asset per Action on the scientific path: no Action splitting there (§13.2).
+  const segmentsInOrchestrator =
+    speechConfig.mode === 'on' && providerCapability(providerId, modelId) !== null;
 
   for (const scene of scenes) {
     if (!scene.actions) continue;
 
     // Split long speech actions into multiple shorter ones before TTS generation,
     // mirroring the client-side approach. Each sub-action gets its own audio file.
-    scene.actions = splitLongSpeechActions(scene.actions, providerId);
+    if (!segmentsInOrchestrator) scene.actions = splitLongSpeechActions(scene.actions, providerId);
 
     // Use scene order to make audio IDs unique across scenes
     const sceneOrder = scene.order;
@@ -351,32 +391,73 @@ export async function generateTTSForClassroom(
       // Server transport emits the derived id plus the serving URL; the
       // client-side converter collapses the pair into one pool asset on
       // first load. Browser generation allocates pool ids directly.
+      // B-4: the derived transport id keeps its shape; the FILE is content-addressed.
       const audioId = `tts_s${sceneOrder}_${action.id}`;
 
       try {
-        const result = await generateTTS(
-          {
+        const { plan, profile } = await prepareNarration({
+          text: speechAction.text,
+          stage: options.stage ?? null,
+          stageId: classroomId,
+          config: speechConfig,
+          fallback: {
             providerId,
-            modelId: DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+            modelId,
             apiKey,
             baseUrl: ttsBaseUrl,
             voice,
-            speed: speechAction.speed,
+            speed: speechAction.speed ?? 1,
+            requestSpeed: speechAction.speed,
           },
-          speechAction.text,
-        );
-
-        const filename = `${audioId}.${result.format || format}`;
-        await fs.writeFile(path.join(audioDir, filename), result.audio);
-
+          actionSpeed: speechAction.speed,
+        });
+        // Skip-if-current (§13.5) only when the scientific flag is not off (DEC-002).
+        if (speechConfig.mode !== 'off') {
+          const assessment = assessNarrationAudio(speechAction, plan, profile, speechConfig.mode);
+          if (assessment.status === 'current' || assessment.status === 'legacy') {
+            recordReuse('batch', speechAction, plan, assessment.status);
+            if (assessment.status === 'current') summary.reused += 1;
+            else summary.skipped += 1;
+            continue;
+          }
+        }
+        const outcome = await synthesizeNarration({
+          action: speechAction,
+          stageId: classroomId,
+          plan,
+          profile,
+          config: speechConfig,
+          reason: speechAction.audioId ? 'stale' : 'initial',
+          entry: 'batch',
+          persist: { kind: 'audio-dir' },
+          // B-3 (approved): the batch path records usage.
+          recordUsage: true,
+          // B-2 (approved): bounded retry for 429/5xx/timeout.
+          transientAttempts: 2,
+        });
+        for (const warning of outcome.warnings) {
+          summary.warningCodes[warning.code] = (summary.warningCodes[warning.code] ?? 0) + 1;
+        }
+        if (outcome.outcome === 'failed' || !outcome.audioRef) {
+          summary.failed += 1;
+          log.warn(`TTS generation failed for action ${action.id}: ${outcome.error?.code ?? 'unknown'}`);
+          continue;
+        }
+        summary.generated += 1;
+        const subjectKey = plan.subjectCode ?? 'general';
+        summary.bySubject[subjectKey] = (summary.bySubject[subjectKey] ?? 0) + 1;
+        const subPath = outcome.audioRef.split(`/api/classroom-media/${classroomId}/`)[1]!;
         speechAction.audioId = audioId;
-        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-        log.info(`Generated TTS: ${filename} (${result.audio.length} bytes)`);
+        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, subPath);
+        speechAction.audioProvenance = outcome.provenance;
+        log.info(`Generated TTS: ${subPath} (${outcome.audio?.bytes.length ?? 0} bytes)`);
       } catch (err) {
+        summary.failed += 1;
         log.warn(`TTS generation failed for action ${action.id}:`, err);
       }
     }
   }
+  return summary;
 }
 
 /**

@@ -31,6 +31,7 @@ import {
   NATIVE_VISUAL_DIRECTIVE,
   OrientationVisualMissingError,
   plannedVisualIssue,
+  requiredSourceVisualIssue,
 } from './visual-plan.js';
 import {
   buildMediaRegistry,
@@ -77,6 +78,7 @@ import type {
 import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
+import { generatedSlideLayoutIssue, normalizeGeneratedSlideLayout } from './slide-layout.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
@@ -97,6 +99,8 @@ export type SceneContentFailureCode = 'prompt-unavailable' | 'invalid-model-outp
 
 export interface SceneContentFailure {
   code: SceneContentFailureCode;
+  /** Safe diagnostic detail for orchestration and operator-visible errors. */
+  detail?: string;
 }
 
 /**
@@ -502,6 +506,17 @@ export async function generateSceneContent(
         );
       let slide = await generateCanvas();
       if (!slide) return null;
+      // When planning selected an authoritative textbook visual, the exact
+      // materialised source must be present after media resolution. Do not
+      // accept a generated/unrelated image and do not spend a second model
+      // call replacing an available book figure with a native approximation.
+      const sourceVisualIssue =
+        guidance.visualPlan?.mode === 'image'
+          ? requiredSourceVisualIssue(assignedImages, imageMapping, slide.elements)
+          : undefined;
+      if (sourceVisualIssue) {
+        throw new OrientationVisualMissingError(outline.title, sourceVisualIssue);
+      }
       // The planned visual is ENFORCED: one regeneration asking for the
       // native-elements fallback, then the typed quality failure — never a log
       // line and never a bare opening.
@@ -1098,7 +1113,7 @@ async function generateSlideContent(
   });
 
   if (!prompts) {
-    onFailure?.({ code: 'prompt-unavailable' });
+    onFailure?.({ code: 'prompt-unavailable', detail: 'slide content prompt is unavailable' });
     return null;
   }
 
@@ -1150,7 +1165,10 @@ async function generateSlideContent(
 
   if (!generatedData || !generatedData.elements || !Array.isArray(generatedData.elements)) {
     log.error(`Failed to parse AI response for: ${visible.title}`);
-    onFailure?.({ code: 'invalid-model-output' });
+    onFailure?.({
+      code: 'invalid-model-output',
+      detail: 'the model response was not valid slide JSON with an elements array',
+    });
     return null;
   }
 
@@ -1181,7 +1199,10 @@ async function generateSlideContent(
   const leaks = findInternalLeaks([visibleCanvasText(fixedElements as unknown as PPTElement[])]);
   if (leaks.length > 0) {
     log.error(`Slide "${visible.title}" exposes internal text (${leaks.join(', ')}); rejecting`);
-    onFailure?.({ code: 'invalid-model-output' });
+    onFailure?.({
+      code: 'invalid-model-output',
+      detail: `the visible slide exposed internal identifiers: ${leaks.join(', ')}`,
+    });
     return null;
   }
 
@@ -1219,11 +1240,20 @@ async function generateSlideContent(
   log.debug(`After video reference normalization: ${videoNormalizedElements.length} elements`);
 
   // Process elements, assign unique IDs
-  const processedElements: PPTElement[] = videoNormalizedElements.map((el) => ({
-    ...el,
-    id: `${el.type}_${nanoid(8)}`,
-    rotate: 0,
-  })) as PPTElement[];
+  const processedElements = normalizeGeneratedSlideLayout(
+    videoNormalizedElements.map((el) => ({
+      ...el,
+      id: `${el.type}_${nanoid(8)}`,
+      rotate: 0,
+    })) as PPTElement[],
+  );
+
+  const layoutIssue = generatedSlideLayoutIssue(processedElements);
+  if (layoutIssue) {
+    log.error(`Slide ${JSON.stringify(visible.title)} has unsafe layout: ${layoutIssue}`);
+    onFailure?.({ code: 'invalid-model-output', detail: layoutIssue });
+    return null;
+  }
 
   // Process background
   let background: SlideBackground | undefined;

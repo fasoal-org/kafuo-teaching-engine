@@ -279,6 +279,8 @@ describe('teaching package generation', () => {
       expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
       const [input, options] = mocks.generateClassroom.mock.calls[0]!;
       expect(input).toEqual(generation);
+      // The non-Kafuo path never adds a subject: only Kafuo carries one.
+      expect(input).not.toHaveProperty('subjectCode');
       expect(options.baseUrl).toBe('');
       expect(options.persistence).toBeDefined();
     });

@@ -69,7 +69,12 @@ export async function assertStageWritable(
   if (lockedBy) {
     throw new TeachingPackageStageLockedError(op.stageId, lockedBy.status);
   }
-  if (retainedDisplaced) {
+  // An attempt row also retains the Stage that was successfully promoted to a
+  // version's current working slot. That Stage is not displaced: while its
+  // referencing version is editable, normal reviewer edits must remain
+  // allowed. The attempt-only protection applies only after the Stage is no
+  // longer referenced by any version.
+  if (versions.length === 0 && retainedDisplaced) {
     throw new TeachingPackageStageLockedError(op.stageId, 'displaced');
   }
 }

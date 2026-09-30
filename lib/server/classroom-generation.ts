@@ -62,6 +62,7 @@ import {
   type TeachingCallContext,
 } from '@/lib/server/teaching-model/execute';
 import type { ResolvedSubjectPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import { isSubjectCode } from '@/lib/server/teaching-model/subject-policy';
 import {
   applySourceVisualPrecedence,
   SourceVisualModelUnavailableError,
@@ -74,10 +75,11 @@ import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-po
 
 const log = createLogger('Classroom');
 
-/** Outline attempts per run on a gate rejection — matches the SSE route's 3. */
+/** Legacy outline attempts per run; governed package generation is single-shot. */
 const MAX_OUTLINE_GATE_ATTEMPTS = 3;
 /** Outline-gate rejections that a corrective re-roll can fix. */
-const OUTLINE_GATE_ERROR = /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID)\b/;
+const OUTLINE_GATE_ERROR =
+  /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
 
 export function containPBLGenerationError(error: unknown, sceneTitle: string): null {
   if (!(error instanceof PBLGenerationError)) throw error;
@@ -170,6 +172,13 @@ export interface GenerateClassroomInput {
    * renders byte-identically to the direction-unaware path.
    */
   language?: string;
+  /**
+   * The authoritative Kafuo subject code (`subjectOffering.code`), copied by the
+   * caller from its curriculum metadata. Stamped on the Stage as `subjectCode`
+   * only when it is a known subject code; never inferred from content. Absent,
+   * null or unknown → the Stage carries no subject (general narration path).
+   */
+  subjectCode?: string | null;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -985,7 +994,8 @@ export async function generateClassroom(
   const outlineTextDirection = resolveTextDirection(outlineLanguage);
   let outlinesResult: Awaited<ReturnType<typeof generateSceneOutlinesFromRequirements>> | undefined;
   let correctiveContext: string | undefined;
-  for (let attempt = 1; attempt <= MAX_OUTLINE_GATE_ATTEMPTS; attempt += 1) {
+  const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
+  for (let attempt = 1; attempt <= maxOutlineGateAttempts; attempt += 1) {
     outlinesResult = await generateSceneOutlinesFromRequirements(
       requirements,
       pdfText,
@@ -1016,7 +1026,7 @@ export async function generateClassroom(
     assertRouteAvailable();
     const rejection = outlinesResult.success ? undefined : outlinesResult.error;
     if (!rejection || !OUTLINE_GATE_ERROR.test(rejection)) break;
-    log.warn(`Outline attempt ${attempt}/${MAX_OUTLINE_GATE_ATTEMPTS} rejected: ${rejection}`);
+    log.warn(`Outline attempt ${attempt}/${maxOutlineGateAttempts} rejected: ${rejection}`);
     correctiveContext = rejection;
   }
 
@@ -1091,6 +1101,7 @@ export async function generateClassroom(
     languageDirective,
     ...(contentLanguage !== undefined ? { language: contentLanguage } : {}),
     ...(textDirection !== undefined ? { textDirection } : {}),
+    ...(isSubjectCode(input.subjectCode) ? { subjectCode: input.subjectCode } : {}),
     videoManifest: buildVideoManifestFromOutlines(outlines),
     style: 'interactive',
     createdAt: Date.now(),
@@ -1201,6 +1212,7 @@ export async function generateClassroom(
           ? (sourceImages?.filter((image) => safeOutline.suggestedImageIds?.includes(image.id)) ??
             [])
           : undefined;
+      let contentFailure: { code: string; detail?: string } | undefined;
       const content = await (async () => {
         try {
           return await withGenerationRetry(
@@ -1236,9 +1248,17 @@ export async function generateClassroom(
                         ),
                     }
                   : {}),
+                logger: log,
+                onFailure: (failure) => {
+                  contentFailure = failure;
+                },
               }),
             {
               label: `scene ${index + 1}/${outlines.length} content`,
+              // Governed package generation is intentionally single-shot per
+              // scene. A rejected result must surface immediately instead of
+              // silently multiplying model cost.
+              ...(input.governed ? { maxRetries: 0 } : {}),
               // A null from a routed call whose route failed is not re-rolled
               // per call (plan §7.4): the run fails at the checkpoint below.
               shouldRetryResult: (result) => result === null && routeFailure === null,
@@ -1257,10 +1277,18 @@ export async function generateClassroom(
         // misattributed TEACHING_MODEL_FLOW_MISMATCH; refuse with the
         // Scene-generation code instead. Non-governed runs keep the skip.
         if (input.governed) {
+          const failureReason = contentFailure
+            ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
+            : 'no scene content was returned';
           throw new TeachingPackageError(
             'GOVERNED_SCENE_GENERATION_FAILED',
-            `a governed scene's content generation failed after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
-            { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
+            `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) could not be generated: ${failureReason}`,
+            {
+              outlineId: safeOutline.id,
+              teachingStage: safeOutline.teachingStage,
+              failureCode: contentFailure?.code,
+              failureDetail: contentFailure?.detail,
+            },
           );
         }
         log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
@@ -1307,6 +1335,7 @@ export async function generateClassroom(
         },
         {
           label: `scene ${index + 1}/${outlines.length} actions`,
+          ...(input.governed ? { maxRetries: 0 } : {}),
           ...(input.governed
             ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
             : {}),
@@ -1447,8 +1476,8 @@ export async function generateClassroom(
       });
 
       try {
-        await generateTTSForClassroom(scenes, stageId, options.baseUrl);
-        log.info('TTS generation complete');
+        const ttsSummary = await generateTTSForClassroom(scenes, stageId, options.baseUrl, { stage });
+        log.info('TTS generation complete', ttsSummary ? JSON.stringify(ttsSummary) : '');
       } catch (err) {
         log.warn('TTS generation phase failed, continuing:', err);
       }

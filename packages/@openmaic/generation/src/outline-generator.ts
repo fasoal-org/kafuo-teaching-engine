@@ -43,6 +43,9 @@ import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
 export const DEFAULT_LANGUAGE_DIRECTIVE =
   'Teach in the language that matches the user requirement.';
 
+/** Prefix used for model answers that do not carry the authoritative flow. */
+export const OUTLINE_TEACHING_FLOW_ERROR = 'OUTLINE_TEACHING_FLOW_INVALID';
+
 export interface OutlinePromptContext {
   /**
    * Which runtime scene families this generation can deliver. The planner is
@@ -181,6 +184,182 @@ function buildSkillPolicyText(teachingFlow: TeachingFlowEntry[] | undefined): st
       return `${index}. stage="${entry.stage}" | required: ${required} | preferred: ${preferred} | allowed: ${allowed} | prohibited-to-combine: ${restrictions}`;
     })
     .join('\n');
+}
+
+/**
+ * Validate the model's flow carriers before any Scene generation is allowed.
+ *
+ * The prompt requires these fields, but prompt text is not an enforcement
+ * boundary: a model can still omit them. Refusing the outline answer here lets
+ * the bounded outline correction loop repair a cheap planning call instead of
+ * discovering the omission after every Scene and media asset was generated.
+ */
+function outlineTeachingFlowIssue(
+  outlines: readonly SceneOutline[],
+  flow: readonly TeachingFlowEntry[],
+  sourceImages: readonly PdfImage[] = [],
+): string | null {
+  if (outlines.length === 0) {
+    return `${OUTLINE_TEACHING_FLOW_ERROR}: no outlines were returned for a ${flow.length}-position Teaching Model Flow`;
+  }
+
+  const indices: number[] = [];
+  const countByFlowIndex = new Map<number, number>();
+  for (const [outlineIndex, outline] of outlines.entries()) {
+    const position = outline.teachingStage;
+    const label = `outline #${outlineIndex + 1} (${JSON.stringify(outline.id)})`;
+    if (!position) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} must carry teachingStage copied from the authoritative Teaching Model Flow`;
+    }
+    if (
+      !Number.isInteger(position.flowIndex) ||
+      position.flowIndex < 0 ||
+      position.flowIndex >= flow.length
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} has flowIndex ${String(position.flowIndex)} outside 0..${flow.length - 1}`;
+    }
+    const expectedKey = flow[position.flowIndex]!.stage;
+    if (position.key !== expectedKey) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} has teachingStage.key ${JSON.stringify(position.key)} but flow[${position.flowIndex}].stage is ${JSON.stringify(expectedKey)}`;
+    }
+    if (
+      expectedKey === 'lesson_opener' &&
+      (outline.type !== 'slide' ||
+        outline.slideType !== 'cover' ||
+        outline.contentRole !== 'orientation' ||
+        (outline.visualPlan?.mode !== 'image' && outline.visualPlan?.mode !== 'native'))
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers lesson_opener but is not a visual cover; this stage requires exactly one cover/orientation slide with visualPlan.mode "image" or "native"`;
+    }
+    if (
+      expectedKey === 'lesson_learning_map' &&
+      (outline.type !== 'slide' ||
+        outline.slideType !== 'content' ||
+        outline.contentRole !== 'orientation')
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers lesson_learning_map but is not a content/orientation slide; this stage requires a separate "what you will learn" slide`;
+    }
+    if (
+      expectedKey === 'outcome_visual_explanations' &&
+      (outline.type !== 'slide' ||
+        outline.contentRole !== 'explanation' ||
+        (outline.visualPlan?.mode !== 'image' && outline.visualPlan?.mode !== 'native'))
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers outcome_visual_explanations but is not a visual explanation; every explanation requires type "slide", contentRole "explanation", and visualPlan.mode "image" or "native"`;
+    }
+    if (expectedKey === 'outcome_visual_explanations') {
+      if (outline.mediaGenerations?.some((request) => request.type === 'image')) {
+        return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers outcome_visual_explanations but requests an AI-generated image; explanation visuals must come from the authoritative textbook, or be a native diagram grounded only in the textbook content`;
+      }
+
+      const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
+      const groundedBookImages = sourceImages.filter((image) =>
+        (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
+      );
+      const suggested = new Set(outline.suggestedImageIds ?? []);
+      const selectedBookImages = sourceImages.filter((image) => suggested.has(image.id));
+
+      if (groundedBookImages.length > 0) {
+        const selectedGrounded = groundedBookImages.some((image) => suggested.has(image.id));
+        if (outline.visualPlan?.mode !== 'image' || !selectedGrounded) {
+          return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} has a textbook visual linked to the same Content Unit but did not select it; set visualPlan.mode "image" and include at least one matching id in suggestedImageIds`;
+        }
+      } else if (selectedBookImages.length > 0) {
+        if (outline.visualPlan?.mode !== 'image') {
+          return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} selected a textbook visual but visualPlan.mode is not "image"`;
+        }
+      } else if (outline.visualPlan?.mode !== 'native') {
+        return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} has no selected textbook visual; use visualPlan.mode "native" so the explanation is visualised only from its authoritative source content`;
+      }
+    }
+    if (expectedKey === 'outcome_check_understanding' && outline.type !== 'quiz') {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers outcome_check_understanding but has type ${JSON.stringify(outline.type)}; this stage requires exactly one quiz`;
+    }
+    if (
+      expectedKey === 'lesson_learning_game' &&
+      (outline.type !== 'interactive' || outline.widgetType !== 'game')
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: ${label} covers lesson_learning_game but is not an interactive game; this stage requires type "interactive" and widgetType "game"`;
+    }
+    indices.push(position.flowIndex);
+    countByFlowIndex.set(position.flowIndex, (countByFlowIndex.get(position.flowIndex) ?? 0) + 1);
+  }
+
+  const collapsed = indices.filter((value, index) => index === 0 || value !== indices[index - 1]);
+  const expected = flow.map((_, index) => index);
+  if (
+    collapsed.length !== expected.length ||
+    collapsed.some((value, index) => value !== expected[index])
+  ) {
+    return `${OUTLINE_TEACHING_FLOW_ERROR}: outline teachingStage sequence must cover the exact flow in order (collapsed [${collapsed.join(', ')}], expected [${expected.join(', ')}])`;
+  }
+  for (const [flowIndex, entry] of flow.entries()) {
+    if (
+      (entry.stage === 'lesson_opener' ||
+        entry.stage === 'lesson_learning_map' ||
+        entry.stage === 'outcome_check_understanding' ||
+        entry.stage === 'lesson_learning_game') &&
+      countByFlowIndex.get(flowIndex) !== 1
+    ) {
+      return `${OUTLINE_TEACHING_FLOW_ERROR}: flow[${flowIndex}] stage ${JSON.stringify(entry.stage)} requires exactly one outline, received ${countByFlowIndex.get(flowIndex) ?? 0}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Deterministically complete the textbook-visual carrier for governed
+ * explanation outlines. Content Unit ↔ image associations are authoritative
+ * input, so applying them here is not a model guess and costs no retry.
+ * Validation below remains strict as the fail-closed boundary.
+ */
+function normalizeBookGroundedExplanationVisuals(
+  outlines: readonly SceneOutline[],
+  flow: readonly TeachingFlowEntry[],
+  sourceImages: readonly PdfImage[],
+): SceneOutline[] {
+  const orderedImages = sortDocumentImagesForVision([...sourceImages]);
+  const imageById = new Map(orderedImages.map((image) => [image.id, image] as const));
+
+  return outlines.map((outline) => {
+    const position = outline.teachingStage;
+    if (
+      !position ||
+      !Number.isInteger(position.flowIndex) ||
+      position.flowIndex < 0 ||
+      position.flowIndex >= flow.length ||
+      flow[position.flowIndex]?.stage !== 'outcome_visual_explanations'
+    ) {
+      return outline;
+    }
+
+    const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
+    const grounded = orderedImages.filter((image) =>
+      (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
+    );
+    const suggested = (outline.suggestedImageIds ?? []).filter((id) => imageById.has(id));
+    const selectedGrounded = suggested.filter((id) => grounded.some((image) => image.id === id));
+    const selectedBookImages = selectedGrounded.length
+      ? selectedGrounded
+      : grounded.length
+        ? [grounded[0]!.id]
+        : suggested;
+    const nonImageMedia = (outline.mediaGenerations ?? []).filter(
+      (request) => request.type !== 'image',
+    );
+    const {
+      mediaGenerations: _discardedMedia,
+      suggestedImageIds: _discardedIds,
+      ...rest
+    } = outline;
+
+    return {
+      ...rest,
+      visualPlan: { mode: selectedBookImages.length > 0 ? 'image' : 'native' },
+      ...(selectedBookImages.length > 0 ? { suggestedImageIds: selectedBookImages } : {}),
+      ...(nonImageMedia.length > 0 ? { mediaGenerations: nonImageMedia } : {}),
+    };
+  });
 }
 
 /**
@@ -329,11 +508,19 @@ export async function generateSceneOutlinesFromRequirements(
       return { success: false, error: 'Failed to parse scene outlines response' };
     }
 
-    const enriched = rawOutlines.map((outline, index) => ({
+    const rawEnriched = rawOutlines.map((outline, index) => ({
       ...stripEmptyOutlineSemantics(outline),
       id: outline.id || nanoid(),
       order: index + 1,
     }));
+    const enriched =
+      context.teachingFlow && context.teachingFlow.length > 0
+        ? normalizeBookGroundedExplanationVisuals(
+            rawEnriched,
+            context.teachingFlow,
+            pdfImages ?? [],
+          )
+        : rawEnriched;
 
     // Slide-semantics gate: every slide outline must come back explicitly and
     // validly classified (slideType + contentRole + a role-valid contentKind).
@@ -355,6 +542,17 @@ export async function generateSceneOutlinesFromRequirements(
       const message = formatOutlineSceneConfigIssues(configIssues);
       logger.warn(message);
       return { success: false, error: message };
+    }
+
+    // A Teaching Model Flow is authoritative even when the optional Teaching
+    // Skills contract marker is absent. Enforce its machine-readable carrier
+    // immediately after parsing, before the expensive Scene phase.
+    if (context.teachingFlow && context.teachingFlow.length > 0) {
+      const issue = outlineTeachingFlowIssue(enriched, context.teachingFlow, pdfImages);
+      if (issue) {
+        logger.warn(issue);
+        return { success: false, error: issue };
+      }
     }
 
     // Planning conflicts are not bad answers to re-roll blindly: they throw

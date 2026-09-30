@@ -14,6 +14,7 @@ import { resolveAudioBlob } from '@/lib/media/resolve-audio-bytes';
 import { assetRefExists } from '@/lib/media/use-asset-url';
 import { mayNameAPoolAsset } from '@/lib/media/media-placeholder';
 import { mayGenerateForStage } from '@/lib/classroom/generation-permission';
+import type { SpeechAudioProvenance } from '@/lib/types/action';
 
 /** Legacy deterministic Dexie key used before pool allocation. */
 export function speechAudioId(sceneOrder: number, actionId: string): string {
@@ -122,6 +123,8 @@ export async function regenerateSpeechAudio(
   action: { id?: string; text?: string; audioId?: string },
   language?: string,
   signal?: AbortSignal,
+  /** SATTS: receives the provenance the server stamped (only when its flag is not off). */
+  onProvenance?: (provenance: SpeechAudioProvenance) => void,
 ): Promise<string | null> {
   if (!isManagedTtsActive()) return null;
   const text = action.text?.trim();
@@ -133,6 +136,7 @@ export async function regenerateSpeechAudio(
   // surfaces withhold the control too; refusing here keeps the two one rule.
   if (!mayGenerateForStage(stageId)) return null;
   const existingAudioId = await exclusivelyOwnedAudioId(action.audioId, stageId);
+  // Manual regeneration always synthesises (plan §7.4); the server records reason 'manual'.
   return generateAndStoreTTS(
     requestId,
     text,
@@ -141,5 +145,8 @@ export async function regenerateSpeechAudio(
     undefined,
     existingAudioId,
     stageId,
+    undefined,
+    0,
+    { actionId: action.id, reason: 'manual', onProvenance },
   );
 }

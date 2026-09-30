@@ -68,11 +68,15 @@ describe('SUBJECT_MODEL_POLICY — pinned to the shared fixture', () => {
     expect(Object.isFrozen(SUBJECT_MODEL_POLICY.MATH.primary.thinking)).toBe(true);
   });
 
-  it('isSubjectCode accepts exactly the six codes', async () => {
+  it('isSubjectCode accepts exactly the seven codes', async () => {
     const { isSubjectCode } = await import('@/lib/server/teaching-model/subject-policy');
     expect(isSubjectCode('MATH')).toBe(true);
     expect(isSubjectCode('CHEMISTRY')).toBe(true);
-    expect(isSubjectCode('ENGLISH')).toBe(false);
+    expect(isSubjectCode('ENGLISH')).toBe(true);
+    expect(isSubjectCode('FRENCH')).toBe(false);
+    // The routing key is the canonical code; the master-subject tokens are not.
+    expect(isSubjectCode('ENG')).toBe(false);
+    expect(isSubjectCode('EHG')).toBe(false);
     expect(isSubjectCode('math')).toBe(false);
     expect(isSubjectCode(null)).toBe(false);
   });
@@ -117,6 +121,17 @@ describe('resolveSubjectModelPolicy', () => {
     expect(policy.policyVersion).toBe('r1-2026-09');
     expect(policy.primary).toMatchObject({
       role: 'primary',
+      modelString: 'openai:gpt-5.6-luna',
+      providerId: 'openai',
+      modelId: 'gpt-5.6-luna',
+      thinking: { mode: 'enabled', effort: 'low' },
+      thinkingLabel: 'low',
+      counterKind: 'exact',
+    });
+    expect(policy.primary.modelInfo.capabilities?.vision).toBe(true);
+    expect(policy.primary.modelInfo.outputWindow).toBeGreaterThan(0);
+    expect(policy.fallback).toMatchObject({
+      role: 'fallback',
       modelString: 'qwen:qwen3.7-flash',
       providerId: 'qwen',
       modelId: 'qwen3.7-flash',
@@ -124,17 +139,53 @@ describe('resolveSubjectModelPolicy', () => {
       thinkingLabel: 'nothink',
       counterKind: 'proxy',
     });
-    expect(policy.primary.modelInfo.capabilities?.vision).toBe(false);
-    expect(policy.primary.modelInfo.outputWindow).toBeGreaterThan(0);
-    expect(policy.fallback).toMatchObject({
-      role: 'fallback',
+    expect(typeof policy.fallback.modelInfo.capabilities?.vision).toBe('boolean');
+  });
+
+  it('routes MATH to Luna (economical/low) first, with Qwen as provider-diverse fallback', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
+    vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
+    const { resolveSubjectModelPolicy } =
+      await import('@/lib/server/teaching-model/resolve-policy');
+    const policy = await resolveSubjectModelPolicy('MATH');
+
+    expect(policy.primary).toMatchObject({
       modelString: 'openai:gpt-5.6-luna',
       providerId: 'openai',
+      modelId: 'gpt-5.6-luna',
       thinking: { mode: 'enabled', effort: 'low' },
       thinkingLabel: 'low',
       counterKind: 'exact',
     });
-    expect(policy.fallback.modelInfo.capabilities?.vision).toBe(true);
+    expect(policy.fallback).toMatchObject({
+      modelString: 'qwen:qwen3.7-flash',
+      providerId: 'qwen',
+      thinking: { mode: 'disabled' },
+      thinkingLabel: 'nothink',
+    });
+  });
+
+  it('routes ENGLISH on the same approved route as the other six subjects', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
+    vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
+    const { resolveSubjectModelPolicy } =
+      await import('@/lib/server/teaching-model/resolve-policy');
+    const english = await resolveSubjectModelPolicy('ENGLISH');
+    const math = await resolveSubjectModelPolicy('MATH');
+
+    expect(english.subjectCode).toBe('ENGLISH');
+    expect(english.primary).toMatchObject({
+      modelString: 'openai:gpt-5.6-luna',
+      thinking: { mode: 'enabled', effort: 'low' },
+      thinkingLabel: 'low',
+    });
+    expect(english.fallback).toMatchObject({
+      modelString: 'qwen:qwen3.7-flash',
+      thinking: { mode: 'disabled' },
+      thinkingLabel: 'nothink',
+    });
+    expect(english.primary.modelString).toBe(math.primary.modelString);
+    expect(english.fallback.modelString).toBe(math.fallback.modelString);
   });
 
   it('refuses an unknown subject code with SUBJECT_ROUTE_UNAVAILABLE (422)', async () => {
@@ -143,7 +194,7 @@ describe('resolveSubjectModelPolicy', () => {
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
     const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
-    await expect(resolveSubjectModelPolicy('ENGLISH')).rejects.toMatchObject({
+    await expect(resolveSubjectModelPolicy('FRENCH')).rejects.toMatchObject({
       code: 'SUBJECT_ROUTE_UNAVAILABLE',
       status: 422,
     });
@@ -151,15 +202,16 @@ describe('resolveSubjectModelPolicy', () => {
   });
 
   it('refuses the whole subject when the FALLBACK provider has no key (fail closed)', async () => {
-    // MATH: primary qwen (keyed) / fallback openai (unkeyed). A subject with
-    // only a working primary is not routed — the fallback is part of the route.
-    vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
+    // Every R1 route is openai-primary / qwen-fallback: with only OPENAI keyed,
+    // the fallback is unresolvable. A subject with only a working primary is
+    // not routed — the fallback is part of the route.
+    vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
-    await expect(resolveSubjectModelPolicy('MATH')).rejects.toMatchObject({
+    await expect(resolveSubjectModelPolicy('PHYSICS')).rejects.toMatchObject({
       code: 'SUBJECT_ROUTE_UNAVAILABLE',
       status: 422,
-      details: { subjectCode: 'MATH', role: 'fallback', model: 'openai:gpt-5-nano' },
+      details: { subjectCode: 'PHYSICS', role: 'fallback', model: 'qwen:qwen3.7-flash' },
     });
   });
 
@@ -239,8 +291,8 @@ describe('policy thinking → provider request body', () => {
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
     const { callLLM } = await import('@/lib/ai/llm');
-    const policy = await resolveSubjectModelPolicy('MATH');
-    const target = policy.primary;
+    const policy = await resolveSubjectModelPolicy('PHYSICS');
+    const target = policy.fallback;
     await callLLM(
       { model: target.model, prompt: 'hi', maxRetries: 0 },
       'test-qwen',
@@ -252,20 +304,17 @@ describe('policy thinking → provider request body', () => {
     expect(bodies[0]).not.toHaveProperty('thinking_budget');
   });
 
-  it('openai:gpt-5-nano minimal sends reasoning_effort:"minimal"', async () => {
+  it('openai:gpt-5-nano minimal sends reasoning_effort:"minimal" (provider integration, no longer routed)', async () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
-    vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
     stubChatCompletion('gpt-5-nano');
-    const { resolveSubjectModelPolicy } =
-      await import('@/lib/server/teaching-model/resolve-policy');
+    const { resolveModel } = await import('@/lib/server/resolve-model');
+    const resolved = await resolveModel({ modelString: 'openai:gpt-5-nano' });
     const { callLLM } = await import('@/lib/ai/llm');
-    const policy = await resolveSubjectModelPolicy('MATH');
-    const target = policy.fallback;
     await callLLM(
-      { model: target.model, prompt: 'hi', maxRetries: 0 },
+      { model: resolved.model, prompt: 'hi', maxRetries: 0 },
       'test-nano',
       undefined,
-      target.thinking,
+      { mode: 'enabled', effort: 'minimal' },
     );
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({ model: 'gpt-5-nano', reasoning_effort: 'minimal' });
@@ -315,5 +364,49 @@ describe('policy thinking → provider request body', () => {
     );
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' } });
+  });
+
+  it('openai:gpt-6-luna low uses the Responses API with low reasoning (provider integration, no longer routed)', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({
+          id: 'resp_6',
+          object: 'response',
+          created_at: 1,
+          status: 'completed',
+          model: 'gpt-6-luna',
+          output: [
+            {
+              id: 'msg_6',
+              type: 'message',
+              status: 'completed',
+              role: 'assistant',
+              content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+            },
+          ],
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 1,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 2,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof globalThis.fetch;
+    const { resolveModel } = await import('@/lib/server/resolve-model');
+    const resolved = await resolveModel({ modelString: 'openai:gpt-6-luna' });
+    const { callLLM } = await import('@/lib/ai/llm');
+    await callLLM(
+      { model: resolved.model, prompt: 'hi', maxRetries: 0 },
+      'test-gpt6-luna',
+      undefined,
+      { mode: 'enabled', effort: 'low' },
+    );
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ model: 'gpt-6-luna', reasoning: { effort: 'low' } });
   });
 });

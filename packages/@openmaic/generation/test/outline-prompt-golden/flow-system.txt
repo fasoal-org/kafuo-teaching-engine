@@ -205,6 +205,12 @@ Do **NOT** plan a separate learning-objectives slide: the objectives live on the
 
 The Teaching Model Flow decides which positions exist and their order; classification never changes that. Classify each outline by what it does for the learner inside its flow position — a stage key is context, never a value of `slideType`, `contentRole` or `contentKind`.
 
+For every outline at Teaching Model Flow stage `outcome_visual_explanations`, the visual is mandatory and textbook-grounded:
+
+- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
+- otherwise use `visualPlan: { "mode": "native" }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
+- never add an AI image request to `mediaGenerations` for this stage, and never use decorative filler as its visual.
+
 ---
 
 ## Default Assumption Rules

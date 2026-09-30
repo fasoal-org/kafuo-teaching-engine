@@ -1,0 +1,44 @@
+{
+  "table": "fractions",
+  "description": "Approved unit fractions spoken as words (plan §10.1).",
+  "roles": [
+    "fraction"
+  ],
+  "entries": [
+    {
+      "key": "1/2",
+      "natural": "نصف",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "P4 item 9: the accessible structure is read by the verbaliser, not stored here."
+    },
+    {
+      "key": "1/3",
+      "natural": "ثلث",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "P4 item 9: the accessible structure is read by the verbaliser, not stored here."
+    },
+    {
+      "key": "1/4",
+      "natural": "ربع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "P4 item 9: the accessible structure is read by the verbaliser, not stored here."
+    },
+    {
+      "key": "2/3",
+      "natural": "ثلثان",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "P4 item 9: the accessible structure is read by the verbaliser, not stored here."
+    },
+    {
+      "key": "3/4",
+      "natural": "ثلاثة أرباع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "P4 item 9: the accessible structure is read by the verbaliser, not stored here."
+    }
+  ]
+}

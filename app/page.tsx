@@ -90,6 +90,8 @@ import {
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import { InteractiveModeButton } from '@/components/generation/interactive-mode-button';
 import { ProBadge } from '@/components/workbench/ProBadge';
+import { BrandLockup } from '@/components/brand/brand-lockup';
+import { DEFAULT_BRAND } from '@/lib/brand/brand-config';
 import { arrivedByProSwap, startProSwap } from '@/lib/workbench/pro-swap';
 import {
   readLastWorkspaceSessionId,
@@ -832,9 +834,7 @@ function HomePage() {
       >
         {/* ── Logo ── */}
         <div className="relative" data-pro-morph="lockup">
-          <motion.img
-            src="/logo-horizontal.png"
-            alt="OpenMAIC"
+          <motion.div
             initial={heroEnter({ opacity: 0, scale: 0.9 })}
             animate={{ opacity: 1, scale: 1 }}
             transition={{
@@ -843,8 +843,15 @@ function HomePage() {
               stiffness: 200,
               damping: 20,
             }}
-            className="h-12 md:h-16 mb-2 -ml-2 md:-ml-3"
-          />
+            className="h-12 md:h-16 mb-2 flex items-center"
+          >
+            <BrandLockup
+              className="gap-3"
+              logoClassName="h-12 md:h-16 -ml-2 md:-ml-3"
+              markClassName="size-11 md:size-14"
+              textClassName="text-3xl md:text-4xl"
+            />
+          </motion.div>
           {workbenchEntryEnabled ? (
             <div
               className="absolute left-full top-0 ml-1.5 mt-[10px] md:ml-2 md:mt-[14px]"
@@ -1346,7 +1353,7 @@ function HomePage() {
 
       {/* Footer — flows with content, at the very end */}
       <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
-        OpenMAIC Open Source Project
+        {DEFAULT_BRAND.productName}
       </div>
     </div>
   );

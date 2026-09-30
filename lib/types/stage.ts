@@ -83,6 +83,11 @@ export {
 export type { TextDirection } from '@openmaic/dsl';
 export { TEXT_DIRECTIONS, isTextDirection, resolveTextDirection } from '@openmaic/dsl';
 
+// Stage-level narration reading mode (`Stage.speechReadingMode`). Absent means
+// 'natural'. Owned by `@openmaic/dsl`.
+export type { SpeechReadingMode } from '@openmaic/dsl';
+export { SPEECH_READING_MODES, isSpeechReadingMode } from '@openmaic/dsl';
+
 // The two discriminant guards are runtime functions, so they must be value
 // re-exported — a bare `export type {}` erases them and leaves the import as
 // `undefined` at runtime / "cannot be used as a value" at the type level.

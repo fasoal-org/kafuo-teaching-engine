@@ -236,7 +236,32 @@
     "doneEditing": "Terminer les modifications",
     "proModeDisabledHint": "L’édition n’est pas disponible sur cette page. Ouvrez une diapositive de cours pour la modifier en mode Pro."
   },
+  "aiVoice": {
+    "notice": "This lesson's voice is AI-generated, not a real teacher.",
+    "label": "AI voice",
+    "dismiss": "Got it"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "Pronunciation",
+      "regenerateAllConfirm": "Regenerate all {{total}} lines? {{current}} are already up to date. Choose Cancel to regenerate only the out-of-date lines.",
+      "original": "Original",
+      "prepared": "Spoken form",
+      "warnings": "Warnings",
+      "noWarnings": "No warnings",
+      "preview": "Preview spoken form",
+      "statusCurrent": "Current",
+      "statusStale": "Stale · {{reason}}",
+      "statusLegacy": "Legacy audio",
+      "statusMissing": "No audio",
+      "generalPath": "General narration (no subject rules)",
+      "policy": "Policy {{version}} ({{status}})",
+      "unavailable": "Pronunciation details are unavailable.",
+      "readingMode": "Narration reading mode",
+      "readingModeNatural": "Natural",
+      "readingModeAccessible": "Accessible (explicit structure)",
+      "unvoicedCount": "{{count}} lines have no audio"
+    },
     "proMode": "Pro",
     "undo": "Annuler",
     "redo": "Rétablir",
@@ -1877,7 +1902,7 @@
       "download": "Télécharger",
       "detailFailed": "Impossible de charger les détails du skill",
       "contentLabel": "Contenu",
-      "builtinDetailNote": "Ce skill est fourni avec OpenMAIC. Téléchargez-le pour l’importer dans un autre espace de travail d’agent.",
+      "builtinDetailNote": "Ce skill est fourni avec Teaching Engine. Téléchargez-le pour l’importer dans un autre espace de travail d’agent.",
       "upload": "Importer",
       "uploading": "Importation…",
       "uploadFailed": "Impossible d’importer le skill. Vérifiez le fichier et réessayez.",

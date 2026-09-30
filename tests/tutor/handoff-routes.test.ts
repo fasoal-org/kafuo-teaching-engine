@@ -24,7 +24,7 @@ const VALID_BODY = {
   },
   allowedSubjects: [
     { code: 'MATH', offeringId: '10', nameAr: 'الرياضيات', nameEn: 'Math', academicLanguage: 'ar' },
-    { code: 'ENGLISH', offeringId: '12', nameAr: 'الإنجليزية', nameEn: 'English', academicLanguage: 'en' },
+    { code: 'FRENCH', offeringId: '12', nameAr: 'الفرنسية', nameEn: 'French', academicLanguage: 'en' },
   ],
   localeHint: 'ar',
   entitlements: { freeChat: true, help: true },
@@ -93,7 +93,7 @@ describe('POST /api/tutor/handoff', () => {
       academic: VALID_BODY.academic,
     });
     // Unrouted codes are NOT refused at mint (the intersection happens at redeem).
-    expect(payload.allowedSubjects.map((s) => s.code)).toEqual(['MATH', 'ENGLISH']);
+    expect(payload.allowedSubjects.map((s) => s.code)).toEqual(['MATH', 'FRENCH']);
   });
 
   it('validates the body shape', async () => {

@@ -36,10 +36,10 @@ const SUBJECTS: StudentSubject[] = [
     academicLanguage: 'ar',
   },
   {
-    code: 'ENGLISH',
+    code: 'FRENCH',
     offeringId: '12',
-    nameAr: 'الإنجليزية',
-    nameEn: 'English',
+    nameAr: 'الفرنسية',
+    nameEn: 'French',
     academicLanguage: 'en',
   },
   { code: 'MATH', offeringId: '13', nameAr: 'رياضيات ٢', nameEn: 'Math 2', academicLanguage: 'ar' },
@@ -129,7 +129,7 @@ describe('redeem → student grant', () => {
     const redeemed = redeemStudentHandoff(token, NOW);
     expect(redeemed.grant.startsWith(STUDENT_GRANT_PREFIX)).toBe(true);
     expect(redeemed.expiresAt - NOW).toBe(3600 * 1000);
-    // ENGLISH is not routed; the duplicate MATH offering is dropped.
+    // FRENCH is not routed; the duplicate MATH offering is dropped.
     expect(redeemed.subjects.map((s) => s.code)).toEqual(['MATH', 'PHYSICS']);
     expect(redeemed.subjects[0]!.offeringId).toBe('10');
     expect(redeemed.academic).toEqual(handoffInput().academic);
@@ -272,8 +272,8 @@ describe('nullable Kafuo labels (cross-repo parity)', () => {
     expect(
       parseLearnerSubject({
         code: null,
-        nameAr: 'الإنجليزية',
-        nameEn: 'English',
+        nameAr: 'الفرنسية',
+        nameEn: 'French',
         academicLanguage: 'ar',
       }),
     ).toMatchObject({ code: null });

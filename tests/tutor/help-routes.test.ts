@@ -527,7 +527,7 @@ describe('Stage Help routes', () => {
 
     it('takes the subject from the grant’s snapshot: a null code (no routing key) or an unrouted one → 422 SUBJECT_ROUTE_UNAVAILABLE, never a generic model', async () => {
       const seed = await seedLesson();
-      for (const code of [null, 'ENGLISH']) {
+      for (const code of [null, 'FRENCH']) {
         const cookie = learnerCookie({
           versionId: seed.versionId,
           stageId: seed.stageId,

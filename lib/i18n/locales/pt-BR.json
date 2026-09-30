@@ -221,7 +221,32 @@
     "startListening": "Entrada por voz",
     "stopListening": "Parar gravação"
   },
+  "aiVoice": {
+    "notice": "This lesson's voice is AI-generated, not a real teacher.",
+    "label": "AI voice",
+    "dismiss": "Got it"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "Pronunciation",
+      "regenerateAllConfirm": "Regenerate all {{total}} lines? {{current}} are already up to date. Choose Cancel to regenerate only the out-of-date lines.",
+      "original": "Original",
+      "prepared": "Spoken form",
+      "warnings": "Warnings",
+      "noWarnings": "No warnings",
+      "preview": "Preview spoken form",
+      "statusCurrent": "Current",
+      "statusStale": "Stale · {{reason}}",
+      "statusLegacy": "Legacy audio",
+      "statusMissing": "No audio",
+      "generalPath": "General narration (no subject rules)",
+      "policy": "Policy {{version}} ({{status}})",
+      "unavailable": "Pronunciation details are unavailable.",
+      "readingMode": "Narration reading mode",
+      "readingModeNatural": "Natural",
+      "readingModeAccessible": "Accessible (explicit structure)",
+      "unvoicedCount": "{{count}} lines have no audio"
+    },
     "proMode": "Pro",
     "undo": "Desfazer",
     "redo": "Refazer",
@@ -1877,7 +1902,7 @@
       "download": "Baixar",
       "detailFailed": "Não foi possível carregar os detalhes do skill",
       "contentLabel": "Conteúdo",
-      "builtinDetailNote": "Este skill acompanha o OpenMAIC. Baixe-o para importar em outro espaço de trabalho de agente.",
+      "builtinDetailNote": "Este skill acompanha o Teaching Engine. Baixe-o para importar em outro espaço de trabalho de agente.",
       "upload": "Enviar",
       "uploading": "Enviando…",
       "uploadFailed": "Não foi possível enviar o skill. Verifique o arquivo e tente novamente.",

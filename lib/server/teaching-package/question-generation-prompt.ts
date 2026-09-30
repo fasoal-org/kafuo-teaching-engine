@@ -14,7 +14,7 @@
  * validator and the Question Bank authority.
  */
 
-export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v1.20260915';
+export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v2.20260924';
 export const QUESTION_ENVELOPE_VERSION = 'tqs.v1.strict.20260817';
 
 export const TEACHING_ROLES = ['check_understanding', 're_check', 'mastery_check'] as const;
@@ -36,14 +36,24 @@ AUTHORITY
 - The approved teaching scenes (anchors C1, C2, ...) define WHAT WAS ACTUALLY TAUGHT.
 - The lesson source excerpts (anchors S1, S2, ...) ground correctness and rule out
   unsupported content.
+- Approved Book Questions (anchors B1, B2, ...) are source-authored assessment evidence.
+  They show how the book assesses this outcome and may support an application that is not
+  repeated verbatim in the teaching scenes.
 
 GROUNDING IS ABSOLUTE
-- Use ONLY the approved material in this message: the learning outcome, the approved
-  teaching scenes, and the lesson source excerpts.
+- Use ONLY the approved material in this message: the learning outcome, approved teaching
+  scenes, lesson source excerpts, and approved Book Questions.
 - Never add a fact, rule, formula, definition, example, or curriculum expectation that is
   not present in that material, even if it is true and you are confident about it.
-- Assess only what the teaching scenes taught for this outcome. Do not assess source content
-  the scenes never taught.
+- Stay within the concept and skill established by the approved book material. Do not assess
+  unrelated source content merely because it occurs elsewhere in the lesson.
+- When a Book Question is supplied for this outcome, use it as grounding and as an
+  assessment-pattern reference. Do not mark a role unsupported merely because the scenes
+  contain only one worked example when the Book Question supports another application of
+  the same book-taught concept or skill.
+- Never copy, lightly paraphrase, renumber, or merely rename a supplied Book Question. An AI
+  question must be materially distinct in representation, reasoning path, problem structure,
+  or book-supported application while remaining answerable from the approved material.
 - Never infer meaning from identifiers. The outcome id is an opaque token to echo back.
 - If the approved material does not contain what a role needs, mark that role
   "unsupported" and say briefly what is missing. Do NOT invent a question to fill the
@@ -80,7 +90,7 @@ THE THREE ROLES MUST MEASURE DIFFERENTLY
   "compare-two-fractions-common-denominator") and a one-sentence description.
 
 EVIDENCE
-- Cite one or more anchors (C1, C2, ... and/or S1, S2, ...) from this message for every
+- Cite one or more anchors (C1, C2, ..., S1, S2, ..., and/or B1, B2, ...) from this message for every
   supported question. Cite only anchors that appear in this message.
 
 OUTPUT
@@ -132,6 +142,7 @@ export interface QuestionPromptInput {
   outcomeStatement: string;
   teachingScenes: PromptSection[];
   sourceExcerpts: PromptSection[];
+  bookQuestions: PromptSection[];
   targetRole: TeachingRole | null;
   findings: string[];
   siblingMeasurements: string[];
@@ -163,6 +174,20 @@ export function buildQuestionUserPrompt(input: QuestionPromptInput): string {
     lines.push(`[${section.anchor}] ${section.title}`);
     lines.push(section.content);
     lines.push('');
+  }
+  lines.push('## Approved Book Questions for this outcome (grounding and inspiration)');
+  if (input.bookQuestions.length === 0) {
+    lines.push('(No approved Book Question reference was supplied for this outcome.)');
+  }
+  for (const section of input.bookQuestions) {
+    lines.push(`[${section.anchor}] ${section.title}`);
+    lines.push(section.content);
+    lines.push('');
+  }
+  if (input.bookQuestions.length > 0) {
+    lines.push(
+      "Use these questions directly only through Book-first inventory outside this call. Here, generate only materially distinct AI questions for residual slots; preserve the book's concept, skill and answerability.",
+    );
   }
   lines.push('');
   if (input.targetRole) {

@@ -117,6 +117,45 @@ describe('duplicateSlideScene', () => {
     expect(dup.content.canvas).not.toBe(source.content.canvas);
   });
 
+  it('drops audioId, audioUrl and audioProvenance from duplicated speech actions', () => {
+    const source = makeSlideScene({
+      actions: [
+        {
+          id: 'speech-1',
+          type: 'speech',
+          text: 'Hello',
+          audioId: 'tts_s1_speech-1',
+          audioUrl: '/api/classroom-media/s/audio/tts_s1_speech-1.mp3',
+          audioProvenance: {
+      fingerprint: 'fp1:x',
+      policyVersion: null,
+      originalDigest: 'o',
+      responseFormat: 'mp3',
+      providerId: 'openai-tts',
+      modelId: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 1,
+      preparedDigest: 'p',
+      segments: 1,
+      preparedChars: 3,
+      originalChars: 3,
+      warningCount: 0,
+      generatedAt: '2026-09-28T00:00:00.000Z',
+      reason: 'initial' as const,
+    },
+        },
+      ],
+    } as unknown as Partial<Scene>);
+    const dup = duplicateSlideScene(source, '(copy)', 2);
+    const copied = dup.actions![0]!;
+    expect(copied).toMatchObject({ type: 'speech', text: 'Hello' });
+    expect(copied).not.toHaveProperty('audioId');
+    expect(copied).not.toHaveProperty('audioUrl');
+    expect(copied).not.toHaveProperty('audioProvenance');
+    // The source keeps its audio.
+    expect(source.actions![0]).toHaveProperty('audioProvenance');
+  });
+
   it('does not inherit the source outlineId (a copy is not generated from it)', () => {
     const source = makeSlideScene({ outlineId: 'src-outline' } as Partial<Scene>);
     const dup = duplicateSlideScene(source, '(copy)', 2);

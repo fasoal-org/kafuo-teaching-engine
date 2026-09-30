@@ -43,6 +43,50 @@ export interface LaserAction extends ActionBase {
 
 // ==================== Synchronous actions ====================
 
+/**
+ * Why a narration audio asset is valid: the digests and profile that produced
+ * it. Written only together with `audioId` and removed wherever `audioId` is
+ * removed. Carries no secrets, URLs or prepared text — digests and counts only —
+ * so it may pass through learner delivery unchanged.
+ */
+export interface SpeechAudioProvenance {
+  /** `'fp1:' + base64url(sha256(canonical material inputs))`. */
+  fingerprint: string;
+  /** `null` = general path (no scientific policy applied). */
+  policyVersion: string | null;
+  policyStatus?: 'approved' | 'experimental';
+  /** sha256 of the original text. */
+  originalDigest: string;
+  /** e.g. `'mp3'`. */
+  responseFormat: string;
+  /** sha256 of the delivery instructions sent; `null` when none. */
+  deliveryDigest?: string | null;
+  /** Subject actually applied (`null` = general). */
+  subjectCode?: string | null;
+  /** Subject on the Stage at generation time (may be non-scientific). */
+  stageSubjectCode?: string | null;
+  language?: string | null;
+  readingMode?: 'natural' | 'accessible';
+  providerId: string;
+  /** Resolved (requested) model id, e.g. a pinned snapshot. */
+  modelId: string;
+  voice: string;
+  speed: number;
+  /** e.g. `'ar-SA-saudi-edu-v1'`; `null` when no instructions were sent. */
+  deliveryProfile?: string | null;
+  /** sha256 of the exact provider-bound prepared text (joined segments). */
+  preparedDigest: string;
+  /** Provider calls that produced this asset. */
+  segments: number;
+  /** Provider-bound characters (sum over segments). */
+  preparedChars: number;
+  originalChars: number;
+  warningCount: number;
+  /** ISO timestamp; informational, NOT part of the fingerprint. */
+  generatedAt: string;
+  reason: 'initial' | 'stale' | 'manual' | 'policy' | 'repair';
+}
+
 /** Speech — teacher narration (wait for TTS to finish) */
 export interface SpeechAction extends ActionBase {
   type: 'speech';
@@ -59,6 +103,8 @@ export interface SpeechAction extends ActionBase {
   audioInvalidated?: boolean;
   voice?: string;
   speed?: number; // default 1.0
+  /** Why `audioId` is valid. See {@link SpeechAudioProvenance}. */
+  audioProvenance?: SpeechAudioProvenance;
 }
 
 /** Open whiteboard (wait for animation) */

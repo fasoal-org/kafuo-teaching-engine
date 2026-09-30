@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { useStageStore } from '@/lib/store';
 import {
@@ -68,7 +68,9 @@ export function Stage({
 }) {
   const { mode, setMode, scenes, currentSceneId, generatingOutlines, stage } = useStageStore();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const enteringWorkbench = useRef(false);
+  const editHandoffHandled = useRef(false);
   const proWorkbenchFlag = isProWorkbenchEnabled();
   const editorEnabled = isMaicEditorEnabled();
   const [proRuntime, setProRuntime] = useState<'pending' | 'on' | 'off'>(
@@ -239,6 +241,33 @@ export function Stage({
       onError: (error) => console.error('[Stage] Pro mode entry failed during teardown', error),
     });
   }, [mode, setMode]);
+
+  // The Admin's Edit action is already an explicit edit intent. Once the
+  // write grant and Stage metadata have loaded, honour the handoff's mode
+  // marker and enter Pro mode automatically. The one-shot ref still lets the
+  // reviewer switch back to playback without this effect immediately forcing
+  // edit mode again.
+  useEffect(() => {
+    if (
+      searchParams.get('mode') !== 'edit' ||
+      editHandoffHandled.current ||
+      mode === 'edit' ||
+      !editorEnabled ||
+      !isEditable
+    ) {
+      return;
+    }
+    editHandoffHandled.current = true;
+    void enterEditMode({
+      teardown: () => playbackRef.current?.teardown(),
+      preload: preloadEditor,
+      activate: () => setMode('edit'),
+      onError: (error) => {
+        editHandoffHandled.current = false;
+        console.error('[Stage] edit handoff could not enter Pro mode', error);
+      },
+    });
+  }, [editorEnabled, isEditable, mode, searchParams, setMode]);
 
   // Auto-exit edit mode when the current scene becomes uneditable
   // (pending generation, no scenes, currently generating).

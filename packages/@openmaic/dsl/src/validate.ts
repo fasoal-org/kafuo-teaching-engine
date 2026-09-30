@@ -16,10 +16,10 @@
  * dependencies.
  */
 import { isActionType } from './action.js';
-import type { ActionType } from './action.js';
+import type { ActionType, SpeechAudioProvenance } from './action.js';
 import { isWidgetType } from './interactive.js';
 import { isPBLProject } from './pbl.js';
-import { isSceneType } from './stage.js';
+import { isSceneType, isSpeechReadingMode } from './stage.js';
 import { isSlideType } from './slides.js';
 import {
   REQUIRED_SLIDE_ASSISTANCE_TIERS,
@@ -386,7 +386,35 @@ export function validateStage(doc: unknown): ValidationResult {
       message: `unknown text direction: ${JSON.stringify(doc.textDirection)} (expected "ltr" or "rtl")`,
     });
   }
+  // Optional speech metadata. Absent is valid (legacy and non-governed stages).
+  if (
+    doc.subjectCode !== undefined &&
+    (typeof doc.subjectCode !== 'string' || !doc.subjectCode.trim())
+  ) {
+    errors.push({ path: '/subjectCode', message: '`subjectCode` must be a non-empty string' });
+  }
+  if (doc.speechReadingMode !== undefined && !isSpeechReadingMode(doc.speechReadingMode)) {
+    errors.push({
+      path: '/speechReadingMode',
+      message: `unknown speech reading mode: ${JSON.stringify(doc.speechReadingMode)} (expected "natural" or "accessible")`,
+    });
+  }
   return done(errors);
+}
+
+/**
+ * Read-side guard for `SpeechAction.audioProvenance`. A malformed provenance
+ * never fails validation — it is dropped on read and the audio is treated as
+ * legacy. Returns the value when it is an object whose `fingerprint`,
+ * `providerId`, `modelId`, `voice` and `preparedDigest` are strings, otherwise
+ * `undefined`. Never throws.
+ */
+export function sanitizeAudioProvenance(value: unknown): SpeechAudioProvenance | undefined {
+  if (!isObject(value)) return undefined;
+  for (const key of ['fingerprint', 'providerId', 'modelId', 'voice', 'preparedDigest']) {
+    if (typeof value[key] !== 'string') return undefined;
+  }
+  return value as unknown as SpeechAudioProvenance;
 }
 
 /** Validate a {@link Scene} aggregate, including its nested content + actions. */

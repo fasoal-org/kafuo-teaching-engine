@@ -389,6 +389,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
     // The runner hands generation the lesson's authoritative language.
     expect(mocks.generateClassroom.mock.calls[0]![0]).toMatchObject({ language: 'ar' });
+    // …and its authoritative subject code, which generation stamps on the Stage.
+    expect(mocks.generateClassroom.mock.calls[0]![0]).toMatchObject({ subjectCode: 'MATH' });
     const version = (await readVersion(qp(), after.versionId!, {
       tenantId: 'tenant-k',
     }))!;
@@ -476,7 +478,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(mocks.generateClassroom).not.toHaveBeenCalled();
   });
 
-  it('retries an invalid flow, then succeeds on a later run (only the valid stage binds)', async () => {
+  it('does not replay the full classroom after an invalid flow', async () => {
     let call = 0;
     mocks.generateClassroom.mockImplementation(async (_execution, options) => {
       call += 1;
@@ -486,7 +488,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         createdAt: 1,
         updatedAt: 1,
       }));
-      // Run 1 omits flow position 1 → invalid; run 2 is valid.
+      // A hypothetical second call would be valid, but the full-classroom
+      // budget is exactly one so it must never be reached.
       const indices = call === 1 ? [0] : [0, 1];
       const scenes = indices.map((flowIndex, index) => flowScene(index + 1, flowIndex));
       scenes.forEach((scene) => ((scene as { stageId?: string }).stageId = reserved.id));
@@ -514,15 +517,15 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     const attemptId = await startKafuo();
     const { readAttemptById } = await import('@/lib/persistence/teaching-package');
     const after = (await readAttemptById(qp(), attemptId))!;
-    expect(after.status).toBe('succeeded');
-    expect(after.generationRuns).toBe(2);
-    expect(mocks.generateClassroom).toHaveBeenCalledTimes(2);
+    expect(after.status).toBe('failed');
+    expect(after.errorCode).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+    expect(after.generationRuns).toBe(1);
+    expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
     // The invalid run's stage was compensated (tombstoned + media removed).
     const live = await pool.query(
       `SELECT COUNT(*)::int AS n FROM stage_meta WHERE deleted_at IS NULL`,
     );
-    // One live stage: the valid one (the invalid run's was tombstoned).
-    expect((live.rows[0] as { n: number }).n).toBe(1);
+    expect((live.rows[0] as { n: number }).n).toBe(0);
   });
 
   it('fails after exhausting bounded runs on persistent flow mismatch (no version created)', async () => {
@@ -561,7 +564,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect(after.status).toBe('failed');
     expect(after.errorCode).toBe('TEACHING_MODEL_FLOW_MISMATCH');
     expect(after.versionId).toBeNull();
-    expect(after.generationRuns).toBeGreaterThanOrEqual(2);
+    expect(after.generationRuns).toBe(1);
     // No live stage survived compensation.
     const live = await pool.query(
       `SELECT COUNT(*)::int AS n FROM stage_meta WHERE deleted_at IS NULL`,
@@ -569,7 +572,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     expect((live.rows[0] as { n: number }).n).toBe(0);
   });
 
-  it('cleans a thrown run’s media directory after reservation and retries', async () => {
+  it('cleans a thrown run’s media directory without replaying the classroom', async () => {
     let calls = 0;
     mocks.generateClassroom.mockImplementation(async (_execution, options) => {
       calls += 1;
@@ -609,12 +612,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     const attemptId = await startKafuo();
     const { readAttemptById } = await import('@/lib/persistence/teaching-package');
     const after = (await readAttemptById(qp(), attemptId))!;
-    expect(after.status).toBe('succeeded');
-    expect(after.generationRuns).toBe(2);
-    // The thrown run's stage directory was removed; only the successful one remains.
+    expect(after.status).toBe('failed');
+    expect(after.generationRuns).toBe(1);
+    expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+    // The thrown run's stage directory was removed; no replay directory exists.
     const entries = await fs.readdir(tmp);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).not.toContain('undefined');
+    expect(entries).toEqual([]);
   });
 
   it('keeps the previous usable stage when a regeneration fails', async () => {
@@ -860,9 +863,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(row.rows[0]!.version_id).toBeNull();
     });
 
-    it('spends the existing run budget on a grounding miss, and no more', async () => {
-      /* The budget itself is unchanged: the bound is still `maxGenerationRuns()`. Each
-         retry is now cheap — it re-rolls the outline call, not 33 Scenes. */
+    it('defaults to one full generation run on a grounding miss', async () => {
+      /* A structural model-output miss must not replay the whole classroom by
+         default. Cheap corrective outline re-rolls live inside that one run. */
       mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
       mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
 
@@ -872,9 +875,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         `SELECT generation_runs FROM teaching_package_generation_attempts WHERE id = $1`,
         [attemptId],
       );
-      expect(Number(row.rows[0]!.generation_runs)).toBe(3);
-      expect(mocks.generateClassroom).toHaveBeenCalledTimes(3);
-      // ...and not one of those three retries produced Scene content.
+      expect(Number(row.rows[0]!.generation_runs)).toBe(1);
+      expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
+      // ...and the rejected run produced no Scene content.
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
     });
 
@@ -1370,8 +1373,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       ['GOVERNED_ACTION_GENERATION_FAILED', true],
       ['GOVERNED_SCENE_GENERATION_FAILED', true],
     ] as const)(
-      '%s: attempt fails with its own code, compensates every run, keeps the bound Stage',
-      async (code, retryable) => {
+      '%s: attempt fails with its own code, compensates the run, keeps the bound Stage',
+      async (code, _retryable) => {
         const { versionId, stageBefore, attemptId } = await startFailingRegeneration(code);
         const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
 
@@ -1379,11 +1382,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         const failed = (await readAttemptById(qp(), attemptId))!;
         expect(failed.status).toBe('failed');
         expect(failed.errorCode).toBe(code);
-        if (retryable) {
-          // A bad model answer is not a bad package: the bounded budget was
-          // spent re-rolling, each run compensated before the next.
-          expect(failed.generationRuns).toBeGreaterThanOrEqual(2);
-        }
+        expect(failed.generationRuns).toBe(1);
         // Nothing new was bound: the version still points at the Stage the
         // valid initial generation bound.
         expect(version.currentStageId).toBe(stageBefore);
@@ -1597,7 +1596,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         const failed = (await readAttemptById(qp(), attemptId))!;
         expect(failed.status).toBe('failed');
         expect(failed.errorCode).toBe(code);
-        expect(failed.generationRuns).toBeGreaterThanOrEqual(2); // retryable, re-rolled
+        expect(failed.generationRuns).toBe(1);
         // Nothing new bound: the version still points at the valid Stage.
         const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
         expect(version.currentStageId).toBe(stageBefore);
@@ -1611,18 +1610,18 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       },
     );
 
-    it('an invalid Action emitted once then valid Actions binds normally after the re-roll', async () => {
-      const { versionId, attemptId } = await regenerateWithActions([
+    it('does not replay the classroom when a later hypothetical Action answer would be valid', async () => {
+      const { versionId, stageBefore, attemptId } = await regenerateWithActions([
         [{ id: 'a-unknown', type: 'legacy_teleport' }],
         [{ id: 'a-ok', type: 'speech', text: 'Canonical.' }],
       ]);
       const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');
 
-      const succeeded = (await readAttemptById(qp(), attemptId))!;
-      expect(succeeded.status).toBe('succeeded');
-      expect(succeeded.generationRuns).toBe(2);
+      const failed = (await readAttemptById(qp(), attemptId))!;
+      expect(failed.status).toBe('failed');
+      expect(failed.generationRuns).toBe(1);
       const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-k' }))!;
-      expect(version.currentStageId).not.toBeNull();
+      expect(version.currentStageId).toBe(stageBefore);
     });
 
     it('the legacy (non-Kafuo) binding path gained no gate', async () => {
@@ -1664,8 +1663,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
       // Exactly the policy pair, with NO stage: the stage route can never win.
       expect(POLICY_CALLS()).toEqual([
+        { modelString: 'openai:gpt-5.6-luna' },
         { modelString: 'qwen:qwen3.7-flash' },
-        { modelString: 'openai:gpt-5-nano' },
       ]);
       expect(POLICY_CALLS().some((call) => 'stage' in call)).toBe(false);
 
@@ -1675,8 +1674,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(row.input_snapshot).toMatchObject({
         subjectCode: 'MATH',
         policyVersion: 'r1-2026-09',
-        primaryModel: 'qwen:qwen3.7-flash',
-        fallbackModel: 'openai:gpt-5-nano',
+        primaryModel: 'openai:gpt-5.6-luna',
+        fallbackModel: 'qwen:qwen3.7-flash',
       });
       expect(row.input_snapshot.resolvedLlmModel).toBeUndefined();
 
@@ -1684,8 +1683,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const execution = mocks.generateClassroom.mock.calls[0]![0];
       expect(execution.modelPolicy).toMatchObject({
         subjectCode: 'MATH',
-        primary: { role: 'primary', modelString: 'qwen:qwen3.7-flash' },
-        fallback: { role: 'fallback', modelString: 'openai:gpt-5-nano' },
+        primary: { role: 'primary', modelString: 'openai:gpt-5.6-luna' },
+        fallback: { role: 'fallback', modelString: 'qwen:qwen3.7-flash' },
       });
       expect(execution.attribution).toEqual({
         tenantId: 'tenant-k',
@@ -1696,7 +1695,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       });
     });
 
-    it('resolves the policy once per ATTEMPT, not per run; every run is attributed by its number', async () => {
+    it('resolves the policy once per attempt and attributes the single full run', async () => {
       let call = 0;
       mocks.generateClassroom.mockImplementation(async (_execution, options) => {
         call += 1;
@@ -1731,19 +1730,15 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       });
       const attemptId = await startKafuo();
       const { readAttemptById } = await import('@/lib/persistence/teaching-package');
-      expect((await readAttemptById(qp(), attemptId))!.generationRuns).toBe(2);
+      expect((await readAttemptById(qp(), attemptId))!.generationRuns).toBe(1);
       expect(POLICY_CALLS()).toHaveLength(2);
       const runs = mocks.generateClassroom.mock.calls.map((c) => c[0].attribution.generationRun);
-      expect(runs).toEqual([1, 2]);
-      // The same policy object serves both runs.
-      expect(mocks.generateClassroom.mock.calls[0]![0].modelPolicy).toBe(
-        mocks.generateClassroom.mock.calls[1]![0].modelPolicy,
-      );
+      expect(runs).toEqual([1]);
     });
 
     it.each([
       ['a null code (unrouted master subject)', null],
-      ['a code outside the policy table', 'ENGLISH'],
+      ['a code outside the policy table', 'FRENCH'],
     ])(
       '%s fails the attempt with SUBJECT_ROUTE_UNAVAILABLE: no Layer A, no run, no version',
       async (_label, subjectCode) => {
@@ -1795,7 +1790,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(execution.attribution).toBeUndefined();
     });
 
-    it('TEACHING_MODEL_UNAVAILABLE (both routes failed for one call) fails the RUN and re-rolls it; a non-retryable one ends the attempt', async () => {
+    it('TEACHING_MODEL_UNAVAILABLE ends the attempt after the single full run', async () => {
       const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
       let calls = 0;
       const valid = mocks.generateClassroom.getMockImplementation()!;
@@ -1819,8 +1814,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const attemptId = await startKafuo();
       const { readAttemptById } = await import('@/lib/persistence/teaching-package');
       const after = (await readAttemptById(qp(), attemptId))!;
-      expect(after.status).toBe('succeeded');
-      expect(after.generationRuns).toBe(2);
+      expect(after.status).toBe('failed');
+      expect(after.errorCode).toBe('TEACHING_MODEL_UNAVAILABLE');
+      expect(after.generationRuns).toBe(1);
 
       // A safety refusal is not "try again later": one run, then the attempt fails.
       mocks.generateClassroom.mockImplementation(async () => {

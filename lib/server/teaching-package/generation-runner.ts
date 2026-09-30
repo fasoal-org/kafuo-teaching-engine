@@ -77,12 +77,10 @@ import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 const log = createLogger('TeachingPackageGeneration');
 const runningAttempts = new Map<string, Promise<void>>();
-const DEFAULT_MAX_GENERATION_RUNS = 3;
-
-function maxGenerationRuns(): number {
-  const raw = Number(process.env.TEACHING_PACKAGE_MAX_GENERATION_RUNS);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_GENERATION_RUNS;
-}
+// Exactly one full classroom attempt: repeating every Scene/media call for a
+// structural model-output error is disproportionately expensive. Repairable
+// outline answers still use the cheap pre-Scene correction loop inside it.
+const MAX_GENERATION_RUNS = 1;
 
 async function runnerPool() {
   const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
@@ -267,6 +265,10 @@ async function runKafuoAttempt(
     // The authoritative lesson language (`learningItem.language`): generation
     // stamps it on the Stage with the base text direction resolved from it.
     language: kafuo.language,
+    // The authoritative subject code (`subjectOffering.code`): generation
+    // stamps it on the Stage when it is a known code, so narration can later
+    // pick subject-aware pronunciation without guessing from text.
+    subjectCode: kafuo.subjectCode,
     // The prompt contract itself, not just prose on the requirement: this is
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.
@@ -306,7 +308,7 @@ async function runKafuoAttempt(
 
   let lastFailure: { code: string; message: string; retryable: boolean } | null = null;
 
-  for (let run = 1; run <= maxGenerationRuns(); run += 1) {
+  for (let run = 1; run <= MAX_GENERATION_RUNS; run += 1) {
     await incrementGenerationRuns(pool, attemptId);
     let reservedStageId: string | null = null;
     const sink = createTeachingPackagePersistenceSink(attemptId);
@@ -326,7 +328,7 @@ async function runKafuoAttempt(
       await onProgress({
         step: 'generating_outlines',
         progress: 15,
-        message: `Generation run ${run}/${maxGenerationRuns()}`,
+        message: `Generation run ${run}/${MAX_GENERATION_RUNS}`,
         scenesGenerated: 0,
       });
 
@@ -465,7 +467,7 @@ async function runKafuoAttempt(
       // to spend now: the Stage-1 gate rejects before any Scene is generated.
       //
       // This grants no extra attempts: the bound is still the enclosing
-      // `for (run = 1; run <= maxGenerationRuns(); ...)` loop, and every run still
+      // `for (run = 1; run <= MAX_GENERATION_RUNS; ...)` loop, and every run still
       // compensates before the next. Only the decision to use a run already available
       // changes.
       //

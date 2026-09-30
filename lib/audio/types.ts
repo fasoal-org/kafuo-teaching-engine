@@ -89,6 +89,7 @@ export type BuiltInTTSProviderId =
   | 'elevenlabs-tts'
   | 'minimax-tts'
   | 'lemonade-tts'
+  | 'cartesia-tts'
   | 'browser-native-tts';
 
 export type TTSProviderId = BuiltInTTSProviderId | `custom-tts-${string}`;
@@ -164,6 +165,25 @@ export interface TTSModelConfig {
    * restart repairs it.
    */
   signal?: AbortSignal;
+  /**
+   * Delivery instructions. Sent ONLY to `openai-tts` with a `gpt-4o-mini-tts*`
+   * model; set only by the governed Arabic profile (SATTS plan §8.6, §12).
+   */
+  instructions?: string;
+  /**
+   * BCP-47 language of the text. Sent only by providers that take one
+   * (`cartesia-tts`: primary subtag as `language`); others ignore it.
+   */
+  language?: string;
+  /** `response_format`; omitted from the request when absent. */
+  responseFormat?: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm';
+  /**
+   * `'sse'` requests `stream_format: "sse"` so the completion event carries
+   * exact token usage (SATTS Wave 0, M5). `openai-tts` + `gpt-4o-mini-tts*` only.
+   */
+  streamFormat?: 'sse';
+  /** Per-request timeout override (the governed profile uses 90 s, M8). */
+  requestTimeoutMs?: number;
 }
 
 // ============================================================================

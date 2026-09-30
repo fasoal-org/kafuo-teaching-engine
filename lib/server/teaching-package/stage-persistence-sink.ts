@@ -13,6 +13,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { migrate } from '@openmaic/dsl';
+
 import type { ClassroomPersistenceSink } from '@/lib/server/classroom-generation';
 import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { stampGenerationAlignmentBaselines } from '@/lib/server/teaching-package/alignment';
@@ -94,6 +96,16 @@ export function createTeachingPackagePersistenceSink(
       const now = Date.now();
 
       for (let attempt = 0; ; attempt += 1) {
+        // The document store also runs the DSL migration before writing. Run
+        // that same pure migration here first so alignment fingerprints are
+        // calculated from the exact material bytes that will be persisted.
+        // Otherwise a storage-time normalization (for example, stripping
+        // legacy line geometry) can make a newly generated Scene look edited
+        // immediately after its first save.
+        const migratedCore = migrate({
+          stage: data.stage,
+          scenes: data.scenes,
+        }) as AppDocument;
         // W15: generation-origin alignment baselines are stamped HERE, on the
         // final scene set — content and Actions composed, narration references
         // normalized, and (on the collision-retry path below) media references
@@ -102,9 +114,12 @@ export function createTeachingPackagePersistenceSink(
         // intent (plan §K ordering requirement). Only governed Scenes (those
         // carrying a teachingSkills carrier) are stamped; legacy Scenes stay
         // untouched.
-        const scenesToSave = stampGenerationAlignmentBaselines(data.scenes as AppScene[], now);
+        const scenesToSave = stampGenerationAlignmentBaselines(
+          migratedCore.scenes as AppScene[],
+          now,
+        );
         const document: AppDocument = {
-          stage: data.stage,
+          ...migratedCore,
           scenes: scenesToSave,
           // The requirement text travels in the execution input only; the
           // outline record is not a lineage home (audit §6.7), so it stays out.
@@ -131,7 +146,7 @@ export function createTeachingPackagePersistenceSink(
           return {
             id: data.id,
             url: `${baseUrl}/classroom/${data.id}`,
-            stage: data.stage,
+            stage: document.stage,
             // The stamped set — the same scenes that were saved, so every
             // downstream consumer (exact-flow validation, binding, callers)
             // sees baselines on the scenes the document actually carries.

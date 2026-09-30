@@ -37,6 +37,7 @@ import {
   readEditorGrants,
   type VerifiedEditorGrant,
 } from '@/lib/server/teaching-package/editor-grant';
+import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-quiz-delivery';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
@@ -579,6 +580,17 @@ export async function handlePersistenceRequest(
           ? await withLearnerDelivery(response, grantEvaluation.grant.purpose === 'learner')
           : response;
       for (const [name, value] of responseHeaders.entries()) overlaid.headers.append(name, value);
+      // A grant-covered document read differs by grant (a learner's has no quiz
+      // keys; a preview or edit grant's does) at the SAME URL. Never let a shared
+      // or browser cache serve one grant's body to another.
+      if (
+        request.method === 'GET' &&
+        grantEvaluation.covered &&
+        !grantEvaluation.refusal &&
+        grantEvaluation.mode === 'documents'
+      ) {
+        overlaid.headers.set('Cache-Control', 'private, no-store');
+      }
       return overlaid;
     } catch (error) {
       console.error('Embedded persistence route initialization failed', error);
@@ -597,7 +609,8 @@ export async function handlePersistenceRequest(
  * The two read-time behaviours of a document served under a `read` grant,
  * applied in a fixed order: (1) omit the planner `outline` for a LEARNER grant —
  * planner documents (which also hold `assistancePlan` / `visualPlan`) are not
- * learner delivery; edit and preview grants keep receiving it — then (2) the
+ * learner delivery; edit and preview grants keep receiving it — (1b) strip
+ * quiz grading secrets for a LEARNER grant (`learner-quiz.ts`) — then (2) the
  * compliance overlay. `stage` and `scenes` are otherwise returned as stored.
  */
 async function withLearnerDelivery(response: Response, learner: boolean): Promise<Response> {
@@ -614,6 +627,12 @@ async function withLearnerDelivery(response: Response, learner: boolean): Promis
     const { outline: _planner, ...learnerDocument } = body as Record<string, unknown>;
     delivered = learnerDocument;
   }
+  // (1b) A LEARNER grant never receives quiz grading secrets: answer keys,
+  // explanations, rubrics. Every quiz payload is rebuilt through an allowlist
+  // (always a new object, so the identity check below cannot short-circuit to
+  // the unsanitized bytes); grading happens server-side via
+  // `POST /api/teaching-packages/{versionId}/quiz-grades`.
+  if (learner) delivered = sanitizeLearnerDelivery(delivered) as typeof delivered;
   const overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
   if (overlaid === body) return response;
   const headers = new Headers(response.headers);

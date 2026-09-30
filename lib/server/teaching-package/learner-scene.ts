@@ -87,3 +87,22 @@ export async function readLearnerScene(
     sceneText: renderSceneText(scene),
   };
 }
+
+/**
+ * The Scene a Kafuo-side Help card is anchored to (the D9 runner in slides mode). The
+ * Backend is the caller, not a learner grant: it names the session's pinned version and
+ * the committed slide, and the version's own current Stage is read here — never a Stage
+ * the caller supplies. Same learner statuses and non-enumerating misses as above.
+ */
+export async function readVersionScene(
+  deps: LearnerSceneDeps,
+  input: { tenantId: string; versionId: string; sceneId: string },
+): Promise<LearnerScene> {
+  const version = await readVersion(deps.pool, input.versionId, { tenantId: input.tenantId });
+  if (!version || !version.currentStageId) throw notFound();
+  return readLearnerScene(
+    deps,
+    { tenantId: input.tenantId, versionId: version.id, stageId: version.currentStageId },
+    { versionId: version.id, stageId: version.currentStageId, sceneId: input.sceneId },
+  );
+}

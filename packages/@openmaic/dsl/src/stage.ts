@@ -20,6 +20,20 @@ import type { Action } from './action.js';
 import type { SlideAssistance, SlideContentKind, SlideContentRole } from './slide-semantics.js';
 import type { TextDirection } from './language.js';
 
+/** How generated narration audio verbalises scientific notation. */
+export type SpeechReadingMode = 'natural' | 'accessible';
+
+/** Frozen set of every valid {@link SpeechReadingMode}. */
+export const SPEECH_READING_MODES = [
+  'natural',
+  'accessible',
+] as const satisfies readonly SpeechReadingMode[];
+
+/** Narrow an unknown value to a valid {@link SpeechReadingMode}. */
+export function isSpeechReadingMode(value: unknown): value is SpeechReadingMode {
+  return typeof value === 'string' && (SPEECH_READING_MODES as readonly string[]).includes(value);
+}
+
 /** All scene kinds owned by the contract. */
 export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
 
@@ -163,6 +177,18 @@ export interface Stage {
    * means "unknown" — readers must not fabricate a direction.
    */
   textDirection?: TextDirection;
+  /**
+   * Authoritative lesson subject code copied from the requester's curriculum
+   * metadata (e.g. Kafuo `subjectOffering.code`). Never inferred from content.
+   * Absent on legacy and non-governed Stages. Unknown-but-well-formed codes are
+   * valid and mean "no subject-specific behaviour".
+   */
+  subjectCode?: string;
+  /**
+   * Narration reading mode for generated audio. Absent ⇒ `'natural'`. Set only
+   * by an owner/editor for Stages marked as needing accessible narration.
+   */
+  speechReadingMode?: SpeechReadingMode;
   style?: string;
   // Whiteboard data
   whiteboard?: Whiteboard[];

@@ -131,6 +131,9 @@ describe('allocated speech audio identities', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
+      0,
+      { actionId: 'speech-1', reason: 'manual', onProvenance: undefined },
     );
   });
 
@@ -159,6 +162,9 @@ describe('allocated speech audio identities', () => {
       undefined,
       'ast_owned_audio',
       'stage-1',
+      undefined,
+      0,
+      { actionId: 'speech-1', reason: 'manual', onProvenance: undefined },
     );
   });
 
@@ -216,6 +222,9 @@ describe('allocated speech audio identities', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
+      0,
+      { actionId: 'speech-1', reason: 'manual', onProvenance: undefined },
     );
     expect(mocks.poolRemove).not.toHaveBeenCalled();
   });

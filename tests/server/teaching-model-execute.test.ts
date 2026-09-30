@@ -188,7 +188,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     await ensureTeachingModelAttemptsSchema(pool);
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
-    policy = await resolveSubjectModelPolicy('MATH'); // primary qwen (proxy, no vision) → fallback gpt-5-nano (exact, vision)
+    policy = await resolveSubjectModelPolicy('MATH'); // primary gpt-5.6-luna (exact, vision) → fallback qwen (proxy, no vision)
     execute = await import('@/lib/server/teaching-model/execute');
   });
 
@@ -225,21 +225,21 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     const [primaryParams, primarySource, , primaryThinking] = mocks.callLLM.mock.calls[0]!;
     const [fallbackParams, , , fallbackThinking] = mocks.callLLM.mock.calls[1]!;
     expect(primaryParams).toMatchObject({
-      model: { provider: 'qwen', modelId: 'qwen3.7-flash' },
+      model: { provider: 'openai', modelId: 'gpt-5.6-luna' },
       system: SMALL.system,
       messages: SMALL.messages,
       maxRetries: 0,
-      maxOutputTokens: getModelInfo('qwen', 'qwen3.7-flash')!.outputWindow,
+      maxOutputTokens: getModelInfo('openai', 'gpt-5.6-luna')!.outputWindow,
     });
     expect(primaryParams.abortSignal).toBeInstanceOf(AbortSignal);
     expect(primarySource).toBe('free-chat-turn');
-    expect(primaryThinking).toEqual({ mode: 'disabled' });
+    expect(primaryThinking).toEqual({ mode: 'enabled', effort: 'low' });
     expect(fallbackParams).toMatchObject({
-      model: { provider: 'openai', modelId: 'gpt-5-nano' },
+      model: { provider: 'qwen', modelId: 'qwen3.7-flash' },
       maxRetries: 0,
-      maxOutputTokens: getModelInfo('openai', 'gpt-5-nano')!.outputWindow,
+      maxOutputTokens: getModelInfo('qwen', 'qwen3.7-flash')!.outputWindow,
     });
-    expect(fallbackThinking).toEqual({ mode: 'enabled', effort: 'minimal' });
+    expect(fallbackThinking).toEqual({ mode: 'disabled' });
 
     const [primary, fallback] = await rows('tma-1', 'tma-2');
     expect(primary).toMatchObject({
@@ -256,9 +256,9 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       primary_failure_ms: null,
       turn_id: 'turn-1',
       worker_id: 'host:1:test',
-      budget_counter_kind: 'proxy',
-      budget_effective_cap: 25_600,
-      thinking_label: 'nothink',
+      budget_counter_kind: 'exact',
+      budget_effective_cap: 30_080,
+      thinking_label: 'low',
     });
     expect(fallback).toMatchObject({
       role: 'fallback',
@@ -271,10 +271,10 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       turn_id: 'turn-1',
       cache_read_reported: true,
       cost_basis: 'full',
-      budget_counter_kind: 'exact',
-      budget_effective_cap: 30_080,
+      budget_counter_kind: 'proxy',
+      budget_effective_cap: 25_600,
       budget_breach: false,
-      thinking_label: 'minimal',
+      thinking_label: 'nothink',
       ttft_unavailable_reason: 'non_streaming',
     });
     expect(Number(fallback!.cache_read_tokens)).toBe(0);
@@ -314,8 +314,8 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       opts(),
     );
     expect(mocks.callLLM).toHaveBeenCalledTimes(2);
-    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('qwen3.7-flash');
-    expect(mocks.callLLM.mock.calls[1]![0].model.modelId).toBe('gpt-5-nano');
+    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('gpt-5.6-luna');
+    expect(mocks.callLLM.mock.calls[1]![0].model.modelId).toBe('qwen3.7-flash');
     expect(result.parsed).toEqual({ scenes: [1] });
     const [primary, fallback] = await rows('tma-1', 'tma-2');
     expect(primary).toMatchObject({
@@ -511,7 +511,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
 
   it('budget assertion refuses an over-cap conversational request WITHOUT calling the provider', async () => {
     let big = 'الاستنتاج المنطقي من الملاحظات المتكررة يسمى تبريراً استقرائياً. ';
-    while (countExactTokens([{ role: 'user', content: big }]) < effectiveCap('proxy') + 1000)
+    while (countExactTokens([{ role: 'user', content: big }]) < effectiveCap('exact') + 1000)
       big += big;
     const params = { system: SMALL.system, messages: [{ role: 'user' as const, content: big }] };
     await expect(
@@ -521,8 +521,8 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       code: 'BUDGET_ASSERTION_FAILED',
       retryable: true,
       attemptId: 'tma-1',
-      counterKind: 'proxy',
-      effectiveCap: 25_600,
+      counterKind: 'exact',
+      effectiveCap: 30_080,
     });
     expect(mocks.callLLM).not.toHaveBeenCalled();
     expect(mocks.streamLLM).not.toHaveBeenCalled();
@@ -530,12 +530,12 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     expect(row).toMatchObject({
       accounting_status: 'complete',
       outcome: 'budget_assertion_failed',
-      budget_counter_kind: 'proxy',
-      budget_effective_cap: 25_600,
+      budget_counter_kind: 'exact',
+      budget_effective_cap: 30_080,
       usage_available: false,
       ttft_unavailable_reason: 'not_called',
     });
-    expect(row!.budget_estimate_tokens).toBeGreaterThan(25_600);
+    expect(row!.budget_estimate_tokens).toBeGreaterThan(30_080);
     expect(mocks.events).toEqual(['insert', 'update']);
   });
 
@@ -560,15 +560,23 @@ describe('executeTeachingCall / executeTeachingStream', () => {
   });
 
   it('post-call budget breach → budget_breach=true, loud, proxy ratio tightened', async () => {
+    // The proxy ratio tightens only on a proxy-counter target, so the Qwen
+    // fallback must serve the call: the Luna primary fails with a 429 first.
     const reported = HARD_CAP + 1000;
-    mocks.callLLM.mockResolvedValueOnce(
-      ok('الجواب.', {
-        usage: { inputTokens: reported, outputTokens: 5 },
-        totalUsage: { inputTokens: reported, outputTokens: 5 },
-      }),
-    );
+    mocks.callLLM
+      .mockImplementationOnce(async () => {
+        throw apiError(429);
+      })
+      .mockResolvedValueOnce(
+        ok('الجواب.', {
+          usage: { inputTokens: reported, outputTokens: 5 },
+          totalUsage: { inputTokens: reported, outputTokens: 5 },
+        }),
+      );
     await execute.executeTeachingCall(policy, turnCtx, SMALL, opts());
-    expect((await rows('tma-1'))[0]).toMatchObject({ outcome: 'succeeded', budget_breach: true });
+    const [primary, fallback] = await rows('tma-1', 'tma-2');
+    expect(primary).toMatchObject({ outcome: 'rate_limited', fallback_triggered: true });
+    expect(fallback).toMatchObject({ role: 'fallback', outcome: 'succeeded', budget_breach: true });
     const calibration = await readCalibration(pool, 'qwen:qwen3.7-flash');
     const exact = countExactTokens([{ role: 'system', content: SMALL.system }, ...SMALL.messages]);
     expect(calibration?.proxyRatio).toBeCloseTo((reported / exact) * 1.05, 6);
@@ -576,14 +584,30 @@ describe('executeTeachingCall / executeTeachingStream', () => {
   });
 
   it('primary lacks vision + images → pre-call fallback with fallback_reason=primary_lacks_vision', async () => {
+    // No approved R1 route pairs a visionless primary with a vision-capable
+    // fallback anymore, so the AMB-08 planning is exercised by overriding the
+    // resolved targets' vision flags: primary Luna (no vision) → fallback Qwen
+    // (vision). The executor only ever reads these flags from modelInfo.
+    const overrideVision = (vision: boolean, t: typeof policy.primary) => ({
+      ...t,
+      modelInfo: {
+        ...t.modelInfo,
+        capabilities: { ...t.modelInfo.capabilities, vision },
+      },
+    });
+    const visionlessPrimary = {
+      ...policy,
+      primary: overrideVision(false, policy.primary),
+      fallback: overrideVision(true, policy.fallback),
+    };
     mocks.callLLM.mockResolvedValueOnce(ok('وصف الصورة.'));
-    const result = await execute.executeTeachingCall(policy, generationCtx, SMALL, {
+    const result = await execute.executeTeachingCall(visionlessPrimary, generationCtx, SMALL, {
       ...opts(),
       images: [{}],
     });
     expect(result.servedBy).toBe('fallback');
     expect(mocks.callLLM).toHaveBeenCalledTimes(1);
-    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('gpt-5-nano');
+    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('qwen3.7-flash');
     const [row] = await rows('tma-1');
     expect(row).toMatchObject({
       role: 'fallback',
@@ -628,7 +652,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       expect(s.onDelta.mock.calls.map((c) => c[0])).toEqual(['الجواب ', 'هو ٤.']);
       expect(s.onFinish).toHaveBeenCalledWith(result);
       expect(mocks.streamLLM.mock.calls[0]![0]).toMatchObject({ maxRetries: 0 });
-      expect(mocks.streamLLM.mock.calls[0]![2]).toEqual({ mode: 'disabled' });
+      expect(mocks.streamLLM.mock.calls[0]![2]).toEqual({ mode: 'enabled', effort: 'low' });
       const [primary, fallback] = await rows('tma-1', 'tma-2');
       expect(primary).toMatchObject({
         outcome: 'provider_error',
@@ -728,7 +752,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
 
     it('budget assertion applies to streams too: over-cap help turn → no streamLLM call', async () => {
       let big = 'نص طويل جداً. ';
-      while (countExactTokens([{ role: 'user', content: big }]) < effectiveCap('proxy') + 500)
+      while (countExactTokens([{ role: 'user', content: big }]) < effectiveCap('exact') + 500)
         big += big;
       const s = sink();
       await expect(

@@ -90,6 +90,16 @@ export type TeachingPackageErrorCode =
   | 'OBJECTIVE_TEACHING_MISSING'
   | 'QUESTION_GENERATION_MODEL_UNAVAILABLE'
   | 'QUESTION_GENERATION_OUTPUT_INVALID'
+  // --- Kafuo student lesson entry: approved introduction read ---
+  /** The approved version's Teaching Model has no introduction projection; fail closed. */
+  | 'INTRODUCTION_FLOW_UNSUPPORTED'
+  /** The approved Stage lacks the orientation scenes/text the projection needs. */
+  | 'INTRODUCTION_INCOMPLETE'
+  // --- Kafuo learner quiz grading (server-side; the client never holds keys) ---
+  /** The scene id is not a quiz scene of the pinned version's Stage. */
+  | 'QUIZ_SCENE_NOT_FOUND'
+  /** The submission names question ids the stored quiz scene does not contain. */
+  | 'QUIZ_QUESTION_NOT_IN_SCENE'
   // --- Teaching Skills canonical versioning (Module 2 W1, plan §M) ---
   /**
    * A historical exact canonical Skill version cannot be resolved for
@@ -271,6 +281,10 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   QUESTION_SOURCE_CONTEXT_UNAVAILABLE: 409,
   OBJECTIVE_NOT_IN_PACKAGE: 422,
   OBJECTIVE_TEACHING_MISSING: 422,
+  INTRODUCTION_FLOW_UNSUPPORTED: 422,
+  INTRODUCTION_INCOMPLETE: 422,
+  QUIZ_SCENE_NOT_FOUND: 404,
+  QUIZ_QUESTION_NOT_IN_SCENE: 422,
   QUESTION_GENERATION_MODEL_UNAVAILABLE: 503,
   QUESTION_GENERATION_OUTPUT_INVALID: 502,
   SKILL_LINEAGE_UNRESOLVABLE: 409,

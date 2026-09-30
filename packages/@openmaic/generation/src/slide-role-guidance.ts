@@ -83,18 +83,28 @@ export function buildSlideRoleContext(input: SlideRoleGuidanceInput): SlideRoleC
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   const visual = VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? ''];
+  const sourceGrounding =
+    input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
   return {
     hasRoleGuidance: true,
-    roleGuidance: [loadVariant(file), ...(visual ? [visual] : []), PRECEDENCE].join('\n\n'),
+    roleGuidance: [
+      loadVariant(file),
+      ...(sourceGrounding ? [sourceGrounding] : []),
+      ...(visual ? [visual] : []),
+      PRECEDENCE,
+    ].join('\n\n'),
   };
 }
+
+const EXPLANATION_VISUAL_GROUNDING =
+  '**Textbook-grounded visual (mandatory).** The visual must stabilise the exact idea taught by this explanation and must follow the authoritative source. Use the selected textbook image when one is available. Otherwise build a native diagram only from the facts, relationships and sequence already supplied for this scene. Do not invent a new example, fact, analogy or context, and do not use decoration as the visual.';
 
 /** How the planned visual is realised on the canvas. Placement is never prescribed. */
 const VISUAL_PLAN_GUIDANCE: Readonly<Record<string, string>> = {
   image:
-    '**The planned visual.** Use the image made available to this slide as its one supporting visual, sized to be genuinely readable. If no image is listed under Available Media, compose the visual from native elements instead — never leave this slide without its visual.',
+    '**The planned visual.** Use the selected image made available to this slide as its one supporting visual, sized to be genuinely readable. The exact selected source must appear on the canvas; an unrelated image or generated substitute does not count.',
   native:
-    '**The planned visual.** Compose ONE meaningful visual from native slide elements — a simple diagram, a chart, or an illustrative group of shapes and lines with short labels — that expresses the hook, the context or the big idea. It must carry meaning; decoration does not count.',
+    '**The planned visual.** Compose ONE meaningful visual from native slide elements — a simple diagram, a chart, or an illustrative group of shapes and lines with short labels — using only the facts, relationships and sequence in the authoritative source content for this slide. It must clarify the idea; decoration does not count.',
   omitted:
     '**No visual is planned for this slide.** Do not add decorative imagery or filler shapes.',
 };

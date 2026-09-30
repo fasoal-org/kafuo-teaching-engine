@@ -91,7 +91,13 @@ export function splitLongSpeechActions(actions: Action[], providerId: TTSProvide
     const chunks = splitLongSpeechText(action.text, maxLength);
     if (chunks.length <= 1) return [action];
     didSplit = true;
-    const { audioId: _audioId, ...baseAction } = action as SpeechAction;
+    // Each chunk is a new action with new text: the source's audio and its
+    // provenance describe neither.
+    const {
+      audioId: _audioId,
+      audioProvenance: _audioProvenance,
+      ...baseAction
+    } = action as SpeechAction;
 
     log.info(
       `Split speech for ${providerId}: action=${action.id}, len=${action.text.length}, chunks=${chunks.length}`,

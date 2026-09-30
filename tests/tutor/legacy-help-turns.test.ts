@@ -146,7 +146,7 @@ describe('POST /api/teaching-model/help-turns', () => {
   });
 
   it('validates: unrouted or null subject code → 422 SUBJECT_ROUTE_UNAVAILABLE; units > 10,000 chars → 422 GROUNDING_TOO_LARGE; > 40 history → 400; digest mismatch → 400', async () => {
-    const unrouted = await post(body({ subject: { code: 'ENGLISH', nameAr: 'إنجليزي', nameEn: 'English', academicLanguage: 'en' } }));
+    const unrouted = await post(body({ subject: { code: 'FRENCH', nameAr: 'فرنسي', nameEn: 'French', academicLanguage: 'en' } }));
     expect(unrouted.status).toBe(422);
     await expect(unrouted.json()).resolves.toMatchObject({ error: { code: 'SUBJECT_ROUTE_UNAVAILABLE', retryable: false } });
     const nullCode = await post(body({ subject: { code: null, nameAr: null, nameEn: 'Physics', academicLanguage: 'ar' } }));
@@ -200,12 +200,12 @@ describe('POST /api/teaching-model/help-turns', () => {
       learning_item_id: '77',
       legacy_help_link_ref: 'link:55',
       subject_code: 'PHYSICS',
-      budget_counter_kind: 'proxy',
+      budget_counter_kind: 'exact',
     });
     // The exact provider request: Scene-scope instruction, the unit under its title, no ids, under every cap.
     const [params, stage, , thinking] = mocks.callLLM.mock.calls[0]!;
     expect(stage).toBe('help-turn');
-    expect(thinking).toEqual({ mode: 'disabled' });
+    expect(thinking).toEqual({ mode: 'enabled', effort: 'low' });
     const texts = (params.messages as Array<{ role: string; content: string }>).map((m) => m.content);
     expect(texts[2]).toContain('Lesson Help anchored to the current Scene');
     expect(texts[2]).toContain('Scene / المشهد: قانون نيوتن الثاني');
@@ -290,6 +290,54 @@ describe('POST /api/teaching-model/help-turns', () => {
     expect(texts[2]).toContain('No curriculum text is available');
     expect(mocks.callLLM.mock.calls[0]![1]).toBe('help-card');
     expect((await rowsFor('op:abc'))[0]).toMatchObject({ stage: 'help-card', conversation_id: null });
+  });
+
+  it('help_card on a runner slide: the slide text grounds the card and the intent hint reaches the prompt; a missing slide falls back', async () => {
+    const { setLegacyHelpDepsForTests } = await import('@/app/api/teaching-model/help-turns/route');
+    const loadSlide = vi.fn(async (input: { tenantId: string; versionId: string; sceneId: string }) =>
+      input.sceneId === 'scene-7'
+        ? { sceneTitle: 'من الأمثلة إلى قاعدة التخمين', sceneText: 'نلاحظ النمط في الأمثلة ثم نخمّن القاعدة العامة.' }
+        : null,
+    );
+    setLegacyHelpDepsForTests({
+      queryable: pool as never,
+      now,
+      workerId: 'host:1:test',
+      executor: { rateCard: BASE_RATE_CARD, completionRetryDelaysMs: [0, 0, 0], idFactory: () => `tma-${++ids}` },
+      loadSlide,
+    });
+    const scope = (sceneId: string) => ({
+      kind: 'help_card',
+      label: 'شريحة «من الأمثلة إلى قاعدة التخمين»',
+      cardKey: sceneId,
+      stepNumber: null,
+      intent: 'give_hint',
+      slide: { versionId: 'tpv-1', sceneId },
+      intentHint: 'hint',
+    });
+
+    mocks.callLLM.mockResolvedValueOnce(ok('لاحظ ما يتكرر في كل مثال.'));
+    const response = await post(body({ turnId: 'op:slide', grounding: { units: [], truncated: false }, helpScope: scope('scene-7') }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ groundingMode: 'scene' });
+    expect(loadSlide).toHaveBeenCalledWith({ tenantId: '1', versionId: 'tpv-1', sceneId: 'scene-7' });
+    const prompt = (mocks.callLLM.mock.calls[0]![0].messages as Array<{ content: string }>).map((m) => m.content).join('\n');
+    expect(prompt).toContain('نلاحظ النمط في الأمثلة ثم نخمّن القاعدة العامة.');
+    expect(prompt).toContain('من الأمثلة إلى قاعدة التخمين');
+    expect(prompt).toContain('HINT ONLY');
+    expect(prompt).not.toContain('No curriculum text is available');
+
+    mocks.callLLM.mockResolvedValueOnce(ok('لا أستطيع تأكيد ما يذكره الدرس.'));
+    const missing = await post(body({ turnId: 'op:slide-miss', grounding: { units: [], truncated: false }, helpScope: scope('scene-x') }));
+    expect(missing.status).toBe(200);
+    await expect(missing.json()).resolves.toMatchObject({ groundingMode: 'insufficient' });
+  });
+
+  it('rejects a malformed slide anchor or an unknown intent hint', async () => {
+    const bad = (helpScope: Record<string, unknown>) =>
+      post(body({ turnId: 'op:bad', helpScope: { kind: 'help_card', label: null, cardKey: null, stepNumber: null, intent: null, ...helpScope } }));
+    expect((await bad({ slide: { versionId: '', sceneId: 's' } })).status).toBe(400);
+    expect((await bad({ intentHint: 'reveal_answer' })).status).toBe(400);
   });
 
   it('both routes fail → 503 TEACHING_MODEL_UNAVAILABLE (retryable), the row is failed and a retry re-runs', async () => {

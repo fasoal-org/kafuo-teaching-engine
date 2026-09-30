@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'vitest';
-import { rewriteAudioRefsToIds, actionsToManifest } from '@/lib/export/classroom-zip-utils';
+import {
+  rewriteAudioRefsToIds,
+  actionsToManifest,
+  manifestStageSpeechMetadata,
+  stageSpeechMetadataFromManifest,
+} from '@/lib/export/classroom-zip-utils';
 import {
   CLASSROOM_ZIP_FORMAT_VERSION,
   agentConfigFromManifest,
@@ -318,5 +323,129 @@ describe('manifest round-trip', () => {
 
     expect('voiceConfig' in imported).toBe(false);
     expect(imported.voiceDesign).toEqual({ identity: 'adult', texture: 'low', delivery: 'calm' });
+  });
+});
+
+// ─── SATTS W1-6: speech metadata and provenance (B-5) ──────────
+
+describe('ZIP speech metadata and narration provenance', () => {
+  const provenance = {
+    fingerprint: 'fp1:zip',
+    policyVersion: 'satts-ar-1.0.0',
+    policyStatus: 'experimental' as const,
+    originalDigest: 'o',
+    responseFormat: 'mp3',
+    providerId: 'openai-tts',
+    modelId: 'gpt-4o-mini-tts-2025-12-15',
+    voice: 'marin',
+    speed: 1,
+    preparedDigest: 'p',
+    segments: 1,
+    preparedChars: 10,
+    originalChars: 5,
+    warningCount: 0,
+    generatedAt: '2026-09-28T00:00:00.000Z',
+    reason: 'initial' as const,
+  };
+
+  test('stage metadata round-trips; the directive key keeps its meaning', () => {
+    const stage = {
+      language: 'ar-SA',
+      textDirection: 'rtl' as const,
+      subjectCode: 'MATH',
+      speechReadingMode: 'accessible' as const,
+    };
+    const manifestStage = {
+      name: 'n',
+      language: 'Answer in Arabic',
+      createdAt: 1,
+      updatedAt: 1,
+      ...manifestStageSpeechMetadata(stage),
+    };
+    expect(manifestStage).toMatchObject({
+      language: 'Answer in Arabic',
+      languageTag: 'ar-SA',
+      textDirection: 'rtl',
+      subjectCode: 'MATH',
+      speechReadingMode: 'accessible',
+    });
+    expect(stageSpeechMetadataFromManifest(manifestStage)).toEqual(stage);
+  });
+
+  test('an old manifest without the new keys restores nothing', () => {
+    expect(manifestStageSpeechMetadata({})).toEqual({});
+    expect(
+      stageSpeechMetadataFromManifest({ name: 'n', language: 'directive', createdAt: 1, updatedAt: 1 }),
+    ).toEqual({});
+  });
+
+  test('malformed manifest values are dropped, not restored', () => {
+    expect(
+      stageSpeechMetadataFromManifest({
+        name: 'n',
+        createdAt: 1,
+        updatedAt: 1,
+        languageTag: ' ',
+        textDirection: 'auto' as never,
+        subjectCode: 'math',
+        speechReadingMode: 'fast' as never,
+      }),
+    ).toEqual({});
+  });
+
+  test('provenance travels with exported and re-imported audio', () => {
+    const speech: SpeechAction = {
+      id: 's1',
+      type: 'speech',
+      text: 'x²',
+      audioId: 'asset-1',
+      audioProvenance: provenance,
+    };
+    const manifest = actionsToManifest([speech], new Map([['asset-1', 'audio/s1.mp3']]));
+    expect(manifest[0]).toMatchObject({ audioRef: 'audio/s1.mp3', audioProvenance: provenance });
+    const imported = rewriteAudioRefsToIds(manifest, { 'audio/s1.mp3': 'asset-9' });
+    expect(imported[0]).toEqual({
+      id: 's1',
+      type: 'speech',
+      text: 'x²',
+      audioId: 'asset-9',
+      audioProvenance: provenance,
+    });
+  });
+
+  test('provenance is dropped with audio that is missing from the archive', () => {
+    const speech: SpeechAction = {
+      id: 's1',
+      type: 'speech',
+      text: 'x²',
+      audioId: 'asset-missing',
+      audioProvenance: provenance,
+    };
+    const manifest = actionsToManifest([speech], new Map());
+    expect(manifest[0]).not.toHaveProperty('audioProvenance');
+    expect(manifest[0]).not.toHaveProperty('audioRef');
+
+    // An archive that references bytes the import could not allocate.
+    const unmapped = rewriteAudioRefsToIds(
+      [
+        {
+          id: 's1',
+          type: 'speech',
+          text: 'x²',
+          audioRef: 'audio/gone.mp3',
+          audioProvenance: provenance,
+        } as never,
+      ],
+      {},
+    );
+    expect(unmapped[0]).not.toHaveProperty('audioProvenance');
+    expect(unmapped[0]).not.toHaveProperty('audioId');
+
+    // A hand-built archive carrying provenance without any audio reference.
+    const orphan = rewriteAudioRefsToIds(
+      [{ id: 's2', type: 'speech', text: 'y', audioProvenance: provenance } as never],
+      {},
+    );
+    expect(orphan[0]).toEqual({ id: 's2', type: 'speech', text: 'y' });
   });
 });

@@ -182,35 +182,27 @@ beforeEach(() => {
 });
 
 describe('generateClassroom — W2 governed failure policy', () => {
-  it('an always-unparseable action model refuses with GOVERNED_ACTION_GENERATION_FAILED after bounded retries', async () => {
+  it('an always-unparseable action model refuses after the single governed attempt', async () => {
     const routed = routeModel({ actions: [ACTIONS_UNPARSEABLE] });
 
     await expect(runGoverned(governedInput)).rejects.toMatchObject({
       code: 'GOVERNED_ACTION_GENERATION_FAILED',
       status: 422,
     });
-    // Bounded retries really happened: the default budget is 5 retries + 1.
-    expect(routed.actionsCalls()).toBe(6);
+    expect(routed.actionsCalls()).toBe(1);
   });
 
-  it('an action model that fails once then succeeds gets exactly one retry and the package binds', async () => {
+  it('does not spend a second governed action call after a failed first result', async () => {
     const routed = routeModel({ actions: [ACTIONS_UNPARSEABLE, ACTIONS_CANONICAL] });
 
-    const result = await runGoverned(governedInput);
-
-    // Scene 1: fallback → one retry → canonical (2 calls); scene 2: first-try
-    // canonical (1 call). EXACTLY one retry for the failing scene.
-    expect(routed.actionsCalls()).toBe(3);
-    expect(result.scenes).toHaveLength(2);
-    // The bound Actions are the parsed canonical sequence, not the defaults.
-    for (const scene of result.scenes) {
-      expect(scene.actions).toEqual([expect.objectContaining({ type: 'speech' })]);
-      expect((scene.actions![0] as { text?: string }).text).toBe('Canonical narration.');
-    }
+    await expect(runGoverned(governedInput)).rejects.toMatchObject({
+      code: 'GOVERNED_ACTION_GENERATION_FAILED',
+    });
+    expect(routed.actionsCalls()).toBe(1);
   });
 
   it("a governed Scene's failed content refuses with GOVERNED_SCENE_GENERATION_FAILED — NOT a flow mismatch", async () => {
-    routeModel({ contentFailsOnScene: 2 });
+    const routed = routeModel({ contentFailsOnScene: 2 });
 
     // The defect this guards: the skipped Scene used to surface later as a
     // retryable TEACHING_MODEL_FLOW_MISMATCH — a content failure misattributed
@@ -223,6 +215,7 @@ describe('generateClassroom — W2 governed failure policy', () => {
     );
     expect(rejection.code).toBe('GOVERNED_SCENE_GENERATION_FAILED');
     expect(rejection.status).toBe(422);
+    expect(routed.contentCalls()).toBe(2);
   });
 });
 

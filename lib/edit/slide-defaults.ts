@@ -106,6 +106,7 @@ export function duplicateSlideScene(source: Scene, copySuffix: string, order: nu
     // pair points at the source's narration just as much as the id does.
     delete next.audioId;
     delete next.audioUrl;
+    delete next.audioProvenance;
     return next as unknown as Action;
   });
 

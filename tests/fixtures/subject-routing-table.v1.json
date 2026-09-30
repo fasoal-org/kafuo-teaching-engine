@@ -3,39 +3,113 @@
   "description": "Approved R1 Subject -> Primary -> Fallback teaching model policy (FRD section 14). Code-owned in OpenMAIC (lib/server/teaching-model/subject-policy.ts) and mirrored in Kafuo Backend (master_subjects.routing_key). Both repos pin their code to this file by test. Never edited without a product decision.",
   "subjects": {
     "MATH": {
-      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
-      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     },
     "PHYSICS": {
-      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
-      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     },
     "BIOLOGY": {
-      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
-      "fallback": { "model": "openai:gpt-5-nano", "thinking": { "mode": "enabled", "effort": "minimal" }, "label": "minimal" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     },
     "ARABIC": {
-      "primary": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" },
-      "fallback": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     },
     "SOCIAL_STUDIES": {
-      "primary": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" },
-      "fallback": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     },
     "CHEMISTRY": {
-      "primary": { "model": "qwen:qwen3.7-flash", "thinking": { "mode": "disabled" }, "label": "nothink" },
-      "fallback": { "model": "openai:gpt-5.6-luna", "thinking": { "mode": "enabled", "effort": "low" }, "label": "low" }
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
+    },
+    "ENGLISH": {
+      "primary": {
+        "model": "openai:gpt-5.6-luna",
+        "thinking": { "mode": "enabled", "effort": "low" },
+        "label": "low"
+      },
+      "fallback": {
+        "model": "qwen:qwen3.7-flash",
+        "thinking": { "mode": "disabled" },
+        "label": "nothink"
+      }
     }
   },
   "masterSubjectCodeMapping": {
-    "description": "AMB-01 resolution (data check on the dev database, 22 Sep 2026: master_subjects rows G1-MTH-SA, G1-PHY-SA, G10-ARA-SA, G10-EHG-SA). master_subjects.code has the shape <GRADE>-<TOKEN>-<REGION>; routing_key is derived from the middle TOKEN. Unknown tokens (e.g. EHG/ENG = English) stay NULL = not routed. Migration 263 applies this mapping; it is idempotent and never overwrites a non-NULL routing_key.",
+    "description": "AMB-01 resolution (data check on the dev database, 22 Sep 2026: master_subjects rows G1-MTH-SA, G1-PHY-SA, G10-ARA-SA, G10-EHG-SA). master_subjects.code has the shape <GRADE>-<TOKEN>-<REGION>; routing_key is derived from the middle TOKEN. Unknown tokens stay NULL = not routed. Migration 263 applies this mapping; it is idempotent and never overwrites a non-NULL routing_key. ENGLISH (product decision 28 Sep 2026, same Primary/Fallback as the other six subjects): tokens ENG and EHG both map to ENGLISH. EHG is the token on the existing master subject G10-EHG-SA (whose own offering is coded G10-ENG-SA), kept as-is rather than renamed; migration 284 widens the CHECK and backfills it.",
     "tokens": {
-      "MTH": "MATH", "MATH": "MATH",
-      "PHY": "PHYSICS", "PHS": "PHYSICS", "PHYSICS": "PHYSICS",
-      "BIO": "BIOLOGY", "BIOLOGY": "BIOLOGY",
-      "ARA": "ARABIC", "ARB": "ARABIC", "ARABIC": "ARABIC",
-      "SOC": "SOCIAL_STUDIES", "SST": "SOCIAL_STUDIES", "SOCIAL": "SOCIAL_STUDIES",
-      "CHM": "CHEMISTRY", "CHE": "CHEMISTRY", "CHEM": "CHEMISTRY", "CHEMISTRY": "CHEMISTRY"
+      "MTH": "MATH",
+      "MATH": "MATH",
+      "PHY": "PHYSICS",
+      "PHS": "PHYSICS",
+      "PHYSICS": "PHYSICS",
+      "BIO": "BIOLOGY",
+      "BIOLOGY": "BIOLOGY",
+      "ARA": "ARABIC",
+      "ARB": "ARABIC",
+      "ARABIC": "ARABIC",
+      "SOC": "SOCIAL_STUDIES",
+      "SST": "SOCIAL_STUDIES",
+      "SOCIAL": "SOCIAL_STUDIES",
+      "CHM": "CHEMISTRY",
+      "CHE": "CHEMISTRY",
+      "CHEM": "CHEMISTRY",
+      "CHEMISTRY": "CHEMISTRY",
+      "ENG": "ENGLISH",
+      "EHG": "ENGLISH",
+      "ENGLISH": "ENGLISH"
     }
   }
 }

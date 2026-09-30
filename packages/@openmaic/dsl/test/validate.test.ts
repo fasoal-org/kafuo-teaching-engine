@@ -7,6 +7,8 @@ import {
   validateAction,
   validateRuntimeSession,
   validateRuntimeRecord,
+  sanitizeAudioProvenance,
+  isSpeechReadingMode,
   type ValidationResult,
 } from '@openmaic/dsl';
 
@@ -28,6 +30,80 @@ describe('validateStage', () => {
   it('rejects non-objects', () => {
     expect(validateStage(null).valid).toBe(false);
     expect(validateStage('x').valid).toBe(false);
+  });
+});
+
+describe('validateStage — speech metadata (subjectCode, speechReadingMode)', () => {
+  const stage = { id: 's', name: 'n', createdAt: 1, updatedAt: 2 };
+
+  it('accepts a legacy stage without either field', () => {
+    expect(validateStage(stage)).toEqual({ valid: true });
+  });
+  it('accepts a subject code and both reading modes', () => {
+    expect(validateStage({ ...stage, subjectCode: 'MATH' })).toEqual({ valid: true });
+    expect(validateStage({ ...stage, subjectCode: 'GEOLOGY' })).toEqual({ valid: true });
+    expect(validateStage({ ...stage, speechReadingMode: 'natural' })).toEqual({ valid: true });
+    expect(validateStage({ ...stage, speechReadingMode: 'accessible' })).toEqual({ valid: true });
+  });
+  it('rejects an empty or non-string subject code', () => {
+    expect(errors(validateStage({ ...stage, subjectCode: '  ' }))).toEqual(['/subjectCode']);
+    expect(errors(validateStage({ ...stage, subjectCode: 7 }))).toEqual(['/subjectCode']);
+  });
+  it('rejects an unknown reading mode', () => {
+    expect(errors(validateStage({ ...stage, speechReadingMode: 'fast' }))).toEqual([
+      '/speechReadingMode',
+    ]);
+    expect(isSpeechReadingMode('accessible')).toBe(true);
+    expect(isSpeechReadingMode('fast')).toBe(false);
+  });
+  it('still tolerates unknown fields', () => {
+    expect(validateStage({ ...stage, subjectCode: 'PHYSICS', futureField: 1 })).toEqual({
+      valid: true,
+    });
+  });
+});
+
+describe('sanitizeAudioProvenance', () => {
+  const provenance = {
+    fingerprint: 'fp1:abc',
+    policyVersion: null,
+    originalDigest: 'd0',
+    responseFormat: 'mp3',
+    providerId: 'openai-tts',
+    modelId: 'gpt-4o-mini-tts',
+    voice: 'alloy',
+    speed: 1,
+    preparedDigest: 'd1',
+    segments: 1,
+    preparedChars: 3,
+    originalChars: 3,
+    warningCount: 0,
+    generatedAt: '2026-09-28T00:00:00.000Z',
+    reason: 'initial',
+  };
+
+  it('returns a well-formed provenance unchanged', () => {
+    expect(sanitizeAudioProvenance(provenance)).toBe(provenance);
+  });
+  it.each(['fingerprint', 'providerId', 'modelId', 'voice', 'preparedDigest'])(
+    'drops a provenance whose %s is not a string',
+    (key) => {
+      expect(sanitizeAudioProvenance({ ...provenance, [key]: 42 })).toBeUndefined();
+      const missing: Record<string, unknown> = { ...provenance };
+      delete missing[key];
+      expect(sanitizeAudioProvenance(missing)).toBeUndefined();
+    },
+  );
+  it('never throws on non-objects', () => {
+    for (const value of [undefined, null, 'x', 1, [], true]) {
+      expect(() => sanitizeAudioProvenance(value)).not.toThrow();
+      expect(sanitizeAudioProvenance(value)).toBeUndefined();
+    }
+  });
+  it('a malformed provenance does not fail action validation', () => {
+    expect(
+      validateAction({ id: 'a', type: 'speech', text: 'hi', audioProvenance: { bogus: true } }),
+    ).toEqual({ valid: true });
   });
 });
 

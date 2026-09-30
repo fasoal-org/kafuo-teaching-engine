@@ -239,8 +239,8 @@ describe('teaching question generation from an approved package', () => {
           ? {
               subjectCode: options.subjectCode,
               policyVersion: 'r1-2026-09',
-              primaryModel: 'qwen:qwen3.7-flash',
-              fallbackModel: 'openai:gpt-5-nano',
+              primaryModel: 'openai:gpt-5.6-luna',
+              fallbackModel: 'qwen:qwen3.7-flash',
             }
           : {}),
       },
@@ -288,6 +288,7 @@ describe('teaching question generation from an approved package', () => {
       targetRole: null,
       findings: [],
       siblingMeasurements: [],
+      bookQuestionReferences: [],
       ...overrides,
     };
   }
@@ -333,17 +334,17 @@ describe('teaching question generation from an approved package', () => {
 
       const result = await generateTeachingQuestionSet(qp(), request(seeded));
       expect(result.envelope).toEqual(ENVELOPE);
-      expect(result.model).toBe('qwen:qwen3.7-flash');
+      expect(result.model).toBe('openai:gpt-5.6-luna');
 
       // The policy pair, resolved with NO stage — never the question-generation route.
       expect(mocks.resolveModel.mock.calls.map((c) => c[0])).toEqual([
+        { modelString: 'openai:gpt-5.6-luna' },
         { modelString: 'qwen:qwen3.7-flash' },
-        { modelString: 'openai:gpt-5-nano' },
       ]);
       expect(mocks.callLLM).toHaveBeenCalledTimes(1);
       const [params, source, retryOptions] = mocks.callLLM.mock.calls[0]!;
       expect(params).toMatchObject({
-        model: { modelString: 'qwen:qwen3.7-flash' },
+        model: { modelString: 'openai:gpt-5.6-luna' },
         system: expect.stringContaining(''),
         prompt: expect.stringContaining('Compare two proper fractions.'),
         maxRetries: 0,
@@ -385,12 +386,12 @@ describe('teaching question generation from an approved package', () => {
 
       const result = await generateTeachingQuestionSet(qp(), request(seeded));
       expect(result.envelope).toEqual(ENVELOPE);
-      expect(result.model).toBe('openai:gpt-5-nano');
+      expect(result.model).toBe('qwen:qwen3.7-flash');
       expect(
         mocks.callLLM.mock.calls.map(
           (c) => (c[0] as { model: { modelString: string } }).model.modelString,
         ),
-      ).toEqual(['qwen:qwen3.7-flash', 'openai:gpt-5-nano']);
+      ).toEqual(['openai:gpt-5.6-luna', 'qwen:qwen3.7-flash']);
       const rows = await ledger();
       expect(
         rows.map((row) => [row.role, row.outcome, row.fallback_triggered, row.fallback_reason]),
@@ -432,7 +433,7 @@ describe('teaching question generation from an approved package', () => {
       const seeded = await seed({ successor: true, subjectCode: 'PHYSICS' });
       mocks.callLLM.mockResolvedValue(ok(JSON.stringify(ENVELOPE)));
       const result = await generateTeachingQuestionSet(qp(), request(seeded));
-      expect(result.model).toBe('qwen:qwen3.7-flash');
+      expect(result.model).toBe('openai:gpt-5.6-luna');
       const rows = await ledger();
       expect(rows[0]).toMatchObject({ subject_code: 'PHYSICS', version_id: seeded.versionId });
     });
@@ -477,6 +478,40 @@ describe('teaching question generation from an approved package', () => {
     expect(prompt).not.toContain('Add like fractions by adding numerators.');
     // The transient presigned URL is never fetched again.
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('uses approved Book Questions as citable grounding and distinct inspiration', async () => {
+    const seeded = await seed();
+    const checking: QuestionModelPort = {
+      generate: vi.fn(async (_system, prompt) => {
+        expect(prompt).toContain('## Approved Book Questions for this outcome');
+        expect(prompt).toContain('[B1] Approved Book Question 7');
+        expect(prompt).toContain('Find a counterexample to the conjecture.');
+        expect(prompt).toContain('generate only materially distinct AI questions');
+        return { text: JSON.stringify(ENVELOPE), model: 'openai:test' };
+      }),
+    };
+    const result = await generateTeachingQuestionSet(
+      qp(),
+      request(seeded, {
+        bookQuestionReferences: [
+          {
+            questionId: '501',
+            questionText: 'Find a counterexample to the conjecture.',
+            choices: [],
+            correctAnswer: { text: 'n = 1' },
+            explanation: 'One counterexample disproves a universal conjecture.',
+            suitableRoles: ['mastery_check'],
+            sourcePageNumber: '42',
+            originalQuestionNumber: '7',
+          },
+        ],
+      }),
+      checking,
+    );
+    expect(result.sections).toContainEqual(
+      expect.objectContaining({ anchor: 'B1', kind: 'book_question' }),
+    );
   });
 
   it.each(['draft', 'in_review', 'rejected', 'discarded'] as const)(
@@ -741,6 +776,7 @@ describe('POST /api/teaching-packages/[id]/question-sets', () => {
     objective: { objectiveRef: '48' },
     flowStages: FLOW_STAGES,
     policy: { envelopeVersion: 'tqs.v1.strict.20260817', language: 'en' },
+    bookQuestionReferences: [],
   };
 
   function post(payload: unknown, auth = 'Bearer svc-key') {
@@ -775,7 +811,36 @@ describe('POST /api/teaching-packages/[id]/question-sets', () => {
       objectiveRef: '48',
       requestId: 'req-1',
       targetRole: null,
+      bookQuestionReferences: [],
     });
+  });
+
+  it('accepts bounded Book Question references and rejects unknown roles', async () => {
+    const service = vi.fn().mockResolvedValue({ requestId: 'req-1', envelope: {} });
+    const { POST } = await loadRoute(service);
+    const reference = {
+      questionId: '501',
+      questionText: 'Which value is a counterexample?',
+      choices: [{ choice_id: 'A', text: '1' }],
+      correctAnswer: { choice_id: 'A' },
+      explanation: 'Substitution disproves the conjecture.',
+      suitableRoles: ['mastery_check'],
+      sourcePageNumber: '42',
+      originalQuestionNumber: '7',
+    };
+    const ok = await POST(post({ ...body, bookQuestionReferences: [reference] }), {
+      params: Promise.resolve({ id: 'tpv-1' }),
+    });
+    expect(ok.status).toBe(200);
+    expect(service.mock.calls[0]![1]).toMatchObject({
+      bookQuestionReferences: [expect.objectContaining({ questionId: '501' })],
+    });
+
+    const bad = await POST(
+      post({ ...body, bookQuestionReferences: [{ ...reference, suitableRoles: ['unknown'] }] }),
+      { params: Promise.resolve({ id: 'tpv-1' }) },
+    );
+    expect(bad.status).toBe(400);
   });
 
   it('maps a not-approved refusal to 409', async () => {

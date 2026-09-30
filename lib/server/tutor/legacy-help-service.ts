@@ -48,10 +48,13 @@ import {
   safetyRecord,
   type SafetyRecord,
 } from '@/lib/server/tutor/experiment-guard';
+import { readVersionScene, type LearnerSceneDeps } from '@/lib/server/teaching-package/learner-scene';
 import {
   assembleTutorPrompt,
+  isHelpIntentHint,
   type AcademicBlockInput,
   type GroundingInput,
+  type HelpIntentHint,
   type HistoryTurnInput,
 } from '@/lib/server/tutor/prompt-assembly';
 import { parseAcademic, parseLearnerSubject, parseLocaleHint, parseStudentRef } from '@/lib/server/tutor/student-context';
@@ -83,7 +86,16 @@ export interface LegacyHelpTurnRequest {
   subject: { code: string | null; nameAr: string | null; nameEn: string | null; academicLanguage: string };
   academic: { curriculumName: string | null; curriculumVersionLabel: string | null; gradeLabel: string | null };
   lesson: { learningItemType: string; learningItemId: string; title: string } | null;
-  helpScope: { kind: 'help_linked_chat' | 'help_card'; label: string | null; cardKey: string | null; stepNumber: number | null; intent: string | null };
+  helpScope: {
+    kind: 'help_linked_chat' | 'help_card';
+    label: string | null;
+    cardKey: string | null;
+    stepNumber: number | null;
+    intent: string | null;
+    /** The runner's committed slide (slides mode): the pinned version and its Scene id. */
+    slide: { versionId: string; sceneId: string } | null;
+    intentHint: HelpIntentHint | null;
+  };
   grounding: { units: LegacyHelpUnit[]; truncated: boolean };
   history: HistoryTurnInput[];
   message: string;
@@ -143,12 +155,26 @@ export function parseLegacyHelpTurnRequest(body: Record<string, unknown>): Legac
   if (stepNumber !== undefined && stepNumber !== null && typeof stepNumber !== 'number') {
     throw invalid('helpScope.stepNumber must be a number');
   }
+  let slide: LegacyHelpTurnRequest['helpScope']['slide'] = null;
+  if (body.helpScope.slide !== undefined && body.helpScope.slide !== null) {
+    if (!isRecord(body.helpScope.slide)) throw invalid('helpScope.slide must be an object');
+    slide = {
+      versionId: requireString(body.helpScope.slide.versionId, 'helpScope.slide.versionId'),
+      sceneId: requireString(body.helpScope.slide.sceneId, 'helpScope.slide.sceneId'),
+    };
+  }
+  const intentHint = body.helpScope.intentHint;
+  if (intentHint !== undefined && intentHint !== null && !isHelpIntentHint(intentHint)) {
+    throw invalid('helpScope.intentHint must be one of explain, simplify, hint, check_answer');
+  }
   const helpScope: LegacyHelpTurnRequest['helpScope'] = {
     kind,
     label: optionalString(body.helpScope.label, 'helpScope.label'),
     cardKey: optionalString(body.helpScope.cardKey, 'helpScope.cardKey'),
     stepNumber: typeof stepNumber === 'number' ? stepNumber : null,
     intent: optionalString(body.helpScope.intent, 'helpScope.intent'),
+    slide,
+    intentHint: isHelpIntentHint(intentHint) ? intentHint : null,
   };
 
   if (!isRecord(body.grounding) || !Array.isArray(body.grounding.units)) {
@@ -250,6 +276,36 @@ export interface LegacyHelpDeps {
   workerId?: string;
   executor?: Pick<TeachingCallOptions, 'rateCard' | 'proxyRatioReader' | 'completionRetryDelaysMs' | 'timeoutMs' | 'idFactory'>;
   inProgressWindowS?: number;
+  /** Test seam; defaults to `readVersionScene` over the teaching-package document store. */
+  loadSlide?: (input: {
+    tenantId: string;
+    versionId: string;
+    sceneId: string;
+  }) => Promise<{ sceneTitle: string; sceneText: string } | null>;
+}
+
+/**
+ * The slide the student is on, as scene grounding. A miss never fails the card: the card
+ * is still answered from the request's own units, exactly as before the slide was sent.
+ */
+async function resolveSlide(
+  request: LegacyHelpTurnRequest,
+  deps: LegacyHelpDeps,
+): Promise<{ sceneTitle: string; sceneText: string } | null> {
+  const slide = request.helpScope.slide;
+  if (!slide) return null;
+  const input = { tenantId: request.tenantId, versionId: slide.versionId, sceneId: slide.sceneId };
+  try {
+    if (deps.loadSlide) return await deps.loadSlide(input);
+    const scene = await readVersionScene({ pool: deps.queryable as unknown as LearnerSceneDeps['pool'] }, input);
+    return { sceneTitle: scene.sceneTitle, sceneText: scene.sceneText };
+  } catch (error) {
+    log.warn(
+      JSON.stringify({ event: 'legacy_help.slide_unavailable', turnId: request.turnId, sceneId: slide.sceneId }),
+      describeErrorSafely(error),
+    );
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +399,22 @@ export async function runLegacyHelpTurn(
     academicLanguage: request.subject.academicLanguage,
   };
   const sceneTitle = request.lesson?.title || request.helpScope.label || null;
-  const grounding: GroundingInput =
-    request.grounding.units.length === 0
+  const slide = await resolveSlide(request, deps);
+  const units = request.grounding.units.map((unit) => ({
+    title: unit.title,
+    text: unit.text,
+    ...(request.grounding.truncated ? { truncated: true } : {}),
+  }));
+  const grounding: GroundingInput = slide && slide.sceneText.trim()
+    ? {
+        // The runner's committed slide is what the student is looking at: its visible text
+        // anchors the card, and the request's units (if any) stay the fact source behind it.
+        mode: 'scene',
+        sceneTitle: slide.sceneTitle || request.helpScope.label || sceneTitle,
+        sceneText: slide.sceneText,
+        units,
+      }
+    : request.grounding.units.length === 0
       ? { mode: 'insufficient' }
       : {
           mode: 'scene',
@@ -376,6 +446,7 @@ export async function runLegacyHelpTurn(
         responseScript: detectScript(request.message),
         localeHint: request.localeHint,
         safetyTriggered: safetyPre.triggered,
+        intentHint: request.helpScope.intentHint,
       },
       helpMode: true,
     });

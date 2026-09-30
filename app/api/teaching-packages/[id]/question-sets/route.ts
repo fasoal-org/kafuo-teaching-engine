@@ -4,8 +4,9 @@
  * Package version (Kafuo question-flow closure, B1).
  *
  * Service-to-service only (Kafuo Backend). Kafuo sends identity and the
- * generation-policy inputs it owns; it never resends Stage, Scenes, the
- * package document or the lesson PDF. TE resolves its own retained context.
+ * generation-policy inputs and bounded approved Book Question references it owns; it never
+ * resends Stage, Scenes, the package document or the lesson PDF. TE resolves its own
+ * retained package context.
  * Stateless: no question persistence and no webhook — Kafuo's Question Bank is
  * the authority for the generated questions; the caller's `requestId` (its
  * generation-run dedup key) is echoed for traceability.
@@ -24,6 +25,7 @@ import {
   generateTeachingQuestionSet,
   isTeachingRole,
   type FlowStageScope,
+  type BookQuestionReference,
 } from '@/lib/server/teaching-package/question-generation';
 import { QUESTION_ENVELOPE_VERSION } from '@/lib/server/teaching-package/question-generation-prompt';
 import {
@@ -68,6 +70,58 @@ function stringList(value: unknown, field: string): string[] {
   return (value as string[]).slice(0, 20).map((entry) => entry.slice(0, 500));
 }
 
+function bookQuestionReferences(value: unknown): BookQuestionReference[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 12) {
+    invalid('bookQuestionReferences must be an array with at most 12 entries');
+  }
+  return (value as unknown[]).map((entry) => {
+    const question = entry as Record<string, unknown> | null;
+    const choices = question?.choices;
+    const suitableRoles = question?.suitableRoles;
+    if (
+      !question ||
+      typeof question.questionId !== 'string' ||
+      !question.questionId ||
+      typeof question.questionText !== 'string' ||
+      !question.questionText.trim() ||
+      question.questionText.length > 2_000 ||
+      !Array.isArray(choices) ||
+      choices.length > 8 ||
+      choices.some((choice) => !choice || typeof choice !== 'object' || Array.isArray(choice)) ||
+      !Array.isArray(suitableRoles) ||
+      suitableRoles.length === 0 ||
+      suitableRoles.some((role) => !isTeachingRole(role))
+    ) {
+      invalid('bookQuestionReferences contains an invalid approved question reference');
+    }
+    if (
+      question.correctAnswer !== null &&
+      question.correctAnswer !== undefined &&
+      (typeof question.correctAnswer !== 'object' || Array.isArray(question.correctAnswer))
+    ) {
+      invalid('bookQuestionReferences.correctAnswer must be an object or null');
+    }
+    const nullableString = (field: string, max: number): string | null => {
+      const fieldValue = question[field];
+      if (fieldValue === undefined || fieldValue === null) return null;
+      if (typeof fieldValue !== 'string')
+        invalid(`bookQuestionReferences.${field} must be a string or null`);
+      return (fieldValue as string).slice(0, max);
+    };
+    return {
+      questionId: question.questionId,
+      questionText: question.questionText,
+      choices: choices as Array<Record<string, unknown>>,
+      correctAnswer: (question.correctAnswer as Record<string, unknown> | null | undefined) ?? null,
+      explanation: nullableString('explanation', 2_000),
+      suitableRoles: suitableRoles as BookQuestionReference['suitableRoles'],
+      sourcePageNumber: nullableString('sourcePageNumber', 100),
+      originalQuestionNumber: nullableString('originalQuestionNumber', 100),
+    };
+  });
+}
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!isTeachingPackageApiConfigured()) return new Response('Not found', { status: 404 });
   try {
@@ -101,7 +155,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (typeof policy.language !== 'string' || !policy.language) {
       invalid('policy.language must be a non-empty string');
     }
-    if (policy.targetRole !== undefined && policy.targetRole !== null && !isTeachingRole(policy.targetRole)) {
+    if (
+      policy.targetRole !== undefined &&
+      policy.targetRole !== null &&
+      !isTeachingRole(policy.targetRole)
+    ) {
       invalid('policy.targetRole must be a known teaching role');
     }
 
@@ -109,7 +167,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const result = await generateTeachingQuestionSet(pool, {
       versionId: id,
       tenantId,
-      learningItem: { type: learningItem!.type as 'lesson' | 'section', id: learningItem!.id as string },
+      learningItem: {
+        type: learningItem!.type as 'lesson' | 'section',
+        id: learningItem!.id as string,
+      },
       requestId: requestId as string,
       objectiveRef: objective!.objectiveRef as string,
       flowStages: flowStages(body.flowStages),
@@ -117,6 +178,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       targetRole: isTeachingRole(policy.targetRole) ? policy.targetRole : null,
       findings: stringList(policy.findings, 'policy.findings'),
       siblingMeasurements: stringList(policy.siblingMeasurements, 'policy.siblingMeasurements'),
+      bookQuestionReferences: bookQuestionReferences(body.bookQuestionReferences),
     });
     return NextResponse.json(result);
   } catch (error) {

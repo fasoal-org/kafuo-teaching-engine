@@ -5,6 +5,7 @@ import { useStageStore } from '@/lib/store/stage';
 import { isSceneEditLocked } from '@/lib/edit/regen-lock';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { useSettingsStore } from '@/lib/store/settings';
+import { isScientificSpeechActive } from '@/lib/speech/scientific-mode';
 import { db } from '@/lib/utils/database';
 import type {
   SceneOutline,
@@ -14,7 +15,7 @@ import type {
 } from '@/lib/types/generation';
 import type { AgentInfo } from '@openmaic/generation';
 import type { Scene } from '@/lib/types/stage';
-import type { SpeechAction } from '@/lib/types/action';
+import type { SpeechAction, SpeechAudioProvenance } from '@/lib/types/action';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { measureAudioDuration } from '@/lib/audio/audio-duration';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
@@ -253,6 +254,21 @@ interface TTSApiResponse {
   format?: string;
   error?: string;
   details?: string;
+  /** SATTS: returned only when the server's scientific mode is not off. */
+  provenance?: SpeechAudioProvenance;
+}
+
+export { isScientificSpeechActive };
+
+/**
+ * SATTS request context (plan §7.2): sent only while the server reports a
+ * scientific mode other than `off`, so requests stay byte-identical to
+ * today's while the flag is off.
+ */
+export interface NarrationRequestContext {
+  actionId: string;
+  reason?: 'initial' | 'stale' | 'manual';
+  onProvenance?: (provenance: SpeechAudioProvenance) => void;
 }
 
 // A dead narrator voice is retried at most once against a DIFFERENT voice (the
@@ -280,6 +296,7 @@ export async function generateAndStoreTTS(
   // QWEN_VC_VOICE_NOT_FOUND retry so a chain of dead voices can never loop
   // /api/generate/tts beyond a single fallback hop.
   fallbackHops = 0,
+  narration?: NarrationRequestContext,
 ): Promise<string | null> {
   const settings = useSettingsStore.getState();
   // A generated roster's explicit voice binding is the course voice source of truth.
@@ -377,6 +394,13 @@ export async function generateAndStoreTTS(
             ttsBaseUrl:
               ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
             ttsProviderOptions: providerOptions,
+            ...(narration && isScientificSpeechActive(settings.scientificSpeechMode)
+              ? {
+                  ...(stageId ? { stageId } : {}),
+                  actionId: narration.actionId,
+                  ...(narration.reason ? { reason: narration.reason } : {}),
+                }
+              : {}),
           }),
           signal,
         });
@@ -431,6 +455,7 @@ export async function generateAndStoreTTS(
             stageId,
             undefined,
             fallbackHops + 1,
+            narration,
           );
         }
         // Bound == global (pinned narrator): a retry would hit the same missing
@@ -449,6 +474,7 @@ export async function generateAndStoreTTS(
               stageId,
               fallbackVoice,
               fallbackHops + 1,
+              narration,
             );
           }
         }
@@ -463,6 +489,7 @@ export async function generateAndStoreTTS(
     log.warn('TTS failed for', requestId, ':', err);
     throw err;
   }
+  if (data.provenance) narration?.onProvenance?.(data.provenance);
 
   const binary = atob(data.base64);
   const bytes = new Uint8Array(binary.length);
@@ -579,6 +606,54 @@ function speechAllocationIds(scene: Scene): string[] {
   );
 }
 
+/**
+ * SATTS skip-if-current (plan §7.2 step 4, §13.5): asks the server which
+ * Actions are current and returns the ones to (re)generate. Only consulted
+ * while the server's scientific mode is not off; any failure fails open to
+ * today's behaviour (generate them all).
+ */
+export async function selectActionsToGenerate(
+  actions: SpeechAction[],
+  stageId: string | undefined,
+  signal?: AbortSignal,
+): Promise<SpeechAction[]> {
+  const settings = useSettingsStore.getState();
+  if (!isScientificSpeechActive(settings.scientificSpeechMode) || !stageId) return actions;
+  try {
+    const response = await fetch('/api/generate/tts/assess', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stageId,
+        ttsProviderId: settings.ttsProviderId,
+        ttsModelId: settings.ttsProvidersConfig?.[settings.ttsProviderId]?.modelId,
+        ttsVoice: settings.ttsVoice,
+        ttsSpeed: settings.ttsSpeed,
+        actions: actions.map((a) => ({
+          id: a.id,
+          text: a.text,
+          audioId: a.audioId,
+          audioInvalidated: a.audioInvalidated,
+          audioProvenance: a.audioProvenance,
+        })),
+      }),
+      signal,
+    });
+    if (!response.ok) return actions;
+    const data = (await response.json()) as {
+      statuses?: Record<string, { status?: string }>;
+    };
+    const statuses = data.statuses ?? {};
+    return actions.filter((action) => {
+      const status = statuses[action.id]?.status;
+      return status !== 'current' && status !== 'legacy';
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    return actions;
+  }
+}
+
 /** Generate TTS for all speech actions in a scene. Returns result. */
 export async function generateTTSForScene(
   scene: Scene,
@@ -588,9 +663,13 @@ export async function generateTTSForScene(
 ): Promise<{ success: boolean; failedCount: number; error?: string }> {
   const providerId = useSettingsStore.getState().ttsProviderId;
   scene.actions = splitLongSpeechActions(scene.actions || [], providerId);
-  const speechActions = scene.actions.filter(
+  const allSpeechActions = scene.actions.filter(
     (a): a is SpeechAction => a.type === 'speech' && !!a.text,
   );
+  if (allSpeechActions.length === 0) return { success: true, failedCount: 0 };
+  // SATTS §13.5: generate only missing/stale Actions. With the scientific
+  // flag off (or if the assess call fails) this is every Action, as today.
+  const speechActions = await selectActionsToGenerate(allSpeechActions, scene.stageId, signal);
   if (speechActions.length === 0) return { success: true, failedCount: 0 };
 
   let failedCount = 0;
@@ -606,6 +685,7 @@ export async function generateTTSForScene(
   const generateOne = async (action: SpeechAction) => {
     const requestId = `tts_s${sceneOrder}_${action.id}`;
     try {
+      let provenance: SpeechAudioProvenance | undefined;
       const assetId = await generateAndStoreTTS(
         requestId,
         action.text,
@@ -614,9 +694,19 @@ export async function generateTTSForScene(
         retryOptions,
         undefined,
         scene.stageId,
+        undefined,
+        0,
+        {
+          actionId: action.id,
+          reason: action.audioId ? 'stale' : 'initial',
+          onProvenance: (value) => {
+            provenance = value;
+          },
+        },
       );
       if (assetId) {
         action.audioId = assetId;
+        if (provenance) action.audioProvenance = provenance;
         freshAllocations.push(assetId);
       }
     } catch (error) {
@@ -660,13 +750,19 @@ export async function generateTTSForScene(
     }
   } catch (error) {
     await removeFreshTtsAllocations(freshAllocations);
-    for (const action of speechActions) delete action.audioId;
+    for (const action of speechActions) {
+      delete action.audioId;
+      delete action.audioProvenance;
+    }
     throw error;
   }
 
   if (failedCount > 0) {
     await removeFreshTtsAllocations(freshAllocations);
-    for (const action of speechActions) delete action.audioId;
+    for (const action of speechActions) {
+      delete action.audioId;
+      delete action.audioProvenance;
+    }
   }
 
   return {

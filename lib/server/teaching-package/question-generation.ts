@@ -6,11 +6,12 @@
  * stays the business authority (validation, review, approval, publication).
  * This service is therefore stateless: it persists no question, opens no
  * question lifecycle, and emits no webhook. It resolves everything from TE's own
- * retained Teaching Package state — never from anything Kafuo resends:
+ * retained Teaching Package state plus Kafuo's bounded approved Book Question references:
  *
  *   Learning Objective (retained attempt snapshot) → what must be assessed
  *   approved final Scenes (current Stage)          → what was actually taught
  *   retained lesson source text                    → grounds correctness
+ *   approved Book Questions from Kafuo             → source assessment pattern/grounding
  *   Teaching Model lineage (version row)           → which flow governs
  *
  * The transient presigned `contentResource.url` is never needed: Layer A kept
@@ -70,6 +71,18 @@ export interface QuestionSetGenerationRequest {
   targetRole: TeachingRole | null;
   findings: string[];
   siblingMeasurements: string[];
+  bookQuestionReferences: BookQuestionReference[];
+}
+
+export interface BookQuestionReference {
+  questionId: string;
+  questionText: string;
+  choices: Array<Record<string, unknown>>;
+  correctAnswer: Record<string, unknown> | null;
+  explanation: string | null;
+  suitableRoles: TeachingRole[];
+  sourcePageNumber: string | null;
+  originalQuestionNumber: string | null;
 }
 
 export interface FlowStageScope {
@@ -113,9 +126,10 @@ export function expandFlowStages(
 
 export interface QuestionSetSection {
   anchor: string;
-  kind: 'teaching_scene' | 'source_excerpt';
+  kind: 'teaching_scene' | 'source_excerpt' | 'book_question';
   title: string;
   sceneId?: string;
+  questionId?: string;
   excerpt: string;
 }
 
@@ -521,6 +535,21 @@ export async function generateTeachingQuestionSet(
       content,
     }),
   );
+  const bookQuestions: Array<PromptSection & { questionId: string }> =
+    request.bookQuestionReferences.map((question, index) => ({
+      anchor: `B${index + 1}`,
+      title: `Approved Book Question ${question.originalQuestionNumber ?? index + 1}`,
+      questionId: question.questionId,
+      content: [
+        `Question: ${question.questionText}`,
+        question.choices.length > 0 ? `Choices: ${JSON.stringify(question.choices)}` : '',
+        question.correctAnswer ? `Approved answer: ${JSON.stringify(question.correctAnswer)}` : '',
+        question.explanation ? `Approved explanation: ${question.explanation}` : '',
+        `Reviewer-approved suitable roles: ${question.suitableRoles.join(', ')}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    }));
 
   const port =
     modelPort ??
@@ -540,6 +569,7 @@ export async function generateTeachingQuestionSet(
     outcomeStatement: objective.snapshot.statement,
     teachingScenes,
     sourceExcerpts,
+    bookQuestions,
     targetRole: request.targetRole,
     findings: request.findings,
     siblingMeasurements: request.siblingMeasurements,
@@ -581,6 +611,7 @@ export async function generateTeachingQuestionSet(
     objectiveRef: request.objectiveRef,
     scenes: teachingScenes.length,
     excerpts: sourceExcerpts.length,
+    bookQuestions: bookQuestions.length,
     targeted: request.targetRole !== null,
   });
 
@@ -604,6 +635,13 @@ export async function generateTeachingQuestionSet(
         kind: 'source_excerpt' as const,
         title: excerpt.title,
         excerpt: excerpt.content.slice(0, RESPONSE_EXCERPT_MAX_CHARS),
+      })),
+      ...bookQuestions.map((question) => ({
+        anchor: question.anchor,
+        kind: 'book_question' as const,
+        title: question.title,
+        questionId: question.questionId,
+        excerpt: question.content.slice(0, RESPONSE_EXCERPT_MAX_CHARS),
       })),
     ],
     envelope,

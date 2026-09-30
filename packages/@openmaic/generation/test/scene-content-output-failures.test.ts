@@ -20,7 +20,13 @@ describe('scene content model-output failures', () => {
       });
 
       expect(content).toBeNull();
-      expect(failures).toEqual([{ code: 'invalid-model-output' }]);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ code: 'invalid-model-output' });
+      if (_type === 'slide') {
+        expect(failures[0]?.detail).toBe(
+          'the model response was not valid slide JSON with an elements array',
+        );
+      }
       expect(aiCall).toHaveBeenCalledTimes(1);
     },
   );

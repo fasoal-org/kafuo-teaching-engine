@@ -150,7 +150,7 @@ describe('validateSceneActionStructure — canonical structure', () => {
     );
     expect(findings[0]!.message).toContain('"legacy_teleport"');
     expect(findings[0]!.message).toContain(
-      'removed or explicitly replaced with one or more canonical current OpenMAIC Actions',
+      'removed or explicitly replaced with one or more canonical current Teaching Engine Actions',
     );
     // TAE-RQ-032: no candidate replacement is ever inferred.
     expect(findings[0]!.message).not.toMatch(/instead|replacing it with|use .* instead/i);

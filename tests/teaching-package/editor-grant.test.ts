@@ -298,6 +298,22 @@ describe('redeem route', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('opens an explicit edit handoff directly in edit mode', async () => {
+    const { token } = mintEditorHandoffToken({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId: 'stage-x',
+      capability: 'write',
+      purpose: 'edit',
+    });
+    routeMocks.getVersion.mockResolvedValue(version('draft', 'stage-x'));
+
+    const response = await redeem(token);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('http://localhost/classroom/stage-x?mode=edit');
+  });
+
   it('refuses an edit handoff once the version left draft|rejected', async () => {
     const { token } = mintEditorHandoffToken({
       tenantId: 'tenant-grant',
@@ -378,9 +394,8 @@ describe('editor handoff tenancy (plan §4.4.5)', () => {
   });
 
   it('honours TEACHING_PACKAGE_HANDOFF_TTL_SECONDS and stays short-lived', async () => {
-    const { mintEditorHandoffToken, verifyEditorHandoffToken } = await import(
-      '@/lib/server/teaching-package/editor-grant'
-    );
+    const { mintEditorHandoffToken, verifyEditorHandoffToken } =
+      await import('@/lib/server/teaching-package/editor-grant');
     vi.stubEnv('TEACHING_PACKAGE_HANDOFF_TTL_SECONDS', '30');
     const now = Date.now();
     const { token, expiresAt } = mintEditorHandoffToken({
@@ -406,9 +421,8 @@ describe('editor handoff tenancy (plan §4.4.5)', () => {
   it('refuses a handoff token whose tenant does not own the version (redeem semantics)', async () => {
     // The redeem route reads the version by token and compares tenants; here we
     // prove the payload round-trips the tenant so the route comparison is total.
-    const { mintEditorHandoffToken, verifyEditorHandoffToken } = await import(
-      '@/lib/server/teaching-package/editor-grant'
-    );
+    const { mintEditorHandoffToken, verifyEditorHandoffToken } =
+      await import('@/lib/server/teaching-package/editor-grant');
     const minted = mintEditorHandoffToken({
       tenantId: 'tenant-A',
       versionId: 'tpv-1',
@@ -427,9 +441,7 @@ describe('editor handoff tenancy (plan §4.4.5)', () => {
   });
 
   it('never sets an openmaic_access cookie from the redeem flow', async () => {
-    const { editorGrantCookieHeaders } = await import(
-      '@/lib/server/teaching-package/editor-grant'
-    );
+    const { editorGrantCookieHeaders } = await import('@/lib/server/teaching-package/editor-grant');
     const cookies = editorGrantCookieHeaders('[]', 'tp:key');
     const names = cookies.map((cookie) => cookie.split('=')[0]);
     expect(names).toContain('teaching_package_grant');
@@ -474,7 +486,10 @@ describe('learner student context (Kafuo R1 contracts §3.2)', () => {
     const headers = new Headers({
       cookie: `teaching_package_grant=${encodeURIComponent(JSON.stringify([grantToken]))}`,
     });
-    expect(readEditorGrant(headers, 'stage-x')).toMatchObject({ purpose: 'learner', student: STUDENT });
+    expect(readEditorGrant(headers, 'stage-x')).toMatchObject({
+      purpose: 'learner',
+      student: STUDENT,
+    });
 
     // A preview handoff never carries it, whatever the caller passed.
     const preview = mintEditorHandoffToken({

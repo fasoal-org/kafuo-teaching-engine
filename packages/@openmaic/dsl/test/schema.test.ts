@@ -84,6 +84,51 @@ describe('generated JSON Schema — Stage', () => {
   });
 });
 
+describe('generated JSON Schema — speech metadata', () => {
+  const stageDefs = (schemas.Stage as GeneratedSchema).definitions;
+  const actionDefs = (schemas.Action as GeneratedSchema).definitions;
+
+  it('Stage carries the optional subjectCode and speechReadingMode properties', () => {
+    expect(stageDefs.Stage.properties).toHaveProperty('subjectCode');
+    expect(stageDefs.Stage.properties).toHaveProperty('speechReadingMode');
+    const v = validator('Stage');
+    const stage = { id: 's', name: 'n', createdAt: 1, updatedAt: 2 };
+    expect(v({ ...stage, subjectCode: 'MATH', speechReadingMode: 'accessible' })).toBe(true);
+    expect(v({ ...stage, speechReadingMode: 'fast' })).toBe(false);
+  });
+
+  it('SpeechAction carries the optional audioProvenance property', () => {
+    expect(actionDefs.SpeechAction.properties).toHaveProperty('audioProvenance');
+    expect(actionDefs.SpeechAudioProvenance.properties).toHaveProperty('fingerprint');
+    const v = validator('Action');
+    expect(
+      v({
+        id: 'a',
+        type: 'speech',
+        text: 'hi',
+        audioId: 'x',
+        audioProvenance: {
+          fingerprint: 'fp1:abc',
+          policyVersion: null,
+          originalDigest: 'd0',
+          responseFormat: 'mp3',
+          providerId: 'openai-tts',
+          modelId: 'gpt-4o-mini-tts',
+          voice: 'alloy',
+          speed: 1,
+          preparedDigest: 'd1',
+          segments: 1,
+          preparedChars: 2,
+          originalChars: 2,
+          warningCount: 0,
+          generatedAt: '2026-09-28T00:00:00.000Z',
+          reason: 'initial',
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('generated JSON Schema — Action', () => {
   const v = validator('Action');
   it('accepts a spotlight action', () => {

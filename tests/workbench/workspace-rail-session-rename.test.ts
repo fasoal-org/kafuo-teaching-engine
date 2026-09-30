@@ -20,7 +20,14 @@ vi.mock('@/lib/hooks/use-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/lib/brand/brand-context', () => ({
-  useBrand: () => ({ markSrc: '/mark.svg', logoSrc: '/logo.svg' }),
+  useBrand: () => ({
+    productName: 'Teaching Engine',
+    shortName: 'Teaching Engine',
+    markSrc: '/mark.svg',
+    logoSrc: '/logo.svg',
+    logoHasWordmark: false,
+    themeColor: '#722ed1',
+  }),
 }));
 vi.mock('@/components/workbench/ProBadge', () => ({ ProBadge: () => null }));
 vi.mock('@/components/language-switcher', () => ({ LanguageSwitcher: () => null }));

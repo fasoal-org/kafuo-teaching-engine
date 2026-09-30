@@ -213,8 +213,8 @@ describe('Free Chat conversation routes', () => {
       expect(denied.response.status).toBe(403);
       expect(denied.json).toMatchObject({ error: { code: 'SUBJECT_NOT_ALLOWED', retryable: false } });
       const unrouted = await createConversation(
-        studentBearer({ subjects: [{ code: 'ENGLISH', offeringId: '9', nameAr: 'إنجليزي', nameEn: 'English', academicLanguage: 'en' }] }),
-        'ENGLISH',
+        studentBearer({ subjects: [{ code: 'FRENCH', offeringId: '9', nameAr: 'فرنسي', nameEn: 'French', academicLanguage: 'en' }] }),
+        'FRENCH',
       );
       expect(unrouted.response.status).toBe(403);
       // Redeem already dropped the unrouted code, so the grant refuses it; a
@@ -223,8 +223,8 @@ describe('Free Chat conversation routes', () => {
       const { resolveTutorRuntimeDeps } = await import('@/lib/server/tutor/runtime-deps');
       const { verifyStudentGrant } = await import('@/lib/server/tutor/student-grant');
       const grant = verifyStudentGrant(studentBearer());
-      grant.allowedSubjects.push({ code: 'ENGLISH', offeringId: '9', nameAr: 'إنجليزي', nameEn: 'English', academicLanguage: 'en' });
-      await expect(create(await resolveTutorRuntimeDeps(), { grant, subjectCode: 'ENGLISH', clientRequestId: 'x' })).rejects.toMatchObject({
+      grant.allowedSubjects.push({ code: 'FRENCH', offeringId: '9', nameAr: 'فرنسي', nameEn: 'French', academicLanguage: 'en' });
+      await expect(create(await resolveTutorRuntimeDeps(), { grant, subjectCode: 'FRENCH', clientRequestId: 'x' })).rejects.toMatchObject({
         code: 'SUBJECT_ROUTE_UNAVAILABLE',
       });
     });

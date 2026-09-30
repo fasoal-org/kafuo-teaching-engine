@@ -87,6 +87,298 @@ describe('generateSceneOutlinesFromRequirements', () => {
     expect(result.data?.languageDirective).toBe(DEFAULT_LANGUAGE_DIRECTIVE);
   });
 
+  test('rejects a Teaching Model Flow answer that omits teachingStage', async () => {
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({ languageDirective: 'Teach in English.', outlines: [baseOutline] }),
+      {
+        teachingFlow: [{ stage: 'lesson_introduction', instructions: 'Introduce the lesson.' }],
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(
+        /^OUTLINE_TEACHING_FLOW_INVALID: outline #1 .* must carry teachingStage/,
+      ),
+    });
+  });
+
+  test('accepts consecutive outlines that cover the exact Teaching Model Flow', async () => {
+    const flow = [
+      { stage: 'lesson_introduction', instructions: 'Introduce.' },
+      { stage: 'guided_practice', instructions: 'Practise.' },
+    ];
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          outlines: [
+            {
+              ...baseOutline,
+              id: 's1',
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            {
+              ...baseOutline,
+              id: 's2',
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            { ...baseOutline, id: 's3', teachingStage: { key: 'guided_practice', flowIndex: 1 } },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines.map((item) => item.teachingStage?.flowIndex)).toEqual([0, 0, 1]);
+  });
+
+  test('rejects a Teaching Model Flow answer with a gap or reordered position', async () => {
+    const flow = [
+      { stage: 'lesson_introduction', instructions: 'Introduce.' },
+      { stage: 'guided_practice', instructions: 'Practise.' },
+    ];
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          outlines: [
+            { ...baseOutline, id: 's1', teachingStage: { key: 'guided_practice', flowIndex: 1 } },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(
+        /OUTLINE_TEACHING_FLOW_INVALID:.*collapsed \[1\].*expected \[0, 1\]/,
+      ),
+    });
+  });
+
+  test('requires every g5.v2 Check Understanding position to be exactly one quiz', async () => {
+    const flow = [{ stage: 'outcome_check_understanding', instructions: 'Check objective O1.' }];
+    const wrongType = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: [
+            {
+              ...baseOutline,
+              teachingStage: { key: 'outcome_check_understanding', flowIndex: 0 },
+            },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+    expect(wrongType).toMatchObject({
+      success: false,
+      error: expect.stringContaining('requires exactly one quiz'),
+    });
+
+    const quiz = {
+      id: 'check-1',
+      type: 'quiz' as const,
+      title: 'Check understanding',
+      description: 'Check objective O1',
+      keyPoints: ['photosynthesis'],
+      order: 1,
+      quizConfig: { questionCount: 2, difficulty: 'medium', questionTypes: ['single'] },
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 0 },
+    };
+    const duplicates = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () => JSON.stringify({ outlines: [quiz, { ...quiz, id: 'check-2' }] }),
+      { teachingFlow: flow },
+    );
+    expect(duplicates).toMatchObject({
+      success: false,
+      error: expect.stringContaining('requires exactly one outline, received 2'),
+    });
+  });
+
+  test('requires the g5.v2 final learning game to be exactly one interactive game', async () => {
+    const flow = [{ stage: 'lesson_learning_game', instructions: 'Play.' }];
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: [
+            {
+              id: 'game-1',
+              type: 'interactive',
+              title: 'Photosynthesis challenge',
+              description: 'Apply the lesson',
+              keyPoints: ['light', 'water'],
+              order: 1,
+              widgetType: 'game',
+              widgetOutline: {
+                concept: 'photosynthesis',
+                gameType: 'quiz',
+                challenge: 'Build the correct photosynthesis process',
+                playerControls: ['choose'],
+                interactions: ['select answer'],
+              },
+              teachingStage: { key: 'lesson_learning_game', flowIndex: 0 },
+            },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines[0]).toMatchObject({ type: 'interactive', widgetType: 'game' });
+  });
+
+  test('requires the g5.v3 opener and learning map as two separate slides', async () => {
+    const flow = [
+      { stage: 'lesson_opener', instructions: 'Open visually.' },
+      { stage: 'lesson_learning_map', instructions: 'Preview objectives.' },
+    ];
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: [
+            {
+              ...baseOutline,
+              id: 'opener',
+              slideType: 'cover',
+              contentRole: 'orientation',
+              contentKind: undefined,
+              visualPlan: { mode: 'native' },
+              teachingStage: { key: 'lesson_opener', flowIndex: 0 },
+            },
+            {
+              ...baseOutline,
+              id: 'map',
+              slideType: 'content',
+              contentRole: 'orientation',
+              contentKind: undefined,
+              teachingStage: { key: 'lesson_learning_map', flowIndex: 1 },
+            },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+    expect(result.success).toBe(true);
+  });
+
+  test('completes a g5.v3 explanation without a book image as a native visual', async () => {
+    const flow = [{ stage: 'outcome_visual_explanations', instructions: 'Explain visually.' }];
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: [
+            {
+              ...baseOutline,
+              teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
+            },
+          ],
+        }),
+      { teachingFlow: flow },
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines[0]).toMatchObject({ visualPlan: { mode: 'native' } });
+  });
+
+  test('deterministically attaches the textbook visual linked to a g5.v3 explanation Content Unit', async () => {
+    const flow = [{ stage: 'outcome_visual_explanations', instructions: 'Explain visually.' }];
+    const sourceImage = {
+      id: 'src-1',
+      src: 'data:image/png;base64,book',
+      pageNumber: 7,
+      sourceContentUnitIds: ['cu-1'],
+    };
+    const answer = (patch: Partial<SceneOutline>) =>
+      JSON.stringify({
+        outlines: [
+          {
+            ...baseOutline,
+            sourceContentUnitIds: ['cu-1'],
+            teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
+            ...patch,
+          },
+        ],
+      });
+
+    const completed = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      [sourceImage],
+      async () => answer({ visualPlan: { mode: 'native' } }),
+      { teachingFlow: flow },
+    );
+    expect(completed).toMatchObject({
+      success: true,
+      data: {
+        outlines: [
+          expect.objectContaining({
+            visualPlan: { mode: 'image' },
+            suggestedImageIds: ['src-1'],
+          }),
+        ],
+      },
+    });
+
+    const selected = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      [sourceImage],
+      async () => answer({ visualPlan: { mode: 'image' }, suggestedImageIds: ['src-1'] }),
+      { teachingFlow: flow },
+    );
+    expect(selected.success).toBe(true);
+  });
+
+  test('replaces an AI-image request with a source-grounded native visual without a retry', async () => {
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: [
+            {
+              ...baseOutline,
+              visualPlan: { mode: 'native' },
+              mediaGenerations: [
+                { type: 'image', elementId: 'gen_img_1', prompt: 'A decorative plant' },
+              ],
+              teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
+            },
+          ],
+        }),
+      {
+        teachingFlow: [{ stage: 'outcome_visual_explanations', instructions: 'Explain visually.' }],
+      },
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.outlines[0]).toMatchObject({ visualPlan: { mode: 'native' } });
+    expect(result.data?.outlines[0]?.mediaGenerations).toBeUndefined();
+  });
+
   test('passes media enable flags into prompt conditionals', async () => {
     let capturedPrompt = '';
     const aiCall: AICallFn = async (system, user) => {

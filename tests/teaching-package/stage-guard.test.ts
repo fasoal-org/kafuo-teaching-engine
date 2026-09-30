@@ -113,6 +113,47 @@ describe('teaching package stage guard', () => {
     await expect(store.deleteScene(stageId, 'scene-2')).resolves.toBeUndefined();
   });
 
+  it('allows the current draft stage even while its successful attempt retains it', async () => {
+    const stageId = 'stage-current-retained';
+    await seedStage(stageId);
+    const versionId = await seedVersion(stageId, 'draft');
+    await insertAttempt(qp(), {
+      id: 'tpa-current-retained',
+      aggregate: {
+        tenantId: 'tenant-test',
+        learningItem: { type: 'lesson', id: 'li-stage-current-retained' },
+      },
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'actor-1',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      inputSnapshot: {
+        learningItem: { type: 'lesson', id: 'li-stage-current-retained' },
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'preview',
+        pdfContentSummary: null,
+        requestedAt: 1,
+      },
+      now: 1,
+    });
+    await pool.query(
+      `UPDATE teaching_package_generation_attempts
+          SET version_id = $2, stage_id = $3, produced_stage_id = $3
+        WHERE id = $1`,
+      ['tpa-current-retained', versionId, stageId],
+    );
+
+    await expect(
+      guardedStore().putScene(stageId, makeSlideScene('scene-2', stageId, 2)),
+    ).resolves.toBeUndefined();
+  });
+
   it.each(LOCKED)('refuses every content mutation while the version is %s', async (status) => {
     const stageId = `stage-locked-${status}`;
     const document = await seedStage(stageId);
@@ -153,7 +194,10 @@ describe('teaching package stage guard', () => {
     await seedStage(stageId);
     await insertAttempt(qp(), {
       id: 'tpa-displaced-guard',
-      aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: 'li-displaced-guard' } },
+      aggregate: {
+        tenantId: 'tenant-test',
+        learningItem: { type: 'lesson', id: 'li-displaced-guard' },
+      },
       kind: 'initial',
       status: 'succeeded',
       requestedByActorRef: 'actor-1',

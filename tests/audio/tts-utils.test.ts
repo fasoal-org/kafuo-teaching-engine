@@ -80,4 +80,32 @@ describe('splitLongSpeechActions', () => {
     // …and the text is preserved across the split.
     expect(out.map((a) => a.text).join('')).toBe(long);
   });
+
+  it('drops audioProvenance with the parent audio when splitting', () => {
+    const long = '句子。'.repeat(400);
+    const parent = {
+      ...speech('a', long),
+      audioId: 'tts_s1_a',
+      audioProvenance: {
+      fingerprint: 'fp1:x',
+      policyVersion: null,
+      originalDigest: 'o',
+      responseFormat: 'mp3',
+      providerId: 'openai-tts',
+      modelId: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 1,
+      preparedDigest: 'p',
+      segments: 1,
+      preparedChars: 3,
+      originalChars: 3,
+      warningCount: 0,
+      generatedAt: '2026-09-28T00:00:00.000Z',
+      reason: 'initial' as const,
+    },
+    } as SpeechAction;
+    const out = splitLongSpeechActions([parent], 'glm-tts') as SpeechAction[];
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.every((a) => !('audioProvenance' in a) && !('audioId' in a))).toBe(true);
+  });
 });

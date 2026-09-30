@@ -8,14 +8,14 @@
  */
 
 import { NextRequest } from 'next/server';
-import {
-  generateTTS,
-  QwenTTSError,
-  TTSInvalidResponseError,
-  TTSRateLimitError,
-} from '@/lib/audio/tts-providers';
+import { QwenTTSError, TTSInvalidResponseError, TTSRateLimitError } from '@/lib/audio/tts-providers';
 import { TTS_PROVIDERS } from '@/lib/audio/constants';
-import { recordGenerationUsage } from '@/lib/server/usage-storage';
+import { readSpeechConfig } from '@/lib/server/speech/config';
+import { synthesizeNarration } from '@/lib/server/speech/narration-synthesis';
+import { prepareNarration } from '@/lib/server/speech/prepare';
+import { governedSubjectFromStore, SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
+import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
+import type { SpeechAction } from '@/lib/types/action';
 import {
   isServerConfiguredProvider,
   isServerTTSProviderDisabled,
@@ -34,7 +34,8 @@ import { isQwenCloneVoice } from '@/lib/audio/constants';
 
 const log = createLogger('TTS API');
 
-export const maxDuration = 30;
+// B-6 (approved): room for multi-segment Actions at the governed 90 s per-call timeout.
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   let ttsProviderId: string | undefined;
@@ -44,6 +45,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { text, ttsModelId, ttsSpeed, ttsApiKey, ttsBaseUrl, ttsProviderOptions } = body as {
       text: string;
+      /** SATTS: the Stage whose authoritative context applies (never trusted for the context itself). */
+      stageId?: string;
+      actionId?: string;
+      /** SATTS: runtime (discussion) speech — subject-aware, never persisted. */
+      dynamic?: boolean;
+      reason?: 'initial' | 'manual' | 'stale' | 'repair' | 'policy';
       audioId: string;
       ttsProviderId: TTSProviderId;
       ttsModelId?: string;
@@ -145,24 +152,85 @@ export async function POST(req: NextRequest) {
         `registeredVoiceId=${voxcpmRegisteredVoiceId || 'none'}, audioId=${audioId}, textLen=${text.length}`,
     );
 
-    // Generate audio
-    const { audio, format } = await generateTTS(config, text);
+    // SATTS (plan §7.2): subject, language and reading mode come from the
+    // persisted Stage — for a caller authorised for it — never from this body.
+    // With SCIENTIFIC_TTS_MODE=off no Stage is read and the request is today's.
+    const speechConfig = readSpeechConfig();
+    const stageId = typeof body.stageId === 'string' && body.stageId ? body.stageId : null;
+    const dynamic = body.dynamic === true;
+    let stageAccess: Awaited<ReturnType<typeof loadStageForSpeech>> = null;
+    if (stageId && speechConfig.mode !== 'off') {
+      try {
+        stageAccess = await loadStageForSpeech(req, stageId, dynamic ? 'read' : 'write');
+      } catch (error) {
+        // Persisted generation fails closed on a known Stage (§14.2); dynamic speech falls back to general.
+        if (!dynamic && error instanceof SpeechContextUnavailableError) {
+          return apiError(error.code, 503, error.message);
+        }
+        stageAccess = null;
+      }
+    }
+    const speechAction = {
+      id: typeof body.actionId === 'string' && body.actionId ? body.actionId : audioId,
+      type: 'speech',
+      text,
+    } as SpeechAction;
+    let prepared;
+    try {
+      prepared = await prepareNarration({
+        text,
+        stage: stageAccess?.stage ?? null,
+        stageId: stageAccess ? stageId : null,
+        config: speechConfig,
+        fallback: {
+          providerId: config.providerId,
+          modelId: config.modelId ?? '',
+          requestModelId: config.modelId,
+          voice: config.voice,
+          speed: config.speed,
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          providerOptions: config.providerOptions,
+        },
+        governedSubjectLookup: governedSubjectFromStore,
+      });
+    } catch (error) {
+      if (!dynamic && error instanceof SpeechContextUnavailableError) {
+        return apiError(error.code, 503, error.message);
+      }
+      throw error;
+    }
 
-    void recordGenerationUsage({
-      kind: 'tts',
-      unit: 'character',
-      providerId: ttsProviderId,
-      modelId: config.modelId,
-      quantity: text.length,
+    const outcome = await synthesizeNarration({
+      action: speechAction,
+      stageId: stageAccess ? stageId : null,
+      plan: prepared.plan,
+      profile: prepared.profile,
+      config: speechConfig,
+      reason: dynamic ? 'dynamic' : (body.reason ?? 'initial'),
+      entry: dynamic ? 'dynamic' : 'route',
+      persist: { kind: 'none' },
+      recordUsage: true,
     });
+    if (outcome.outcome === 'failed' || !outcome.audio) {
+      return apiError(outcome.error?.code ?? 'GENERATION_FAILED', 422, outcome.error?.message ?? 'failed');
+    }
 
     // Convert to base64
-    const base64 = Buffer.from(audio).toString('base64');
+    const base64 = Buffer.from(outcome.audio.bytes).toString('base64');
 
     return apiSuccess({
       audioId,
       base64,
-      format,
+      format: outcome.audio.format,
+      // Additive (SATTS §7.2 step 3): the client stamps provenance with audioId.
+      // Not with the flag off: the route read no Stage then, so a provenance
+      // stamped now would not match the Stage-aware plan later (DEC-027); the
+      // audio stays `legacy`, which later passes keep.
+      ...(!dynamic && speechConfig.mode !== 'off' && outcome.provenance
+        ? { provenance: outcome.provenance }
+        : {}),
+      ...(outcome.warnings.length > 0 ? { warnings: outcome.warnings.map((w) => w.code) } : {}),
     });
   } catch (error) {
     log.error(

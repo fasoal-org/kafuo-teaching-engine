@@ -114,6 +114,10 @@ const log = createLogger('TTSProviders');
 export interface TTSGenerationResult {
   audio: Uint8Array;
   format: string;
+  /** Exact provider usage (SSE mode only). */
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  /** SSE mode only: whether the stream ended with its completion event. */
+  completed?: boolean;
 }
 
 /**
@@ -174,7 +178,8 @@ export class TTSInvalidResponseError extends Error {
  */
 const DEFAULT_TTS_REQUEST_TIMEOUT_MS = 30_000;
 
-function ttsRequestTimeoutMs(): number {
+function ttsRequestTimeoutMs(override?: number): number {
+  if (override !== undefined && Number.isFinite(override) && override > 0) return override;
   const raw = process.env.TTS_REQUEST_TIMEOUT_MS?.trim();
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TTS_REQUEST_TIMEOUT_MS;
@@ -196,8 +201,8 @@ export class TTSRequestTimeoutError extends Error {
 }
 
 /** Combine the caller's cancel signal with the per-request timeout. */
-function ttsRequestSignal(callerSignal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(ttsRequestTimeoutMs());
+function ttsRequestSignal(callerSignal?: AbortSignal, timeoutMs?: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ttsRequestTimeoutMs(timeoutMs));
   return callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 }
 
@@ -238,7 +243,7 @@ export async function generateTTS(
     throw new Error(`API key required for TTS provider: ${config.providerId}`);
   }
 
-  const signal = ttsRequestSignal(config.signal);
+  const signal = ttsRequestSignal(config.signal, config.requestTimeoutMs);
   try {
     switch (config.providerId) {
       case 'openai-tts':
@@ -262,6 +267,8 @@ export async function generateTTS(
         return await generateDoubaoTTS(config, text, signal);
       case 'elevenlabs-tts':
         return await generateElevenLabsTTS(config, text, signal);
+      case 'cartesia-tts':
+        return await generateCartesiaTTS(config, text, signal);
 
       case 'lemonade-tts':
         return await generateLemonadeTTS(config, text, signal);
@@ -284,7 +291,7 @@ export async function generateTTS(
     if (isTimeoutSignal(signal)) {
       throw new TTSRequestTimeoutError(
         config.providerId,
-        `TTS request timed out after ${ttsRequestTimeoutMs()}ms (provider ${config.providerId}) — the provider did not respond. Retry the tool call.`,
+        `TTS request timed out after ${ttsRequestTimeoutMs(config.requestTimeoutMs)}ms (provider ${config.providerId}) — the provider did not respond. Retry the tool call.`,
       );
     }
     throw error;
@@ -302,18 +309,27 @@ async function generateOpenAITTS(
   const baseUrl = config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
+  const model = config.modelId || 'gpt-4o-mini-tts';
+  // The governed-profile fields go only to OpenAI's instruction-capable models;
+  // custom OpenAI-compatible providers always receive today's exact body.
+  const instructionCapable = config.providerId === 'openai-tts' && /^gpt-4o-mini-tts/.test(model);
+  const body: Record<string, unknown> = {
+    model,
+    input: text,
+    voice: config.voice,
+    speed: config.speed || 1.0,
+  };
+  if (config.instructions && instructionCapable) body.instructions = config.instructions;
+  if (config.responseFormat) body.response_format = config.responseFormat;
+  const sse = config.streamFormat === 'sse' && instructionCapable;
+  if (sse) body.stream_format = 'sse';
   const response = await fetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
     },
-    body: JSON.stringify({
-      model: config.modelId || 'gpt-4o-mini-tts',
-      input: text,
-      voice: config.voice,
-      speed: config.speed || 1.0,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -323,7 +339,58 @@ async function generateOpenAITTS(
     throw new Error(`OpenAI TTS API error: ${error.error?.message || response.statusText}`);
   }
 
+  if (sse) return await readOpenAISpeechStream(response, config.responseFormat || 'mp3');
   return await validateTTSAudioResponse(response, 'OpenAI');
+}
+
+/**
+ * Reads an OpenAI `stream_format: "sse"` speech response: `speech.audio.delta`
+ * events carry base64 audio, and `speech.audio.done` carries exact `usage`
+ * (SATTS Wave 0, M5). `completed` is false when the stream ended without the
+ * done event (a cut stream, M4) — the caller decides whether that is a failure.
+ */
+export async function readOpenAISpeechStream(
+  response: Response,
+  format: string,
+): Promise<TTSGenerationResult> {
+  const text = await response.text();
+  const chunks: Uint8Array[] = [];
+  let completed = false;
+  let usage: TTSGenerationResult['usage'];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    let event: { type?: string; audio?: unknown; usage?: Record<string, unknown> };
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    if (event.type === 'speech.audio.delta' && typeof event.audio === 'string') {
+      chunks.push(new Uint8Array(Buffer.from(event.audio, 'base64')));
+    } else if (event.type === 'speech.audio.done') {
+      completed = true;
+      const u = event.usage ?? {};
+      usage = {
+        inputTokens: Number(u.input_tokens) || 0,
+        outputTokens: Number(u.output_tokens) || 0,
+        totalTokens: Number(u.total_tokens) || 0,
+      };
+    }
+  }
+  const size = chunks.reduce((n, c) => n + c.byteLength, 0);
+  if (size === 0) {
+    throw new TTSInvalidResponseError('OpenAI', 'OpenAI TTS stream carried no audio');
+  }
+  const audio = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    audio.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { audio, format, completed, ...(usage ? { usage } : {}) };
 }
 
 /**
@@ -1051,6 +1118,56 @@ async function generateElevenLabsTTS(
   }
 
   return await validateTTSAudioResponse(response, 'ElevenLabs', requestedFormat);
+}
+
+/** Cartesia API version pinned per its docs; bump deliberately. */
+export const CARTESIA_API_VERSION = '2026-08-14';
+
+/**
+ * Cartesia TTS (`POST /tts/bytes`). Voice is a library voice id; there are no
+ * free-text delivery instructions — the accent comes from the voice itself.
+ * Output is MP3 24 kHz / 128 kbps mono (or WAV PCM when `wav` is requested).
+ */
+async function generateCartesiaTTS(
+  config: TTSModelConfig,
+  text: string,
+  signal: AbortSignal,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['cartesia-tts'].defaultBaseUrl || '').replace(/\/+$/, '');
+  const format = config.responseFormat === 'wav' || config.format === 'wav' ? 'wav' : 'mp3';
+  // Documented range 0.6–1.5 (generation_config.speed).
+  const speed = Math.min(1.5, Math.max(0.6, config.speed || 1.0));
+  const language = config.language?.trim().split('-')[0]?.toLowerCase();
+  const outputFormat =
+    format === 'wav'
+      ? { container: 'wav', encoding: 'pcm_s16le', sample_rate: 24000 }
+      : { container: 'mp3', sample_rate: 24000, bit_rate: 128000 };
+
+  const response = await fetch(`${baseUrl}/tts/bytes`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Cartesia-Version': CARTESIA_API_VERSION,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      model_id: config.modelId || TTS_PROVIDERS['cartesia-tts'].defaultModelId,
+      transcript: text,
+      voice: { mode: 'id', id: config.voice },
+      ...(language ? { language } : {}),
+      output_format: outputFormat,
+      generation_config: { speed },
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throwIfTtsRateLimited('Cartesia', response.status);
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Cartesia TTS API error: ${errorText.slice(0, 300)}`);
+  }
+
+  return await validateTTSAudioResponse(response, 'Cartesia', format);
 }
 
 /**

@@ -102,7 +102,7 @@ describe('ensureConversationTitle', () => {
     expect(countTokens(params.messages, 'exact', 'openai:gpt-5-nano')).toBeLessThanOrEqual(TITLE_INPUT_TOKEN_CAP);
     expect(params.messages[params.messages.length - 1]).toEqual({ role: 'user', content: 'Title:' });
     const [primary, fallback] = [await readAttempt(pool, 'tma-1'), await readAttempt(pool, 'tma-2')];
-    expect(primary).toMatchObject({ stage: 'free-chat-title', capability: 'free_chat', role: 'primary', outcome: 'rate_limited', conversation_id: 'conv-1', turn_id: 'turn-1', budget_effective_cap: 25_600 });
+    expect(primary).toMatchObject({ stage: 'free-chat-title', capability: 'free_chat', role: 'primary', outcome: 'rate_limited', conversation_id: 'conv-1', turn_id: 'turn-1', budget_effective_cap: 30_080 });
     expect(primary!.budget_estimate_tokens).toBeLessThanOrEqual(TITLE_INPUT_TOKEN_CAP);
     expect(fallback).toMatchObject({ role: 'fallback', outcome: 'succeeded' });
   });

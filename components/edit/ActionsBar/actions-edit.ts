@@ -1,4 +1,4 @@
-import type { Action } from '@/lib/types/action';
+import type { Action, SpeechAudioProvenance } from '@/lib/types/action';
 
 /**
  * Pure, immutable edit operations on a scene's `actions` list, plus a factory
@@ -121,12 +121,19 @@ export function setSpeechTextClearAudioById(actions: Action[], id: string, text:
     ...a,
     text,
     audioInvalidated: true,
-  } as Action & { audioId?: string; audioUrl?: string; audioInvalidated?: boolean };
+  } as Action & {
+    audioId?: string;
+    audioUrl?: string;
+    audioInvalidated?: boolean;
+    audioProvenance?: unknown;
+  };
   delete cleaned.audioId;
   // The legacy URL of an unconverted pair points at the old wording's
   // narration just as much as the id does; keeping it would let a later
   // conversion ingest superseded audio for the new text.
   delete cleaned.audioUrl;
+  // Provenance describes the removed audio, so it goes with it.
+  delete cleaned.audioProvenance;
   next[index] = cleaned;
   return next;
 }
@@ -168,21 +175,39 @@ export function setElementIdById(actions: Action[], id: string, elementId: strin
   return index < 0 ? actions : setElementId(actions, index, elementId);
 }
 
-/** Stamp a speech action's cached `audioId` (no-op if not a speech action). */
-export function setAudioId(actions: Action[], index: number, audioId: string): Action[] {
+/**
+ * Stamp a speech action's cached `audioId` (no-op if not a speech action).
+ * `audioProvenance`, when given, is stamped with it; this never invents one,
+ * and without it the field is left untouched.
+ */
+export function setAudioId(
+  actions: Action[],
+  index: number,
+  audioId: string,
+  audioProvenance?: SpeechAudioProvenance,
+): Action[] {
   const a = actions[index];
   if (!a || a.type !== 'speech') return actions;
   const next = actions.slice();
-  const updated = { ...a, audioId } as Action & { audioInvalidated?: boolean };
+  const updated = {
+    ...a,
+    audioId,
+    ...(audioProvenance ? { audioProvenance } : {}),
+  } as Action & { audioInvalidated?: boolean };
   delete updated.audioInvalidated;
   next[index] = updated;
   return next;
 }
 
 /** Like {@link setAudioId} but targets an action by id (index-stale-safe). */
-export function setAudioIdById(actions: Action[], id: string, audioId: string): Action[] {
+export function setAudioIdById(
+  actions: Action[],
+  id: string,
+  audioId: string,
+  audioProvenance?: SpeechAudioProvenance,
+): Action[] {
   const index = actions.findIndex((a) => a.id === id);
-  return index < 0 ? actions : setAudioId(actions, index, audioId);
+  return index < 0 ? actions : setAudioId(actions, index, audioId, audioProvenance);
 }
 
 /** Set a discussion's `topic` by id (no-op for a missing id / non-discussion). */

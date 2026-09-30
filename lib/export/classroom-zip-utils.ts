@@ -1,9 +1,10 @@
 import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action';
-import type { ManifestAction, MediaIndexEntry } from './classroom-zip-types';
+import type { ManifestAction, ManifestStage, MediaIndexEntry } from './classroom-zip-types';
 import { db, mediaFileKey } from '@/lib/utils/database';
 import type { AssetManifestEntry } from '@openmaic/dsl';
 import type { AudioFileRecord, MediaFileRecord } from '@/lib/utils/database';
-import type { Scene } from '@/lib/types/stage';
+import { isSpeechReadingMode, isTextDirection } from '@/lib/types/stage';
+import type { Scene, Stage } from '@/lib/types/stage';
 import { resolveAudioBlob } from '@/lib/media/resolve-audio-bytes';
 import { fetchMediaUrl } from '@/lib/media/fetch-media-url';
 import { mapWithConcurrency } from '@/lib/utils/concurrency';
@@ -321,6 +322,7 @@ export function actionsToManifest(
       const {
         audioId,
         audioUrl: _legacyAudioUrl,
+        audioProvenance,
         ...rest
       } = speech as SpeechAction & {
         audioUrl?: string;
@@ -328,9 +330,11 @@ export function actionsToManifest(
       const audioRef =
         (audioId ? audioIdToPath.get(audioId) : undefined) ??
         (_legacyAudioUrl ? audioUrlToPath.get(_legacyAudioUrl) : undefined);
+      // Provenance describes the audio bytes, so it travels only with them.
       return {
         ...rest,
         ...(audioRef ? { audioRef } : {}),
+        ...(audioRef && audioProvenance ? { audioProvenance } : {}),
       } as ManifestAction;
     }
     if (action.type === 'discussion') {
@@ -370,10 +374,23 @@ export function rewriteAudioRefsToIds(
               : undefined
           : undefined;
       const audioId = typeof mapped === 'string' ? mapped : undefined;
+      const { audioProvenance, ...withoutProvenance } = rest as typeof rest & {
+        audioProvenance?: unknown;
+      };
+      // Re-allocation keeps the bytes, so provenance stays valid — but only
+      // when the audio itself was imported.
       return {
-        ...rest,
+        ...withoutProvenance,
         ...(audioId ? { audioId } : {}),
+        ...(audioId && audioProvenance !== undefined ? { audioProvenance } : {}),
       } as Action;
+    }
+    if (action.type === 'speech' && 'audioProvenance' in action) {
+      // No audio travelled with this action: its provenance describes nothing.
+      const { audioProvenance: _orphaned, ...rest } = action as ManifestAction & {
+        audioProvenance?: unknown;
+      };
+      return rest as Action;
     }
     if (action.type === 'discussion') {
       const {
@@ -401,4 +418,44 @@ export function rewriteAudioRefsToIds(
     }
     return action as Action;
   });
+}
+
+// ─── Stage speech metadata (B-5) ───────────────────────────────
+
+/** App-level shape of `Stage.subjectCode` (mirrors `validateAppStage`). */
+const MANIFEST_SUBJECT_CODE = /^[A-Z_]{2,32}$/;
+
+/**
+ * The Stage fields the manifest's legacy `language` key (which holds the
+ * directive) cannot carry: the BCP-47 tag, the resolved direction, the subject
+ * and the reading mode. Absent fields stay absent.
+ */
+export function manifestStageSpeechMetadata(
+  stage: Pick<Stage, 'language' | 'textDirection' | 'subjectCode' | 'speechReadingMode'>,
+): Pick<ManifestStage, 'languageTag' | 'textDirection' | 'subjectCode' | 'speechReadingMode'> {
+  return {
+    ...(stage.language ? { languageTag: stage.language } : {}),
+    ...(stage.textDirection ? { textDirection: stage.textDirection } : {}),
+    ...(stage.subjectCode ? { subjectCode: stage.subjectCode } : {}),
+    ...(stage.speechReadingMode ? { speechReadingMode: stage.speechReadingMode } : {}),
+  };
+}
+
+/**
+ * Restores the Stage fields written by {@link manifestStageSpeechMetadata},
+ * keeping only well-formed values. Archives written before these keys existed
+ * yield `{}`, so they import exactly as before.
+ */
+export function stageSpeechMetadataFromManifest(
+  manifestStage: ManifestStage,
+): Pick<Stage, 'language' | 'textDirection' | 'subjectCode' | 'speechReadingMode'> {
+  const { languageTag, textDirection, subjectCode, speechReadingMode } = manifestStage;
+  return {
+    ...(typeof languageTag === 'string' && languageTag.trim() ? { language: languageTag } : {}),
+    ...(isTextDirection(textDirection) ? { textDirection } : {}),
+    ...(typeof subjectCode === 'string' && MANIFEST_SUBJECT_CODE.test(subjectCode)
+      ? { subjectCode }
+      : {}),
+    ...(isSpeechReadingMode(speechReadingMode) ? { speechReadingMode } : {}),
+  };
 }

@@ -1,0 +1,114 @@
+{
+  "table": "functions",
+  "description": "Function names as read in Saudi textbooks (جا، جتا، ظا …).",
+  "roles": [
+    "function"
+  ],
+  "entries": [
+    {
+      "key": "sin",
+      "natural": "جا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "cos",
+      "natural": "جتا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "tan",
+      "natural": "ظا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "cot",
+      "natural": "ظتا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "sec",
+      "natural": "قا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "csc",
+      "natural": "قتا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "log",
+      "natural": "لو",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ln",
+      "natural": "لو الطبيعي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "exp",
+      "natural": "الدالة الأسية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "arcsin",
+      "natural": "جا عكسي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Inverse sine, read faithfully (P9)"
+    },
+    {
+      "key": "arccos",
+      "natural": "جتا عكسي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Inverse cosine"
+    },
+    {
+      "key": "arctan",
+      "natural": "ظا عكسي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Inverse tangent"
+    },
+    {
+      "key": "sinh",
+      "natural": "جا زائدي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Hyperbolic sine"
+    },
+    {
+      "key": "cosh",
+      "natural": "جتا زائدي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Hyperbolic cosine"
+    },
+    {
+      "key": "tanh",
+      "natural": "ظا زائدي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Hyperbolic tangent"
+    }
+  ]
+}

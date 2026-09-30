@@ -388,7 +388,12 @@ describe('browser scene generation retry wrappers', () => {
       content: { type: 'slide', canvas: { id: 'slide-1', elements: [] } },
       actions: [
         { id: 'speech-1', type: 'speech', text: 'First line' },
-        { id: 'speech-2', type: 'speech', text: 'Second line' },
+        {
+          id: 'speech-2',
+          type: 'speech',
+          text: 'Second line',
+          audioProvenance: { fingerprint: 'fp1:old', providerId: 'p', modelId: 'm' },
+        },
       ],
     } as unknown as Parameters<typeof generateTTSForScene>[0];
 
@@ -401,6 +406,8 @@ describe('browser scene generation retry wrappers', () => {
     expect(mocks.poolRemove).not.toHaveBeenCalled();
     expect(mocks.audioDelete).toHaveBeenCalledExactlyOnceWith('tts_s1_speech-1');
     expect(scene.actions?.every((action) => !('audioId' in action))).toBe(true);
+    // The rollback removes provenance wherever it removes audio (SATTS W1-7).
+    expect(scene.actions?.every((action) => !('audioProvenance' in action))).toBe(true);
   });
 
   it('waits for parallel TTS workers before rolling back an abandoned scene', async () => {
@@ -474,5 +481,67 @@ describe('browser scene generation retry wrappers', () => {
     expect(mocks.audioPut).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ id: 'ast_stable_audio', format: 'wav' }),
     );
+  });
+
+  describe('SATTS assess-then-generate (plan §7.2 step 4)', () => {
+    const scene = () =>
+      ({
+        id: 'scene-1',
+        stageId: 'stage-1',
+        type: 'slide',
+        title: 'Scene',
+        order: 1,
+        content: { type: 'slide', canvas: { id: 'slide-1', elements: [] } },
+        actions: [
+          { id: 'speech-1', type: 'speech', text: 'current line', audioId: 'ast_old', audioProvenance: { fingerprint: 'fp1:x', providerId: 'p', modelId: 'm', voice: 'v', preparedDigest: 'd' } },
+          { id: 'speech-2', type: 'speech', text: 'stale line', audioId: 'ast_stale' },
+        ],
+      }) as unknown as Parameters<typeof import('@/lib/hooks/use-scene-generator').generateTTSForScene>[0];
+
+    const provenance = { fingerprint: 'fp1:new', providerId: 'p', modelId: 'm', voice: 'v', preparedDigest: 'd2' };
+
+    it('with the flag on: synthesises only non-current Actions, sends stage context, stamps provenance', async () => {
+      mocks.settingsState.mockReturnValue({ ...mocks.settingsState(), scientificSpeechMode: 'on' });
+      const { generateTTSForScene } = await import('@/lib/hooks/use-scene-generator');
+      mockFetch
+        .mockResolvedValueOnce(
+          jsonResponse(200, { success: true, statuses: { 'speech-1': { status: 'current' }, 'speech-2': { status: 'stale', reason: 'text' } } }),
+        )
+        .mockResolvedValueOnce(jsonResponse(200, { success: true, base64: btoa('audio'), format: 'mp3', provenance }));
+      const target = scene();
+      const result = await generateTTSForScene(target, 'Arabic', undefined, { ...retryOptions, maxRetries: 0 });
+      expect(result).toMatchObject({ success: true, failedCount: 0 });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0]![0]).toBe('/api/generate/tts/assess');
+      const ttsBody = JSON.parse((mockFetch.mock.calls[1]![1] as RequestInit).body as string);
+      expect(ttsBody).toMatchObject({ stageId: 'stage-1', actionId: 'speech-2', reason: 'stale', text: 'stale line' });
+      expect(target.actions![0]).toMatchObject({ audioId: 'ast_old' });
+      expect(target.actions![1]).toMatchObject({ audioId: expect.any(String), audioProvenance: provenance });
+      expect((target.actions![1] as { audioId: string }).audioId).not.toBe('ast_stale');
+    });
+
+    it('with the flag off: no assess call and today\'s request body (no stage context)', async () => {
+      mocks.settingsState.mockReturnValue({ ...mocks.settingsState(), scientificSpeechMode: 'off' });
+      const { generateTTSForScene } = await import('@/lib/hooks/use-scene-generator');
+      mockFetch.mockImplementation(async () => jsonResponse(200, { success: true, base64: btoa('audio'), format: 'mp3' }));
+      await generateTTSForScene(scene(), 'Arabic', undefined, { ...retryOptions, maxRetries: 0 });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      for (const [url, init] of mockFetch.mock.calls) {
+        expect(url).toBe('/api/generate/tts');
+        const body = JSON.parse((init as RequestInit).body as string);
+        expect(body).not.toHaveProperty('stageId');
+        expect(body).not.toHaveProperty('actionId');
+      }
+    });
+
+    it('an assess failure fails open to generating every Action', async () => {
+      mocks.settingsState.mockReturnValue({ ...mocks.settingsState(), scientificSpeechMode: 'on' });
+      const { generateTTSForScene } = await import('@/lib/hooks/use-scene-generator');
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse(500, { success: false }))
+        .mockImplementation(async () => jsonResponse(200, { success: true, base64: btoa('audio'), format: 'mp3' }));
+      await generateTTSForScene(scene(), 'Arabic', undefined, { ...retryOptions, maxRetries: 0 });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
   });
 });

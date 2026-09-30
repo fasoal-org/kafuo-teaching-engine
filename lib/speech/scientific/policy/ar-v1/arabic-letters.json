@@ -1,0 +1,219 @@
+{
+  "table": "arabic-letters",
+  "description": "Arabic-letter variable names (D-1 Saudi curriculum convention, D-10 renderer safety net). Mathematics and Physics only; the conjunction و is never a variable.",
+  "roles": [
+    "variable"
+  ],
+  "entries": [
+    {
+      "key": "ا",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Bare alef; textbooks usually write أ"
+    },
+    {
+      "key": "أ",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "إ",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Hamza-below form of أ"
+    },
+    {
+      "key": "آ",
+      "natural": "ألف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Madda form of أ"
+    },
+    {
+      "key": "ب",
+      "natural": "باء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ت",
+      "natural": "تاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ث",
+      "natural": "ثاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ج",
+      "natural": "جيم",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write جـ; the tatweel is not part of the key"
+    },
+    {
+      "key": "ح",
+      "natural": "حاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "خ",
+      "natural": "خاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "د",
+      "natural": "دال",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Also the function name in د(س)"
+    },
+    {
+      "key": "ذ",
+      "natural": "ذال",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ر",
+      "natural": "راء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ز",
+      "natural": "زاي",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "س",
+      "natural": "سين",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "The usual first variable (x)"
+    },
+    {
+      "key": "ش",
+      "natural": "شين",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ص",
+      "natural": "صاد",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "The usual second variable (y)"
+    },
+    {
+      "key": "ض",
+      "natural": "ضاد",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ط",
+      "natural": "طاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ظ",
+      "natural": "ظاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ع",
+      "natural": "عين",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "The usual third variable (z)"
+    },
+    {
+      "key": "غ",
+      "natural": "غين",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ف",
+      "natural": "فاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ق",
+      "natural": "قاف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ك",
+      "natural": "كاف",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ل",
+      "natural": "لام",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "م",
+      "natural": "ميم",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Never a variable right after a number (5 م، 2024م: metre / Gregorian marker)"
+    },
+    {
+      "key": "ن",
+      "natural": "نون",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ه",
+      "natural": "هاء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Textbooks write هـ; the tatweel is not part of the key. Never a variable right after a number (1445هـ: Hijri marker)"
+    },
+    {
+      "key": "ي",
+      "natural": "ياء",
+      "status": "proposed",
+      "source": "Draft transcription of the Arabic letter names used for variables in Saudi school mathematics (D-1, D-10: س، ص، ع …); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    }
+  ]
+}
