@@ -16,10 +16,16 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const stage = vi.hoisted(() => ({ id: 'stage-panel' as string | null }));
+const stage = vi.hoisted(() => ({
+  id: 'stage-panel' as string | null,
+  flushStageSave: vi.fn(async () => {}),
+  resyncStageScenesFromServer: vi.fn(async () => {}),
+}));
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: (selector: (state: { stage: { id: string | null } | null }) => unknown) =>
     selector({ stage: stage.id ? { id: stage.id } : null }),
+  flushStageSave: stage.flushStageSave,
+  resyncStageScenesFromServer: stage.resyncStageScenesFromServer,
 }));
 
 import { TeachingSkillsPanel } from '@/components/edit/EditDock/TeachingSkillsPanel';
@@ -247,6 +253,12 @@ describe('TeachingSkillsPanel', () => {
     const put = fetchMock.mock.calls.find((call) => String(call[1]?.method) === 'PUT')!;
     expect(put[0]).toBe('/api/stages/stage-panel/teaching-skills');
     expect(put[1].body).toContain('"classification":"non-instructional"');
+    // single-slide-regeneration-plan §11.5: the editor's own edits land first,
+    // and the server-written Scene is re-synced into the store afterwards.
+    expect(stage.flushStageSave).toHaveBeenCalled();
+    expect(stage.resyncStageScenesFromServer).toHaveBeenCalledWith('stage-panel', [
+      expect.any(String),
+    ]);
   });
 
   it('attaches above the surface layer: mounted by EditDock, never referenced under surfaces/', () => {

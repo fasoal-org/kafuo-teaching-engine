@@ -243,7 +243,40 @@ export type TeachingPackageErrorCode =
   /** Help: the question is outside the current Scene (P7). */
   | 'OUTSIDE_SCENE_SCOPE'
   /** The client disconnected before the turn completed. */
-  | 'ABORTED';
+  | 'ABORTED'
+  // --- Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §14) ---
+  /** A `read` Editor grant asked for a mutation. */
+  | 'READ_ONLY_GRANT'
+  /** The named Scene is not part of the grant's Stage. */
+  | 'SCENE_NOT_FOUND'
+  /** Only `slide` Scenes are regenerable by a reviewer (quiz / interactive / PBL are not). */
+  | 'SCENE_TYPE_NOT_REGENERABLE'
+  /** The slide plans a textbook visual, but none of its selected ids resolves in the manifest. */
+  | 'SOURCE_VISUAL_UNRESOLVED'
+  /** Slide content generation produced nothing usable. */
+  | 'SCENE_CONTENT_GENERATION_FAILED'
+  /** Action generation fell back to model-free defaults on a package regeneration. */
+  | 'SCENE_ACTION_GENERATION_FAILED'
+  /** Another regeneration of the same Scene holds a valid lease. */
+  | 'SCENE_REGENERATION_IN_PROGRESS'
+  /** The Scene was written by someone else between the start and the commit. */
+  | 'SCENE_CHANGED_DURING_REGENERATION'
+  /** The regeneration's lease was reclaimed before its commit. */
+  | 'REGENERATION_LEASE_LOST'
+  /** The stored document is on an older DSL version; no whole-document fallback is taken. */
+  | 'DOCUMENT_NOT_CURRENT'
+  /** The provider answered but the commit could not be recorded; retry with a new key. */
+  | 'REGENERATION_PERSISTENCE_FAILED'
+  /** The regeneration id is unknown for this Stage. */
+  | 'REGENERATION_NOT_FOUND'
+  /** Restore: the regeneration is not a succeeded one, or was already restored. */
+  | 'REGENERATION_NOT_RESTORABLE'
+  /** Restore: the Scene changed after the regeneration wrote it. */
+  | 'SCENE_CHANGED_SINCE_REGENERATION'
+  /** A grant-delegated Scene write carried no revision precondition. */
+  | 'PRECONDITION_REQUIRED'
+  /** A grant-delegated Scene write was based on a revision that is no longer current. */
+  | 'SCENE_REVISION_CONFLICT';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NOT_FOUND: 404,
@@ -332,6 +365,22 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   HELP_GROUNDING_UNAVAILABLE: 422,
   OUTSIDE_SCENE_SCOPE: 422,
   ABORTED: 499,
+  READ_ONLY_GRANT: 403,
+  SCENE_NOT_FOUND: 404,
+  SCENE_TYPE_NOT_REGENERABLE: 422,
+  SOURCE_VISUAL_UNRESOLVED: 422,
+  SCENE_CONTENT_GENERATION_FAILED: 502,
+  SCENE_ACTION_GENERATION_FAILED: 422,
+  SCENE_REGENERATION_IN_PROGRESS: 409,
+  SCENE_CHANGED_DURING_REGENERATION: 409,
+  REGENERATION_LEASE_LOST: 409,
+  DOCUMENT_NOT_CURRENT: 409,
+  REGENERATION_PERSISTENCE_FAILED: 503,
+  REGENERATION_NOT_FOUND: 404,
+  REGENERATION_NOT_RESTORABLE: 409,
+  SCENE_CHANGED_SINCE_REGENERATION: 409,
+  PRECONDITION_REQUIRED: 428,
+  SCENE_REVISION_CONFLICT: 409,
 };
 
 export class TeachingPackageError extends Error {

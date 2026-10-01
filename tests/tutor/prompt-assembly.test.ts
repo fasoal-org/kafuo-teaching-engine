@@ -372,3 +372,98 @@ describe('UNIT_CHAR_CAP pre-cap', () => {
     expect(giant.units[0]!.text.endsWith('ن')).toBe(true);
   });
 });
+
+describe('discovery-first P7: item headers, grouping, insufficient reasons', () => {
+  const groundingBlock = (result: ReturnType<typeof assembleTutorPrompt>) => String(result.messages[2]!.content);
+  const SECTION = { key: '612', title: 'المثال المضاد', itemType: 'SECTION' as const };
+  const LESSON = { key: '155', title: 'التبرير والبرهان', itemType: 'LESSON' as const };
+
+  it('the header reads «Section / القسم» for a SECTION item and «Lesson / الدرس» otherwise', () => {
+    const section = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: { mode: 'retrieved', lessonTitle: 'المثال المضاد', itemType: 'SECTION', units: [{ title: 'تعريف', text: 'نص', item: SECTION }] },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
+    expect(groundingBlock(section)).toContain('Section / القسم: المثال المضاد');
+    expect(groundingBlock(section)).not.toContain('Lesson / الدرس');
+    const lesson = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: { mode: 'retrieved', lessonTitle: 'التبرير والبرهان', units: [{ title: 'تعريف', text: 'نص' }] },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
+    expect(groundingBlock(lesson)).toContain('Lesson / الدرس: التبرير والبرهان');
+  });
+
+  it('groups units under each item title when they span 2–3 items, in first-appearance order, with no ids', () => {
+    const result = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: {
+        mode: 'retrieved',
+        lessonTitle: null,
+        units: [
+          { title: 'وحدة أ1', text: 'نص أ1', score: 0.9, item: SECTION },
+          { title: 'وحدة ب1', text: 'نص ب1', score: 0.8, item: LESSON },
+          { title: 'وحدة أ2', text: 'نص أ2', score: 0.7, item: SECTION },
+        ],
+      },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
+    const block = groundingBlock(result);
+    const sectionAt = block.indexOf('Section / القسم: المثال المضاد');
+    const lessonAt = block.indexOf('Lesson / الدرس: التبرير والبرهان');
+    expect(sectionAt).toBeGreaterThan(-1);
+    expect(lessonAt).toBeGreaterThan(sectionAt);
+    // Both SECTION units sit under the SECTION header, before the LESSON header.
+    expect(block.indexOf('### وحدة أ2')).toBeLessThan(lessonAt);
+    expect(block.indexOf('### وحدة ب1')).toBeGreaterThan(lessonAt);
+    const all = result.messages.map((m) => String(m.content)).join('\n');
+    expect(all).not.toMatch(/\b612\b|\b155\b/);
+  });
+
+  it('five units over 10,000 characters are capped (least relevant dropped) and still grouped without ids', () => {
+    const units = Array.from({ length: 5 }, (_, i) => ({
+      title: `وحدة ${i}`,
+      text: repeat(AR_SENTENCE, 3_000),
+      score: 1 - i * 0.1,
+      item: i % 2 === 0 ? SECTION : LESSON,
+    }));
+    const result = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: { mode: 'retrieved', units },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
+    expect(result.reductions[0]).toBe('unit_char_cap');
+    expect(result.grounding.totalChars).toBeLessThanOrEqual(UNIT_CHAR_CAP);
+    expect(result.grounding.units.map((u) => u.title)).toEqual(['وحدة 0', 'وحدة 1', 'وحدة 2']);
+    const block = groundingBlock(result);
+    expect(block).toContain('Section / القسم: المثال المضاد');
+    expect(block).toContain('Lesson / الدرس: التبرير والبرهان');
+    expect(block).not.toMatch(/\b612\b|\b155\b/);
+  });
+
+  it('no_match and index_not_ready add the explicit general-answer note; other reasons keep the unchanged wording', () => {
+    const insufficient = (reason?: Parameters<typeof assembleTutorPrompt>[0]['grounding'] & { mode: 'insufficient' }) =>
+      groundingBlock(
+        assembleTutorPrompt({ academic: ACADEMIC, grounding: reason ?? { mode: 'insufficient' }, history: { turns: [] }, message: 'س', policy: MATH_POLICY }),
+      );
+    const plain = insufficient();
+    expect(plain).toContain('No curriculum text is available');
+    expect(plain).not.toContain('general subject knowledge, not the curriculum wording');
+    for (const reason of ['no_match', 'index_not_ready'] as const) {
+      const text = insufficient({ mode: 'insufficient', reason });
+      expect(text.startsWith(plain)).toBe(true);
+      expect(text).toContain('general subject knowledge, not the curriculum wording');
+    }
+    for (const reason of ['retrieval_unavailable', 'retrieval_busy', 'below_evidence_floor', 'embedding_profile_mismatch'] as const) {
+      expect(insufficient({ mode: 'insufficient', reason })).toBe(plain);
+    }
+  });
+});

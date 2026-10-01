@@ -31,7 +31,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
-import { useStageStore } from '@/lib/store/stage';
+import { flushStageSave, resyncStageScenesFromServer, useStageStore } from '@/lib/store/stage';
 
 interface SkillRefView {
   skillId: string;
@@ -135,6 +135,10 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
     setBusy(true);
     setError(null);
     try {
+      // The server writes this Scene itself: land the editor's own pending
+      // edits first, so the re-sync below never replaces unsaved work
+      // (single-slide-regeneration-plan §11.5).
+      await flushStageSave().catch(() => {});
       const base = `/api/stages/${encodeURIComponent(stageId)}`;
       const response = await fetch(
         endpoint === 'skills' ? `${base}/teaching-skills` : `${base}/scene-alignment-confirmations`,
@@ -151,6 +155,10 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
         setError(payload?.error?.message ?? 'the change was rejected');
         return;
       }
+      // Bring the server-written Scene (and its revision) into the store, so
+      // the editor's next save of it is based on what the database holds
+      // instead of silently reverting the change.
+      await resyncStageScenesFromServer(stageId, [sceneId]).catch(() => {});
       await load();
     } catch {
       setError('the change could not be applied');

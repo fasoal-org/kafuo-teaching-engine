@@ -103,7 +103,7 @@ function spokenTexts(actions: ReadonlyArray<{ type: string; text?: unknown }>): 
  * Model-free default Actions are validated like any answer. Without a policy
  * the generator runs exactly once, as before.
  */
-async function generateRegisterCompliantActions<T extends { type: string; text?: unknown }>(
+export async function generateRegisterCompliantActions<T extends { type: string; text?: unknown }>(
   generate: (correctiveContext?: string) => Promise<T[]>,
   policy: SpeechRegisterPolicy | null,
   scene: { title: string; outlineId: string },

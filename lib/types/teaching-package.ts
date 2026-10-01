@@ -355,7 +355,13 @@ export type ReviewEventType =
   | 'superseded'
   | 'discarded'
   | 'successor_created'
-  | 'stage_replaced';
+  | 'stage_replaced'
+  // Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §10.3).
+  | 'scene_regeneration_started'
+  | 'scene_regeneration_completed'
+  | 'scene_regeneration_failed'
+  | 'scene_regeneration_refused'
+  | 'scene_regeneration_restored';
 
 export interface ReviewEvent {
   id: number;

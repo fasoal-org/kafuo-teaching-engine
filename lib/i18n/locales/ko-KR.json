@@ -672,6 +672,44 @@
     "dock": {
       "elementRefHint": "요소 참조 — 다음 메시지와 함께 보낼 요소 선택",
       "globalTools": "전역 도구"
+    },
+    "slideRegeneration": {
+      "menuItem": "Regenerate slide",
+      "title": "Regenerate this slide",
+      "scope": "Only this slide is regenerated. Its place in the lesson, its learning objectives and its teaching skills stay the same; its content and narration are replaced.",
+      "instructionLabel": "Requirements for the AI",
+      "instructionHelp": "Describe what the new version of this slide must do. This text is sent to the AI.",
+      "instructionPlaceholder": "For example: explain the rule with a simpler everyday example and fix the wrong formula.",
+      "reasonLabel": "Reason for regeneration",
+      "reasonHelp": "Why this slide needs regenerating. It is kept in the review history only and is never sent to the AI.",
+      "reasonPlaceholder": "For example: the formula on this slide is wrong.",
+      "counter": "{{count}}/{{max}}",
+      "errorRequired": "This field is required.",
+      "errorMin": "Write at least {{limit}} characters.",
+      "errorMax": "Use at most {{limit}} characters.",
+      "submit": "Regenerate this slide",
+      "cancel": "Cancel",
+      "running": "Regenerating this slide. This can take a minute; keep this tab open.",
+      "success": "The slide was regenerated.",
+      "changedSince": "The slide was regenerated, but it has changed again since. The current version is shown.",
+      "notDurable": "Your latest changes to this slide could not be saved yet, so nothing was sent. Try again in a moment.",
+      "conflictNotice": "This slide was changed elsewhere; your unsaved changes to it were not saved.",
+      "reloadNotice": "This editor tab was out of date, so its changes were not saved. The slides were reloaded.",
+      "restoreAction": "Restore previous",
+      "restored": "The previous version of the slide was restored.",
+      "restoreFailed": "The previous version could not be restored ({{code}}).",
+      "errors": {
+        "STAGE_LOCKED": "This package can no longer be edited.",
+        "SCENE_REGENERATION_IN_PROGRESS": "This slide is already being regenerated.",
+        "SCENE_CHANGED_DURING_REGENERATION": "The slide was changed while it was being regenerated, so the result was not saved. The current version is shown.",
+        "SOURCE_VISUAL_UNRESOLVED": "This slide's textbook image cannot be identified, so the slide cannot be regenerated.",
+        "ORIENTATION_VISUAL_MISSING": "The new version did not keep the slide's textbook image, so it was not saved. Try again.",
+        "SPEECH_REGISTER_NONCOMPLIANT": "The narration did not follow the required spoken style after several tries. Nothing was saved.",
+        "TEACHING_MODEL_UNAVAILABLE": "The AI service is unavailable right now. Nothing was saved; try again later.",
+        "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
+        "READ_ONLY_GRANT": "This editor session can only view the package.",
+        "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
+      }
     }
   },
   "classroomComplete": {

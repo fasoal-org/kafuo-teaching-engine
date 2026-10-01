@@ -28,7 +28,12 @@ import {
   recordConversationActivity,
   unarchiveConversation,
   upsertHelpSession,
+  parseConversationAssociation,
+  parseGroundingSnapshot,
+  parsePendingClarification,
+  updateConversationPendingClarification,
   writeGroundingSnapshot,
+  type GroundingSnapshot,
   type InsertConversationInput,
 } from '@/lib/persistence/tutor-runtime';
 
@@ -336,18 +341,44 @@ describe('tutor runtime persistence', () => {
     expect(await archiveConversation(pool, 'conv-1', { ...OWNER, tenantId: '9' }, NOW)).toBeNull();
   });
 
-  it('grounding snapshot round-trips and clears', async () => {
+  it('grounding snapshot v2 round-trips (kafuo_http and direct) and clears', async () => {
     await insertConversation(pool, conversation({ id: 'conv-1' }));
     expect(await readGroundingSnapshot(pool, 'conv-1')).toBeNull();
-    const snapshot = {
-      units: [{ unitId: 'u-1', lessonId: 'l-1', lessonTitle: 'Fractions', title: 'Intro', text: '…', chars: 1 }],
+    const httpSnapshot: GroundingSnapshot = {
+      schema: 2,
+      source: 'kafuo_http',
+      units: [{ source: 'kafuo_http', unitId: 'u-1', lessonId: 'l-1', lessonTitle: 'Fractions', title: 'Intro', text: '…', chars: 1 }],
       keywords: ['fractions'],
       setAtSeq: 3,
       lastUsedSeq: 3,
     };
-    await writeGroundingSnapshot(pool, 'conv-1', snapshot, NOW + 1);
-    expect(await readGroundingSnapshot(pool, 'conv-1')).toEqual(snapshot);
-    await writeGroundingSnapshot(pool, 'conv-1', null, NOW + 2);
+    await writeGroundingSnapshot(pool, 'conv-1', httpSnapshot, NOW + 1);
+    expect(await readGroundingSnapshot(pool, 'conv-1')).toEqual(httpSnapshot);
+    const directSnapshot: GroundingSnapshot = {
+      schema: 2,
+      source: 'direct',
+      units: [
+        {
+          source: 'direct',
+          unitId: '3279',
+          itemId: '155',
+          itemType: 'LESSON',
+          buildId: '41',
+          revisionId: '90',
+          unitUpdatedAt: '2026-09-30T10:00:00+00:00',
+          title: 'المفردات',
+          text: 'المثال المضاد',
+          chars: 13,
+        },
+      ],
+      items: [{ itemId: '155', itemType: 'LESSON', title: 'التبرير والبرهان' }],
+      keywords: ['مثال', 'مضاد'],
+      setAtSeq: 5,
+      lastUsedSeq: 7,
+    };
+    await writeGroundingSnapshot(pool, 'conv-1', directSnapshot, NOW + 2);
+    expect(await readGroundingSnapshot(pool, 'conv-1')).toEqual(directSnapshot);
+    await writeGroundingSnapshot(pool, 'conv-1', null, NOW + 3);
     expect(await readGroundingSnapshot(pool, 'conv-1')).toBeNull();
   });
 
@@ -464,6 +495,376 @@ describe('tutor runtime persistence', () => {
         inputTokenEstimate: 1,
         budgetEstimateTokens: 1,
         budgetCounterKind: 'exact',
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+/** The tutor tables exactly as they were before discovery-first P7 (inline CHECKs without `clarification`). */
+const PRE_P7_DDL = [
+  `CREATE TABLE teaching_package_versions (id TEXT PRIMARY KEY)`,
+  `CREATE TABLE tutor_conversations (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0),
+    student_ref TEXT NOT NULL,
+    subject_code TEXT NOT NULL,
+    subject_offering_id TEXT NOT NULL,
+    subject_name TEXT NOT NULL,
+    academic JSONB NOT NULL,
+    lesson_association JSONB,
+    title TEXT,
+    title_source TEXT CHECK (title_source IN ('topic','lesson','lesson_suffix','fallback','pending')),
+    status TEXT NOT NULL CHECK (status IN ('active','archived')),
+    grounding JSONB,
+    context_summary TEXT,
+    summary_through_seq BIGINT,
+    last_input_tokens INTEGER,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    last_message_at DOUBLE PRECISION,
+    client_request_id TEXT,
+    created_at DOUBLE PRECISION NOT NULL,
+    updated_at DOUBLE PRECISION NOT NULL
+  )`,
+  `CREATE TABLE tutor_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES tutor_conversations(id) ON DELETE RESTRICT,
+    seq BIGINT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('student','tutor')),
+    client_message_id TEXT,
+    turn_id TEXT NOT NULL,
+    turn_attempt INTEGER NOT NULL DEFAULT 1,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('accepted','generating','completed','failed')),
+    served_by TEXT CHECK (served_by IN ('primary','fallback')),
+    grounding_mode TEXT CHECK (grounding_mode IN ('none','reuse','retrieved','scene','insufficient')),
+    safety JSONB,
+    error_code TEXT,
+    accounting_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    meter_reservation_id TEXT,
+    meter_finalized BOOLEAN NOT NULL DEFAULT FALSE,
+    generating_at DOUBLE PRECISION,
+    created_at DOUBLE PRECISION NOT NULL,
+    completed_at DOUBLE PRECISION,
+    CONSTRAINT tm_conversation_seq_unique UNIQUE (conversation_id, seq)
+  )`,
+  `CREATE TABLE tutor_help_sessions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0),
+    version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+    stage_id TEXT NOT NULL,
+    scene_id TEXT NOT NULL,
+    learner_key TEXT NOT NULL,
+    student_ref TEXT NOT NULL,
+    subject_code TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active','closed')),
+    created_at DOUBLE PRECISION NOT NULL,
+    updated_at DOUBLE PRECISION NOT NULL,
+    CONSTRAINT ths_anchor_unique UNIQUE (version_id, stage_id, scene_id, learner_key)
+  )`,
+  `CREATE TABLE tutor_help_messages (
+    id TEXT PRIMARY KEY,
+    help_session_id TEXT NOT NULL REFERENCES tutor_help_sessions(id) ON DELETE RESTRICT,
+    seq BIGINT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('student','tutor')),
+    client_message_id TEXT,
+    turn_id TEXT NOT NULL,
+    turn_attempt INTEGER NOT NULL DEFAULT 1,
+    step_ref TEXT,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('accepted','generating','completed','failed')),
+    served_by TEXT CHECK (served_by IN ('primary','fallback')),
+    grounding_mode TEXT CHECK (grounding_mode IN ('none','reuse','retrieved','scene','insufficient')),
+    safety JSONB,
+    error_code TEXT,
+    accounting_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    meter_reservation_id TEXT,
+    meter_finalized BOOLEAN NOT NULL DEFAULT FALSE,
+    generating_at DOUBLE PRECISION,
+    created_at DOUBLE PRECISION NOT NULL,
+    completed_at DOUBLE PRECISION,
+    CONSTRAINT thm_session_seq_unique UNIQUE (help_session_id, seq)
+  )`,
+  `CREATE TABLE tutor_turn_groundings (
+    turn_id TEXT PRIMARY KEY,
+    conversation_id TEXT,
+    help_session_id TEXT,
+    mode TEXT NOT NULL CHECK (mode IN ('none','reuse','retrieved','scene','insufficient')),
+    assessment JSONB NOT NULL,
+    units JSONB NOT NULL,
+    total_chars INTEGER NOT NULL CHECK (total_chars <= 10000),
+    truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    input_token_estimate INTEGER NOT NULL,
+    lineage_status TEXT CHECK (lineage_status IN ('own_attempt','predecessor_attempt','partial','unavailable')),
+    resolved_attempt_id TEXT,
+    budget_estimate_tokens INTEGER NOT NULL,
+    budget_counter_kind TEXT NOT NULL CHECK (budget_counter_kind IN ('exact','proxy')),
+    created_at DOUBLE PRECISION NOT NULL
+  )`,
+];
+
+describe('discovery-first P7 schema evolution and stored shapes', () => {
+  let pool: PGlitePool;
+
+  beforeEach(async () => {
+    const db = new PGlite();
+    await db.waitReady;
+    pool = new PGlitePool(db);
+  });
+
+  afterEach(async () => {
+    await pool.end();
+  });
+
+  const checkDefs = async (table: string) =>
+    (
+      await pool.query<{ conname: string; def: string }>(
+        `SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+          WHERE conrelid = $1::regclass AND contype = 'c' ORDER BY conname`,
+        [table],
+      )
+    ).rows;
+
+  const groundingModeCheck = async (table: string, column: string) =>
+    (await checkDefs(table)).filter((row) => row.def.includes(column) && row.def.includes('reuse'));
+
+  it('upgrades the pre-P7 schema in place (twice): CHECKs accept clarification, new columns exist, old rows stay', async () => {
+    for (const statement of PRE_P7_DDL) await pool.query(statement);
+    await pool.query(`INSERT INTO teaching_package_versions (id) VALUES ('tpv-1')`);
+    // A pre-P7 row with the old association and snapshot shapes, written by hand.
+    await pool.query(
+      `INSERT INTO tutor_conversations (id, tenant_id, student_ref, subject_code, subject_offering_id, subject_name,
+         academic, lesson_association, grounding, status, created_at, updated_at)
+       VALUES ('conv-1', '1', $1, 'MATH', '10', 'الرياضيات', '{"academicLanguage":"ar"}'::jsonb, $2::jsonb, $3::jsonb, 'active', $4, $4)`,
+      [
+        OWNER.studentRef,
+        JSON.stringify({ learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قديم', confidence: 0.9, associatedAtSeq: 1 }),
+        JSON.stringify({ units: [{ unitId: 'u-1', title: 'x', text: 'y', chars: 1 }], keywords: [], setAtSeq: 1, lastUsedSeq: 1 }),
+        NOW,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO tutor_messages (id, conversation_id, seq, role, turn_id, text, status, grounding_mode, created_at)
+       VALUES ('m-old', 'conv-1', 1, 'tutor', 't-old', 'old', 'completed', 'retrieved', $1)`,
+      [NOW],
+    );
+    const before = await groundingModeCheck('tutor_messages', 'grounding_mode');
+    expect(before).toHaveLength(1);
+    expect(before[0]!.def).not.toContain('clarification');
+
+    await ensureTutorRuntimeSchema(pool);
+    await ensureTutorRuntimeSchema(pool);
+
+    for (const [table, column] of [
+      ['tutor_messages', 'grounding_mode'],
+      ['tutor_turn_groundings', 'mode'],
+    ] as const) {
+      const checks = await groundingModeCheck(table, column);
+      expect(checks).toHaveLength(1);
+      expect(checks[0]!.def).toContain('clarification');
+    }
+    // Help messages never use it: their CHECK is untouched.
+    const help = await groundingModeCheck('tutor_help_messages', 'grounding_mode');
+    expect(help).toHaveLength(1);
+    expect(help[0]!.def).not.toContain('clarification');
+
+    const columns = async (table: string) =>
+      (
+        await pool.query<{ column_name: string }>(
+          `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+          [table],
+        )
+      ).rows.map((r) => r.column_name);
+    expect(await columns('tutor_conversations')).toContain('pending_clarification');
+    expect(await columns('tutor_messages')).toContain('first_delta_at');
+    expect(await columns('tutor_help_messages')).not.toContain('first_delta_at');
+    expect(await columns('tutor_turn_groundings')).toEqual(
+      expect.arrayContaining([
+        'source',
+        'outcome_reason',
+        'resolution',
+        'embedding_model',
+        'embedding_tokens',
+        'pool_wait_ms',
+        'resolve_ms',
+        'embed_ms',
+        'search_ms',
+        'total_retrieval_ms',
+      ]),
+    );
+
+    // The old row survives; its pre-P7 association and snapshot parse as "none" (D-19).
+    const old = (await readConversation(pool, 'conv-1'))!;
+    expect(old).toMatchObject({ id: 'conv-1', lessonAssociation: null, grounding: null, pendingClarification: null });
+    expect((await readMessagesBySeq(pool, { parentId: 'conv-1', limit: 5 })).messages[0]).toMatchObject({
+      groundingMode: 'retrieved',
+    });
+
+    // `clarification` is now accepted on tutor_messages and tutor_turn_groundings …
+    await insertTutorMessage(pool, {
+      id: 'm-clar',
+      parentId: 'conv-1',
+      seq: 2,
+      turnId: 't-clar',
+      turnAttempt: 1,
+      text: 'أي موضوع تقصد؟',
+      servedBy: null,
+      groundingMode: 'clarification',
+      accountingComplete: true,
+      firstDeltaAt: NOW + 0.25,
+      now: NOW,
+    });
+    const delta = await pool.query<{ first_delta_at: number }>(
+      `SELECT first_delta_at FROM tutor_messages WHERE id = 'm-clar'`,
+    );
+    expect(Number(delta.rows[0]!.first_delta_at)).toBe(NOW + 0.25);
+    await insertTurnGrounding(pool, {
+      turnId: 't-clar',
+      conversationId: 'conv-1',
+      mode: 'clarification',
+      assessment: {},
+      units: [],
+      totalChars: 0,
+      inputTokenEstimate: 0,
+      budgetEstimateTokens: 0,
+      budgetCounterKind: 'exact',
+      now: NOW,
+    });
+    // … and still refused on tutor_help_messages.
+    await upsertHelpSession(pool, {
+      id: 'hs-1',
+      tenantId: '1',
+      versionId: 'tpv-1',
+      stageId: 's',
+      sceneId: 'sc',
+      learnerKey: 'tp:x',
+      studentRef: OWNER.studentRef,
+      subjectCode: 'MATH',
+      now: NOW,
+    });
+    await expect(
+      insertHelpTutorMessage(pool, {
+        id: 'hm-1',
+        parentId: 'hs-1',
+        seq: 1,
+        turnId: 'ht-1',
+        turnAttempt: 1,
+        text: 'x',
+        servedBy: null,
+        groundingMode: 'clarification',
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('a fresh database carries the widened CHECKs at creation (the evolution block is a no-op)', async () => {
+    await pool.query(`CREATE TABLE teaching_package_versions (id TEXT PRIMARY KEY)`);
+    await ensureTutorRuntimeSchema(pool);
+    const checks = await groundingModeCheck('tutor_messages', 'grounding_mode');
+    expect(checks).toHaveLength(1);
+    expect(checks[0]!.def).toContain('clarification');
+    await ensureTutorRuntimeSchema(pool);
+    expect(await groundingModeCheck('tutor_messages', 'grounding_mode')).toEqual(checks);
+  });
+
+  it('parses only association v2 and the rollback-only schema 1; anything else is none', () => {
+    const v2 = { schema: 2, learningItemType: 'SECTION', learningItemId: '612', title: 'المثال المضاد', confidence: 0.81, associatedAtSeq: 3, buildId: '41' };
+    expect(parseConversationAssociation(v2)).toEqual(v2);
+    expect(parseConversationAssociation(JSON.stringify(v2))).toEqual(v2);
+    const v1 = { schema: 1, lessonId: '290', lessonTitle: 'التبرير', confidence: 0.6, associatedAtSeq: 1 };
+    expect(parseConversationAssociation(v1)).toEqual(v1);
+    for (const other of [
+      { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'x', confidence: 0.9, associatedAtSeq: 1 },
+      { ...v2, learningItemType: 'lesson' },
+      { ...v2, learningItemId: '' },
+      { ...v1, lessonId: 290 },
+      { schema: 3 },
+      'not json',
+      null,
+      [],
+    ]) {
+      expect(parseConversationAssociation(other)).toBeNull();
+    }
+  });
+
+  it('parses only snapshot v2; a pre-P7 or malformed snapshot is none; pending clarification is validated', () => {
+    expect(parseGroundingSnapshot({ units: [], keywords: [], setAtSeq: 1, lastUsedSeq: 1 })).toBeNull();
+    const direct = {
+      schema: 2,
+      source: 'direct',
+      units: [{ source: 'direct', unitId: '1', itemId: '2', itemType: 'LESSON', buildId: '3', revisionId: '4', unitUpdatedAt: 't', title: null, text: 'x', chars: 1 }],
+      items: [{ itemId: '2', itemType: 'LESSON', title: 'T' }],
+      keywords: ['x'],
+      setAtSeq: 1,
+      lastUsedSeq: 1,
+    };
+    expect(parseGroundingSnapshot(direct)).toEqual(direct);
+    // A direct unit without build data cannot be revalidated: the snapshot is none.
+    expect(parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], buildId: undefined }] })).toBeNull();
+    // A kafuo_http unit inside a direct snapshot is not a direct unit.
+    expect(parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], source: 'kafuo_http' }] })).toBeNull();
+
+    const pending = { candidates: [{ itemId: '1', itemType: 'LESSON', title: 'أ' }, { itemId: '2', itemType: 'SECTION', title: 'ب' }], questionSeq: 3, askedAtSeq: 4 };
+    expect(parsePendingClarification(pending)).toEqual(pending);
+    expect(parsePendingClarification({ ...pending, candidates: [] })).toBeNull();
+    expect(parsePendingClarification({ ...pending, candidates: [...pending.candidates, ...pending.candidates] })).toBeNull();
+    expect(parsePendingClarification({ ...pending, questionSeq: 'x' })).toBeNull();
+  });
+
+  it('pending_clarification and the retrieval audit columns round-trip', async () => {
+    await pool.query(`CREATE TABLE teaching_package_versions (id TEXT PRIMARY KEY)`);
+    await ensureTutorRuntimeSchema(pool);
+    await insertConversation(pool, conversation({ id: 'conv-1' }));
+    const pending = { candidates: [{ itemId: '155', itemType: 'LESSON' as const, title: 'التبرير' }], questionSeq: 1, askedAtSeq: 2 };
+    await updateConversationPendingClarification(pool, 'conv-1', pending, NOW + 1);
+    expect((await readConversation(pool, 'conv-1'))!.pendingClarification).toEqual(pending);
+    await updateConversationPendingClarification(pool, 'conv-1', null, NOW + 2);
+    expect((await readConversation(pool, 'conv-1'))!.pendingClarification).toBeNull();
+
+    const row = await insertTurnGrounding(pool, {
+      turnId: 'turn-1',
+      conversationId: 'conv-1',
+      mode: 'insufficient',
+      assessment: { rule: 'lesson_discovery' },
+      units: [],
+      totalChars: 0,
+      inputTokenEstimate: 900,
+      budgetEstimateTokens: 900,
+      budgetCounterKind: 'proxy',
+      retrieval: {
+        source: 'direct',
+        outcomeReason: 'no_match',
+        resolution: { outcome: 'no_match', indexCoverage: 'partial' },
+        embeddingModel: null,
+        embeddingTokens: null,
+        poolWaitMs: 0.5,
+        resolveMs: 3.25,
+        embedMs: 0,
+        searchMs: 0,
+        totalRetrievalMs: 3.75,
+      },
+      now: NOW,
+    });
+    expect(row).toMatchObject({
+      source: 'direct',
+      outcomeReason: 'no_match',
+      resolution: { outcome: 'no_match', indexCoverage: 'partial' },
+      poolWaitMs: 0.5,
+      resolveMs: 3.25,
+      totalRetrievalMs: 3.75,
+    });
+    expect(await readTurnGrounding(pool, 'turn-1')).toEqual(row);
+    await expect(
+      insertTurnGrounding(pool, {
+        turnId: 'turn-2',
+        mode: 'none',
+        assessment: {},
+        units: [],
+        totalChars: 0,
+        inputTokenEstimate: 1,
+        budgetEstimateTokens: 1,
+        budgetCounterKind: 'exact',
+        retrieval: { source: 'elsewhere' as never },
         now: NOW,
       }),
     ).rejects.toMatchObject({ code: '23514' });

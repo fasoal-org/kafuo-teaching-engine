@@ -220,6 +220,26 @@ export function stableLearnerKey(tenantId: string, versionId: string, learnerRef
 }
 
 /**
+ * The audit session reference of a reviewer-driven slide regeneration
+ * (single-slide-regeneration-plan §10.2): a keyed digest of the grant's
+ * sandbox identity, built like {@link stableLearnerKey}. It links the
+ * regenerations one editor session made without storing the raw learner key,
+ * the grant, or any cookie.
+ */
+export function sceneRegenerationSessionRef(
+  tenantId: string,
+  versionId: string,
+  learnerKey: string,
+): string {
+  const digest = createHmac('sha256', grantSecret())
+    .update(`scene-regeneration-session|${tenantId}|${versionId}|${learnerKey}`)
+    .digest()
+    .subarray(0, 16)
+    .toString('base64url');
+  return `tps:${digest}`;
+}
+
+/**
  * The Set-Cookie pair a redeem writes: the HttpOnly grant cookie (whose value
  * is the serialized JSON array of grant tokens — the credential) and the
  * readable companion learner key (a partition name, not a credential).

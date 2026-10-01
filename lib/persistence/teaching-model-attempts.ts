@@ -26,7 +26,9 @@ export type TeachingCapability =
   | 'package_generation'
   | 'question_generation'
   | 'help'
-  | 'free_chat';
+  | 'free_chat'
+  // Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §8.2).
+  | 'scene_regeneration';
 export type TeachingOrigin = 'openmaic_runtime' | 'kafuo_backend';
 export type AttemptRole = 'primary' | 'fallback';
 export type AccountingStatus = 'started' | 'complete' | 'incomplete';
@@ -65,7 +67,7 @@ const TEACHING_MODEL_ATTEMPT_TABLES = `
 CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0),
-  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat')),
+  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration')),
   subject_code TEXT NOT NULL,
   policy_version TEXT NOT NULL,
   stage TEXT NOT NULL,
@@ -123,6 +125,7 @@ CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   student_ref TEXT,
   scene_id TEXT,
   legacy_help_link_ref TEXT,
+  scene_regeneration_id TEXT,
   worker_id TEXT NOT NULL,
   late_completion BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DOUBLE PRECISION NOT NULL,
@@ -166,6 +169,31 @@ CREATE INDEX IF NOT EXISTS tma_worker_started_idx
   WHERE accounting_status = 'started';
 `;
 
+/**
+ * Single-slide regeneration (single-slide-regeneration-plan §10.1): an
+ * existing ledger gains the regeneration association column and the widened
+ * capability CHECK. Both are guarded, so a re-run and a fresh database (whose
+ * CREATE TABLE already carries them) are no-ops. The CHECK is never narrowed.
+ */
+const TEACHING_MODEL_ATTEMPT_EVOLUTION = `
+ALTER TABLE teaching_model_attempts ADD COLUMN IF NOT EXISTS scene_regeneration_id TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_model_attempts_capability_check'
+       AND pg_get_constraintdef(oid) LIKE '%scene_regeneration%'
+  ) THEN
+    ALTER TABLE teaching_model_attempts
+      DROP CONSTRAINT IF EXISTS teaching_model_attempts_capability_check;
+    ALTER TABLE teaching_model_attempts
+      ADD CONSTRAINT teaching_model_attempts_capability_check
+      CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration'));
+  END IF;
+END;
+$$;
+`;
+
 export const TEACHING_MODEL_ATTEMPTS_SCHEMA = `${TEACHING_MODEL_ATTEMPT_TABLES}
 ${TEACHING_MODEL_ATTEMPT_INDEXES}`;
 
@@ -175,6 +203,9 @@ export async function ensureTeachingModelAttemptsSchema(queryable: Queryable): P
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(TEACHING_MODEL_ATTEMPT_INDEXES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(TEACHING_MODEL_ATTEMPT_EVOLUTION)) {
     await queryable.query(statement);
   }
 }
@@ -198,6 +229,12 @@ export type AttemptAssociation =
       learningItemType?: string | null;
       learningItemId?: string | null;
       questionSetRef?: string | null;
+      /**
+       * A reviewer-driven single-slide regeneration: the producing attempt
+       * stays in `generationAttemptId`, this names the regeneration row, so
+       * its spend is reported on its own and never folds into the attempt's.
+       */
+      sceneRegenerationId?: string | null;
     }
   | {
       kind: 'turn';
@@ -343,6 +380,7 @@ export interface TeachingModelAttemptRow {
   student_ref: string | null;
   scene_id: string | null;
   legacy_help_link_ref: string | null;
+  scene_regeneration_id?: string | null;
   worker_id: string;
   late_completion: boolean;
   created_at: number;
@@ -383,7 +421,7 @@ export async function insertStartedAttempt(
        started_at, origin,
        generation_attempt_id, generation_run, version_id, learning_item_type, learning_item_id, question_set_ref,
        conversation_id, turn_id, help_session_id, student_ref, scene_id, legacy_help_link_ref,
-       worker_id, created_at
+       worker_id, created_at, scene_regeneration_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10, $11, $12,
@@ -392,7 +430,7 @@ export async function insertStartedAttempt(
        $17, $18,
        $19, $20, $21, $22, $23, $24,
        $25, $26, $27, $28, $29, $30,
-       $31, $17
+       $31, $17, $32
      )`,
     [
       input.id,
@@ -426,6 +464,7 @@ export async function insertStartedAttempt(
       turn?.sceneId ?? null,
       turn?.legacyHelpLinkRef ?? null,
       input.workerId,
+      generation?.sceneRegenerationId ?? null,
     ],
   );
 }
@@ -822,7 +861,8 @@ export type AttemptGroupBy =
   | 'turn_id'
   | 'version_id'
   | 'generation_attempt_id'
-  | 'learning_item_id';
+  | 'learning_item_id'
+  | 'scene_regeneration_id';
 
 const GROUP_BY_COLUMNS: ReadonlySet<AttemptGroupBy> = new Set([
   'capability',
@@ -840,6 +880,7 @@ const GROUP_BY_COLUMNS: ReadonlySet<AttemptGroupBy> = new Set([
   'version_id',
   'generation_attempt_id',
   'learning_item_id',
+  'scene_regeneration_id',
 ]);
 
 /** Shared row filter for the reporting queries (all optional). */

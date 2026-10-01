@@ -27,6 +27,8 @@ interface ThumbItemProps {
   readonly onActivate: () => void;
   readonly onDuplicate: () => void;
   readonly onDelete: () => void;
+  /** Present only when this slide may be regenerated (write grant, editable package, slide). */
+  readonly onRegenerate?: () => void;
 }
 
 function ThumbItemComponent({
@@ -37,6 +39,7 @@ function ThumbItemComponent({
   onActivate,
   onDuplicate,
   onDelete,
+  onRegenerate,
 }: ThumbItemProps) {
   const { t } = useI18n();
   const viewportSize = useCanvasStore.use.viewportSize();
@@ -227,6 +230,11 @@ function ThumbItemComponent({
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenuItem onSelect={startRename}>{t('edit.nav.rename')}</DropdownMenuItem>
+                {onRegenerate && (
+                  <DropdownMenuItem onSelect={onRegenerate} data-testid="slide-nav-regenerate">
+                    {t('edit.slideRegeneration.menuItem')}
+                  </DropdownMenuItem>
+                )}
                 {SCENE_CREATION_ENABLED && (
                   <DropdownMenuItem onSelect={onDuplicate}>
                     {t('edit.nav.duplicate')}

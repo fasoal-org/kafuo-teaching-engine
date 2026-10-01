@@ -12,8 +12,19 @@
  * conversation still works. `lessonId` is never accepted from the client.
  *
  * The turn itself runs through `runTutorTurn`; this module supplies the Free
- * Chat `prepare` (assessment → reuse / retrieve / none, snapshot, lesson
- * association) and `afterCommit` (title, optional compaction).
+ * Chat `prepare` (assessment → reuse / retrieve / none / clarification,
+ * snapshot, item association) and `afterCommit` (title, optional compaction).
+ *
+ * Grounding source (discovery-first plan P7, `TUTOR_GROUNDING_SOURCE`):
+ *  - `kafuo_http` (default) and `shadow` (a stub until P6, recorded as
+ *    "shadow not available"): the existing `grounding/search` call, unchanged
+ *    request and SSE frames; writes the rollback-only schema-1 association
+ *    and a `kafuo_http`-tagged snapshot.
+ *  - `direct` (config + `TUTOR_GROUNDING_DIRECT_TENANTS` + a wired reader):
+ *    the discovery-first flow through the Kafuo grounding reader seam
+ *    (`grounding/direct-grounding.ts`), association v2 and snapshot v2.
+ * A Kafuo scope refusal on either path refuses the turn with
+ * SUBJECT_NO_LONGER_AVAILABLE (D-18) before any reservation.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -22,6 +33,7 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 import { createLogger } from '@/lib/logger';
 import {
   archiveConversation,
+  associationTitle,
   insertConversationIdempotent,
   listConversationsByStudent,
   readConversationByClientRequestId,
@@ -29,11 +41,18 @@ import {
   readOwnedConversation,
   unarchiveConversation,
   updateConversationLessonAssociation,
+  updateConversationPendingClarification,
   writeGroundingSnapshot,
   type ConversationAcademic,
+  type ConversationAssociation,
   type ConversationStatus,
+  type DirectSnapshotUnit,
   type GroundingSnapshot,
-  type GroundingSnapshotUnit,
+  type GroundingSourceTag,
+  type HttpSnapshotUnit,
+  type ItemAssociationV2,
+  type LearningItemType,
+  type PendingClarification,
   type TurnGroundingUnit,
   type TutorConversation,
   type TutorMessage,
@@ -49,8 +68,30 @@ import {
   groundingKeywords,
   type ContextAssessment,
 } from '@/lib/server/tutor/context-assessment';
-import type { GroundingSearchResponse } from '@/lib/server/tutor/kafuo-integration-client';
-import type { AcademicBlockInput, GroundingInput } from '@/lib/server/tutor/prompt-assembly';
+import { clarificationText, matchClarificationReply } from '@/lib/server/tutor/grounding/clarification';
+import {
+  accessLost,
+  retrieveDirect,
+  revalidateUnits,
+  RetrievalClock,
+  runDiscoveryProbe,
+  type DirectRetrievalResult,
+  type RetrievalTimings,
+} from '@/lib/server/tutor/grounding/direct-grounding';
+import { assessmentRuleset, resolveGroundingRoute } from '@/lib/server/tutor/grounding/grounding-config';
+import type {
+  DirectGroundingDeps,
+  ResolveItemsResult,
+} from '@/lib/server/tutor/grounding/kafuo-grounding-reader';
+import {
+  KafuoIntegrationError,
+  type GroundingSearchResponse,
+} from '@/lib/server/tutor/kafuo-integration-client';
+import type {
+  AcademicBlockInput,
+  GroundingInput,
+  InsufficientReason,
+} from '@/lib/server/tutor/prompt-assembly';
 import { toGroundingUnitInput } from '@/lib/server/tutor/prompt-assembly';
 import type { TutorRuntimeDeps } from '@/lib/server/tutor/runtime-deps';
 import type { StudentGrantPayload } from '@/lib/server/tutor/student-grant';
@@ -114,7 +155,7 @@ export function toWireConversation(c: TutorConversation): WireConversation {
     status: c.status,
     // The internal learning item id stays internal (BR-03): only the title and confidence go out.
     lessonAssociation: c.lessonAssociation
-      ? { lessonTitle: c.lessonAssociation.lessonTitle, confidence: c.lessonAssociation.confidence }
+      ? { lessonTitle: associationTitle(c.lessonAssociation), confidence: c.lessonAssociation.confidence }
       : null,
     messageCount: c.messageCount,
     lastMessageAt: c.lastMessageAt,
@@ -373,21 +414,532 @@ export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInpu
 }
 
 // ---------------------------------------------------------------------------
-// Free Chat prepare: assessment → reuse / retrieve / none
+// Free Chat prepare: assessment → (probe) → reuse / retrieve / none / clarification
 // ---------------------------------------------------------------------------
 
-function snapshotUnitsToInput(units: GroundingSnapshotUnit[]) {
-  return units.map((unit) => toGroundingUnitInput({ title: unit.title, text: unit.text }));
+/**
+ * One turn's grounding decision, whichever source served it. `buildPreparedTurn`
+ * turns it into the runner's `PreparedTurn`.
+ */
+interface FreeChatGrounding {
+  source: GroundingSourceTag;
+  grounding: GroundingInput;
+  /** Student-visible item title: only when this turn's evidence is the associated item's. */
+  lessonTitle: string | null;
+  /** SSE extras — sent by the `direct` path only (the HTTP path's frames stay unchanged). */
+  eventItemType: LearningItemType | null;
+  eventReason: InsufficientReason | null;
+  /** `tutor_turn_groundings.outcome_reason` (both paths). */
+  outcomeReason: string | null;
+  nextSnapshot: GroundingSnapshot | null;
+  association: { kind: 'keep' } | { kind: 'set'; value: ConversationAssociation } | { kind: 'clear' };
+  auditUnits: TurnGroundingUnit[];
+  totalChars: number;
+  truncated: boolean;
+  assessmentExtra: Record<string, unknown>;
+  resolution: Record<string, unknown> | null;
+  timings: RetrievalTimings | null;
+  embedding: { model: string; tokens: number | null } | null;
+  clarification: { text: string; candidates: PendingClarification['candidates'] } | null;
 }
 
-function auditUnits(units: ReadonlyArray<{ unitId: string; lessonId?: string | null; title: string | null; chars: number }>): TurnGroundingUnit[] {
-  return units.map((unit, index) => ({
+function emptyGrounding(source: GroundingSourceTag): FreeChatGrounding {
+  return {
+    source,
+    grounding: { mode: 'none' },
+    lessonTitle: null,
+    eventItemType: null,
+    eventReason: null,
+    outcomeReason: null,
+    nextSnapshot: null,
+    association: { kind: 'keep' },
+    auditUnits: [],
+    totalChars: 0,
+    truncated: false,
+    assessmentExtra: {},
+    resolution: null,
+    timings: null,
+    embedding: null,
+    clarification: null,
+  };
+}
+
+function snapshotItemTitle(snapshot: GroundingSnapshot, itemId: string): string | null {
+  return snapshot.source === 'direct'
+    ? (snapshot.items.find((item) => item.itemId === itemId)?.title ?? null)
+    : null;
+}
+
+/** Snapshot → assembler units (ids dropped; direct units keep their item for the headers). */
+function snapshotUnitsToInput(snapshot: GroundingSnapshot) {
+  if (snapshot.source === 'direct') {
+    return snapshot.units.map((unit) =>
+      toGroundingUnitInput({
+        title: unit.title,
+        text: unit.text,
+        item: { key: unit.itemId, title: snapshotItemTitle(snapshot, unit.itemId), itemType: unit.itemType },
+      }),
+    );
+  }
+  return snapshot.units.map((unit) => toGroundingUnitInput({ title: unit.title, text: unit.text }));
+}
+
+function auditUnits(snapshot: GroundingSnapshot): TurnGroundingUnit[] {
+  if (snapshot.source === 'direct') {
+    return snapshot.units.map((unit, index) => ({
+      unitId: unit.unitId,
+      itemId: unit.itemId,
+      itemType: unit.itemType,
+      buildId: unit.buildId,
+      revisionId: unit.revisionId,
+      title: unit.title,
+      chars: unit.chars,
+      orderIndex: index,
+    }));
+  }
+  return snapshot.units.map((unit, index) => ({
     unitId: unit.unitId,
     lessonId: unit.lessonId ?? null,
     title: unit.title,
     chars: unit.chars,
     orderIndex: index,
   }));
+}
+
+function snapshotChars(snapshot: GroundingSnapshot): number {
+  return snapshot.units.reduce((sum, unit) => sum + unit.chars, 0);
+}
+
+/**
+ * The associated item when EVERY unit of the snapshot comes from it (F-T3:
+ * the title is shown only for the associated item's own evidence). Compared on
+ * the full `(schema, type, id)` tuple.
+ */
+function associationOfSnapshot(
+  snapshot: GroundingSnapshot,
+  association: ConversationAssociation | null,
+): ConversationAssociation | null {
+  if (!association || snapshot.units.length === 0) return null;
+  if (association.schema === 2) {
+    return snapshot.source === 'direct' &&
+      snapshot.units.every(
+        (unit) =>
+          unit.itemId === association.learningItemId &&
+          unit.itemType === association.learningItemType,
+      )
+      ? association
+      : null;
+  }
+  return snapshot.source === 'kafuo_http' &&
+    snapshot.units.every((unit) => unit.lessonId === association.lessonId)
+    ? association
+    : null;
+}
+
+function reuseGrounding(
+  source: GroundingSourceTag,
+  snapshot: GroundingSnapshot,
+  association: ConversationAssociation | null,
+  seq: number,
+  emitExtras: boolean,
+): FreeChatGrounding {
+  const owner = associationOfSnapshot(snapshot, association);
+  const lessonTitle = owner ? associationTitle(owner) : null;
+  const itemType = owner && owner.schema === 2 ? owner.learningItemType : null;
+  return {
+    ...emptyGrounding(source),
+    grounding: {
+      mode: 'reuse',
+      lessonTitle,
+      ...(itemType ? { itemType } : {}),
+      units: snapshotUnitsToInput(snapshot),
+    },
+    lessonTitle,
+    eventItemType: emitExtras ? itemType : null,
+    nextSnapshot: { ...snapshot, lastUsedSeq: seq },
+    auditUnits: auditUnits(snapshot),
+    totalChars: snapshotChars(snapshot),
+  };
+}
+
+/** D-18 on the HTTP path: Kafuo's definitive scope refusal (404 student_ref_unknown / 403 offering_not_permitted). */
+function httpAccessDenied(error: unknown): 'student_ref_unknown' | 'offering_not_permitted' | null {
+  const record = (typeof error === 'object' && error !== null ? error : {}) as {
+    name?: unknown;
+    code?: unknown;
+    status?: unknown;
+  };
+  if (!(error instanceof KafuoIntegrationError) && record.name !== 'KafuoIntegrationError') return null;
+  if (record.code === 'student_ref_unknown' || record.code === 'offering_not_permitted') {
+    return record.code;
+  }
+  return record.status === 403 ? 'offering_not_permitted' : null;
+}
+
+/**
+ * The temporary `kafuo_http` path (also `shadow` until P6): the existing
+ * `grounding/search` call, byte-for-byte the same request. It writes the
+ * rollback-only schema-1 association (never over a v2) and a snapshot tagged
+ * `kafuo_http`. Its SSE frames carry no P7 extras.
+ */
+async function groundOverHttp(
+  deps: TutorRuntimeDeps,
+  conversation: TutorConversation,
+  ctx: PrepareContext,
+  assessment: ContextAssessment,
+  source: 'kafuo_http' | 'shadow',
+): Promise<FreeChatGrounding> {
+  const seq = ctx.studentMessage.seq;
+  const snapshot = conversation.grounding;
+  const current = conversation.lessonAssociation;
+  const base = emptyGrounding(source);
+
+  if (assessment.decision === 'reuse' && snapshot) {
+    return reuseGrounding(source, snapshot, current, seq, false);
+  }
+  if (assessment.decision !== 'retrieve') return base;
+
+  let response: GroundingSearchResponse | null = null;
+  let retrieval: 'ok' | 'empty' | 'unavailable' | null = null;
+  try {
+    response = await deps.kafuo.groundingSearch({
+      tenantId: conversation.tenantId,
+      studentRef: conversation.studentRef,
+      subjectOfferingId: conversation.subjectOfferingId,
+      query: assessment.query ?? ctx.studentMessage.text.slice(0, 200),
+      maxChars: UNIT_CHAR_CAP,
+      ...(snapshot ? { preferredContentUnitIds: snapshot.units.map((unit) => unit.unitId) } : {}),
+    });
+  } catch (error) {
+    const denied = httpAccessDenied(error);
+    if (denied) throw accessLost(denied);
+    retrieval = 'unavailable';
+    log.warn(
+      JSON.stringify({
+        event: 'tutor.grounding_unavailable',
+        turnId: ctx.turnId,
+        error: describeErrorSafely(error).name,
+      }),
+    );
+  }
+  const resolution = source === 'shadow' ? { shadow: 'not_available' } : null;
+  if (!response || response.units.length === 0) {
+    if (retrieval === null) retrieval = 'empty';
+    return {
+      ...base,
+      grounding: { mode: 'insufficient' },
+      outcomeReason: retrieval === 'unavailable' ? 'retrieval_unavailable' : 'below_evidence_floor',
+      assessmentExtra: { retrieval },
+      resolution,
+    };
+  }
+  const match = decideLessonAssociation(response);
+  const units: HttpSnapshotUnit[] = response.units.map((unit) => ({
+    source: 'kafuo_http',
+    unitId: unit.contentUnitId,
+    lessonId: unit.lessonId || null,
+    lessonTitle: unit.lessonTitle || null,
+    title: unit.unitTitle || null,
+    text: unit.text,
+    chars: unit.text.length,
+  }));
+  const nextSnapshot: GroundingSnapshot = {
+    schema: 2,
+    source: 'kafuo_http',
+    units,
+    keywords: groundingKeywords(response.units),
+    setAtSeq: seq,
+    lastUsedSeq: seq,
+  };
+  // Rollback-only schema 1: never replaces a v2, never rewrites the same lesson.
+  const writeV1 =
+    match !== null &&
+    current?.schema !== 2 &&
+    !(current?.schema === 1 && current.lessonId === match.lessonId);
+  return {
+    ...base,
+    grounding: {
+      mode: 'retrieved',
+      lessonTitle: match ? match.lessonTitle : null,
+      units: response.units.map((unit) =>
+        toGroundingUnitInput({ unitTitle: unit.unitTitle, text: unit.text, score: unit.score }),
+      ),
+    },
+    lessonTitle: match ? match.lessonTitle : null,
+    nextSnapshot,
+    association: writeV1
+      ? {
+          kind: 'set',
+          value: {
+            schema: 1,
+            lessonId: match!.lessonId,
+            lessonTitle: match!.lessonTitle,
+            confidence: match!.confidence,
+            associatedAtSeq: seq,
+          },
+        }
+      : { kind: 'keep' },
+    auditUnits: auditUnits(nextSnapshot),
+    totalChars: snapshotChars(nextSnapshot),
+    truncated: response.truncated,
+    assessmentExtra: {
+      retrieval: 'ok',
+      ...(match ? { lessonMatchConfidence: match.confidence } : {}),
+    },
+    resolution,
+  };
+}
+
+/** The original question of a pending clarification (its text, never stored elsewhere). */
+async function questionText(
+  deps: TutorRuntimeDeps,
+  conversationId: string,
+  ctx: PrepareContext,
+  questionSeq: number,
+): Promise<string | null> {
+  const inWindow = ctx.historyMessages.find((m) => m.seq === questionSeq && m.role === 'student');
+  if (inWindow) return inWindow.text;
+  const { messages } = await readMessagesBySeq(deps.pool, {
+    parentId: conversationId,
+    beforeSeq: questionSeq + 1,
+    limit: 1,
+  });
+  const message = messages.find((m) => m.seq === questionSeq && m.role === 'student');
+  return message ? message.text : null;
+}
+
+/** A `direct` retrieval result → this turn's grounding, snapshot and association. */
+function fromDirectResult(
+  result: DirectRetrievalResult,
+  conversation: TutorConversation,
+  ctx: PrepareContext,
+  base: FreeChatGrounding,
+): FreeChatGrounding {
+  const seq = ctx.studentMessage.seq;
+  const current = conversation.lessonAssociation;
+  if (result.kind === 'insufficient') {
+    return {
+      ...base,
+      grounding: { mode: 'insufficient', reason: result.reason },
+      eventReason: result.reason,
+      outcomeReason: result.reason,
+      resolution: result.resolution,
+      embedding: result.embedding ?? null,
+    };
+  }
+  if (result.kind === 'clarify') {
+    return {
+      ...base,
+      outcomeReason: 'clarification',
+      resolution: result.resolution,
+      clarification: {
+        text: clarificationText(ctx.studentMessage.text, result.candidates.map((c) => c.title)),
+        candidates: result.candidates,
+      },
+    };
+  }
+  const titleOf = new Map(result.items.map((item) => [item.itemId, item] as const));
+  const units: DirectSnapshotUnit[] = result.units.map((unit) => ({
+    source: 'direct',
+    unitId: unit.contentUnitId,
+    itemId: unit.learningItemId,
+    itemType: unit.itemType,
+    buildId: unit.buildId,
+    revisionId: unit.contentRevisionId,
+    unitUpdatedAt: unit.unitUpdatedAt,
+    title: unit.unitTitle,
+    text: unit.text,
+    chars: unit.text.length,
+  }));
+  const nextSnapshot: GroundingSnapshot = {
+    schema: 2,
+    source: 'direct',
+    units,
+    items: result.items.map((item) => ({ itemId: item.itemId, itemType: item.itemType, title: item.title })),
+    keywords: groundingKeywords(result.units.map((unit) => ({ unitTitle: unit.unitTitle, text: unit.text }))),
+    setAtSeq: seq,
+    lastUsedSeq: seq,
+  };
+  // Association v2: written for a single-item evidence set; cleared when the
+  // evidence spans other items (never left stale).
+  let association: FreeChatGrounding['association'] = { kind: 'keep' };
+  let associated: ItemAssociationV2 | null = null;
+  if (result.items.length === 1) {
+    const item = result.items[0]!;
+    if (
+      current?.schema === 2 &&
+      current.learningItemId === item.itemId &&
+      current.learningItemType === item.itemType
+    ) {
+      associated = current;
+    } else {
+      associated = {
+        schema: 2,
+        learningItemType: item.itemType,
+        learningItemId: item.itemId,
+        title: item.title ?? '',
+        confidence: Math.max(0, Math.min(1, Math.max(...result.units.map((unit) => unit.similarity)))),
+        associatedAtSeq: seq,
+        buildId: result.units[0]?.buildId ?? null,
+      };
+      association = { kind: 'set', value: associated };
+    }
+  } else if (current) {
+    association = { kind: 'clear' };
+  }
+  const lessonTitle = associated && associated.title ? associated.title : null;
+  const itemType = lessonTitle ? associated!.learningItemType : null;
+  return {
+    ...base,
+    grounding: {
+      mode: 'retrieved',
+      lessonTitle,
+      ...(itemType ? { itemType } : {}),
+      units: result.units.map((unit) =>
+        toGroundingUnitInput({
+          unitTitle: unit.unitTitle,
+          text: unit.text,
+          score: unit.similarity,
+          item: {
+            key: unit.learningItemId,
+            title: titleOf.get(unit.learningItemId)?.title ?? null,
+            itemType: unit.itemType,
+          },
+        }),
+      ),
+    },
+    lessonTitle,
+    eventItemType: itemType,
+    nextSnapshot,
+    association,
+    auditUnits: auditUnits(nextSnapshot),
+    totalChars: snapshotChars(nextSnapshot),
+    resolution: result.resolution,
+    embedding: result.embedding,
+  };
+}
+
+/**
+ * The `direct` path (discovery-first §5.6): pending clarification choice →
+ * D-10 probe → reuse revalidation (D-17) → retrieve through the reader seam.
+ */
+async function groundDirect(
+  deps: TutorRuntimeDeps,
+  direct: DirectGroundingDeps,
+  conversation: TutorConversation,
+  ctx: PrepareContext,
+  assessment: ContextAssessment,
+): Promise<FreeChatGrounding> {
+  const seq = ctx.studentMessage.seq;
+  const scope = {
+    tenantId: conversation.tenantId,
+    studentRef: conversation.studentRef,
+    subjectOfferingId: conversation.subjectOfferingId,
+  };
+  const clock = new RetrievalClock();
+  const snapshot = conversation.grounding;
+  const extra: Record<string, unknown> = {};
+  const finish = (grounding: FreeChatGrounding): FreeChatGrounding => ({
+    ...grounding,
+    assessmentExtra: { ...grounding.assessmentExtra, ...extra },
+    timings: clock.snapshot(),
+  });
+  const base = emptyGrounding('direct');
+
+  // 1. A pending clarification: an ordinal or a title chooses the item, and the
+  //    ORIGINAL question is retrieved. Anything else is assessed normally.
+  const pending = conversation.pendingClarification;
+  if (pending && pending.askedAtSeq < seq) {
+    const choice = matchClarificationReply(
+      ctx.studentMessage.text,
+      pending.candidates.map((candidate) => candidate.title),
+    );
+    if (choice) {
+      const candidate = pending.candidates[choice.index]!;
+      const question = (await questionText(deps, conversation.id, ctx, pending.questionSeq)) ?? ctx.studentMessage.text;
+      extra.clarificationChoice = { by: choice.by, index: choice.index + 1, itemId: candidate.itemId };
+      const result = await retrieveDirect(
+        direct,
+        scope,
+        {
+          text: question,
+          selected: {
+            learningItemId: candidate.itemId,
+            itemType: candidate.itemType,
+            title: candidate.title,
+            score: 0,
+            matchedTermTypes: [],
+            routable: true,
+          },
+        },
+        clock,
+      );
+      return finish(fromDirectResult(result, conversation, ctx, base));
+    }
+  }
+
+  // 2. D-10 probe: a strong match to another item upgrades none / reuse to retrieve.
+  let decision = assessment.decision;
+  let resolved: ResolveItemsResult | undefined;
+  if (
+    (decision === 'none' || decision === 'reuse') &&
+    assessment.rule !== 'social_meta' &&
+    assessment.contentKeywordCount >= 1
+  ) {
+    const currentItems = new Set(
+      snapshot?.source === 'direct' && !assessment.groundingStale
+        ? snapshot.units.map((unit) => unit.itemId)
+        : [],
+    );
+    const probe = await runDiscoveryProbe(direct, scope, ctx.studentMessage.text, currentItems, clock);
+    extra.probe = probe.audit;
+    if (probe.upgrade) {
+      decision = 'retrieve';
+      resolved = probe.upgrade;
+    }
+  }
+
+  // 3. Reuse: only a `direct` snapshot, revalidated once (D-17).
+  if (decision === 'reuse' && snapshot) {
+    if (snapshot.source !== 'direct') {
+      extra.reuse = 'snapshot_not_direct';
+      decision = 'retrieve';
+    } else {
+      const check = await revalidateUnits(
+        direct,
+        scope,
+        snapshot.units.map((unit) => ({
+          contentUnitId: unit.unitId,
+          learningItemId: unit.itemId,
+          buildId: unit.buildId,
+          contentRevisionId: unit.revisionId,
+          unitUpdatedAt: unit.unitUpdatedAt,
+        })),
+        clock,
+      );
+      extra.revalidation = { outcome: check.outcome, valid: check.validCount, total: snapshot.units.length };
+      if (check.outcome === 'valid') {
+        return finish(reuseGrounding('direct', snapshot, conversation.lessonAssociation, seq, true));
+      }
+      if (check.outcome === 'invalid') {
+        decision = 'retrieve';
+      } else {
+        return finish({
+          ...base,
+          grounding: { mode: 'insufficient', reason: check.outcome },
+          eventReason: check.outcome,
+          outcomeReason: check.outcome,
+        });
+      }
+    }
+  }
+
+  if (decision !== assessment.decision) extra.effectiveDecision = decision;
+  if (decision === 'retrieve') {
+    const result = await retrieveDirect(direct, scope, { text: ctx.studentMessage.text, resolved }, clock);
+    return finish(fromDirectResult(result, conversation, ctx, base));
+  }
+  return finish(base);
 }
 
 export async function prepareFreeChatTurn(
@@ -397,76 +949,26 @@ export async function prepareFreeChatTurn(
   ctx: PrepareContext,
 ): Promise<PreparedTurn> {
   const seq = ctx.studentMessage.seq;
+  const route = resolveGroundingRoute({
+    tenantId: conversation.tenantId,
+    directAvailable: deps.grounding !== undefined,
+  });
+  if (route.fallbackReason === 'reader_not_wired') {
+    log.warn(JSON.stringify({ event: 'tutor.grounding_direct_unavailable', turnId: ctx.turnId }));
+  }
+  const ruleset = assessmentRuleset(route.effective);
   const snapshot = conversation.grounding;
   const turnsSinceUse = snapshot ? Math.max(0, Math.floor((seq - snapshot.lastUsedSeq) / 2)) : 0;
   const assessment: ContextAssessment = assessContext({
     message: ctx.studentMessage.text,
     grounding: snapshot ? { keywords: snapshot.keywords, turnsSinceUse } : null,
+    ruleset,
   });
 
-  let grounding: GroundingInput = { mode: 'none' };
-  let nextSnapshot: GroundingSnapshot | null = null;
-  let association: ReturnType<typeof decideLessonAssociation> = null;
-  let audit: TurnGroundingUnit[] = [];
-  let totalChars = 0;
-  let truncated = false;
-  let lessonTitle: string | null = conversation.lessonAssociation?.lessonTitle ?? null;
-  let retrieval: 'ok' | 'empty' | 'unavailable' | null = null;
-
-  if (assessment.decision === 'reuse' && snapshot) {
-    grounding = { mode: 'reuse', lessonTitle, units: snapshotUnitsToInput(snapshot.units) };
-    nextSnapshot = { ...snapshot, lastUsedSeq: seq };
-    audit = auditUnits(snapshot.units);
-    totalChars = snapshot.units.reduce((sum, unit) => sum + unit.chars, 0);
-  } else if (assessment.decision === 'retrieve') {
-    let response: GroundingSearchResponse | null = null;
-    try {
-      response = await deps.kafuo.groundingSearch({
-        tenantId: conversation.tenantId,
-        studentRef: conversation.studentRef,
-        subjectOfferingId: conversation.subjectOfferingId,
-        query: assessment.query ?? ctx.studentMessage.text.slice(0, 200),
-        maxChars: UNIT_CHAR_CAP,
-        ...(snapshot ? { preferredContentUnitIds: snapshot.units.map((unit) => unit.unitId) } : {}),
-      });
-    } catch (error) {
-      retrieval = 'unavailable';
-      log.warn(
-        JSON.stringify({
-          event: 'tutor.grounding_unavailable',
-          turnId: ctx.turnId,
-          error: describeErrorSafely(error).name,
-        }),
-      );
-    }
-    if (response && response.units.length > 0) {
-      retrieval = 'ok';
-      association = decideLessonAssociation(response);
-      if (association) lessonTitle = association.lessonTitle;
-      const units: GroundingSnapshotUnit[] = response.units.map((unit) => ({
-        unitId: unit.contentUnitId,
-        lessonId: unit.lessonId || null,
-        lessonTitle: unit.lessonTitle || null,
-        title: unit.unitTitle || null,
-        text: unit.text,
-        chars: unit.text.length,
-      }));
-      grounding = {
-        mode: 'retrieved',
-        lessonTitle: association ? association.lessonTitle : lessonTitle,
-        units: response.units.map((unit) =>
-          toGroundingUnitInput({ unitTitle: unit.unitTitle, text: unit.text, score: unit.score }),
-        ),
-      };
-      nextSnapshot = { units, keywords: groundingKeywords(response.units), setAtSeq: seq, lastUsedSeq: seq };
-      audit = auditUnits(units);
-      totalChars = units.reduce((sum, unit) => sum + unit.chars, 0);
-      truncated = response.truncated;
-    } else {
-      if (retrieval === null) retrieval = 'empty';
-      grounding = { mode: 'insufficient' };
-    }
-  }
+  const outcome =
+    route.effective === 'direct'
+      ? await groundDirect(deps, deps.grounding!, conversation, ctx, assessment)
+      : await groundOverHttp(deps, conversation, ctx, assessment, route.effective);
 
   const summaryThrough = conversation.summaryThroughSeq;
   const summary = conversation.contextSummary;
@@ -480,12 +982,28 @@ export async function prepareFreeChatTurn(
       }
     : { turns: ctx.history };
 
+  const grounded = outcome.grounding.mode === 'reuse' || outcome.grounding.mode === 'retrieved';
+  const timings = outcome.timings;
   return {
     academic,
-    grounding,
+    grounding: outcome.grounding,
     history,
-    // The grounding event names the lesson only when lesson grounding is in play this turn.
-    lessonTitle: grounding.mode === 'reuse' || grounding.mode === 'retrieved' ? lessonTitle : null,
+    // The grounding event names the item only for its own evidence this turn (never on insufficient).
+    lessonTitle: grounded ? outcome.lessonTitle : null,
+    ...(outcome.source === 'direct'
+      ? { groundingEvent: { itemType: outcome.eventItemType, reason: outcome.eventReason } }
+      : {}),
+    ...(outcome.clarification
+      ? {
+          clarification: {
+            text: outcome.clarification.text,
+            candidates: outcome.clarification.candidates.map((candidate) => ({
+              title: candidate.title,
+              itemType: candidate.itemType,
+            })),
+          },
+        }
+      : {}),
     audit: {
       assessment: {
         decision: assessment.decision,
@@ -493,29 +1011,51 @@ export async function prepareFreeChatTurn(
         overlap: assessment.overlap,
         groundingStale: assessment.groundingStale,
         keywordCount: assessment.keywords.length,
-        ...(retrieval ? { retrieval } : {}),
-        ...(association ? { lessonMatchConfidence: association.confidence } : {}),
+        ruleset: assessment.ruleset,
+        contentKeywordCount: assessment.contentKeywordCount,
+        source: outcome.source,
+        ...outcome.assessmentExtra,
       },
-      units: audit,
-      totalChars: Math.min(totalChars, UNIT_CHAR_CAP),
-      truncated,
+      units: outcome.auditUnits,
+      totalChars: Math.min(outcome.totalChars, UNIT_CHAR_CAP),
+      truncated: outcome.truncated,
+      retrieval: {
+        source: outcome.source,
+        outcomeReason: outcome.outcomeReason,
+        resolution: outcome.resolution,
+        embeddingModel: outcome.embedding?.model ?? null,
+        embeddingTokens: outcome.embedding?.tokens ?? null,
+        poolWaitMs: timings?.poolWaitMs ?? null,
+        resolveMs: timings?.resolveMs ?? null,
+        embedMs: timings?.embedMs ?? null,
+        searchMs: timings?.searchMs ?? null,
+        totalRetrievalMs: timings?.totalRetrievalMs ?? null,
+      },
     },
-    commit: async (q: Queryable) => {
+    commit: async (q: Queryable, result) => {
       const nowS = deps.now() / 1000;
-      if (nextSnapshot) await writeGroundingSnapshot(q, conversation.id, nextSnapshot, nowS);
-      if (association && conversation.lessonAssociation?.learningItemId !== association.lessonId) {
-        await updateConversationLessonAssociation(
+      // `direct`: only a delivered turn moves the conversation's grounding, so
+      // a retry (turn_attempt + 1) re-runs resolution and retrieval
+      // deterministically instead of reusing evidence the student never
+      // received. The `kafuo_http` path keeps its existing behaviour.
+      if (result.succeeded || outcome.source !== 'direct') {
+        if (outcome.nextSnapshot) await writeGroundingSnapshot(q, conversation.id, outcome.nextSnapshot, nowS);
+        if (outcome.association.kind === 'set') {
+          await updateConversationLessonAssociation(q, conversation.id, outcome.association.value, nowS);
+        } else if (outcome.association.kind === 'clear') {
+          await updateConversationLessonAssociation(q, conversation.id, null, nowS);
+        }
+      }
+      if (outcome.clarification && result.tutorMessageSeq !== null) {
+        await updateConversationPendingClarification(
           q,
           conversation.id,
-          {
-            learningItemType: 'lesson',
-            learningItemId: association.lessonId,
-            lessonTitle: association.lessonTitle,
-            confidence: association.confidence,
-            associatedAtSeq: seq,
-          },
+          { candidates: outcome.clarification.candidates, questionSeq: seq, askedAtSeq: result.tutorMessageSeq },
           nowS,
         );
+      } else if (conversation.pendingClarification && result.succeeded) {
+        // A choice was consumed, or the student moved on: the question is no longer pending.
+        await updateConversationPendingClarification(q, conversation.id, null, nowS);
       }
     },
   };

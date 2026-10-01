@@ -32,6 +32,13 @@ import { INCOMPLETE_DEADLINE_S } from '@/lib/server/teaching-model/accounting-sw
 
 const CONVERSATIONAL = ['free_chat', 'help'] as const;
 const GENERATION = ['package_generation', 'question_generation'] as const;
+/**
+ * Reviewer-driven single-slide regeneration spend is its own view
+ * (single-slide-regeneration-plan §8.3): its ledger rows name the producing
+ * attempt, so folding them into GENERATION would change that attempt's
+ * per-attempt numbers. `overall` and `latency` include it by construction.
+ */
+const SCENE_REGENERATION = 'scene_regeneration' as const;
 
 export interface TeachingModelReport {
   generatedAt: number;
@@ -47,6 +54,10 @@ export interface TeachingModelReport {
   generation: {
     perVersion: AttemptAggregateRow[];
     perAttempt: AttemptAggregateRow[];
+  };
+  sceneRegeneration: {
+    perRegeneration: AttemptAggregateRow[];
+    perVersion: AttemptAggregateRow[];
   };
   fallback: FallbackBreakdownRow[];
   latency: AttemptAggregateRow[];
@@ -70,6 +81,7 @@ export async function buildTeachingModelReport(
   };
   const conv = { ...filter, capability: [...CONVERSATIONAL] };
   const gen = { ...filter, capability: [...GENERATION] };
+  const regen = { ...filter, capability: SCENE_REGENERATION };
   const [overall, perTurn, perConversation, perStudent, perSubject, perModel] = await Promise.all([
     aggregateAttempts(queryable, { groupBy: [], ...filter }),
     aggregateAttempts(queryable, { groupBy: ['turn_id'], ...conv }),
@@ -77,6 +89,10 @@ export async function buildTeachingModelReport(
     aggregateAttempts(queryable, { groupBy: ['student_ref'], ...conv }),
     aggregateAttempts(queryable, { groupBy: ['subject_code'], ...conv }),
     aggregateAttempts(queryable, { groupBy: ['model_string'], ...conv }),
+  ]);
+  const [regenPerRegeneration, regenPerVersion] = await Promise.all([
+    aggregateAttempts(queryable, { groupBy: ['scene_regeneration_id'], ...regen }),
+    aggregateAttempts(queryable, { groupBy: ['version_id'], ...regen }),
   ]);
   const [perVersion, perAttempt, fallback, latency, helpByOrigin, budgetBreaches, incomplete, outbox, unresolved] =
     await Promise.all([
@@ -96,6 +112,7 @@ export async function buildTeachingModelReport(
     overall: overall[0] ?? null,
     conversational: { perTurn, perConversation, perStudent, perSubject, perModel },
     generation: { perVersion, perAttempt },
+    sceneRegeneration: { perRegeneration: regenPerRegeneration, perVersion: regenPerVersion },
     fallback,
     latency,
     helpByOrigin,
@@ -178,6 +195,12 @@ export function renderTeachingModelReport(report: TeachingModelReport): string {
   renderAggregate('Conversational cost per model', report.conversational.perModel, out);
   renderAggregate('Generation cost per version', report.generation.perVersion, out);
   renderAggregate('Generation cost per attempt', report.generation.perAttempt, out);
+  renderAggregate(
+    'Slide regeneration cost per regeneration',
+    report.sceneRegeneration.perRegeneration,
+    out,
+  );
+  renderAggregate('Slide regeneration cost per version', report.sceneRegeneration.perVersion, out);
 
   out.push('## Fallback rate by subject / primary model');
   if (report.fallback.length === 0) out.push('(no rows)');

@@ -11,6 +11,7 @@ import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 import type { AppDocument } from '@/lib/document-store/persistence-types';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type { TeachingCallOptions } from '@/lib/server/teaching-model/execute';
+import type { DirectGroundingDeps } from '@/lib/server/tutor/grounding/kafuo-grounding-reader';
 import {
   getKafuoIntegrationClient,
   type KafuoIntegrationClient,
@@ -35,6 +36,12 @@ export interface TutorRuntimeDeps {
    * to the owner-scoped teaching-package document store; tests plug PGlite.
    */
   loadStageDocument?: (stageId: string) => Promise<AppDocument | null>;
+  /**
+   * Free Chat `direct` grounding (discovery-first P7): the Kafuo grounding
+   * reader + query embedder seam. Unset until P6 wires the pg reader; while
+   * unset, `TUTOR_GROUNDING_SOURCE=direct` falls back to `kafuo_http`.
+   */
+  grounding?: DirectGroundingDeps;
 }
 
 const OVERRIDE_KEY = Symbol.for('openmaic.tutor.runtime-deps-override');

@@ -7,7 +7,7 @@
  * (`app/api/chat/route.ts`), lifted into a reusable writer so Free Chat now
  * and Help later emit exactly one shape:
  *
- *   turn_start {turnId, turnAttempt} → grounding {mode, lessonTitle?}
+ *   turn_start {turnId, turnAttempt} → grounding {mode, lessonTitle?, itemType?, reason?, candidates?}
  *   → text_delta {delta}… → (restart {servedBy:'fallback'} → text_delta…)
  *   → done {messageId, servedBy, safety?, accountingComplete: true}
  *   | error {code, retryable, window?, resetAt?}
@@ -37,9 +37,20 @@ export interface TurnStartEvent {
   turnAttempt: number;
 }
 
+/**
+ * `itemType`, `reason` and `candidates` are optional additions (discovery-first
+ * P7, F-M1/F-M3) sent only by the `direct` grounding path; no new event type.
+ *  - `itemType`  LESSON | SECTION of the item named by `lessonTitle`;
+ *  - `reason`    why an `insufficient` turn has no curriculum evidence;
+ *  - `candidates` the human-readable topics a `clarification` asks about
+ *    (titles only — never an id).
+ */
 export interface GroundingEvent {
   mode: string;
   lessonTitle?: string;
+  itemType?: string;
+  reason?: string;
+  candidates?: Array<{ title: string; itemType: string }>;
 }
 
 export interface DoneEvent {

@@ -55,6 +55,13 @@ const ACADEMIC = {
 const FIRST_TURN = { student: 'ما هو التبرير الاستقرائي في الرياضيات؟', tutor: 'التبرير الاستقرائي هو استنتاج قاعدة عامة من أمثلة متكررة.' };
 const NOW_S = T0_MS / 1000;
 
+/** Rollback-only schema-1 association (the `kafuo_http` path names a `lessons.id`). */
+const v1 = (lessonId: string, lessonTitle: string, confidence = 0.7, associatedAtSeq = 1) =>
+  ({ schema: 1, lessonId, lessonTitle, confidence, associatedAtSeq }) as const;
+/** Association v2 (the `direct` path names a `learning_items.id` with its type). */
+const v2 = (learningItemId: string, title: string, learningItemType: 'LESSON' | 'SECTION' = 'LESSON') =>
+  ({ schema: 2, learningItemType, learningItemId, title, confidence: 0.8, associatedAtSeq: 1, buildId: 'b-1' }) as const;
+
 describe('ensureConversationTitle', () => {
   let pool: RecordingPool;
   let policy: ResolvedSubjectPolicy;
@@ -127,32 +134,66 @@ describe('ensureConversationTitle', () => {
 
   it('a confident lesson association names the conversation after the official lesson title (no model call)', async () => {
     const c = await conversation();
-    await updateConversationLessonAssociation(pool, c.id, { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.7, associatedAtSeq: 1 }, NOW_S);
+    await updateConversationLessonAssociation(pool, c.id, v1('L1', 'قانون حفظ الكتلة'), NOW_S);
     expect(await title((await readConversation(pool, c.id))!)).toEqual({ title: 'قانون حفظ الكتلة', titleSource: 'lesson', changed: true });
+    expect(mocks.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('an association v2 on a SECTION item names the conversation after the section title', async () => {
+    const c = await conversation();
+    await updateConversationLessonAssociation(pool, c.id, v2('612', 'المثال المضاد', 'SECTION'), NOW_S);
+    expect(await title((await readConversation(pool, c.id))!)).toEqual({ title: 'المثال المضاد', titleSource: 'lesson', changed: true });
     expect(mocks.callLLM).not.toHaveBeenCalled();
   });
 
   it('a second conversation on the same lesson gets a topic suffix; numbering only when the topic call fails', async () => {
     const first = await conversation('conv-1');
-    await updateConversationLessonAssociation(pool, first.id, { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.7, associatedAtSeq: 1 }, NOW_S);
+    await updateConversationLessonAssociation(pool, first.id, v1('L1', 'قانون حفظ الكتلة'), NOW_S);
     await updateConversationTitle(pool, first.id, { title: 'قانون حفظ الكتلة', titleSource: 'lesson', now: NOW_S });
 
     const second = await conversation('conv-2');
-    await updateConversationLessonAssociation(pool, second.id, { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.8, associatedAtSeq: 1 }, NOW_S);
+    await updateConversationLessonAssociation(pool, second.id, v1('L1', 'قانون حفظ الكتلة', 0.8), NOW_S);
     mocks.callLLM.mockResolvedValueOnce(ok('مسائل'));
     expect(await title((await readConversation(pool, second.id))!)).toEqual({ title: 'قانون حفظ الكتلة — مسائل', titleSource: 'lesson_suffix', changed: true });
 
     const third = await conversation('conv-3');
-    await updateConversationLessonAssociation(pool, third.id, { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.8, associatedAtSeq: 1 }, NOW_S);
+    await updateConversationLessonAssociation(pool, third.id, v1('L1', 'قانون حفظ الكتلة', 0.8), NOW_S);
     mocks.callLLM.mockRejectedValue(apiError(503));
     expect(await title((await readConversation(pool, third.id))!)).toEqual({ title: 'قانون حفظ الكتلة — 3', titleSource: 'lesson_suffix', changed: true });
+  });
+
+  it('siblings key on the (schema, type, id) tuple: a schema-1 lessons.id never equals a v2 learning_items.id', async () => {
+    const lessonTitled = await conversation('conv-1');
+    await updateConversationLessonAssociation(pool, lessonTitled.id, v1('155', 'قانون حفظ الكتلة'), NOW_S);
+    await updateConversationTitle(pool, lessonTitled.id, { title: 'قانون حفظ الكتلة', titleSource: 'lesson', now: NOW_S });
+    const sectionTitled = await conversation('conv-2');
+    await updateConversationLessonAssociation(pool, sectionTitled.id, v2('155', 'قانون حفظ الكتلة', 'SECTION'), NOW_S);
+    await updateConversationTitle(pool, sectionTitled.id, { title: 'قانون حفظ الكتلة', titleSource: 'lesson', now: NOW_S });
+
+    // Same id string, different tuple: neither counts as a sibling → plain lesson title, no topic call.
+    const fresh = await conversation('conv-3');
+    await updateConversationLessonAssociation(pool, fresh.id, v2('155', 'المثال المضاد', 'LESSON'), NOW_S);
+    expect(await title((await readConversation(pool, fresh.id))!)).toEqual({ title: 'المثال المضاد', titleSource: 'lesson', changed: true });
+    expect(mocks.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('a pre-P7 association shape is ignored (parses as none): the title is a topic', async () => {
+    mocks.callLLM.mockResolvedValueOnce(ok('موضوع'));
+    const c = await conversation();
+    await pool.query(`UPDATE tutor_conversations SET lesson_association = $2::jsonb WHERE id = $1`, [
+      c.id,
+      JSON.stringify({ learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قديم', confidence: 0.9, associatedAtSeq: 1 }),
+    ]);
+    const read = (await readConversation(pool, c.id))!;
+    expect(read.lessonAssociation).toBeNull();
+    expect(await title(read)).toEqual({ title: 'موضوع', titleSource: 'topic', changed: true });
   });
 
   it('a later lesson match replaces a topic title but never a lesson-based one', async () => {
     mocks.callLLM.mockResolvedValueOnce(ok('موضوع'));
     const c = await conversation();
     expect((await title(c)).titleSource).toBe('topic');
-    await updateConversationLessonAssociation(pool, c.id, { learningItemType: 'lesson', learningItemId: 'L2', lessonTitle: 'المتتابعات', confidence: 0.9, associatedAtSeq: 3 }, NOW_S);
+    await updateConversationLessonAssociation(pool, c.id, v1('L2', 'المتتابعات', 0.9, 3), NOW_S);
     expect(await title((await readConversation(pool, c.id))!)).toEqual({ title: 'المتتابعات', titleSource: 'lesson', changed: true });
     expect(await title((await readConversation(pool, c.id))!)).toMatchObject({ changed: false, title: 'المتتابعات' });
   });

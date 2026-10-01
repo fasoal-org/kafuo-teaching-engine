@@ -85,6 +85,15 @@ No curriculum text is available for this turn. Do not claim what the lesson stat
 ## نصوص المنهج
 لا تتوفر نصوص من المنهج لهذا الدور. لا تدّعِ ما يذكره الدرس؛ قل إنك لا تستطيع تأكيد صياغة الدرس، واطرح سؤال توضيح قصيرًا إن لزم، أو أجب من المعرفة العامة مع التصريح بذلك.`;
 
+/**
+ * Added after the unchanged insufficient note ONLY when no approved item
+ * matched (`no_match`) or the matched item's index is not usable
+ * (`index_not_ready`): the existing CTX-05 behaviour, made explicit
+ * (discovery-first P7). Other insufficient reasons keep the note alone.
+ */
+export const GENERAL_ANSWER_NOTE_TEXT = `No approved curriculum unit matches this question: give a general explanation and say clearly that it is general subject knowledge, not the curriculum wording.
+لا توجد نصوص معتمدة من المنهج تطابق هذا السؤال: قدّم شرحًا عامًا وصرّح بوضوح أنه معرفة عامة بالمادة وليس صياغة المنهج.`;
+
 /** Help-mode addition: the tutor stays inside the current Scene (HLP-04). */
 export const HELP_SCOPE_TEXT = `This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.
 هذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.`;

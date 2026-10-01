@@ -250,7 +250,12 @@ describe('persistence route editor grant', () => {
   it('serves a write grant: drafts are editable, deletes guarded, other stages untouched', async () => {
     const cookie = grantCookie(STAGE_X, 'write');
 
-    const write = await call(`/documents/${STAGE_X}/scenes/scene-2`, putSceneInit(STAGE_X, cookie));
+    // A grant-delegated Scene write carries its revision precondition
+    // (single-slide-regeneration-plan §11): scene-2 is new, so `{}`.
+    const write = await call(
+      `/documents/${STAGE_X}/scenes/scene-2`,
+      putSceneInit(STAGE_X, cookie, { 'x-tp-expected-scene-revs': encodeURIComponent('{}') }),
+    );
     expect([200, 204]).toContain(write.status);
 
     // No stage_meta row ever carries the anonymous cookie owner.

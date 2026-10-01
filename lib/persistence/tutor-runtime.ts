@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS tutor_messages (
   text TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('accepted','generating','completed','failed')),
   served_by TEXT CHECK (served_by IN ('primary','fallback')),
-  grounding_mode TEXT CHECK (grounding_mode IN ('none','reuse','retrieved','scene','insufficient')),
+  grounding_mode TEXT CHECK (grounding_mode IN ('none','reuse','retrieved','scene','insufficient','clarification')),
   safety JSONB,
   error_code TEXT,
   accounting_complete BOOLEAN NOT NULL DEFAULT FALSE,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS tutor_turn_groundings (
   turn_id TEXT PRIMARY KEY,
   conversation_id TEXT,
   help_session_id TEXT,
-  mode TEXT NOT NULL CHECK (mode IN ('none','reuse','retrieved','scene','insufficient')),
+  mode TEXT NOT NULL CHECK (mode IN ('none','reuse','retrieved','scene','insufficient','clarification')),
   assessment JSONB NOT NULL,
   units JSONB NOT NULL,
   total_chars INTEGER NOT NULL CHECK (total_chars <= 10000),
@@ -167,8 +167,64 @@ CREATE INDEX IF NOT EXISTS ttg_help_session_idx
   WHERE help_session_id IS NOT NULL;
 `;
 
+/**
+ * Discovery-first Free Chat (discovery-first plan P7): additive only. The
+ * `grounding_mode` CHECKs on `tutor_messages` and `tutor_turn_groundings`
+ * gain `clarification` (drop and re-add, guarded — precedent
+ * `teaching-model-attempts.ts` evolution block; `tutor_help_messages` never
+ * uses it and keeps its CHECK). New nullable columns record the retrieval
+ * source, outcome reason, resolution audit and stage timings, the
+ * student-perceived first-delta time, and the pending clarification. A fresh
+ * database (whose CREATE TABLE already carries the widened CHECKs) and a
+ * re-run are no-ops. Nothing is ever narrowed.
+ */
+const TUTOR_RUNTIME_EVOLUTION = `
+ALTER TABLE tutor_conversations ADD COLUMN IF NOT EXISTS pending_clarification JSONB;
+ALTER TABLE tutor_messages ADD COLUMN IF NOT EXISTS first_delta_at DOUBLE PRECISION;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS source TEXT
+  CHECK (source IN ('kafuo_http','direct','shadow'));
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS outcome_reason TEXT;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS resolution JSONB;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS embedding_tokens INTEGER;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS pool_wait_ms DOUBLE PRECISION;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS resolve_ms DOUBLE PRECISION;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS embed_ms DOUBLE PRECISION;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS search_ms DOUBLE PRECISION;
+ALTER TABLE tutor_turn_groundings ADD COLUMN IF NOT EXISTS total_retrieval_ms DOUBLE PRECISION;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'tutor_messages_grounding_mode_check'
+       AND pg_get_constraintdef(oid) LIKE '%clarification%'
+  ) THEN
+    ALTER TABLE tutor_messages DROP CONSTRAINT IF EXISTS tutor_messages_grounding_mode_check;
+    ALTER TABLE tutor_messages
+      ADD CONSTRAINT tutor_messages_grounding_mode_check
+      CHECK (grounding_mode IN ('none','reuse','retrieved','scene','insufficient','clarification'));
+  END IF;
+END;
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'tutor_turn_groundings_mode_check'
+       AND pg_get_constraintdef(oid) LIKE '%clarification%'
+  ) THEN
+    ALTER TABLE tutor_turn_groundings DROP CONSTRAINT IF EXISTS tutor_turn_groundings_mode_check;
+    ALTER TABLE tutor_turn_groundings
+      ADD CONSTRAINT tutor_turn_groundings_mode_check
+      CHECK (mode IN ('none','reuse','retrieved','scene','insufficient','clarification'));
+  END IF;
+END;
+$$;
+`;
+
 export const TUTOR_RUNTIME_SCHEMA = `${TUTOR_RUNTIME_TABLES}
-${TUTOR_RUNTIME_INDEXES}`;
+${TUTOR_RUNTIME_INDEXES}
+${TUTOR_RUNTIME_EVOLUTION}`;
 
 /**
  * Idempotent; safe at every boot and twice in a row. Must run AFTER
@@ -182,6 +238,9 @@ export async function ensureTutorRuntimeSchema(queryable: Queryable): Promise<vo
   for (const statement of splitSqlStatements(TUTOR_RUNTIME_INDEXES)) {
     await queryable.query(statement);
   }
+  for (const statement of splitSqlStatements(TUTOR_RUNTIME_EVOLUTION)) {
+    await queryable.query(statement);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,8 +252,13 @@ export type TitleSource = 'topic' | 'lesson' | 'lesson_suffix' | 'fallback' | 'p
 export type MessageRole = 'student' | 'tutor';
 export type MessageStatus = 'accepted' | 'generating' | 'completed' | 'failed';
 export type ServedBy = 'primary' | 'fallback';
-export type GroundingMode = 'none' | 'reuse' | 'retrieved' | 'scene' | 'insufficient';
+/** `clarification` is Free Chat only (P7, D-8 (a)): a deterministic template, no model call. */
+export type GroundingMode = 'none' | 'reuse' | 'retrieved' | 'scene' | 'insufficient' | 'clarification';
 export type LineageStatus = 'own_attempt' | 'predecessor_attempt' | 'partial' | 'unavailable';
+/** The retrieval path that served a Free Chat turn (`TUTOR_GROUNDING_SOURCE`, effective). */
+export type GroundingSourceTag = 'kafuo_http' | 'direct' | 'shadow';
+/** Kafuo Learning Item types Free Chat can ground on (LESSON and SECTION). */
+export type LearningItemType = 'LESSON' | 'SECTION';
 export type HelpSessionStatus = 'active' | 'closed';
 
 export interface ConversationAcademic {
@@ -209,29 +273,323 @@ export interface ConversationAcademic {
   subjectNameEn?: string | null;
 }
 
-export interface LessonAssociation {
-  learningItemType: string;
+/**
+ * Association v2 (discovery-first P7, CHAT-07): the conversation's Learning
+ * Item — a Kafuo `learning_items.id` with its type. Written only by the
+ * `direct` path, on a `single` resolution or a single-item evidence set, and
+ * cleared when a later turn grounds on other items.
+ */
+export interface ItemAssociationV2 {
+  schema: 2;
+  learningItemType: LearningItemType;
   learningItemId: string;
+  title: string;
+  confidence: number;
+  associatedAtSeq: number;
+  buildId: string | null;
+}
+
+/**
+ * Rollback-only association written by the temporary `kafuo_http` path (it
+ * can only name a Kafuo `lessons.id`). Never replaces a v2; removed in P11
+ * with that path.
+ */
+export interface LessonAssociationV1 {
+  schema: 1;
+  lessonId: string;
   lessonTitle: string;
   confidence: number;
   associatedAtSeq: number;
 }
 
-export interface GroundingSnapshotUnit {
+export type ConversationAssociation = ItemAssociationV2 | LessonAssociationV1;
+
+/**
+ * The `(schema, type, id)` tuple titles and sibling counts key on, so a
+ * schema-1 `lessons.id` never equals a v2 `learning_items.id`.
+ */
+export interface AssociationKey {
+  schema: 1 | 2;
+  type: string;
+  id: string;
+}
+
+export function associationKey(association: ConversationAssociation): AssociationKey {
+  return association.schema === 2
+    ? { schema: 2, type: association.learningItemType, id: association.learningItemId }
+    : { schema: 1, type: 'lesson', id: association.lessonId };
+}
+
+/** The human-readable name of the associated item (never an id). */
+export function associationTitle(association: ConversationAssociation): string {
+  return association.schema === 2 ? association.title : association.lessonTitle;
+}
+
+/** A unit retrieved by the `direct` path (snapshot v2): enough to revalidate it (D-17). */
+export interface DirectSnapshotUnit {
+  source: 'direct';
   unitId: string;
-  lessonId?: string | null;
-  lessonTitle?: string | null;
+  itemId: string;
+  itemType: LearningItemType;
+  buildId: string;
+  revisionId: string;
+  unitUpdatedAt: string;
   title: string | null;
   text: string;
   chars: number;
 }
 
-/** The conversation's current valid grounding (§8.2 `reuse`). */
-export interface GroundingSnapshot {
-  units: GroundingSnapshotUnit[];
-  keywords: string[];
-  setAtSeq: number;
-  lastUsedSeq: number;
+/** A unit returned by the temporary `kafuo_http` path (no build/version data, never revalidated). */
+export interface HttpSnapshotUnit {
+  source: 'kafuo_http';
+  unitId: string;
+  lessonId: string | null;
+  lessonTitle: string | null;
+  title: string | null;
+  text: string;
+  chars: number;
+}
+
+export type GroundingSnapshotUnit = DirectSnapshotUnit | HttpSnapshotUnit;
+
+/** A Learning Item the direct snapshot's units come from (for the prompt's per-item headers). */
+export interface SnapshotItem {
+  itemId: string;
+  itemType: LearningItemType;
+  title: string | null;
+}
+
+/**
+ * The conversation's current grounding (§8.2 `reuse`), snapshot v2. The
+ * `direct` path reuses only a `source: 'direct'` snapshot (after
+ * `validate_units`); any other stored shape parses as "no snapshot".
+ */
+export type GroundingSnapshot =
+  | {
+      schema: 2;
+      source: 'direct';
+      units: DirectSnapshotUnit[];
+      items: SnapshotItem[];
+      keywords: string[];
+      setAtSeq: number;
+      lastUsedSeq: number;
+    }
+  | {
+      schema: 2;
+      source: 'kafuo_http';
+      units: HttpSnapshotUnit[];
+      keywords: string[];
+      setAtSeq: number;
+      lastUsedSeq: number;
+    };
+
+/** A clarification awaiting the student's choice (P7, FRD §9): ≤ 3 candidates, no text. */
+export interface PendingClarification {
+  candidates: Array<{ itemId: string; itemType: LearningItemType; title: string }>;
+  /** `seq` of the student's original question (its text is re-read for retrieval). */
+  questionSeq: number;
+  /** `seq` of the tutor's clarification message. */
+  askedAtSeq: number;
+}
+
+// --- Strict parsers (D-19: any other stored shape is "none", not an error) ---
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isItemType(value: unknown): value is LearningItemType {
+  return value === 'LESSON' || value === 'SECTION';
+}
+
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+/**
+ * Accepts exactly association v2 or the rollback-only schema 1. Anything
+ * else — including the pre-P7 `{learningItemType:'lesson', learningItemId:<lessons.id>}`
+ * — is "no association". Ordinary input validation, not a compatibility path.
+ */
+export function parseConversationAssociation(raw: unknown): ConversationAssociation | null {
+  const value = typeof raw === 'string' ? safeJson(raw) : raw;
+  if (!isRecord(value)) return null;
+  if (value.schema === 2) {
+    if (
+      isItemType(value.learningItemType) &&
+      isNonEmptyString(value.learningItemId) &&
+      typeof value.title === 'string' &&
+      isFiniteNumber(value.confidence) &&
+      isFiniteNumber(value.associatedAtSeq) &&
+      (value.buildId === undefined || isStringOrNull(value.buildId))
+    ) {
+      return {
+        schema: 2,
+        learningItemType: value.learningItemType,
+        learningItemId: value.learningItemId,
+        title: value.title,
+        confidence: value.confidence,
+        associatedAtSeq: value.associatedAtSeq,
+        buildId: (value.buildId as string | null | undefined) ?? null,
+      };
+    }
+    return null;
+  }
+  if (value.schema === 1) {
+    if (
+      isNonEmptyString(value.lessonId) &&
+      typeof value.lessonTitle === 'string' &&
+      isFiniteNumber(value.confidence) &&
+      isFiniteNumber(value.associatedAtSeq)
+    ) {
+      return {
+        schema: 1,
+        lessonId: value.lessonId,
+        lessonTitle: value.lessonTitle,
+        confidence: value.confidence,
+        associatedAtSeq: value.associatedAtSeq,
+      };
+    }
+  }
+  return null;
+}
+
+function parseDirectUnit(value: unknown): DirectSnapshotUnit | null {
+  if (!isRecord(value) || value.source !== 'direct') return null;
+  if (
+    !isNonEmptyString(value.unitId) ||
+    !isNonEmptyString(value.itemId) ||
+    !isItemType(value.itemType) ||
+    !isNonEmptyString(value.buildId) ||
+    !isNonEmptyString(value.revisionId) ||
+    typeof value.unitUpdatedAt !== 'string' ||
+    !isStringOrNull(value.title) ||
+    typeof value.text !== 'string' ||
+    !isFiniteNumber(value.chars)
+  ) {
+    return null;
+  }
+  return {
+    source: 'direct',
+    unitId: value.unitId,
+    itemId: value.itemId,
+    itemType: value.itemType,
+    buildId: value.buildId,
+    revisionId: value.revisionId,
+    unitUpdatedAt: value.unitUpdatedAt,
+    title: value.title,
+    text: value.text,
+    chars: value.chars,
+  };
+}
+
+function parseHttpUnit(value: unknown): HttpSnapshotUnit | null {
+  if (!isRecord(value) || value.source !== 'kafuo_http') return null;
+  if (
+    !isNonEmptyString(value.unitId) ||
+    !isStringOrNull(value.lessonId) ||
+    !isStringOrNull(value.lessonTitle) ||
+    !isStringOrNull(value.title) ||
+    typeof value.text !== 'string' ||
+    !isFiniteNumber(value.chars)
+  ) {
+    return null;
+  }
+  return {
+    source: 'kafuo_http',
+    unitId: value.unitId,
+    lessonId: value.lessonId,
+    lessonTitle: value.lessonTitle,
+    title: value.title,
+    text: value.text,
+    chars: value.chars,
+  };
+}
+
+function parseAll<T>(values: unknown, parse: (value: unknown) => T | null): T[] | null {
+  if (!Array.isArray(values)) return null;
+  const out: T[] = [];
+  for (const value of values) {
+    const parsed = parse(value);
+    if (parsed === null) return null;
+    out.push(parsed);
+  }
+  return out;
+}
+
+/** Accepts exactly snapshot v2 (`direct` or `kafuo_http`); any other shape is "no snapshot". */
+export function parseGroundingSnapshot(raw: unknown): GroundingSnapshot | null {
+  const value = typeof raw === 'string' ? safeJson(raw) : raw;
+  if (!isRecord(value) || value.schema !== 2) return null;
+  if (!isFiniteNumber(value.setAtSeq) || !isFiniteNumber(value.lastUsedSeq)) return null;
+  const keywords = parseAll(value.keywords, (k) => (typeof k === 'string' ? k : null));
+  if (keywords === null) return null;
+  if (value.source === 'direct') {
+    const units = parseAll(value.units, parseDirectUnit);
+    const items = parseAll(value.items, (item) =>
+      isRecord(item) &&
+      isNonEmptyString(item.itemId) &&
+      isItemType(item.itemType) &&
+      isStringOrNull(item.title)
+        ? { itemId: item.itemId, itemType: item.itemType, title: item.title }
+        : null,
+    );
+    if (units === null || items === null) return null;
+    return {
+      schema: 2,
+      source: 'direct',
+      units,
+      items,
+      keywords,
+      setAtSeq: value.setAtSeq,
+      lastUsedSeq: value.lastUsedSeq,
+    };
+  }
+  if (value.source === 'kafuo_http') {
+    const units = parseAll(value.units, parseHttpUnit);
+    if (units === null) return null;
+    return {
+      schema: 2,
+      source: 'kafuo_http',
+      units,
+      keywords,
+      setAtSeq: value.setAtSeq,
+      lastUsedSeq: value.lastUsedSeq,
+    };
+  }
+  return null;
+}
+
+export function parsePendingClarification(raw: unknown): PendingClarification | null {
+  const value = typeof raw === 'string' ? safeJson(raw) : raw;
+  if (!isRecord(value)) return null;
+  if (!isFiniteNumber(value.questionSeq) || !isFiniteNumber(value.askedAtSeq)) return null;
+  const candidates = parseAll(value.candidates, (candidate) =>
+    isRecord(candidate) &&
+    isNonEmptyString(candidate.itemId) &&
+    isItemType(candidate.itemType) &&
+    typeof candidate.title === 'string'
+      ? { itemId: candidate.itemId, itemType: candidate.itemType, title: candidate.title }
+      : null,
+  );
+  if (candidates === null || candidates.length === 0 || candidates.length > 3) return null;
+  return { candidates, questionSeq: value.questionSeq, askedAtSeq: value.askedAtSeq };
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 export interface TutorConversation {
@@ -242,11 +600,13 @@ export interface TutorConversation {
   subjectOfferingId: string;
   subjectName: string;
   academic: ConversationAcademic;
-  lessonAssociation: LessonAssociation | null;
+  lessonAssociation: ConversationAssociation | null;
   title: string | null;
   titleSource: TitleSource | null;
   status: ConversationStatus;
   grounding: GroundingSnapshot | null;
+  /** Set by a clarification turn; cleared by the next successful turn. */
+  pendingClarification: PendingClarification | null;
   contextSummary: string | null;
   summaryThroughSeq: number | null;
   lastInputTokens: number | null;
@@ -300,9 +660,29 @@ export interface TutorHelpSession {
 export interface TurnGroundingUnit {
   unitId: string;
   lessonId?: string | null;
+  /** `direct` path: the unit's Learning Item and build/revision (audit, CHAT-07). */
+  itemId?: string | null;
+  itemType?: LearningItemType | null;
+  buildId?: string | null;
+  revisionId?: string | null;
   title: string | null;
   chars: number;
   orderIndex: number;
+}
+
+/** Retrieval audit of one Free Chat turn (P7): source, outcome reason, resolution and timings. */
+export interface TurnRetrievalAudit {
+  source: GroundingSourceTag;
+  outcomeReason?: string | null;
+  /** Bounded ids, outcomes, scores, matched term types and build ids — never text (RET-07). */
+  resolution?: Record<string, unknown> | null;
+  embeddingModel?: string | null;
+  embeddingTokens?: number | null;
+  poolWaitMs?: number | null;
+  resolveMs?: number | null;
+  embedMs?: number | null;
+  searchMs?: number | null;
+  totalRetrievalMs?: number | null;
 }
 
 export interface TurnGrounding {
@@ -319,6 +699,17 @@ export interface TurnGrounding {
   resolvedAttemptId: string | null;
   budgetEstimateTokens: number;
   budgetCounterKind: 'exact' | 'proxy';
+  /** P7 retrieval audit; `null` columns on rows written before P7 or by Help. */
+  source: GroundingSourceTag | null;
+  outcomeReason: string | null;
+  resolution: Record<string, unknown> | null;
+  embeddingModel: string | null;
+  embeddingTokens: number | null;
+  poolWaitMs: number | null;
+  resolveMs: number | null;
+  embedMs: number | null;
+  searchMs: number | null;
+  totalRetrievalMs: number | null;
   createdAt: number;
 }
 
@@ -355,6 +746,7 @@ interface ConversationRow extends Record<string, unknown> {
   title_source: TitleSource | null;
   status: ConversationStatus;
   grounding: unknown;
+  pending_clarification: unknown;
   context_summary: string | null;
   summary_through_seq: unknown;
   last_input_tokens: number | null;
@@ -366,8 +758,8 @@ interface ConversationRow extends Record<string, unknown> {
 }
 
 const CONVERSATION_COLUMNS = `id, tenant_id, student_ref, subject_code, subject_offering_id, subject_name,
-  academic, lesson_association, title, title_source, status, grounding, context_summary,
-  summary_through_seq, last_input_tokens, message_count, last_message_at, client_request_id,
+  academic, lesson_association, title, title_source, status, grounding, pending_clarification,
+  context_summary, summary_through_seq, last_input_tokens, message_count, last_message_at, client_request_id,
   created_at, updated_at`;
 
 function mapConversation(row: ConversationRow): TutorConversation {
@@ -379,11 +771,12 @@ function mapConversation(row: ConversationRow): TutorConversation {
     subjectOfferingId: row.subject_offering_id,
     subjectName: row.subject_name,
     academic: json<ConversationAcademic>(row.academic),
-    lessonAssociation: jsonOrNull<LessonAssociation>(row.lesson_association),
+    lessonAssociation: parseConversationAssociation(row.lesson_association),
     title: row.title,
     titleSource: row.title_source,
     status: row.status,
-    grounding: jsonOrNull<GroundingSnapshot>(row.grounding),
+    grounding: parseGroundingSnapshot(row.grounding),
+    pendingClarification: parsePendingClarification(row.pending_clarification),
     contextSummary: row.context_summary,
     summaryThroughSeq: numOrNull(row.summary_through_seq),
     lastInputTokens: numOrNull(row.last_input_tokens),
@@ -490,6 +883,16 @@ interface GroundingRow extends Record<string, unknown> {
   resolved_attempt_id: string | null;
   budget_estimate_tokens: number;
   budget_counter_kind: 'exact' | 'proxy';
+  source: GroundingSourceTag | null;
+  outcome_reason: string | null;
+  resolution: unknown;
+  embedding_model: string | null;
+  embedding_tokens: unknown;
+  pool_wait_ms: unknown;
+  resolve_ms: unknown;
+  embed_ms: unknown;
+  search_ms: unknown;
+  total_retrieval_ms: unknown;
   created_at: number;
 }
 
@@ -508,6 +911,16 @@ function mapGrounding(row: GroundingRow): TurnGrounding {
     resolvedAttemptId: row.resolved_attempt_id,
     budgetEstimateTokens: num(row.budget_estimate_tokens),
     budgetCounterKind: row.budget_counter_kind,
+    source: row.source ?? null,
+    outcomeReason: row.outcome_reason ?? null,
+    resolution: jsonOrNull<Record<string, unknown>>(row.resolution),
+    embeddingModel: row.embedding_model ?? null,
+    embeddingTokens: numOrNull(row.embedding_tokens),
+    poolWaitMs: numOrNull(row.pool_wait_ms),
+    resolveMs: numOrNull(row.resolve_ms),
+    embedMs: numOrNull(row.embed_ms),
+    searchMs: numOrNull(row.search_ms),
+    totalRetrievalMs: numOrNull(row.total_retrieval_ms),
     createdAt: num(row.created_at),
   };
 }
@@ -595,22 +1008,29 @@ export async function readConversationByClientRequestId(
 
 /**
  * How many OTHER conversations of this student already carry a title based
- * on the given lesson (CHAT-02: a second conversation on the same lesson gets
- * a topic suffix).
+ * on the same associated item (CHAT-02: a second conversation on the same
+ * item gets a topic suffix). Keyed on the full `(schema, type, id)` tuple, so
+ * a rollback-only schema-1 `lessons.id` never counts as a v2
+ * `learning_items.id` (P7).
  */
 export async function countConversationsForLesson(
   queryable: Queryable,
   owner: ConversationOwner,
-  learningItemId: string,
+  key: AssociationKey,
   excludeConversationId: string,
 ): Promise<number> {
   const result = await queryable.query<{ n: unknown }>(
     `SELECT count(*)::int AS n FROM tutor_conversations
       WHERE tenant_id = $1 AND student_ref = $2 AND id <> $3
         AND lesson_association IS NOT NULL
-        AND lesson_association->>'learningItemId' = $4
+        AND lesson_association->>'schema' = $4
+        AND (CASE WHEN lesson_association->>'schema' = '2'
+                  THEN lesson_association->>'learningItemType' ELSE 'lesson' END) = $5
+        AND (CASE WHEN lesson_association->>'schema' = '2'
+                  THEN lesson_association->>'learningItemId'
+                  ELSE lesson_association->>'lessonId' END) = $6
         AND title_source IN ('lesson', 'lesson_suffix')`,
-    [owner.tenantId, owner.studentRef, excludeConversationId, learningItemId],
+    [owner.tenantId, owner.studentRef, excludeConversationId, String(key.schema), key.type, key.id],
   );
   return num(result.rows[0]?.n ?? 0);
 }
@@ -771,7 +1191,7 @@ export async function updateConversationTitle(
 export async function updateConversationLessonAssociation(
   queryable: Queryable,
   id: string,
-  association: LessonAssociation | null,
+  association: ConversationAssociation | null,
   now: number,
 ): Promise<void> {
   await queryable.query(
@@ -813,7 +1233,7 @@ export async function readGroundingSnapshot(
     `SELECT grounding FROM tutor_conversations WHERE id = $1`,
     [conversationId],
   );
-  return result.rows[0] ? jsonOrNull<GroundingSnapshot>(result.rows[0].grounding) : null;
+  return result.rows[0] ? parseGroundingSnapshot(result.rows[0].grounding) : null;
 }
 
 /** Replace (or clear with `null`) the conversation's current grounding snapshot. */
@@ -826,6 +1246,19 @@ export async function writeGroundingSnapshot(
   await queryable.query(
     `UPDATE tutor_conversations SET grounding = $2::jsonb, updated_at = $3 WHERE id = $1`,
     [conversationId, snapshot === null ? null : JSON.stringify(snapshot), now],
+  );
+}
+
+/** Set (or clear with `null`) the clarification awaiting the student's choice (P7). */
+export async function updateConversationPendingClarification(
+  queryable: Queryable,
+  conversationId: string,
+  pending: PendingClarification | null,
+  now: number,
+): Promise<void> {
+  await queryable.query(
+    `UPDATE tutor_conversations SET pending_clarification = $2::jsonb, updated_at = $3 WHERE id = $1`,
+    [conversationId, pending === null ? null : JSON.stringify(pending), now],
   );
 }
 
@@ -1065,6 +1498,11 @@ export interface InsertTutorMessageInput {
   meterReservationId?: string | null;
   /** Help rows only. */
   stepRef?: string | null;
+  /**
+   * Free Chat rows only: epoch seconds the first `text_delta` was written
+   * (student-perceived TTFT, P7). Ignored for Help rows (no such column).
+   */
+  firstDeltaAt?: number | null;
   /** Epoch seconds. */
   now: number;
 }
@@ -1075,9 +1513,9 @@ async function insertTutor(
   t: MessageTable,
   input: InsertTutorMessageInput,
 ): Promise<TutorMessage> {
-  const stepColumn = t.hasStepRef ? ', step_ref' : '';
-  // $12 is `now`; step_ref, when present, is $13.
-  const stepValue = t.hasStepRef ? ', $13' : '';
+  // $12 is `now`; the table-specific column (step_ref for Help, first_delta_at
+  // for Free Chat) is $13.
+  const extraColumn = t.hasStepRef ? 'step_ref' : 'first_delta_at';
   const params: unknown[] = [
     input.id,
     input.parentId,
@@ -1092,14 +1530,14 @@ async function insertTutor(
     input.meterReservationId ?? null,
     input.now,
   ];
-  if (t.hasStepRef) params.push(input.stepRef ?? null);
+  params.push(t.hasStepRef ? (input.stepRef ?? null) : (input.firstDeltaAt ?? null));
   const result = await queryable.query<MessageRow>(
     `INSERT INTO ${t.table} (
        id, ${t.parentColumn}, seq, role, client_message_id, turn_id, turn_attempt, text, status,
        served_by, grounding_mode, safety, accounting_complete, meter_reservation_id,
-       created_at, completed_at${stepColumn}
+       created_at, completed_at, ${extraColumn}
      ) VALUES ($1, $2, $3, 'tutor', NULL, $4, $5, $6, 'completed', $7, $8, $9::jsonb, $10, $11,
-       $12, $12${stepValue})
+       $12, $12, $13)
      RETURNING ${messageColumns(t)}`,
     params,
   );
@@ -1417,6 +1855,8 @@ export interface InsertTurnGroundingInput {
   resolvedAttemptId?: string | null;
   budgetEstimateTokens: number;
   budgetCounterKind: 'exact' | 'proxy';
+  /** Free Chat (P7): retrieval source, outcome reason, resolution and timings. */
+  retrieval?: TurnRetrievalAudit | null;
   /** Epoch seconds. */
   now: number;
 }
@@ -1430,8 +1870,10 @@ export async function insertTurnGrounding(
     `INSERT INTO tutor_turn_groundings (
        turn_id, conversation_id, help_session_id, mode, assessment, units, total_chars, truncated,
        input_token_estimate, lineage_status, resolved_attempt_id, budget_estimate_tokens,
-       budget_counter_kind, created_at
-     ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14)
+       budget_counter_kind, created_at, source, outcome_reason, resolution, embedding_model,
+       embedding_tokens, pool_wait_ms, resolve_ms, embed_ms, search_ms, total_retrieval_ms
+     ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14,
+       $15, $16, $17::jsonb, $18, $19, $20, $21, $22, $23, $24)
      ON CONFLICT (turn_id) DO UPDATE SET
        mode = EXCLUDED.mode,
        assessment = EXCLUDED.assessment,
@@ -1443,7 +1885,17 @@ export async function insertTurnGrounding(
        resolved_attempt_id = EXCLUDED.resolved_attempt_id,
        budget_estimate_tokens = EXCLUDED.budget_estimate_tokens,
        budget_counter_kind = EXCLUDED.budget_counter_kind,
-       created_at = EXCLUDED.created_at
+       created_at = EXCLUDED.created_at,
+       source = EXCLUDED.source,
+       outcome_reason = EXCLUDED.outcome_reason,
+       resolution = EXCLUDED.resolution,
+       embedding_model = EXCLUDED.embedding_model,
+       embedding_tokens = EXCLUDED.embedding_tokens,
+       pool_wait_ms = EXCLUDED.pool_wait_ms,
+       resolve_ms = EXCLUDED.resolve_ms,
+       embed_ms = EXCLUDED.embed_ms,
+       search_ms = EXCLUDED.search_ms,
+       total_retrieval_ms = EXCLUDED.total_retrieval_ms
      RETURNING *`,
     [
       input.turnId,
@@ -1460,6 +1912,16 @@ export async function insertTurnGrounding(
       input.budgetEstimateTokens,
       input.budgetCounterKind,
       input.now,
+      input.retrieval?.source ?? null,
+      input.retrieval?.outcomeReason ?? null,
+      input.retrieval?.resolution ? JSON.stringify(input.retrieval.resolution) : null,
+      input.retrieval?.embeddingModel ?? null,
+      input.retrieval?.embeddingTokens ?? null,
+      input.retrieval?.poolWaitMs ?? null,
+      input.retrieval?.resolveMs ?? null,
+      input.retrieval?.embedMs ?? null,
+      input.retrieval?.searchMs ?? null,
+      input.retrieval?.totalRetrievalMs ?? null,
     ],
   );
   return mapGrounding(result.rows[0]!);

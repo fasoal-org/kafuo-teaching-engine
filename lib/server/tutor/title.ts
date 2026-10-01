@@ -17,12 +17,18 @@
  *  - a later confident lesson match may replace a topic/fallback/pending
  *    title with the lesson title without touching subject or history.
  *
+ * The associated item is association v2 (a LESSON or SECTION Learning Item)
+ * or, while `kafuo_http` can still be rolled back to, the schema-1 lesson.
+ * Sibling counts key on the full `(schema, type, id)` tuple (P7).
+ *
  * Never on the student's critical path: the runner calls this after `done`.
  */
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 import { createLogger } from '@/lib/logger';
 import {
+  associationKey,
+  associationTitle,
   countConversationsForLesson,
   readConversation,
   updateConversationTitle,
@@ -189,14 +195,20 @@ export async function ensureConversationTitle(input: EnsureTitleInput): Promise<
   const unchanged: TitleOutcome = { title: fresh.title, titleSource: fresh.titleSource, changed: false };
 
   // A confident lesson match names the conversation (possibly replacing a topic).
-  if (association && fresh.titleSource !== 'lesson' && fresh.titleSource !== 'lesson_suffix') {
+  if (
+    association &&
+    associationTitle(association).trim() !== '' &&
+    fresh.titleSource !== 'lesson' &&
+    fresh.titleSource !== 'lesson_suffix'
+  ) {
+    const itemTitle = associationTitle(association);
     const siblings = await countConversationsForLesson(
       input.pool,
       { tenantId: fresh.tenantId, studentRef: fresh.studentRef },
-      association.learningItemId,
+      associationKey(association),
       fresh.id,
     );
-    let title = association.lessonTitle;
+    let title = itemTitle;
     let source: TitleSource = 'lesson';
     if (siblings > 0) {
       const topic = input.firstTurn
@@ -212,7 +224,7 @@ export async function ensureConversationTitle(input: EnsureTitleInput): Promise<
             executor: input.executor,
           })
         : null;
-      title = topic ? `${association.lessonTitle} — ${topic}` : `${association.lessonTitle} — ${siblings + 1}`;
+      title = topic ? `${itemTitle} — ${topic}` : `${itemTitle} — ${siblings + 1}`;
       source = 'lesson_suffix';
     }
     await updateConversationTitle(input.pool, fresh.id, { title, titleSource: source, now: input.now });

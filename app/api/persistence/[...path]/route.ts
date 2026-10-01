@@ -41,6 +41,16 @@ import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-q
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import {
+  encodeSceneRevs,
+  EXPECTED_SCENE_REVS_HEADER,
+  parseExpectedSceneRevs,
+  revisionPreconditionFence,
+  revisionPreconditionTarget,
+  SCENE_REVS_RESULT_HEADER,
+  type RevisionPreconditionState,
+} from '@/lib/server/teaching-package/revision-precondition-fence';
+import type { Queryable } from '@openmaic/storage/document/pg';
 
 export const runtime = 'nodejs';
 
@@ -94,24 +104,44 @@ function indirectEgressWithinGrace(
   return { mode: 'redirect', collectionGraceMs };
 }
 
+type DocumentMutationFence = (
+  queryable: Queryable,
+  operation: {
+    stageId?: string;
+    mode: 'create' | 'mutate' | 'read' | 'delete' | 'library';
+    scope: 'content' | 'library';
+  },
+  phase: 'before' | 'after',
+) => Promise<void>;
+
 async function createPersistenceHandler(
   connectionString: string,
   ownerId: string,
   access: DocumentAccess,
   poolFactory?: PersistencePoolFactory,
   grantRuntimeLearnerKey?: string,
+  revisionFence?: DocumentMutationFence,
 ): Promise<RequestListener> {
   const { pool, runtimeStore, assetStore } = await getServerPersistenceProvider(
     connectionString,
     poolFactory,
   );
+  const stageGuard = teachingPackageStageGuardFence();
   const documentStore = createOwnerBoundDocumentStore({
     pool,
     ownerId,
     validateScene: validateAppScene,
     validateStage: validateAppStage,
-    // Teaching package immutability, inside every mutation transaction.
-    mutationFence: teachingPackageStageGuardFence(),
+    // Teaching package immutability, inside every mutation transaction. A
+    // grant-delegated Scene write composes its revision precondition FIRST
+    // (single-slide-regeneration-plan §11.4): it takes `stage_meta` before the
+    // guard reads the versions.
+    mutationFence: revisionFence
+      ? async (queryable, operation, phase) => {
+          await revisionFence(queryable, operation, phase);
+          await stageGuard(queryable, operation, phase);
+        }
+      : stageGuard,
   });
   // The asset posture, precisely.
   //
@@ -549,6 +579,33 @@ export async function handlePersistenceRequest(
         return response;
       }
 
+      // Mandatory revision preconditions (single-slide-regeneration-plan §11):
+      // a grant-delegated write that can replace or delete a Scene must say
+      // which revisions it is based on. Without them nothing is written — an
+      // old client never falls back to last-writer-wins. Owner (non-grant)
+      // writes are untouched.
+      const preconditionTarget =
+        delegated && grantEvaluation.covered && grantEvaluation.mode === 'documents'
+          ? revisionPreconditionTarget(request.method, path)
+          : null;
+      const preconditionState: RevisionPreconditionState = {};
+      let revisionFence: DocumentMutationFence | undefined;
+      if (preconditionTarget && access === 'allow') {
+        const expected = parseExpectedSceneRevs(request.headers.get(EXPECTED_SCENE_REVS_HEADER));
+        if (!expected) {
+          const response = jsonError(
+            428,
+            'PRECONDITION_REQUIRED',
+            `this write must carry the ${EXPECTED_SCENE_REVS_HEADER} revisions it is based on; reload the editor`,
+          );
+          for (const [name, value] of responseHeaders.entries()) {
+            response.headers.append(name, value);
+          }
+          return response;
+        }
+        revisionFence = revisionPreconditionFence(preconditionTarget, expected, preconditionState);
+      }
+
       const response =
         access === 'not-found'
           ? jsonError(404, 'DOCUMENT_NOT_FOUND', '@openmaic/storage: document not found')
@@ -563,9 +620,38 @@ export async function handlePersistenceRequest(
                   !grantEvaluation.refusal
                   ? grantEvaluation.runtimeLearnerKey
                   : undefined,
+                revisionFence,
               ),
               request,
             );
+      if (preconditionState.refusal) {
+        // The fence recorded its refusal before throwing; the storage handler
+        // answered it as a generic failure. Replace that answer, whatever its
+        // status, with the precondition outcome.
+        const refusal = preconditionState.refusal;
+        const conflict = Response.json(
+          {
+            error: {
+              code: refusal.code,
+              message: refusal.message,
+              details: { scenes: refusal.scenes },
+            },
+          },
+          { status: refusal.status },
+        );
+        for (const [name, value] of responseHeaders.entries()) {
+          conflict.headers.append(name, value);
+        }
+        return conflict;
+      }
+      if (preconditionTarget && response.ok && preconditionState.resultRevs) {
+        // The revisions read inside the write transaction: exactly the bytes
+        // this request wrote.
+        response.headers.set(
+          SCENE_REVS_RESULT_HEADER,
+          encodeSceneRevs(preconditionState.resultRevs),
+        );
+      }
       // RSS 7.5.8 — the learner delivery boundary. A document READ served under
       // a `read` grant (learner and preview) passes through the compliance
       // overlay, which blanks a confirmed MOE-prohibited visual. The stored

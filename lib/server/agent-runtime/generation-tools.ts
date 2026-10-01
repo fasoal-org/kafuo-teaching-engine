@@ -218,7 +218,10 @@ function slideSemanticsOf(
  * unless the new content brings its own. Carried verbatim, never derived; the
  * scene builder still drops it if the slide's role does not allow assistance.
  */
-function withCarriedAssistance<T extends object>(content: T, existing: Scene | undefined): T {
+export function withCarriedAssistance<T extends object>(
+  content: T,
+  existing: Scene | undefined,
+): T {
   if (!existing || existing.type !== 'slide' || existing.content.type !== 'slide') return content;
   const { assistance } = existing.content;
   if (assistance === undefined || !('elements' in content) || 'assistance' in content) {
@@ -227,7 +230,7 @@ function withCarriedAssistance<T extends object>(content: T, existing: Scene | u
   return { ...content, assistance };
 }
 
-function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
+export function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
   const planned = (snapshot as AppDocumentOutline | undefined)?.outlines?.find(
     (entry) => entry.id === scene.outlineId || entry.order === scene.order,
   );
@@ -322,7 +325,7 @@ export function collectUnresolvedMediaPlaceholders(scene: Scene): UnresolvedMedi
   return placeholders;
 }
 
-function actionContext(scenes: readonly Scene[], current: Scene): SceneGenerationContext {
+export function actionContext(scenes: readonly Scene[], current: Scene): SceneGenerationContext {
   const ordered = [...scenes].sort((a, b) => a.order - b.order);
   const index = ordered.findIndex((scene) => scene.id === current.id);
   const previous = index > 0 ? ordered[index - 1] : undefined;

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { extractKeywords } from '@/lib/server/tutor/arabic-text';
 import {
   assessContext,
+  contentKeywords,
   decideLessonAssociation,
   GROUNDING_STALE_TURNS,
   groundingKeywords,
@@ -10,6 +11,7 @@ import {
   type AssessmentRule,
   type ContextDecision,
 } from '@/lib/server/tutor/context-assessment';
+import { stripIntentWords } from '@/lib/server/tutor/grounding/intent-lexicon';
 
 /**
  * Rule-based context assessment (FRD CTX-01..05; plan §8.2). Table-driven,
@@ -26,12 +28,20 @@ const MASS_GROUNDING = {
 
 type Case = [message: string, decision: ContextDecision, rule: AssessmentRule];
 
+/**
+ * Every table below holds under BOTH rulesets: `discovery_v1` (P7) only
+ * changes the cases pinned in the "discovery_v1" block at the end.
+ */
+const RULESETS = ['r1', 'discovery_v1'] as const;
+
 function run(cases: Case[], grounding: typeof MASS_GROUNDING | null) {
-  for (const [message, decision, rule] of cases) {
-    const result = assessContext({ message, grounding });
-    expect({ message, decision: result.decision, rule: result.rule }).toEqual({ message, decision, rule });
-    if (decision === 'retrieve') expect(result.query).toBeTruthy();
-    else expect(result.query).toBeUndefined();
+  for (const ruleset of RULESETS) {
+    for (const [message, decision, rule] of cases) {
+      const result = assessContext({ message, grounding, ruleset });
+      expect({ ruleset, message, decision: result.decision, rule: result.rule }).toEqual({ ruleset, message, decision, rule });
+      if (decision === 'retrieve') expect(result.query).toBeTruthy();
+      else expect(result.query).toBeUndefined();
+    }
   }
 }
 
@@ -173,6 +183,67 @@ describe('stale grounding', () => {
     // Without grounding this is lesson discovery (3+ consecutive content words), not reuse.
     expect(result.decision).toBe('retrieve');
     expect(result.rule).toBe('lesson_discovery');
+  });
+});
+
+describe('discovery_v1 (P7 a/b/c): intent words, topic shift over a continuation cue, contentKeywordCount', () => {
+  const SAMPLE = 'اشرحلي المثال المضاد';
+  const RECENT = { ...MASS_GROUNDING, turnsSinceUse: 1 };
+
+  it('strips tutoring-intent words before keywords (a bare «مثال» is not one)', () => {
+    expect(stripIntentWords(SAMPLE)).toBe('المثال المضاد');
+    expect(stripIntentWords('اشرح لي المثال المضاد')).toBe('المثال المضاد');
+    expect(stripIntentWords('ما هو المثال المضاد؟')).toBe('المثال المضاد');
+    expect(stripIntentWords('explain the counterexample')).toBe('the counterexample');
+    expect(stripIntentWords('مثال')).toBe('مثال');
+    expect(contentKeywords(SAMPLE)).toEqual(['مثال', 'مضاد']);
+    expect(contentKeywords('مثال تاني')).toEqual(['مثال']);
+    expect(contentKeywords('بسّط أكتر')).toEqual([]);
+    expect(contentKeywords('another example')).toEqual(['example']);
+  });
+
+  it('the sample question in a NEW conversation retrieves with «اشرحلي» out of the query', () => {
+    const v1 = assessContext({ message: SAMPLE, grounding: null, ruleset: 'discovery_v1' });
+    expect(v1).toMatchObject({ decision: 'retrieve', rule: 'lesson_discovery', query: 'مثال مضاد', contentKeywordCount: 2 });
+    // r1 (the kafuo_http default) is unchanged: the intent word still pollutes the query.
+    const r1 = assessContext({ message: SAMPLE, grounding: null });
+    expect(r1).toMatchObject({ decision: 'retrieve', rule: 'lesson_discovery', ruleset: 'r1' });
+    expect(r1.query).toContain('اشرحلي');
+  });
+
+  it('the sample question in a conversation grounded on ANOTHER topic is a topic shift, not a continuation', () => {
+    const v1 = assessContext({ message: SAMPLE, grounding: RECENT, ruleset: 'discovery_v1' });
+    expect(v1).toMatchObject({ decision: 'retrieve', rule: 'topic_shift_retrieve', query: 'مثال مضاد', overlap: 0 });
+    // r1 pinned: «مثال» in the continuation lexicon reused the old topic (the defect P7 fixes behind the ruleset).
+    expect(assessContext({ message: SAMPLE, grounding: RECENT })).toMatchObject({ decision: 'reuse', rule: 'continuation' });
+  });
+
+  it('the sample question while grounded on the SAME topic still continues', () => {
+    const counterexample = { keywords: extractKeywords('المثال المضاد: مثال يبين أن التخمين خاطئ'), turnsSinceUse: 1 };
+    expect(assessContext({ message: SAMPLE, grounding: counterexample, ruleset: 'discovery_v1' })).toMatchObject({
+      decision: 'reuse',
+      rule: 'continuation',
+    });
+  });
+
+  it('«مثال» alone and «مثال تاني» still continue; the bare term falls to none and relies on the D-10 probe', () => {
+    for (const message of ['مثال', 'مثال تاني', 'another example', 'بسّط أكتر']) {
+      expect(assessContext({ message, grounding: RECENT, ruleset: 'discovery_v1' })).toMatchObject({
+        decision: 'reuse',
+        rule: 'continuation',
+      });
+    }
+    const bare = assessContext({ message: 'المثال المضاد', grounding: null, ruleset: 'discovery_v1' });
+    expect(bare).toMatchObject({ decision: 'none', rule: 'default_none', contentKeywordCount: 2 });
+  });
+
+  it('social turns stay none under social_meta (the rule the D-10 probe never runs on)', () => {
+    for (const message of ['شكرا', 'مرحبا!', 'thanks!', 'من أنت؟']) {
+      expect(assessContext({ message, grounding: RECENT, ruleset: 'discovery_v1' })).toMatchObject({
+        decision: 'none',
+        rule: 'social_meta',
+      });
+    }
   });
 });
 

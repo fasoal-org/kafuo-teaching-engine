@@ -30,6 +30,11 @@ import {
   isTeachingPackageGrantSession,
 } from '@/lib/persistence/grant-session';
 import {
+  bindStageSceneRevs,
+  clearStageSceneRevs,
+  setSceneRev,
+} from '@/lib/persistence/scene-revision-registry';
+import {
   isStageDeleted,
   isStageDeletionInFlight,
   isStageWriteStale,
@@ -58,6 +63,69 @@ type FlushRound = {
   promise: Promise<Set<string>>;
 };
 let flushInFlight: FlushRound | null = null;
+
+/**
+ * Single-slide regeneration (single-slide-regeneration-plan §12.3). While a
+ * regeneration of a Scene runs, its Stage's autosave is held (the barrier) so
+ * this tab's own whole-document save cannot bump the Scene's revision and
+ * waste the paid run; the Scene itself is locked (the dialog is modal, and a
+ * programmatic mark of a locked Scene is logged).
+ */
+const regenerationBarriers = new Map<string, number>();
+const regenerationLocks = new Set<string>();
+
+function regenerationLockKey(stageId: string, sceneId: string): string {
+  return `${stageId}\u0000${sceneId}`;
+}
+
+/** A save outcome the server refused on its revision precondition (§11.5). */
+type RevisionConflictSave = {
+  kind: 'revision-conflict';
+  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  sceneIds: string[];
+};
+
+export interface StageSaveConflict {
+  stageId: string;
+  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  sceneIds: string[];
+}
+
+const saveConflictListeners = new Set<(conflict: StageSaveConflict) => void>();
+
+/** Subscribe to "a slide changed elsewhere; the local copy was replaced" notices. */
+export function onStageSaveConflict(listener: (conflict: StageSaveConflict) => void): () => void {
+  saveConflictListeners.add(listener);
+  return () => saveConflictListeners.delete(listener);
+}
+
+function revisionConflictOf(error: unknown): RevisionConflictSave | null {
+  for (let current: unknown = error, depth = 0; current && depth < 5; depth += 1) {
+    if (typeof current !== 'object') return null;
+    const candidate = current as {
+      status?: unknown;
+      code?: unknown;
+      details?: unknown;
+      cause?: unknown;
+    };
+    if (candidate.status === 409 && candidate.code === 'SCENE_REVISION_CONFLICT') {
+      const scenes = (candidate.details as { scenes?: Array<{ id?: unknown }> } | undefined)
+        ?.scenes;
+      return {
+        kind: 'revision-conflict',
+        code: 'SCENE_REVISION_CONFLICT',
+        sceneIds: (scenes ?? []).flatMap((scene) =>
+          typeof scene.id === 'string' ? [scene.id] : [],
+        ),
+      };
+    }
+    if (candidate.status === 428 && candidate.code === 'PRECONDITION_REQUIRED') {
+      return { kind: 'revision-conflict', code: 'PRECONDITION_REQUIRED', sceneIds: [] };
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
 let stageStorageModulePromise: Promise<typeof import('@/lib/utils/stage-storage')> | null = null;
 
 /**
@@ -255,6 +323,14 @@ function markPendingChanges(stageId: string | undefined, ...changes: PendingChan
   if (stageDocumentWriteAccess(stageId) === 'read-only') return;
   if (pendingStageId !== stageId) resetPendingChanges(stageId);
   for (const change of changes) {
+    if (
+      change.kind === 'scene' &&
+      regenerationLocks.has(regenerationLockKey(stageId, change.sceneId))
+    ) {
+      log.warn(
+        `Scene ${change.sceneId} changed while it is being regenerated; the regenerated slide replaces it`,
+      );
+    }
     pendingRevision += 1;
     pendingChanges.set(pendingChangeKey(change), { change, revision: pendingRevision });
   }
@@ -584,7 +660,7 @@ async function persistDirtySnapshot(
   dirtySnapshot: ReadonlyMap<string, PendingEntry>,
   snapshot: StagePersistenceSnapshot,
   capturedEpoch: number,
-): Promise<Set<string> | StaleDroppedSave | ReadOnlyRefusedSave> {
+): Promise<Set<string> | StaleDroppedSave | ReadOnlyRefusedSave | RevisionConflictSave> {
   if (!snapshot.stage) return new Set();
   // A stale capture is dropped, not retried: this covers snapshots that
   // escaped `discardPendingStageChanges` because they already left the
@@ -617,6 +693,8 @@ async function persistDirtySnapshot(
     capturedEpoch,
   ).catch((error: unknown) => {
     if (isTerminalGrantDocumentRefusal(error)) return 'read-only-refused' as const;
+    const conflict = revisionConflictOf(error);
+    if (conflict) return conflict;
     throw error;
   });
   // A stale drop persisted nothing, and also leaves nothing to retry: the
@@ -634,7 +712,12 @@ async function persistDirtySnapshot(
   // restores mint fresh revisions.
   if (result === 'stale-dropped') return 'stale-dropped';
   if (result === 'read-only-refused') return 'read-only-refused';
-  return new Set((result?.failedChanges ?? []).map(pendingChangeKey));
+  if (result && typeof result === 'object' && 'kind' in result) return result;
+  return new Set(
+    ((result as { failedChanges?: PendingChange[] } | undefined)?.failedChanges ?? []).map(
+      pendingChangeKey,
+    ),
+  );
 }
 
 const useStageStoreBase = create<StageState>()((set, get) => ({
@@ -705,6 +788,14 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
             if (result === 'stale-dropped') return;
             if (result === 'read-only-refused') {
               noteGrantReadOnlyRefusal(departingStageId);
+              return;
+            }
+            if ('kind' in result) {
+              // The departing Stage is no longer in the store: its conflicted
+              // Scenes are simply not written (the server copy stands).
+              log.warn(
+                `Departing stage ${departingStageId}: ${result.code}; its unsaved slide changes were not written`,
+              );
               return;
             }
             lastFailedKeys = result;
@@ -1290,6 +1381,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           // this normalises the SPA path to match.
           mode: 'playback',
         });
+        // Bound in the same synchronous step as the content, under the same
+        // load token: the revisions describe exactly what was just applied.
+        if (data.sceneRevs) bindStageSceneRevs(stageId, data.sceneRevs);
+        else clearStageSceneRevs(stageId);
         resetPendingChanges(stageId);
         if (generationComplete && !persistedComplete) void get().saveToStorage();
         log.info('Loaded from storage:', stageId);
@@ -1324,6 +1419,9 @@ function startFlushRound(): FlushRound | null {
   // The single choke point every flush path funnels through — the debounce
   // timer, an explicit drain, and the visibilitychange/beforeunload kick alike.
   if (!mayWriteStageDocument(stageId)) return null;
+  // A slide regeneration holds this Stage's writes until it settles; its
+  // release schedules what was held.
+  if (regenerationBarriers.has(stageId)) return null;
   const dirtySnapshot = new Map(pendingChanges);
   const state = useStageStore.getState();
   if (state.stage?.id !== stageId) {
@@ -1347,6 +1445,15 @@ function startFlushRound(): FlushRound | null {
         noteGrantReadOnlyRefusal(stageId);
         recordFlushOutcome(false);
         return new Set<string>();
+      }
+      // The server refused on its revision precondition: those Scenes were
+      // changed elsewhere (409) or this tab has no revisions for the Stage
+      // (428). Terminal for them — never retried as-is: the server copy
+      // replaces the local one, their pending entries are dropped, and the
+      // rest of the queue is retried by the finally below.
+      if (typeof result === 'object' && 'kind' in result) {
+        recordFlushOutcome(false);
+        return reconcileRevisionConflict(stageId, result, dirtySnapshot);
       }
       // A fenced drop persisted nothing. For the pending map that is
       // equivalent to "no failures" (nothing to retry; the deletion path owns
@@ -1446,6 +1553,175 @@ export async function flushStageSave(): Promise<void> {
     }
   }
   throw new Error(`Stage persistence did not quiesce after ${MAX_FLUSH_DRAIN_ROUNDS} flush rounds`);
+}
+
+// ==================== Revision preconditions & slide regeneration ====================
+
+function sortedByOrder(scenes: Scene[]): Scene[] {
+  return [...scenes].sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Replace Scenes with the server's copy WITHOUT marking them dirty, and bind
+ * their revisions (single-slide-regeneration-plan §11.5). `'all'` re-reads
+ * the whole Stage (a 428: this tab holds no revisions for it). Reads go
+ * through the same load sandwich as a cold load, so content and revisions
+ * always belong together. No-op when the store has moved to another Stage.
+ */
+export async function resyncStageScenesFromServer(
+  stageId: string,
+  sceneIds: readonly string[] | 'all',
+): Promise<void> {
+  stageStorageModulePromise ??= import('@/lib/utils/stage-storage');
+  const { loadStageData } = await stageStorageModulePromise;
+  const data = await loadStageData(stageId);
+  const state = useStageStore.getState();
+  if (!data || state.stage?.id !== stageId) return;
+  const serverScenes = data.scenes.map(migrateScene);
+  let scenes: Scene[];
+  if (sceneIds === 'all') {
+    scenes = serverScenes;
+    // Bind only what the sandwich proved; an unknown binding stays unbound
+    // (an empty map would make every later whole save conflict).
+    if (data.sceneRevs) bindStageSceneRevs(stageId, data.sceneRevs);
+    else clearStageSceneRevs(stageId);
+  } else {
+    scenes = [...state.scenes];
+    for (const sceneId of sceneIds) {
+      const server = serverScenes.find((scene) => scene.id === sceneId);
+      const index = scenes.findIndex((scene) => scene.id === sceneId);
+      if (server && index >= 0) scenes[index] = server;
+      else if (server) scenes.push(server);
+      else if (index >= 0) scenes.splice(index, 1);
+      setSceneRev(stageId, sceneId, data.sceneRevs?.[sceneId] ?? null);
+    }
+    scenes = sortedByOrder(scenes);
+  }
+  const currentSceneId = scenes.some((scene) => scene.id === state.currentSceneId)
+    ? state.currentSceneId
+    : (scenes[0]?.id ?? null);
+  useStageStore.setState({ scenes, currentSceneId });
+}
+
+async function reconcileRevisionConflict(
+  stageId: string,
+  conflict: RevisionConflictSave,
+  dirtySnapshot: ReadonlyMap<string, PendingEntry>,
+): Promise<Set<string>> {
+  const all = conflict.code === 'PRECONDITION_REQUIRED' || conflict.sceneIds.length === 0;
+  const dropped = new Set<string>();
+  for (const [key, entry] of dirtySnapshot) {
+    const isScene = entry.change.kind === 'scene';
+    const conflicted = all
+      ? isScene || entry.change.kind === 'structure' || entry.change.kind === 'outline'
+      : isScene && conflict.sceneIds.includes((entry.change as { sceneId: string }).sceneId);
+    if (!conflicted) continue;
+    if (pendingStageId === stageId && pendingChanges.get(key)?.revision === entry.revision) {
+      pendingChanges.delete(key);
+    }
+    dropped.add(key);
+  }
+  log.warn(
+    `Stage ${stageId}: ${conflict.code} for ${all ? 'the whole stage' : conflict.sceneIds.join(', ')}; replacing the local copy with the server's`,
+  );
+  try {
+    await resyncStageScenesFromServer(stageId, all ? 'all' : conflict.sceneIds);
+  } catch (error) {
+    log.error(`Stage ${stageId}: re-sync after a revision conflict failed`, error);
+  }
+  for (const listener of saveConflictListeners) {
+    listener({ stageId, code: conflict.code, sceneIds: all ? [] : [...conflict.sceneIds] });
+  }
+  // Reported as the dropped keys: nothing of them landed, and none may be
+  // retried as-is.
+  return dropped;
+}
+
+/**
+ * True when nothing of `sceneId` is waiting to be written: no pending entry
+ * for it, no in-flight round for its Stage, and no structure/outline dirt
+ * (both of which save the whole document, the Scene included).
+ */
+export function isSceneDurable(stageId: string, sceneId: string): boolean {
+  if (flushInFlight?.stageId === stageId) return false;
+  if (pendingStageId !== stageId) return true;
+  return (
+    !pendingChanges.has(`scene:${sceneId}`) &&
+    !pendingChanges.has('structure') &&
+    !pendingChanges.has('outline')
+  );
+}
+
+/**
+ * Apply the server's copy of one Scene without marking it dirty (it IS what
+ * the database holds), drop any pending write of it, keep the selection, and
+ * record its revision.
+ */
+export function replaceSceneFromServer(stageId: string, scene: Scene, rev: number): Scene | null {
+  const state = useStageStore.getState();
+  if (state.stage?.id !== stageId) return null;
+  const migrated = migrateScene(scene);
+  const index = state.scenes.findIndex((candidate) => candidate.id === scene.id);
+  const scenes =
+    index >= 0
+      ? state.scenes.map((candidate) => (candidate.id === scene.id ? migrated : candidate))
+      : sortedByOrder([...state.scenes, migrated]);
+  if (pendingStageId === stageId) pendingChanges.delete(`scene:${scene.id}`);
+  setSceneRev(stageId, scene.id, rev);
+  useStageStore.setState({ scenes });
+  return migrated;
+}
+
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+export interface SceneRegenerationHandle {
+  /** Hold the Stage's autosave (call AFTER the pre-submit drain proved the Scene durable). */
+  holdWrites(): void;
+  /** Lift the lock and the hold, then explicitly schedule whatever was held. */
+  release(): void;
+}
+
+/**
+ * Lock one Scene for a regeneration (single-slide-regeneration-plan §12.3).
+ * The lock is taken at once; the Stage's autosave is held only from
+ * `holdWrites()` on, so the pre-submit drain can still flush. `release`
+ * explicitly schedules what was held — a held edit with no later mutation
+ * would otherwise wait for one forever.
+ */
+export function beginSceneRegeneration(stageId: string, sceneId: string): SceneRegenerationHandle {
+  const key = regenerationLockKey(stageId, sceneId);
+  regenerationLocks.add(key);
+  let holding = false;
+  let released = false;
+  return {
+    holdWrites() {
+      if (holding || released) return;
+      holding = true;
+      regenerationBarriers.set(stageId, (regenerationBarriers.get(stageId) ?? 0) + 1);
+      if (typeof window !== 'undefined') window.addEventListener('beforeunload', warnBeforeUnload);
+    },
+    release() {
+      if (released) return;
+      released = true;
+      regenerationLocks.delete(key);
+      if (holding) {
+        const remaining = (regenerationBarriers.get(stageId) ?? 1) - 1;
+        if (remaining > 0) regenerationBarriers.set(stageId, remaining);
+        else regenerationBarriers.delete(stageId);
+        if (typeof window !== 'undefined' && regenerationBarriers.size === 0) {
+          window.removeEventListener('beforeunload', warnBeforeUnload);
+        }
+      }
+      if (pendingStageId && pendingChanges.size > 0) schedulePendingSave();
+    },
+  };
+}
+
+export function isSceneRegenerationLocked(stageId: string, sceneId: string): boolean {
+  return regenerationLocks.has(regenerationLockKey(stageId, sceneId));
 }
 
 if (typeof window !== 'undefined') {

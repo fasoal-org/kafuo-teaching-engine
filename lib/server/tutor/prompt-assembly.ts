@@ -7,7 +7,9 @@
  *
  *   1. rules            `tutor-rules@r1` (byte-stable across turns)
  *   2. academic         subject names, curriculum, grade, academic language
- *   3. grounding        lesson title + Content Units (stable order, no ids);
+ *   3. grounding        item header («Lesson / الدرس» or «Section / القسم» by
+ *                       item type) + Content Units (stable order, no ids;
+ *                       grouped under each item's title when 2–3 items);
  *                       Help: scene title/text + Scene units; `insufficient`
  *                       note when evidence was required but is unavailable
  *   4. summary          `context_summary` when compaction produced one
@@ -39,7 +41,7 @@ import type { ModelMessage } from 'ai';
 
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { CounterKind } from '@/lib/server/teaching-model/subject-policy';
-import type { GroundingMode } from '@/lib/persistence/tutor-runtime';
+import type { GroundingMode, LearningItemType } from '@/lib/persistence/tutor-runtime';
 import type { Script } from '@/lib/server/tutor/arabic-text';
 import {
   countExactTokens,
@@ -51,6 +53,7 @@ import {
   UNIT_CHAR_CAP,
 } from '@/lib/server/tutor/token-budget';
 import {
+  GENERAL_ANSWER_NOTE_TEXT,
   HELP_SCOPE_TEXT,
   INSUFFICIENT_GROUNDING_TEXT,
   PARTIAL_SCENE_COVERAGE_TEXT,
@@ -81,6 +84,15 @@ export interface AcademicBlockInput {
   academicLanguage: string;
 }
 
+export type GroundingItemKind = LearningItemType;
+
+/** The Learning Item a unit comes from (P7). `key` only groups units — it is never rendered. */
+export interface GroundingUnitItem {
+  key: string;
+  title: string | null;
+  itemType: GroundingItemKind;
+}
+
 export interface GroundingUnitInput {
   /** Official unit title; shown as a heading (no id). */
   title: string | null;
@@ -89,14 +101,32 @@ export interface GroundingUnitInput {
   score?: number | null;
   /** True when the unit was head-cut at a paragraph boundary (Kafuo or here). */
   truncated?: boolean;
+  /** Free Chat `direct` path: the unit's item, for per-item headers. */
+  item?: GroundingUnitItem | null;
 }
+
+/**
+ * Why curriculum evidence is absent (discovery-first §5.6). Only `no_match`
+ * and `index_not_ready` add the explicit "general explanation" note; the
+ * other reasons keep the unchanged CTX-05 wording.
+ */
+export type InsufficientReason =
+  | 'no_match'
+  | 'index_not_ready'
+  | 'below_evidence_floor'
+  | 'retrieval_unavailable'
+  | 'retrieval_busy'
+  | 'embedding_profile_mismatch'
+  | 'embedding_provider_unsupported';
 
 export type GroundingInput =
   | { mode: 'none' }
-  | { mode: 'insufficient' }
+  | { mode: 'insufficient'; reason?: InsufficientReason | null }
   | {
       mode: 'reuse' | 'retrieved';
       lessonTitle?: string | null;
+      /** Header label for `lessonTitle` («Section / القسم» for SECTION); default LESSON. */
+      itemType?: GroundingItemKind | null;
       units: GroundingUnitInput[];
     }
   | {
@@ -250,6 +280,26 @@ function renderUnit(unit: GroundingUnitInput): string {
   return `${heading}\n${unit.text.trim()}${note}`;
 }
 
+/** «Lesson / الدرس» or «Section / القسم» (P7: the header names the item's type). */
+export function itemHeaderLabel(itemType: GroundingItemKind | null | undefined): string {
+  return itemType === 'SECTION' ? 'Section / القسم' : 'Lesson / الدرس';
+}
+
+/** Units grouped by item in first-appearance order, or `null` unless they span 2–3 items. */
+function groupUnitsByItem(
+  units: readonly GroundingUnitInput[],
+): Array<{ item: GroundingUnitItem; units: GroundingUnitInput[] }> | null {
+  if (units.length === 0 || units.some((unit) => !unit.item)) return null;
+  const groups = new Map<string, { item: GroundingUnitItem; units: GroundingUnitInput[] }>();
+  for (const unit of units) {
+    const item = unit.item!;
+    const group = groups.get(item.key) ?? { item, units: [] };
+    group.units.push(unit);
+    groups.set(item.key, group);
+  }
+  return groups.size >= 2 && groups.size <= 3 ? [...groups.values()] : null;
+}
+
 export function renderGroundingBlock(
   grounding: GroundingInput,
   units: GroundingUnitInput[],
@@ -257,20 +307,23 @@ export function renderGroundingBlock(
 ): string | null {
   if (grounding.mode === 'none') return null;
   if (grounding.mode === 'insufficient') {
-    return helpMode
-      ? `${HELP_SCOPE_TEXT}\n\n${INSUFFICIENT_GROUNDING_TEXT}`
-      : INSUFFICIENT_GROUNDING_TEXT;
+    const general =
+      grounding.reason === 'no_match' || grounding.reason === 'index_not_ready'
+        ? `${INSUFFICIENT_GROUNDING_TEXT}\n${GENERAL_ANSWER_NOTE_TEXT}`
+        : INSUFFICIENT_GROUNDING_TEXT;
+    return helpMode ? `${HELP_SCOPE_TEXT}\n\n${general}` : general;
   }
   const lines: string[] = [];
   if (helpMode || grounding.mode === 'scene') lines.push(HELP_SCOPE_TEXT, '');
   lines.push('## Curriculum grounding / نصوص المنهج');
+  const groups = grounding.mode === 'scene' ? null : groupUnitsByItem(units);
   if (grounding.mode === 'scene') {
     if (grounding.sceneTitle) lines.push(`Scene / المشهد: ${grounding.sceneTitle}`);
     if (grounding.sceneText && grounding.sceneText.trim()) {
       lines.push('### Visible scene text / نص المشهد', grounding.sceneText.trim());
     }
-  } else if (grounding.lessonTitle) {
-    lines.push(`Lesson / الدرس: ${grounding.lessonTitle}`);
+  } else if (grounding.lessonTitle && !groups) {
+    lines.push(`${itemHeaderLabel(grounding.itemType)}: ${grounding.lessonTitle}`);
   }
   if (units.length === 0 && grounding.mode !== 'scene') return INSUFFICIENT_GROUNDING_TEXT;
   lines.push(
@@ -279,7 +332,15 @@ export function renderGroundingBlock(
   if (grounding.mode === 'scene' && grounding.coverage === 'partial') {
     lines.push(PARTIAL_SCENE_COVERAGE_TEXT);
   }
-  for (const unit of units) lines.push('', renderUnit(unit));
+  if (groups) {
+    for (const group of groups) {
+      const title = group.item.title && group.item.title.trim() ? group.item.title.trim() : '—';
+      lines.push('', `${itemHeaderLabel(group.item.itemType)}: ${title}`);
+      for (const unit of group.units) lines.push('', renderUnit(unit));
+    }
+  } else {
+    for (const unit of units) lines.push('', renderUnit(unit));
+  }
   return lines.join('\n');
 }
 
@@ -461,7 +522,9 @@ export function assembleTutorPrompt(input: AssembleTutorPromptInput): AssembledT
     if (academicBlock) messages.push({ role: 'system', content: academicBlock });
     const groundingInput: GroundingInput =
       groundingMode === 'insufficient'
-        ? { mode: 'insufficient' }
+        ? input.grounding.mode === 'insufficient'
+          ? input.grounding
+          : { mode: 'insufficient' }
         : groundingMode === 'none'
           ? { mode: 'none' }
           : input.grounding;
@@ -584,11 +647,13 @@ export function toGroundingUnitInput(unit: {
   text: string;
   score?: number | null;
   truncated?: boolean;
+  item?: GroundingUnitItem | null;
 }): GroundingUnitInput {
   return {
     title: unit.unitTitle ?? unit.title ?? null,
     text: unit.text,
     ...(typeof unit.score === 'number' ? { score: unit.score } : {}),
     ...(unit.truncated ? { truncated: true } : {}),
+    ...(unit.item ? { item: unit.item } : {}),
   };
 }

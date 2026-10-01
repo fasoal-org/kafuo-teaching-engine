@@ -13,7 +13,14 @@
  *                                new generation under turn_attempt + 1
  *   → guard pre-check            directive + `safety.triggered`; a guard
  *                                exception → boundary reply, no model call
- *   → prepare                    assessment (+ retrieval) / Scene grounding
+ *   → prepare                    assessment (+ probe / retrieval) / Scene
+ *                                grounding; a D-18 SUBJECT_NO_LONGER_AVAILABLE
+ *                                refusal fails the student row before any
+ *                                reservation
+ *   → clarification              Free Chat only (discovery-first P7, D-8 (a)):
+ *                                a deterministic template, persisted and
+ *                                streamed as text_delta — no model call, no
+ *                                reservation, no finalize
  *   → assemble under budget      REQUEST_TOO_LARGE refused BEFORE any reservation
  *   → meter reserve              refused → ALLOWANCE_EXHAUSTED; unreachable →
  *                                METER_UNAVAILABLE; both before any ledger row
@@ -78,6 +85,7 @@ import {
   type MessageFailureInput,
   type MessageWindowOptions,
   type TurnGroundingUnit,
+  type TurnRetrievalAudit,
   type TutorMessage,
 } from '@/lib/persistence/tutor-runtime';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -219,6 +227,15 @@ export interface TurnGroundingAudit {
   truncated?: boolean;
   lineageStatus?: 'own_attempt' | 'predecessor_attempt' | 'partial' | 'unavailable' | null;
   resolvedAttemptId?: string | null;
+  /** Free Chat (P7): retrieval source, outcome reason, resolution and timings. */
+  retrieval?: TurnRetrievalAudit | null;
+}
+
+/** A deterministic clarification instead of a model reply (discovery-first P7, D-8 (a)). */
+export interface PreparedClarification {
+  text: string;
+  /** Human-readable topics for the `grounding` event (titles only, never ids). */
+  candidates: Array<{ title: string; itemType: string }>;
 }
 
 export interface PreparedTurn {
@@ -229,10 +246,22 @@ export interface PreparedTurn {
   audit: TurnGroundingAudit;
   /** Sent on the `grounding` SSE event when associated. */
   lessonTitle?: string | null;
+  /**
+   * Optional `grounding` event fields (P7, `direct` path only): `itemType`
+   * when the grounding is reuse/retrieved, `reason` when it is insufficient.
+   */
+  groundingEvent?: { itemType?: string | null; reason?: string | null };
+  /** When set, the turn answers with this template: no assembly, no reservation, no model. */
+  clarification?: PreparedClarification;
   /** Runs INSIDE the completion transaction (snapshot, lesson association). */
   commit?(
     q: Queryable,
-    outcome: { succeeded: boolean; groundingMode: GroundingMode },
+    outcome: {
+      succeeded: boolean;
+      groundingMode: GroundingMode;
+      /** `seq` of the tutor message written in this transaction, when one was. */
+      tutorMessageSeq: number | null;
+    },
   ): Promise<void>;
 }
 
@@ -459,15 +488,30 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
     beforeSeq: studentMessage.seq,
     limit: HISTORY_WINDOW_MESSAGES,
   });
-  const prepared = await plan.prepare({
-    queryable: deps.pool,
-    studentMessage,
-    turnId,
-    turnAttempt,
-    safety,
-    history: pairHistoryTurns(window.messages),
-    historyMessages: window.messages,
-  });
+  let prepared: PreparedTurn;
+  try {
+    prepared = await plan.prepare({
+      queryable: deps.pool,
+      studentMessage,
+      turnId,
+      turnAttempt,
+      safety,
+      history: pairHistoryTurns(window.messages),
+      historyMessages: window.messages,
+    });
+  } catch (error) {
+    // D-18: the student lost access mid-conversation. No reservation exists
+    // yet; the row must not stay `generating` (TURN_IN_PROGRESS on a retry).
+    if (error instanceof TeachingPackageError && error.code === 'SUBJECT_NO_LONGER_AVAILABLE') {
+      await failBeforeReservation(error.code);
+    }
+    throw error;
+  }
+
+  // --- 3b. clarification (Free Chat, D-8 (a)): no model, no reservation -------
+  if (prepared.clarification) {
+    return clarifyWithoutModel(plan, deps, studentMessage, prepared, safety);
+  }
 
   // --- 4. assemble under the tighter cap (before any reservation) -----------
   const proxyTarget = [policy.primary, policy.fallback].find((t) => t.counterKind === 'proxy');
@@ -671,6 +715,112 @@ async function boundaryWithoutModel(
   return sse.response;
 }
 
+/**
+ * Discovery-first P7 clarification (D-8 (a)): the item resolution was
+ * uncertain, so the reply is a deterministic template naming ≤ 3 topics. It
+ * is persisted like any reply (tutor message `grounding_mode='clarification'`,
+ * the turn grounding row, `pending_clarification` through `prepared.commit`)
+ * and streamed as turn_start → grounding → text_delta → done. No model call,
+ * no meter reservation, no ledger row, no finalize outbox row, no title call.
+ * A replay of the completed turn re-sends the stored text.
+ */
+async function clarifyWithoutModel(
+  plan: TurnPlan,
+  deps: TurnRunnerDeps,
+  studentMessage: TutorMessage,
+  prepared: PreparedTurn,
+  pre: GuardPreCheck,
+): Promise<Response> {
+  const clarification = prepared.clarification!;
+  const now = deps.now ?? Date.now;
+  const nowS = now() / 1000;
+  const newId = deps.idFactory ?? (() => randomUUID());
+  const withTransaction = nodePostgresTransaction(deps.pool);
+  const { store, parent } = plan;
+  const safety = safetyRecord(pre, { applied: false });
+  let tutorMessage: TutorMessage;
+  try {
+    tutorMessage = await withTransaction(async (q) => {
+      const seq = await store.nextSeq(q, parent.id);
+      const inserted = await store.insertTutor(q, {
+        id: `msg-${newId()}`,
+        parentId: parent.id,
+        seq,
+        turnId: studentMessage.turnId,
+        turnAttempt: studentMessage.turnAttempt,
+        text: clarification.text,
+        servedBy: null,
+        groundingMode: 'clarification',
+        safety: safety as unknown as Record<string, unknown>,
+        accountingComplete: true,
+        stepRef: plan.stepRef ?? null,
+        firstDeltaAt: nowS,
+        now: nowS,
+      });
+      await store.markCompleted(q, studentMessage.id, { now: nowS, accountingComplete: true });
+      await store.recordActivity?.(q, parent.id, { messageCountDelta: 1, lastMessageAt: nowS });
+      await insertTurnGrounding(q, {
+        turnId: studentMessage.turnId,
+        ...(store.kind === 'conversation'
+          ? { conversationId: parent.id }
+          : { helpSessionId: parent.id }),
+        mode: 'clarification',
+        assessment: { ...prepared.audit.assessment, turnAttempt: studentMessage.turnAttempt },
+        units: [],
+        totalChars: 0,
+        truncated: false,
+        inputTokenEstimate: 0,
+        budgetEstimateTokens: 0,
+        budgetCounterKind: plan.policy.primary.counterKind,
+        retrieval: prepared.audit.retrieval ?? null,
+        now: nowS,
+      });
+      await prepared.commit?.(q, {
+        succeeded: true,
+        groundingMode: 'clarification',
+        tutorMessageSeq: seq,
+      });
+      return inserted;
+    });
+  } catch (error) {
+    await store
+      .markFailed(deps.pool, studentMessage.id, { now: now() / 1000, errorCode: 'INTERNAL_ERROR' })
+      .catch(() => {});
+    throw error;
+  }
+  const sse = createTutorSseWriter({
+    requestSignal: plan.requestSignal,
+    ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
+  });
+  sse.turnStart({ turnId: studentMessage.turnId, turnAttempt: studentMessage.turnAttempt });
+  sse.grounding({
+    mode: 'clarification',
+    ...(clarification.candidates.length ? { candidates: clarification.candidates } : {}),
+  });
+  sse.textDelta(clarification.text);
+  sse.done({
+    messageId: tutorMessage.id,
+    servedBy: null,
+    safety: safety as unknown as Record<string, unknown>,
+    accountingComplete: true,
+  });
+  log.info(
+    JSON.stringify({
+      event: 'tutor.turn',
+      turnId: studentMessage.turnId,
+      turnAttempt: studentMessage.turnAttempt,
+      capability: plan.capability,
+      stage: plan.stage,
+      decision: prepared.audit.assessment.rule ?? prepared.audit.assessment.decision ?? null,
+      groundingMode: 'clarification',
+      candidates: clarification.candidates.length,
+      outcome: 'clarification',
+    }),
+  );
+  await sse.close();
+  return sse.response;
+}
+
 // ---------------------------------------------------------------------------
 // The streamed part: executor → post-check → completion transaction → done
 // ---------------------------------------------------------------------------
@@ -710,10 +860,25 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
   const nowS = () => now() / 1000;
 
   sse.turnStart({ turnId, turnAttempt });
+  const eventItemType =
+    (assembled.groundingMode === 'reuse' || assembled.groundingMode === 'retrieved') &&
+    prepared.groundingEvent?.itemType
+      ? prepared.groundingEvent.itemType
+      : null;
+  const eventReason =
+    assembled.groundingMode === 'insufficient' &&
+    prepared.grounding.mode === 'insufficient' &&
+    prepared.groundingEvent?.reason
+      ? prepared.groundingEvent.reason
+      : null;
   sse.grounding({
     mode: assembled.groundingMode,
     ...(prepared.lessonTitle ? { lessonTitle: prepared.lessonTitle } : {}),
+    ...(eventItemType ? { itemType: eventItemType } : {}),
+    ...(eventReason ? { reason: eventReason } : {}),
   });
+  // Student-perceived time to first streamed content (epoch seconds, P7).
+  let firstDeltaAt: number | null = null;
 
   // Ledger completions are collected here and written in the turn transaction (§7.7 step 2).
   const pendingCompletions: Array<{ attemptId: string; completion: AttemptCompletionInput }> = [];
@@ -750,7 +915,10 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
       },
       { messages: assembled.messages },
       {
-        onDelta: (delta) => sse.textDelta(delta),
+        onDelta: (delta) => {
+          if (firstDeltaAt === null && delta.length > 0) firstDeltaAt = nowS();
+          sse.textDelta(delta);
+        },
         onRestart: () => sse.restart('fallback'),
         onFinish: () => {},
       },
@@ -788,6 +956,7 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',
       });
       finalizeReason = 'safety_boundary';
+      if (firstDeltaAt === null) firstDeltaAt = nowS();
       log.info(
         JSON.stringify({
           event: 'tutor.safety_triggered',
@@ -811,8 +980,10 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
       for (const pending of pendingCompletions) {
         await completeAttempt(q, pending.attemptId, pending.completion);
       }
+      let tutorMessageSeq: number | null = null;
       if (result) {
         const seq = await store.nextSeq(q, parent.id);
+        tutorMessageSeq = seq;
         tutorMessage = await store.insertTutor(q, {
           id: `msg-${args.newId()}`,
           parentId: parent.id,
@@ -826,6 +997,7 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
           accountingComplete: true,
           meterReservationId: reservationId,
           stepRef: plan.stepRef ?? null,
+          firstDeltaAt,
           now: nowS(),
         });
         await store.markCompleted(q, studentMessage.id, {
@@ -857,6 +1029,7 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         resolvedAttemptId: prepared.audit.resolvedAttemptId ?? null,
         budgetEstimateTokens: assembled.budget.estimate,
         budgetCounterKind: assembled.budget.counterKind,
+        retrieval: prepared.audit.retrieval ?? null,
         now: nowS(),
       });
       await enqueueFinalize(q, {
@@ -868,7 +1041,7 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         reason: finalizeReason,
         now: nowS(),
       });
-      await prepared.commit?.(q, { succeeded, groundingMode });
+      await prepared.commit?.(q, { succeeded, groundingMode, tutorMessageSeq });
     });
   };
 

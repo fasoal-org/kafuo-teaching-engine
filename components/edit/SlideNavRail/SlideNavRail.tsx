@@ -25,6 +25,14 @@ import { useInWorkbenchPanel } from '@/lib/workbench/panel-context';
 import type { Scene } from '@/lib/types/stage';
 import { ThumbItem } from './ThumbItem';
 import { InsertionZone } from './InsertionZone';
+import { RegenerateSlideDialog } from '@/components/edit/RegenerateSlideDialog';
+import {
+  canRegenerateScene,
+  fetchRegenerationGate,
+  type RegenerationGate,
+} from '@/lib/edit/scene-regeneration-client';
+import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
+import { onStageSaveConflict } from '@/lib/store/stage';
 
 // Collapsed, the rail is a slim edge handle — just wide enough to hold the
 // expand chevron — rather than a narrow column of page numbers. The point of
@@ -62,6 +70,43 @@ export function SlideNavRail() {
   const insertSceneAfter = useStageStore.use.insertSceneAfter();
   const deleteScene = useStageStore.use.deleteScene();
   const stage = useStageStore.use.stage();
+  const stageId = stage?.id;
+  // Single-slide regeneration (single-slide-regeneration-plan §12.1): the
+  // action exists only for an editable package Stage under a write grant.
+  const [gateState, setGateState] = useState<{
+    stageId: string;
+    gate: RegenerationGate | null;
+  } | null>(null);
+  // Keyed by Stage, so a navigation never shows the previous Stage's answer.
+  const regenerationGate = gateState?.stageId === stageId ? gateState.gate : null;
+  const [regenerating, setRegenerating] = useState<{ id: string; title: string } | null>(null);
+  useEffect(() => {
+    if (!stageId || !isTeachingPackageGrantSession()) return;
+    let cancelled = false;
+    void fetchRegenerationGate(stageId)
+      .then((gate) => {
+        if (!cancelled) setGateState({ stageId, gate });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [stageId]);
+  // A slide changed elsewhere: the editor now shows the server copy.
+  useEffect(
+    () =>
+      onStageSaveConflict((conflict) => {
+        if (conflict.stageId !== stageId) return;
+        toast.warning(
+          t(
+            conflict.code === 'PRECONDITION_REQUIRED'
+              ? 'edit.slideRegeneration.reloadNotice'
+              : 'edit.slideRegeneration.conflictNotice',
+          ),
+        );
+      }),
+    [stageId, t],
+  );
   const collapsed = useSettingsStore((s) => s.editRailCollapsed);
   const setCollapsed = useSettingsStore((s) => s.setEditRailCollapsed);
   const persistedWidth = useSettingsStore((s) => s.editRailWidth);
@@ -467,6 +512,11 @@ export function SlideNavRail() {
                       onActivate={() => handleActivate(scene.id)}
                       onDuplicate={() => handleDuplicate(scene.id)}
                       onDelete={() => handleDelete(scene.id)}
+                      onRegenerate={
+                        canRegenerateScene(regenerationGate, scene)
+                          ? () => setRegenerating({ id: scene.id, title: scene.title })
+                          : undefined
+                      }
                     />
                     {SCENE_CREATION_ENABLED && (
                       <InsertionZone
@@ -483,6 +533,17 @@ export function SlideNavRail() {
           </AnimatePresence>
         </div>
       )}
+      {stageId && regenerating ? (
+        <RegenerateSlideDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setRegenerating(null);
+          }}
+          stageId={stageId}
+          sceneId={regenerating.id}
+          sceneTitle={regenerating.title}
+        />
+      ) : null}
     </aside>
   );
 }

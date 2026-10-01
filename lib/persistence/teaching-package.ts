@@ -51,6 +51,31 @@ import type {
 
 const TENANT_CHECK = `tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0)`;
 
+/**
+ * The review-event vocabulary. The `scene_regeneration_*` values record the
+ * reviewer-driven single-slide regeneration (single-slide-regeneration-plan
+ * §10.3); an existing database is widened by the guarded DO block in
+ * `TEACHING_PACKAGE_EVOLUTION`, a fresh one gets this text directly.
+ */
+const REVIEW_EVENT_TYPES = [
+  'created',
+  'submitted_for_review',
+  'review_edit_started',
+  'rejected',
+  'resubmitted',
+  'approved',
+  'superseded',
+  'discarded',
+  'successor_created',
+  'stage_replaced',
+  'scene_regeneration_started',
+  'scene_regeneration_completed',
+  'scene_regeneration_failed',
+  'scene_regeneration_refused',
+  'scene_regeneration_restored',
+] as const;
+const REVIEW_EVENT_TYPES_SQL = REVIEW_EVENT_TYPES.map((type) => `'${type}'`).join(',');
+
 /** Tables only — created before the evolution block runs. */
 const TEACHING_PACKAGE_TABLES = `
 CREATE TABLE IF NOT EXISTS teaching_package_versions (
@@ -78,7 +103,7 @@ CREATE TABLE IF NOT EXISTS teaching_package_versions (
 CREATE TABLE IF NOT EXISTS teaching_package_review_events (
   id BIGSERIAL PRIMARY KEY,
   version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
-  event_type TEXT NOT NULL CHECK (event_type IN ('created','submitted_for_review','review_edit_started','rejected','resubmitted','approved','superseded','discarded','successor_created','stage_replaced')),
+  event_type TEXT NOT NULL CHECK (event_type IN (${REVIEW_EVENT_TYPES_SQL})),
   from_status TEXT,
   to_status TEXT NOT NULL,
   actor_ref TEXT NOT NULL CHECK (length(btrim(actor_ref)) > 0),
@@ -258,6 +283,26 @@ DROP INDEX IF EXISTS teaching_package_versions_single_active;
 DROP INDEX IF EXISTS teaching_package_versions_item_version_idx;
 DROP INDEX IF EXISTS teaching_package_attempts_single_inflight;
 DROP INDEX IF EXISTS teaching_package_attempts_request_id_unique;
+
+-- Single-slide regeneration (single-slide-regeneration-plan §10.1): widen the
+-- inline event-type CHECK of an existing database. Guarded on the constraint's
+-- own text, so a re-run (or a fresh database created with the new text) is a
+-- no-op. The CHECK is never narrowed again: review events are append-only.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_package_review_events_event_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%scene_regeneration_restored%'
+  ) THEN
+    ALTER TABLE teaching_package_review_events
+      DROP CONSTRAINT IF EXISTS teaching_package_review_events_event_type_check;
+    ALTER TABLE teaching_package_review_events
+      ADD CONSTRAINT teaching_package_review_events_event_type_check
+      CHECK (event_type IN (${REVIEW_EVENT_TYPES_SQL}));
+  END IF;
+END;
+$$;
 `;
 
 const SOURCE_CONTEXT_EVOLUTION = `
@@ -302,6 +347,51 @@ CREATE TABLE IF NOT EXISTS teaching_package_content_units (
 
 CREATE INDEX IF NOT EXISTS tpcu_tenant_attempt_idx
   ON teaching_package_content_units (tenant_id, attempt_id);
+`;
+
+/**
+ * Reviewer-driven single-slide regeneration (single-slide-regeneration-plan
+ * §9.1). One row per request: the idempotency record, the lease of the one
+ * running regeneration per Scene, the immutable pre-image and result, and the
+ * audit fields (`instruction` is what the model was asked; `reason` is the
+ * reviewer's audit justification and never enters a prompt).
+ */
+const SCENE_REGENERATION_TABLES = `
+CREATE TABLE IF NOT EXISTS teaching_package_scene_regenerations (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  stage_id TEXT NOT NULL,
+  scene_id TEXT NOT NULL,
+  scene_order DOUBLE PRECISION NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  instruction TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  actor_ref TEXT NOT NULL CHECK (length(btrim(actor_ref)) > 0),
+  session_ref TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running','succeeded','failed')),
+  attempt_token TEXT NOT NULL,
+  lease_expires_at DOUBLE PRECISION NOT NULL,
+  base_scene_rev BIGINT NOT NULL,
+  previous_scene JSONB NOT NULL,
+  result_scene JSONB,
+  result_scene_rev BIGINT,
+  candidate_scene JSONB,
+  error_code TEXT,
+  register_policy JSONB,
+  model_route JSONB,
+  requested_at DOUBLE PRECISION NOT NULL,
+  completed_at DOUBLE PRECISION,
+  restored_at DOUBLE PRECISION
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpsr_version_key_unique
+  ON teaching_package_scene_regenerations (version_id, idempotency_key);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpsr_single_running
+  ON teaching_package_scene_regenerations (stage_id, scene_id)
+  WHERE status = 'running';
 `;
 
 /** Canonical indexes — tenant-scoped unique constraints in their ONLY form. */
@@ -383,6 +473,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(CONTENT_UNIT_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(SCENE_REGENERATION_TABLES)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique

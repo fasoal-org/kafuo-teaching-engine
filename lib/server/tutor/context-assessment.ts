@@ -24,6 +24,20 @@
  * separate decision over the retrieval response: only when
  * `lessonMatch.confidence ≥ TUTOR_LESSON_MATCH_THRESHOLD` (0.45) AND every
  * returned unit belongs to that lesson.
+ *
+ * Rulesets (`TUTOR_ASSESSMENT_RULESET`, discovery-first plan P7):
+ *  - `r1` (default on the `kafuo_http` path): exactly the rules above.
+ *  - `discovery_v1`:
+ *    (a) tutoring-intent words («اشرحلي», "explain", …) are stripped before
+ *        keywords, so they never reach the query or the overlap;
+ *    (b) rule 3 no longer reuses when the message carries ≥ 2 CONTENT
+ *        keywords and zero overlap with the grounding — the topic shift wins.
+ *        «مثال» alone and «مثال تاني» still continue (follow-up modifiers such
+ *        as «تاني» are not content);
+ *    (c) `contentKeywordCount` is exposed for the D-10 Discovery probe.
+ *  Rule 6's run-length cue still reads the original message, so «اشرحلي
+ *  المثال المضاد» without grounding retrieves as before, now with the query
+ *  «مثال مضاد».
  */
 import {
   detectScript,
@@ -33,6 +47,8 @@ import {
   longestContentRun,
   normalizeText,
 } from '@/lib/server/tutor/arabic-text';
+import type { AssessmentRuleset } from '@/lib/server/tutor/grounding/grounding-config';
+import { isFollowUpModifier, stripIntentWords } from '@/lib/server/tutor/grounding/intent-lexicon';
 import type { GroundingSearchResponse } from '@/lib/server/tutor/kafuo-integration-client';
 
 export type ContextDecision = 'reuse' | 'retrieve' | 'none';
@@ -59,15 +75,23 @@ export interface AssessmentGrounding {
 export interface AssessContextInput {
   message: string;
   grounding: AssessmentGrounding | null;
+  /** Default `r1`. */
+  ruleset?: AssessmentRuleset;
 }
 
 export interface ContextAssessment {
   decision: ContextDecision;
   rule: AssessmentRule;
+  ruleset: AssessmentRuleset;
   /** The retrieval query (content keywords joined) on `retrieve`. */
   query?: string;
   /** Content keywords of the message (for the snapshot and the title fallback). */
   keywords: string[];
+  /**
+   * Topic-naming keywords: intent words stripped, follow-up modifiers
+   * («تاني», "another", …) excluded. Gates the D-10 probe (both rulesets).
+   */
+  contentKeywordCount: number;
   /** Overlap with the (non-stale) grounding, 0 when absent. */
   overlap: number;
   /** True when a grounding existed but was ignored as stale. */
@@ -149,14 +173,26 @@ export function detectFollowUpCue(message: string): FollowUpCue | null {
 // Assessment
 // ---------------------------------------------------------------------------
 
+/** Topic-naming keywords of a message (intent words stripped, follow-up modifiers excluded). */
+export function contentKeywords(message: string): string[] {
+  return extractKeywords(stripIntentWords(message)).filter(
+    (keyword) => !isFollowUpModifier(keyword),
+  );
+}
+
 export function assessContext(input: AssessContextInput): ContextAssessment {
+  const ruleset: AssessmentRuleset = input.ruleset ?? 'r1';
+  const discovery = ruleset === 'discovery_v1';
   const normalized = normalizeText(input.message);
-  const keywords = extractKeywords(input.message);
+  const keywords = discovery
+    ? extractKeywords(stripIntentWords(input.message))
+    : extractKeywords(input.message);
+  const contentKeywordCount = contentKeywords(input.message).length;
   const stale = input.grounding !== null && input.grounding.turnsSinceUse > GROUNDING_STALE_TURNS;
   const grounding = input.grounding !== null && !stale ? input.grounding : null;
   const overlap = grounding ? keywordOverlap(keywords, grounding.keywords) : 0;
   const query = keywords.join(' ');
-  const base = { keywords, overlap, groundingStale: stale };
+  const base = { ruleset, keywords, contentKeywordCount, overlap, groundingStale: stale };
 
   // 1. social / meta
   if (matchesAny(SOCIAL_META, normalized)) {
@@ -172,10 +208,14 @@ export function assessContext(input: AssessContextInput): ContextAssessment {
   }
 
   // 3. continuation cue with a recently used grounding
+  //    (discovery_v1 (b): a message naming ≥ 2 content keywords with zero
+  //    overlap is a topic shift even when it contains a cue such as «مثال»)
   const shortMessage = keywords.length <= 3;
+  const topicShiftWins = discovery && contentKeywordCount >= 2 && overlap === 0;
   if (
     grounding &&
     grounding.turnsSinceUse <= CONTINUATION_RECENT_TURNS &&
+    !topicShiftWins &&
     (matchesAny(CONTINUATION, normalized) || (shortMessage && overlap > 0))
   ) {
     return { decision: 'reuse', rule: 'continuation', ...base };
