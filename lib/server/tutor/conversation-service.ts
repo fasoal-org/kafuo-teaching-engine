@@ -15,11 +15,14 @@
  * Chat `prepare` (assessment → reuse / retrieve / none / clarification,
  * snapshot, item association) and `afterCommit` (title, optional compaction).
  *
- * Grounding source (discovery-first plan P7, `TUTOR_GROUNDING_SOURCE`):
- *  - `kafuo_http` (default) and `shadow` (a stub until P6, recorded as
- *    "shadow not available"): the existing `grounding/search` call, unchanged
- *    request and SSE frames; writes the rollback-only schema-1 association
- *    and a `kafuo_http`-tagged snapshot.
+ * Grounding source (discovery-first plan P6/P7, `TUTOR_GROUNDING_SOURCE`):
+ *  - `kafuo_http` (default) and `shadow`: the existing `grounding/search`
+ *    call, unchanged request and SSE frames; writes the rollback-only
+ *    schema-1 association and a `kafuo_http`-tagged snapshot. On `shadow`, a
+ *    sampled retrieve turn also runs the direct path in the background
+ *    (`grounding/shadow-grounding.ts`) and records the comparison in the
+ *    turn's audit; it never changes the reply ("not_available" when no
+ *    reader is wired).
  *  - `direct` (config + `TUTOR_GROUNDING_DIRECT_TENANTS` + a wired reader):
  *    the discovery-first flow through the Kafuo grounding reader seam
  *    (`grounding/direct-grounding.ts`), association v2 and snapshot v2.
@@ -78,11 +81,21 @@ import {
   type DirectRetrievalResult,
   type RetrievalTimings,
 } from '@/lib/server/tutor/grounding/direct-grounding';
-import { assessmentRuleset, resolveGroundingRoute } from '@/lib/server/tutor/grounding/grounding-config';
+import {
+  assessmentRuleset,
+  isShadowSampled,
+  resolveGroundingRoute,
+  shadowSampleRate,
+} from '@/lib/server/tutor/grounding/grounding-config';
 import type {
   DirectGroundingDeps,
   ResolveItemsResult,
 } from '@/lib/server/tutor/grounding/kafuo-grounding-reader';
+import {
+  launchGroundingShadow,
+  signalShadowTurnCommitted,
+  type ShadowRun,
+} from '@/lib/server/tutor/grounding/shadow-grounding';
 import {
   KafuoIntegrationError,
   type GroundingSearchResponse,
@@ -577,10 +590,41 @@ function httpAccessDenied(error: unknown): 'student_ref_unknown' | 'offering_not
 }
 
 /**
- * The temporary `kafuo_http` path (also `shadow` until P6): the existing
+ * `shadow` on a retrieve turn (P6): start the direct path NOW, concurrently
+ * with the HTTP call, unless no reader is wired or the turn is not sampled.
+ * Returns the `resolution.shadow` status written with the turn.
+ */
+function startShadow(
+  deps: TutorRuntimeDeps,
+  conversation: TutorConversation,
+  ctx: PrepareContext,
+): { status: 'not_available' | 'not_sampled' | 'pending'; run: ShadowRun | null } {
+  if (!deps.grounding) return { status: 'not_available', run: null };
+  const rate = shadowSampleRate();
+  if (!isShadowSampled(ctx.turnId, rate)) return { status: 'not_sampled', run: null };
+  const run = launchGroundingShadow({
+    direct: deps.grounding,
+    scope: {
+      tenantId: conversation.tenantId,
+      studentRef: conversation.studentRef,
+      subjectOfferingId: conversation.subjectOfferingId,
+    },
+    text: ctx.studentMessage.text,
+    turnId: ctx.turnId,
+    turnAttempt: ctx.turnAttempt,
+    sampleRate: rate,
+    pool: deps.pool,
+  });
+  launchBackground(run.done);
+  return { status: 'pending', run };
+}
+
+/**
+ * The temporary `kafuo_http` path (also what serves `shadow`): the existing
  * `grounding/search` call, byte-for-byte the same request. It writes the
  * rollback-only schema-1 association (never over a v2) and a snapshot tagged
- * `kafuo_http`. Its SSE frames carry no P7 extras.
+ * `kafuo_http`. Its SSE frames carry no P7 extras. On `shadow` the direct
+ * comparison only adds `resolution.shadow` to the audit.
  */
 async function groundOverHttp(
   deps: TutorRuntimeDeps,
@@ -599,6 +643,22 @@ async function groundOverHttp(
   }
   if (assessment.decision !== 'retrieve') return base;
 
+  const shadow = source === 'shadow' ? startShadow(deps, conversation, ctx) : null;
+  const httpStartedAt = performance.now();
+  const settleShadow = (
+    outcome: 'retrieved' | 'insufficient' | 'refused',
+    reason: string | null,
+    units: GroundingSearchResponse['units'],
+  ) =>
+    shadow?.run?.settleHttp({
+      outcome,
+      reason,
+      unitIds: units.map((unit) => unit.contentUnitId),
+      unitLessonIds: units.map((unit) => unit.lessonId || null),
+      lessonIds: [...new Set(units.map((unit) => unit.lessonId).filter((id) => id))],
+      ms: Math.round((performance.now() - httpStartedAt) * 1000) / 1000,
+    });
+
   let response: GroundingSearchResponse | null = null;
   let retrieval: 'ok' | 'empty' | 'unavailable' | null = null;
   try {
@@ -612,7 +672,10 @@ async function groundOverHttp(
     });
   } catch (error) {
     const denied = httpAccessDenied(error);
-    if (denied) throw accessLost(denied);
+    if (denied) {
+      settleShadow('refused', denied, []);
+      throw accessLost(denied);
+    }
     retrieval = 'unavailable';
     log.warn(
       JSON.stringify({
@@ -622,9 +685,14 @@ async function groundOverHttp(
       }),
     );
   }
-  const resolution = source === 'shadow' ? { shadow: 'not_available' } : null;
+  const resolution = shadow ? { shadow: shadow.status } : null;
   if (!response || response.units.length === 0) {
     if (retrieval === null) retrieval = 'empty';
+    settleShadow(
+      'insufficient',
+      retrieval === 'unavailable' ? 'retrieval_unavailable' : 'below_evidence_floor',
+      [],
+    );
     return {
       ...base,
       grounding: { mode: 'insufficient' },
@@ -633,6 +701,7 @@ async function groundOverHttp(
       resolution,
     };
   }
+  settleShadow('retrieved', null, response.units);
   const match = decideLessonAssociation(response);
   const units: HttpSnapshotUnit[] = response.units.map((unit) => ({
     source: 'kafuo_http',
@@ -1074,6 +1143,9 @@ async function afterFreeChatTurn(
   executorOptions: Parameters<typeof ensureConversationTitle>[0]['executor'],
   info: CommittedTurn,
 ): Promise<void> {
+  // A `shadow` comparison waits for this commit to merge into the audit row
+  // (non-blocking: it only wakes the background job).
+  signalShadowTurnCommitted(info.turnId, info.turnAttempt);
   if (!info.succeeded || !info.tutorMessage) return;
   // The title is derived from the FIRST completed turn; on a later turn (a
   // pending retry, or a lesson match arriving late) it is read back.

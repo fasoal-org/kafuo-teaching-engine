@@ -11,6 +11,7 @@ import {
   countStartedRowsPastDeadline,
 } from '@/lib/server/teaching-model/accounting-sweeper';
 import { getMeterOutboxSweeper } from '@/lib/server/teaching-model/sweep-registry';
+import { kafuoGroundingHealth } from '@/lib/server/tutor/grounding/pg-grounding-reader';
 
 const version = process.env.npm_package_version || '0.1.0';
 
@@ -68,5 +69,8 @@ export async function GET() {
       tts: Object.values(getServerTTSProviders()).some((info) => !info.disabled),
     },
     accounting: await accountingBlock(),
+    // Free Chat direct grounding reader (discovery-first P6): pool counts and
+    // the last error code. `null` counts until the lazy pool exists; never the DSN.
+    kafuoGrounding: kafuoGroundingHealth(),
   });
 }

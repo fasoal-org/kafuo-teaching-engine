@@ -25,6 +25,11 @@
  *    or model call. Text, vectors and rows are never logged (RET-07).
  *  - Ids are Kafuo bigints as decimal strings.
  *
+ * P6 implements it in `pg-grounding-reader.ts` (pg Pool + semaphore) and
+ * `query-embedding.ts`. P4's `resolve_items` returns `build_id` per candidate
+ * (NULL for a title-probe candidate), mapped to the optional
+ * `ItemCandidate.buildId`.
+ *
  * Contract gap for P4/P5/P6: §5.3/§5.4 list no `build_id` in the
  * `item_embedding_profile` / `search_units` outputs, but snapshot v2,
  * association v2 and `validate_units` need the unit's active build. The seam
@@ -78,6 +83,16 @@ export interface ItemCandidate {
   matchedTermTypes: string[];
   /** `false` only for `index_not_ready` audit candidates. */
   routable: boolean;
+  /**
+   * The item's active (last successful) Discovery build (P4 `build_id`). NULL
+   * only for a title-probe `index_not_ready` candidate: a never-built item has
+   * no build. Absent on a candidate rebuilt from a clarification choice.
+   */
+  buildId?: string | null;
+  /** P4 readiness (`ready`, `stale`, `building`, …); audit only. */
+  readiness?: string;
+  /** P4 match source: `term`, `title` or `fallback`; audit only. */
+  matchSource?: 'term' | 'title' | 'fallback';
 }
 
 export type IndexCoverage = 'complete' | 'partial';
@@ -89,24 +104,28 @@ export type ResolveItemsResult = ReaderCallMeta &
         outcome: 'single';
         reasonCode: string | null;
         candidates: ItemCandidate[];
+        indexCoverage?: IndexCoverage;
       }
     | {
         /** ≤ `maxCandidates` routable items within M of the top. */
         outcome: 'ambiguous';
         reasonCode: string | null;
         candidates: ItemCandidate[];
+        indexCoverage?: IndexCoverage;
       }
     | {
         /** Bounded lexical fallback (CHAT-06): never grounded without the student's choice. */
         outcome: 'weak';
         reasonCode: string | null;
         candidates: ItemCandidate[];
+        indexCoverage?: IndexCoverage;
       }
     | {
         /** An eligible item matched but is not routable. Candidates are audit only. */
         outcome: 'index_not_ready';
         reasonCode: string | null;
         candidates: ItemCandidate[];
+        indexCoverage?: IndexCoverage;
       }
     | {
         outcome: 'no_match';
@@ -185,7 +204,12 @@ export interface SearchUnitRow {
 
 export type SearchUnitsResult = ReaderCallMeta &
   (
-    | { outcome: 'ok'; units: SearchUnitRow[] }
+    | {
+        outcome: 'ok';
+        units: SearchUnitRow[];
+        /** Targets Kafuo left out as `dropped_incompatible` (RET-01); audit only. */
+        dropped?: Array<{ learningItemId: string; embeddingRunId: string }>;
+      }
     /** A target's run is no longer the item's selected run: no rows. */
     | { outcome: 'run_superseded' }
     /** A target run's provider/model no longer equal the query's: no rows. */

@@ -72,6 +72,16 @@ export async function registerNodeInstrumentation(): Promise<void> {
     });
   }
 
+  // Free Chat direct grounding (discovery-first P6): `direct` or `shadow`
+  // without the reader DSN refuses to start. The reader pool itself is lazy
+  // (no connection is opened here).
+  {
+    const { validateKafuoGroundingConfig } = await import(
+      '@/lib/server/tutor/grounding/grounding-config'
+    );
+    validateKafuoGroundingConfig();
+  }
+
   // Restart-safe webhook delivery: boot scan + interval sweep (also reclaims
   // stale generation attempts and emits their failure events).
   //
@@ -188,6 +198,14 @@ export async function registerNodeInstrumentation(): Promise<void> {
         await meterOutboxSweeper?.stop();
       } catch (error) {
         console.error('[instrumentation] Meter outbox sweeper stop failed', error);
+      }
+      try {
+        const { closeKafuoGroundingReader } = await import(
+          '@/lib/server/tutor/grounding/pg-grounding-reader'
+        );
+        await closeKafuoGroundingReader();
+      } catch (error) {
+        console.error('[instrumentation] Kafuo grounding reader shutdown failed', error);
       }
       const connectionString = process.env.DATABASE_URL?.trim();
       if (connectionString) {

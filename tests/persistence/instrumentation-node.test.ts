@@ -144,6 +144,23 @@ describe('node instrumentation', () => {
     vi.resetModules();
   });
 
+  it('refuses to start with TUTOR_GROUNDING_SOURCE=shadow|direct and no KAFUO_GROUNDING_DATABASE_URL (P6)', async () => {
+    mockInstrumentationSeams();
+    const signals = captureSignalHandlers();
+    vi.stubEnv('TUTOR_GROUNDING_SOURCE', 'shadow');
+    vi.stubEnv('KAFUO_GROUNDING_DATABASE_URL', '');
+
+    const { registerNodeInstrumentation } = await import('@/lib/server/instrumentation-node');
+    await expect(registerNodeInstrumentation()).rejects.toThrow(/KAFUO_GROUNDING_DATABASE_URL/);
+    expect(signals.registered).toEqual([]);
+
+    vi.resetModules();
+    mockInstrumentationSeams();
+    vi.stubEnv('KAFUO_GROUNDING_DATABASE_URL', 'postgres://kafuo_grounding_reader:x@127.0.0.1:1/none');
+    const again = await import('@/lib/server/instrumentation-node');
+    await expect(again.registerNodeInstrumentation()).resolves.toBeUndefined();
+  });
+
   it('installs one SIGTERM and one SIGINT handler', async () => {
     mockInstrumentationSeams();
     const signals = captureSignalHandlers();

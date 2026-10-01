@@ -3,10 +3,15 @@ import { describe, expect, it } from 'vitest';
 import {
   ambiguousSearchMinScore,
   assessmentRuleset,
+  DEFAULT_SHADOW_SAMPLE,
   evidenceFloor,
   groundingSourceSetting,
   isDirectGroundingTenant,
+  kafuoGroundingDatabaseUrl,
+  kafuoGroundingPoolSettings,
   resolveGroundingRoute,
+  shadowSampleRate,
+  validateKafuoGroundingConfig,
 } from '@/lib/server/tutor/grounding/grounding-config';
 
 /**
@@ -84,5 +89,59 @@ describe('TUTOR_ASSESSMENT_RULESET and the D-7 knobs', () => {
     expect(evidenceFloor({})).toBe(0);
     expect(evidenceFloor({ TUTOR_GROUNDING_EVIDENCE_FLOOR: '0.3' })).toBe(0.3);
     expect(evidenceFloor({ TUTOR_GROUNDING_EVIDENCE_FLOOR: '2' })).toBe(0);
+  });
+});
+
+describe('P6: the reader pool, the shadow sample and the boot check', () => {
+  it('pool settings default to max 8, 300 ms admission, 30 s idle, 2.5 s client backstop; out-of-range values fall back', () => {
+    expect(kafuoGroundingPoolSettings({})).toEqual({
+      max: 8,
+      admissionTimeoutMs: 300,
+      idleTimeoutMs: 30_000,
+      queryTimeoutMs: 2_500,
+    });
+    expect(
+      kafuoGroundingPoolSettings({
+        KAFUO_GROUNDING_POOL_MAX: '4',
+        KAFUO_GROUNDING_ADMISSION_TIMEOUT_MS: '500',
+        KAFUO_GROUNDING_IDLE_TIMEOUT_MS: '10000',
+        KAFUO_GROUNDING_QUERY_TIMEOUT_MS: '2000',
+      }),
+    ).toEqual({ max: 4, admissionTimeoutMs: 500, idleTimeoutMs: 10_000, queryTimeoutMs: 2_000 });
+    expect(kafuoGroundingPoolSettings({ KAFUO_GROUNDING_POOL_MAX: '0' }).max).toBe(8);
+    expect(kafuoGroundingPoolSettings({ KAFUO_GROUNDING_POOL_MAX: '65' }).max).toBe(8);
+    expect(kafuoGroundingPoolSettings({ KAFUO_GROUNDING_POOL_MAX: '2.5' }).max).toBe(8);
+  });
+
+  it('TUTOR_GROUNDING_SHADOW_SAMPLE: 0..1, default 0.1', () => {
+    expect(DEFAULT_SHADOW_SAMPLE).toBe(0.1);
+    expect(shadowSampleRate({})).toBe(0.1);
+    expect(shadowSampleRate({ TUTOR_GROUNDING_SHADOW_SAMPLE: '1' })).toBe(1);
+    expect(shadowSampleRate({ TUTOR_GROUNDING_SHADOW_SAMPLE: '0' })).toBe(0);
+    expect(shadowSampleRate({ TUTOR_GROUNDING_SHADOW_SAMPLE: '1.5' })).toBe(0.1);
+    expect(shadowSampleRate({ TUTOR_GROUNDING_SHADOW_SAMPLE: 'x' })).toBe(0.1);
+  });
+
+  it('boot: direct or shadow without KAFUO_GROUNDING_DATABASE_URL refuses to start; kafuo_http never needs it', () => {
+    expect(() => validateKafuoGroundingConfig({})).not.toThrow();
+    expect(() =>
+      validateKafuoGroundingConfig({ TUTOR_GROUNDING_SOURCE: 'kafuo_http' }),
+    ).not.toThrow();
+    expect(() => validateKafuoGroundingConfig({ TUTOR_GROUNDING_SOURCE: 'shadow' })).toThrow(
+      /TUTOR_GROUNDING_SOURCE=shadow needs KAFUO_GROUNDING_DATABASE_URL/,
+    );
+    expect(() =>
+      validateKafuoGroundingConfig({
+        TUTOR_GROUNDING_SOURCE: 'direct',
+        KAFUO_GROUNDING_DATABASE_URL: '  ',
+      }),
+    ).toThrow(/TUTOR_GROUNDING_SOURCE=direct needs KAFUO_GROUNDING_DATABASE_URL/);
+    expect(() =>
+      validateKafuoGroundingConfig({
+        TUTOR_GROUNDING_SOURCE: 'direct',
+        KAFUO_GROUNDING_DATABASE_URL: 'postgres://kafuo_grounding_reader:x@db/kafuo',
+      }),
+    ).not.toThrow();
+    expect(kafuoGroundingDatabaseUrl({ KAFUO_GROUNDING_DATABASE_URL: ' ' })).toBeNull();
   });
 });

@@ -134,6 +134,9 @@ function candidateAudit(candidate: ItemCandidate) {
     score: candidate.score,
     matchedTermTypes: candidate.matchedTermTypes,
     routable: candidate.routable,
+    ...(candidate.buildId !== undefined ? { buildId: candidate.buildId } : {}),
+    ...(candidate.readiness !== undefined ? { readiness: candidate.readiness } : {}),
+    ...(candidate.matchSource !== undefined ? { matchSource: candidate.matchSource } : {}),
   };
 }
 
@@ -524,6 +527,8 @@ async function searchItems(
         continue;
       }
       case 'ok': {
+        const kafuoDropped = (searched as { dropped?: unknown[] }).dropped;
+        if (kafuoDropped && kafuoDropped.length > 0) resolution.kafuoDropped = kafuoDropped;
         const floor = evidenceFloor();
         const titles = new Map(
           candidates.map((candidate) => [candidate.learningItemId, candidate] as const),
