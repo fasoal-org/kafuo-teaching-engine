@@ -15,7 +15,9 @@ const DEFAULT_PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..
 const PROMPT_VARIABLE_DEFAULTS = {
   // The in-template Arabic register rule renders unless a server spoken-language
   // policy replaces it (`spokenLanguagePolicyVars`).
-  'slide-actions': { legacyArabicRegisterRule: true },
+  // Likewise its Arabic spoken-formula rules, unless the shared spoken-script
+  // policy replaces them (`spokenScriptVars`).
+  'slide-actions': { legacyArabicRegisterRule: true, legacySpokenScriptRule: true },
   'pbl-actions': {
     projectSummary:
       '(No generated milestones are available; introduce the project topic without inventing any.)',

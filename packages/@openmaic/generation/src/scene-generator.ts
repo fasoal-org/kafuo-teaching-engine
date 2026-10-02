@@ -67,6 +67,11 @@ import {
 } from './prompt-formatters.js';
 import type { PromptId } from './prompts/types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
+import {
+  buildSpokenScriptContext,
+  classifySceneTransition,
+  type SpokenScriptOptions,
+} from './narration-script.js';
 import type {
   GeneratedInteractiveContent,
   GeneratedPBLContent,
@@ -226,6 +231,14 @@ export interface SceneActionsOptions {
    * Appended to the user prompt; absent → the prompt is unchanged.
    */
   correctiveContext?: string;
+  /**
+   * The shared TTS-ready spoken-script and topic-signposting policy (one
+   * source for all four Action prompts), set by the server from the lesson's
+   * authoritative language and register. When present the slide template's
+   * own Arabic formula and register wording is withheld, so the rules are
+   * never duplicated. Absent → every Action prompt renders byte-identically.
+   */
+  spokenScript?: SpokenScriptOptions;
   logger?: GenerationLogger;
 }
 
@@ -237,6 +250,26 @@ function spokenLanguagePolicyVars(policy: string | undefined): Record<string, un
     spokenLanguagePolicy: policy,
     // The in-template register rule is replaced by the policy, never combined.
     legacyArabicRegisterRule: false,
+  };
+}
+
+/** Template variables for the spoken-script policy; empty when there is none. */
+function spokenScriptVars(
+  options: SceneActionsOptions,
+  outline: SceneOutline,
+): Record<string, unknown> {
+  if (!options.spokenScript) return {};
+  const ctx = options.ctx;
+  return {
+    ...buildSpokenScriptContext(
+      options.spokenScript,
+      classifySceneTransition(outline, ctx),
+      ctx?.previousSpeeches[0],
+    ),
+    // The shared policy replaces the slide template's own Arabic wording and
+    // formula rules, never combined with them.
+    legacyArabicRegisterRule: false,
+    legacySpokenScriptRule: false,
   };
 }
 
@@ -2166,6 +2199,7 @@ export async function generateSceneActions(
     const guidance = toPlannerGuidance(outline);
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: visible.title,
       keyPoints: visible.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: guidance.description,
@@ -2214,6 +2248,7 @@ export async function generateSceneActions(
 
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -2257,6 +2292,7 @@ export async function generateSceneActions(
       '(no interactive elements detected)';
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -2304,6 +2340,7 @@ export async function generateSceneActions(
     const projectV2 = (content as Partial<GeneratedPBLContent>).projectV2;
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,

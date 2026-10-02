@@ -257,3 +257,109 @@ describe('outside the Saudi policy nothing is forced', () => {
     expect(routed.actionPrompts).toHaveLength(1);
   });
 });
+
+describe('narration quality: topic signposting and spoken notation share the bounded re-roll', () => {
+  const twoScenes = [
+    {
+      ...outlines[0]!,
+      id: 'o1',
+      title: 'مقدمة في الحركة',
+      contentRole: 'orientation' as const,
+      order: 1,
+    },
+    {
+      ...outlines[0]!,
+      id: 'o2',
+      title: 'القوة المحصلة',
+      contentRole: 'explanation' as const,
+      contentKind: 'concept' as const,
+      keyPoints: ['القوة المحصلة'],
+      order: 2,
+    },
+  ];
+  const OPENING =
+    'هلا والله يا شباب، اليوم بنتعرف على الحركة، وخلونا الحين نشوف كيف تتحرك الأجسام حولنا عشان نفهم قوانين نيوتن بعدين بشكل زين وواضح.';
+  const UNANNOUNCED =
+    'القوة المحصلة هي مجموع القوى اللي تأثر على الجسم، وعشان نحسبها نجمع القوى مع بعض، وبعدين نشوف اتجاهها الحين.';
+  const ANNOUNCED =
+    'طيب، الحين ننتقل لموضوع القوة المحصلة. القوة المحصلة هي مجموع القوى اللي تأثر على الجسم، وعشان نحسبها نجمع القوى مع بعض.';
+
+  /** Replies per scene: the page-2 prompt is recognised by its position line. */
+  function routeByScene(scene2Replies: string[]) {
+    const scene2Prompts: Array<{ system: string; user: string }> = [];
+    let scene1Calls = 0;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        const user = request.messages.find((m) => m.role === 'user')?.content ?? '';
+        if (!ACTIONS_PROMPT.test(system)) return { text: CONTENT_OK };
+        if (system.includes('NEW TOPIC (page 2 of 2)')) {
+          scene2Prompts.push({ system, user });
+          return {
+            text: speech(
+              scene2Replies[Math.min(scene2Prompts.length - 1, scene2Replies.length - 1)]!,
+            ),
+          };
+        }
+        scene1Calls += 1;
+        return { text: speech(OPENING) };
+      },
+    );
+    return { scene2Prompts, scene1Calls: () => scene1Calls };
+  }
+
+  beforeEach(() => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: LI155_MODEL_DIRECTIVE, outlines: twoScenes },
+    });
+  });
+
+  it('compliant narration passes on the first attempt', async () => {
+    const routed = routeByScene([ANNOUNCED]);
+    await generate({ language: 'ar', subjectCode: 'PHYSICS' });
+    expect(routed.scene1Calls()).toBe(1);
+    expect(routed.scene2Prompts).toHaveLength(1);
+    // Every Action prompt carries the shared spoken-script and signposting policy.
+    expect(routed.scene2Prompts[0]!.system).toContain('## Spoken Script — TTS-ready narration');
+    expect(routed.scene2Prompts[0]!.system).toContain('## Topic Signposting');
+  });
+
+  it('a missing topic transition causes exactly one corrective re-roll of that scene', async () => {
+    const routed = routeByScene([UNANNOUNCED, ANNOUNCED]);
+    const result = await generate({ language: 'ar', subjectCode: 'PHYSICS' });
+    expect(routed.scene1Calls()).toBe(1);
+    expect(routed.scene2Prompts).toHaveLength(2);
+    const correction = routed.scene2Prompts[1]!.user;
+    expect(correction).toContain('Correction Required');
+    expect(correction).toContain('Scene 2 of 2 «القوة المحصلة»');
+    expect(correction).toContain('transition: new-topic');
+    expect(correction).toContain('announce the move to the new topic');
+    const spoken = (result.scenes[1]!.actions as Array<{ type: string; text?: string }>).find(
+      (action) => action.type === 'speech',
+    );
+    expect(spoken?.text).toBe(ANNOUNCED);
+  });
+
+  it('raw notation and a missing transition are merged into ONE corrective prompt', async () => {
+    const routed = routeByScene([`${UNANNOUNCED} يعني F = ma`, ANNOUNCED]);
+    await generate({ language: 'ar', subjectCode: 'PHYSICS' });
+    expect(routed.scene2Prompts).toHaveLength(2);
+    const correction = routed.scene2Prompts[1]!.user;
+    expect(correction).toContain('`F = ma`');
+    expect(correction).toContain('transition: new-topic');
+    expect(correction.split('## Correction Required').length - 1).toBe(1);
+  });
+
+  it('persistent failure stops after exactly 3 attempts with a typed error', async () => {
+    const routed = routeByScene([UNANNOUNCED]);
+    const failure = await generate({ language: 'ar', subjectCode: 'PHYSICS' }).catch(
+      (error) => error,
+    );
+    expect(failure).toMatchObject({ code: 'SPEECH_REGISTER_NONCOMPLIANT', status: 422 });
+    expect(failure.details.issues).toEqual([
+      expect.objectContaining({ code: 'TOPIC_NOT_SIGNALED', transition: 'new-topic' }),
+    ]);
+    expect(routed.scene2Prompts).toHaveLength(3);
+  });
+});

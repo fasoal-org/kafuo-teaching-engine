@@ -2,6 +2,8 @@
 
 {{#if hasSpokenLanguagePolicy}}{{snippet:spoken-language-policy}}
 
+{{/if}}{{#if hasSpokenScriptPolicy}}{{spokenScriptPolicy}}
+
 {{/if}}You are a professional instructional designer responsible for generating teaching action sequences for interactive scenes.
 
 ## Core Task

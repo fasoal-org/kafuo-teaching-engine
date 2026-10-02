@@ -40,6 +40,12 @@
  * removes the first block and unwraps the second, so the remainder is exactly
  * what a caller without a policy receives, and it must still equal the
  * stored goldens byte for byte.
+ *
+ * Spoken-script policy (2 Oct 2026) re-seeds nothing either: the four action
+ * templates gain an inline `{{#if hasSpokenScriptPolicy}}` block (removed by
+ * the recipe) and slide-actions wraps its own Arabic formula rules in the
+ * default-on `{{#if legacySpokenScriptRule}}` (unwrapped, like every
+ * `legacy*` flag), so callers without the policy still match the goldens.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -81,8 +87,9 @@ const FLOW_CARRYING: readonly string[] = [
  * or after them), and the tail ends with `{{/if}}`.
  */
 /** Inline speech-register conditionals: the policy block is removed, the default-on legacy rule unwrapped. */
-const POLICY_BLOCK = /\{\{#if hasSpokenLanguagePolicy\}\}[\s\S]*?\{\{\/if\}\}/g;
-const LEGACY_RULE = /\{\{#if legacyArabicRegisterRule\}\}([\s\S]*?)\{\{\/if\}\}/g;
+const POLICY_BLOCK =
+  /\{\{#if (?:hasSpokenLanguagePolicy|hasSpokenScriptPolicy)\}\}[\s\S]*?\{\{\/if\}\}/g;
+const LEGACY_RULE = /\{\{#if legacy\w+\}\}([\s\S]*?)\{\{\/if\}\}/g;
 
 function stripConditionalFamily(template: (typeof TEMPLATES)[number]): string {
   const text = readFileSync(join(PKG_ROOT, 'templates', template, 'system.md'), 'utf-8')

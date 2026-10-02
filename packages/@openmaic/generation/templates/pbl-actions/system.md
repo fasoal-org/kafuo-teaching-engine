@@ -2,6 +2,8 @@
 
 {{#if hasSpokenLanguagePolicy}}{{snippet:spoken-language-policy}}
 
+{{/if}}{{#if hasSpokenScriptPolicy}}{{spokenScriptPolicy}}
+
 {{/if}}You are a teaching action designer for a Project-Based Learning (PBL) scene.
 
 PBL scenes contain a complete project configuration with milestones and a guided project workspace led by an instructor.

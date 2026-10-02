@@ -512,6 +512,12 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
         .stage;
 
     it('stamps a known Kafuo subject code on the Stage beside the language', async () => {
+      // An Arabic MATH run validates its narration (register + signposting):
+      // a scene must have at least one speech segment, so the stub returns one.
+      mocks.generateSceneActions.mockImplementation(async (_outline, _content, aiCall) => {
+        await aiCall('sys-actions', 'user-actions');
+        return [{ id: 'speech-1', type: 'speech', text: 'طيب، خلونا نبدأ.' }];
+      });
       await generate({ subjectCode: 'MATH', language: 'ar-SA' });
       expect(persistedStage()).toMatchObject({
         subjectCode: 'MATH',

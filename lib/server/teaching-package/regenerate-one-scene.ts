@@ -36,7 +36,10 @@ import {
 } from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
 import { generateRegisterCompliantActions } from '@/lib/server/classroom-generation';
-import type { SpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
+import {
+  resolveSpokenScriptOptions,
+  type SpeechRegisterPolicy,
+} from '@/lib/server/speech/register-policy';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
 import {
@@ -202,6 +205,8 @@ export async function regenerateOneScene(
     : 'SCENE_ACTION_GENERATION_FAILED';
   let actions;
   try {
+    const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
+    const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
     actions = await generateRegisterCompliantActions(
       async (correctiveContext) => {
         let fellBack: SceneActionsFallback | undefined;
@@ -210,12 +215,13 @@ export async function regenerateOneScene(
           content,
           input.aiCallFor('scene-actions'),
           {
-            ctx: actionContext(input.scenes as Scene[], pre as Scene),
+            ctx: sceneCtx,
             agents,
             languageDirective,
             ...(input.registerPolicy
               ? { spokenLanguagePolicy: input.registerPolicy.directive }
               : {}),
+            ...(spokenScript ? { spokenScript } : {}),
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
@@ -236,6 +242,7 @@ export async function regenerateOneScene(
       },
       input.registerPolicy,
       { title: pre.title, outlineId: outline.id },
+      { outline, ctx: sceneCtx },
     );
   } catch (error) {
     assertRoute();

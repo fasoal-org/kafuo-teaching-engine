@@ -59,10 +59,17 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   formatSpeechRegisterCorrection,
   resolveSpeechRegisterPolicy,
+  resolveSpokenScriptOptions,
   validateSpeechRegister,
   type SpeechRegisterIssue,
   type SpeechRegisterPolicy,
 } from '@/lib/server/speech/register-policy';
+import {
+  formatNarrationSignpostingCorrection,
+  validateNarrationSignposting,
+  type NarrationSceneContext,
+  type NarrationSignpostingIssue,
+} from '@/lib/server/speech/narration-signposting';
 import {
   executeTeachingCall,
   TeachingModelUnavailableError,
@@ -96,42 +103,66 @@ function spokenTexts(actions: ReadonlyArray<{ type: string; text?: unknown }>): 
 
 /**
  * Generate one scene's Actions under the server's spoken-language register
- * policy. A noncompliant narration re-rolls THIS scene only, with the issues
- * as corrective context, up to {@link SPEECH_REGISTER_MAX_ATTEMPTS} attempts
- * in total; then the run fails with `SPEECH_REGISTER_NONCOMPLIANT`, which is
- * not an attempt-level retry code (the package is never regenerated for it).
- * Model-free default Actions are validated like any answer. Without a policy
- * the generator runs exactly once, as before.
+ * policy. The narration is checked for its register and raw spoken notation
+ * and — when the scene's position is known — for topic signposting. Any issue
+ * re-rolls THIS scene only, with every issue merged into ONE corrective
+ * context, up to {@link SPEECH_REGISTER_MAX_ATTEMPTS} attempts in total; then
+ * the run fails with `SPEECH_REGISTER_NONCOMPLIANT` (typed issue codes in its
+ * details), which is not an attempt-level retry code (the package is never
+ * regenerated for it). Model-free default Actions are validated like any
+ * answer. Without a policy the generator runs exactly once, as before.
  */
 export async function generateRegisterCompliantActions<T extends { type: string; text?: unknown }>(
   generate: (correctiveContext?: string) => Promise<T[]>,
   policy: SpeechRegisterPolicy | null,
   scene: { title: string; outlineId: string },
+  signposting?: NarrationSceneContext,
 ): Promise<T[]> {
   if (!policy) return generate();
   let correctiveContext: string | undefined;
   let issues: SpeechRegisterIssue[] = [];
+  let structure: NarrationSignpostingIssue[] = [];
   for (let attempt = 1; attempt <= SPEECH_REGISTER_MAX_ATTEMPTS; attempt += 1) {
     const actions = await generate(correctiveContext);
-    issues = validateSpeechRegister(spokenTexts(actions), policy);
-    if (issues.length === 0) return actions;
+    const texts = spokenTexts(actions);
+    issues = validateSpeechRegister(texts, policy);
+    structure = signposting ? validateNarrationSignposting(texts, signposting) : [];
+    if (issues.length === 0 && structure.length === 0) return actions;
     log.warn(
-      `Scene "${scene.title}" narration breaks the ${policy.register} register policy (${issues
+      `Scene "${scene.title}" narration breaks the ${policy.register} narration policy (${[
+        ...issues,
+        ...structure,
+      ]
         .map((issue) => issue.code)
         .join(', ')}); attempt ${attempt}/${SPEECH_REGISTER_MAX_ATTEMPTS}`,
     );
-    correctiveContext = formatSpeechRegisterCorrection(issues, policy);
+    correctiveContext = [
+      ...(structure.length > 0 && signposting
+        ? [formatNarrationSignpostingCorrection(structure, signposting)]
+        : []),
+      ...(issues.length > 0 ? [formatSpeechRegisterCorrection(issues, policy)] : []),
+    ].join('\n\n');
   }
   throw new TeachingPackageError(
     'SPEECH_REGISTER_NONCOMPLIANT',
-    `scene ${JSON.stringify(scene.title)} narration still breaks the ${policy.register} register policy after ${SPEECH_REGISTER_MAX_ATTEMPTS} attempts (${issues
+    `scene ${JSON.stringify(scene.title)} narration still breaks the ${policy.register} narration policy after ${SPEECH_REGISTER_MAX_ATTEMPTS} attempts (${[
+      ...issues,
+      ...structure,
+    ]
       .map((issue) => issue.code)
       .join(', ')})`,
     {
       outlineId: scene.outlineId,
       policyVersion: policy.version,
       register: policy.register,
-      issues: issues.map((issue) => ({ code: issue.code, evidence: issue.evidence })),
+      issues: [
+        ...issues.map((issue) => ({ code: issue.code, evidence: issue.evidence })),
+        ...structure.map((issue) => ({
+          code: issue.code,
+          transition: issue.transition,
+          evidence: issue.evidence,
+        })),
+      ],
     },
   );
 }
@@ -1060,6 +1091,9 @@ export async function generateClassroom(
     language: input.language,
     subjectCode: input.subjectCode,
   });
+  // The shared TTS-ready spoken-script + signposting policy, from the same
+  // authoritative inputs (absent → Action prompts render exactly as before).
+  const spokenScript = resolveSpokenScriptOptions(input.language, registerPolicy);
   let outlinesResult: Awaited<ReturnType<typeof generateSceneOutlinesFromRequirements>> | undefined;
   let correctiveContext: string | undefined;
   const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
@@ -1382,6 +1416,14 @@ export async function generateClassroom(
       // fell back; shouldRetryResult re-rolls while it did, and a fallback
       // surviving the full budget refuses with the run's own code below.
       // Non-governed callers keep today's contract exactly: first result wins.
+      // Page position + the previous page's speech, so first/last-page cues,
+      // same-session continuity and topic signposting exist on the server path.
+      const sceneCtx = {
+        pageIndex: index + 1,
+        totalPages: outlines.length,
+        allTitles: outlines.map((planned) => planned.title),
+        previousSpeeches,
+      };
       const actions = await generateRegisterCompliantActions(
         async (correctiveContext) => {
           let attemptProducedFallback = false;
@@ -1389,17 +1431,11 @@ export async function generateClassroom(
             () => {
               attemptProducedFallback = false;
               return generateSceneActions(safeOutline, content, actionsAiCall, {
-                // Page position + the previous page's speech, so first/last-page
-                // cues and same-session continuity exist on the server path too.
-                ctx: {
-                  pageIndex: index + 1,
-                  totalPages: outlines.length,
-                  allTitles: outlines.map((planned) => planned.title),
-                  previousSpeeches,
-                },
+                ctx: sceneCtx,
                 agents,
                 languageDirective,
                 ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+                ...(spokenScript ? { spokenScript } : {}),
                 ...(correctiveContext ? { correctiveContext } : {}),
                 // W1: the ONE resolved Flow position — the generator never sees the
                 // array and never performs the lookup itself.
@@ -1440,6 +1476,7 @@ export async function generateClassroom(
         },
         registerPolicy,
         { title: safeOutline.title, outlineId: safeOutline.id },
+        { outline: safeOutline, ctx: sceneCtx },
       );
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
@@ -1552,6 +1589,7 @@ export async function generateClassroom(
             agents,
             languageDirective,
             ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+            ...(spokenScript ? { spokenScript } : {}),
             ...(correctiveContext ? { correctiveContext } : {}),
           }),
         registerPolicy,

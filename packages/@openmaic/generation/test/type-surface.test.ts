@@ -45,6 +45,9 @@ type _SceneActionKeys = Assert<
     | 'flowContext'
     | 'resolvedSkills'
     | 'onFallback'
+    | 'spokenLanguagePolicy'
+    | 'correctiveContext'
+    | 'spokenScript'
     | 'logger'
   >
 >;

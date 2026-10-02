@@ -88,8 +88,16 @@ describe('validateSpeechRegister', () => {
     expect(issues[0]!.evidence).toEqual(['提交']);
   });
 
-  it('short notation tokens are left to SATTS, not rejected', () => {
-    expect(validateSpeechRegister(['طيب، عندنا x يساوي 5 kg تقريبًا.'], saudi)).toEqual([]);
+  it('a lone variable letter is left to SATTS; a raw quantity with a unit symbol is not (2 Oct 2026)', () => {
+    // Changed on purpose: TTS-ready narration (policy ar-speech-register-2)
+    // rejects raw quantities/units in Arabic scientific speech; `x` alone is
+    // still a letter name SATTS reads.
+    expect(validateSpeechRegister(['طيب، عندنا x يساوي خمسة كيلوجرام تقريبًا.'], saudi)).toEqual(
+      [],
+    );
+    expect(validateSpeechRegister(['طيب، عندنا x يساوي 5 kg تقريبًا.'], saudi)).toEqual([
+      { code: 'RAW_SPOKEN_NOTATION', evidence: ['5 kg'] },
+    ]);
   });
 
   it('a short narration is not judged for register', () => {

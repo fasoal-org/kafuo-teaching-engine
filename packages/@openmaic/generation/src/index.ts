@@ -153,6 +153,21 @@ export {
 } from './slide-role-guidance.js';
 export type { SlideRoleContext, SlideRoleGuidanceInput } from './slide-role-guidance.js';
 export {
+  SPOKEN_SCRIPT_ASSETS,
+  buildSpokenScriptContext,
+  classifySceneTransition,
+  describeSceneTransition,
+  normalizeSpokenText,
+  tokensMatch,
+  topicTokens,
+} from './narration-script.js';
+export type {
+  SceneTransition,
+  SceneTransitionKind,
+  SpokenScriptContext,
+  SpokenScriptOptions,
+} from './narration-script.js';
+export {
   generateSlideAssistance,
   sanitizeAssistanceHtml,
   visibleCanvasText,
