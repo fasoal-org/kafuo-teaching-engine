@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useStageStore } from '@/lib/store/stage';
-import { isScientificSpeechActive } from '@/lib/speech/scientific-mode';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
   resolveAgentVoice,
@@ -55,7 +54,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const { locale, t } = useI18n();
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
-  const scientificSpeechMode = useSettingsStore((s) => s.scientificSpeechMode);
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
   const ttsVolume = useSettingsStore((s) => s.ttsVolume);
   const playbackSpeed = useSettingsStore((s) => s.playbackSpeed);
@@ -249,10 +247,11 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           // client's own base URL (custom providers).
           ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl,
           ttsProviderOptions: providerOptions,
-          // SATTS (plan §7.6, FR-027): subject-aware dynamic speech — the server
-          // reads the Stage's context under a read grant and persists nothing.
-          // Sent only while the server's scientific mode is active.
-          ...(isScientificSpeechActive(scientificSpeechMode) && useStageStore.getState().stage?.id
+          // Dynamic speech of a Stage (SATTS plan §7.6, FR-027; TTS routing):
+          // the server reads the Stage's language and subject under a read grant,
+          // routes the provider from them and persists nothing. Sent in every
+          // scientific mode — routing applies with the flag off too.
+          ...(useStageStore.getState().stage?.id
             ? { stageId: useStageStore.getState().stage!.id, dynamic: true }
             : {}),
         }),
@@ -272,7 +271,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       controller.signal.throwIfAborted();
       return `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
     },
-    [agents, locale, ttsProvidersConfig, ttsSpeed, scientificSpeechMode],
+    [agents, locale, ttsProvidersConfig, ttsSpeed],
   );
 
   const prefetchNext = useCallback(() => {

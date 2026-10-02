@@ -261,9 +261,10 @@ interface TTSApiResponse {
 export { isScientificSpeechActive };
 
 /**
- * SATTS request context (plan §7.2): sent only while the server reports a
- * scientific mode other than `off`, so requests stay byte-identical to
- * today's while the flag is off.
+ * Narration request context. The Stage id is always sent with it (the server
+ * routes the TTS provider from the persisted Stage, in every mode); the SATTS
+ * fields (plan §7.2: action id, reason) only while the server reports a
+ * scientific mode other than `off`.
  */
 export interface NarrationRequestContext {
   actionId: string;
@@ -394,9 +395,11 @@ export async function generateAndStoreTTS(
             ttsBaseUrl:
               ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
             ttsProviderOptions: providerOptions,
+            // Narration names its Stage in every mode: the server routes the
+            // provider from the persisted Stage's language and subject.
+            ...(narration && stageId ? { stageId } : {}),
             ...(narration && isScientificSpeechActive(settings.scientificSpeechMode)
               ? {
-                  ...(stageId ? { stageId } : {}),
                   actionId: narration.actionId,
                   ...(narration.reason ? { reason: narration.reason } : {}),
                 }

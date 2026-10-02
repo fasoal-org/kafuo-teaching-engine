@@ -36,6 +36,11 @@ import {
 } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
 import { providerCapability } from '@/lib/server/speech/provider-capabilities';
+import {
+  routedProviderStatus,
+  routedProviderUnavailableMessage,
+  teachingRouteForStage,
+} from '@/lib/server/speech/teaching-route';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
@@ -332,36 +337,58 @@ export async function generateTTSForClassroom(
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
-  // Resolve TTS provider (exclude browser-native-tts and operator force-disabled
-  // providers — server precedence, #665).
-  const ttsProviderIds = Object.entries(getServerTTSProviders())
-    .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
-    .map(([id]) => id);
-  if (ttsProviderIds.length === 0) {
-    log.warn('No server TTS provider configured, skipping TTS generation');
-    return;
-  }
+  // Teaching Engine TTS route (from the Stage's language and subject): when it
+  // matches, its provider/model/voice are authoritative and an unavailable
+  // routed provider skips TTS — never the first configured provider instead.
+  const route = teachingRouteForStage(options.stage);
+  let providerId: TTSProviderId;
+  let modelId: string;
+  let voice: string;
+  let apiKey: string | undefined;
+  let ttsBaseUrl: string | undefined;
+  if (route) {
+    const status = routedProviderStatus(route.providerId);
+    if (status.status !== 'ok') {
+      log.warn(`${routedProviderUnavailableMessage(route, status.status)}; skipping TTS generation`);
+      return;
+    }
+    providerId = route.providerId;
+    modelId = route.modelId;
+    voice = route.voiceId;
+    apiKey = status.apiKey;
+    ttsBaseUrl = status.baseUrl;
+  } else {
+    // Resolve TTS provider (exclude browser-native-tts and operator force-disabled
+    // providers — server precedence, #665).
+    const ttsProviderIds = Object.entries(getServerTTSProviders())
+      .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
+      .map(([id]) => id);
+    if (ttsProviderIds.length === 0) {
+      log.warn('No server TTS provider configured, skipping TTS generation');
+      return;
+    }
 
-  const providerId = ttsProviderIds[0] as TTSProviderId;
-  const apiKey = resolveTTSApiKey(providerId);
-  const ttsProvider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
-  if (ttsProvider?.requiresApiKey && !apiKey) {
-    log.warn(`No API key for TTS provider "${providerId}", skipping TTS generation`);
-    return;
+    providerId = ttsProviderIds[0] as TTSProviderId;
+    apiKey = resolveTTSApiKey(providerId);
+    const ttsProvider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
+    if (ttsProvider?.requiresApiKey && !apiKey) {
+      log.warn(`No API key for TTS provider "${providerId}", skipping TTS generation`);
+      return;
+    }
+    ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
+    voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
+    if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
+      log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
+      return;
+    }
+    // B-1 (approved): operator model pins apply to the batch path too.
+    modelId =
+      resolveTTSModel(
+        providerId,
+        DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+        voice,
+      ) || '';
   }
-  const ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
-  const voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
-  if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
-    log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
-    return;
-  }
-  // B-1 (approved): operator model pins apply to the batch path too.
-  const modelId =
-    resolveTTSModel(
-      providerId,
-      DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
-      voice,
-    ) || '';
   const speechConfig = readSpeechConfig();
   const summary: ClassroomTtsSummary = {
     generated: 0,
@@ -434,6 +461,7 @@ export async function generateTTSForClassroom(
           recordUsage: true,
           // B-2 (approved): bounded retry for 429/5xx/timeout.
           transientAttempts: 2,
+          routeId: route?.routeId,
         });
         for (const warning of outcome.warnings) {
           summary.warningCodes[warning.code] = (summary.warningCodes[warning.code] ?? 0) + 1;

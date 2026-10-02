@@ -18,6 +18,14 @@ import {
 } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
 import { governedSubjectFromStore } from '@/lib/server/speech/speech-context';
+import {
+  routedProviderStatus,
+  routedProviderUnavailableMessage,
+  teachingRouteForStage,
+} from '@/lib/server/speech/teaching-route';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('SceneTTS');
 
 export interface SceneTtsSummary {
   available: boolean;
@@ -48,31 +56,55 @@ function narratorVoice(roster: SceneTtsInput['roster']) {
 
 /** Server-configured narration synthesis into the stage's classroom-media path. */
 export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<SceneTtsSummary> {
-  const enabled = enabledProviderIds();
-  const bound = narratorVoice(input.roster);
-  const providerId = (
-    bound?.providerId && enabled.includes(bound.providerId as TTSProviderId)
-      ? bound.providerId
-      : enabled[0]
-  ) as TTSProviderId | undefined;
-  if (!providerId) {
-    return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
+  // Teaching Engine TTS route (from the Stage's language and subject): when it
+  // matches, its provider/model/voice override the roster binding, and an
+  // unavailable routed provider is reported — never replaced by another one.
+  const route = teachingRouteForStage(input.stage);
+  let providerId: TTSProviderId;
+  let apiKey: string | undefined;
+  let baseUrl: string | undefined;
+  let voice: string;
+  let modelId: string;
+  if (route) {
+    const status = routedProviderStatus(route.providerId);
+    if (status.status !== 'ok') {
+      log.warn(routedProviderUnavailableMessage(route, status.status));
+      return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
+    }
+    providerId = route.providerId;
+    apiKey = status.apiKey;
+    baseUrl = status.baseUrl;
+    voice = route.voiceId;
+    modelId = route.modelId;
+  } else {
+    const enabled = enabledProviderIds();
+    const bound = narratorVoice(input.roster);
+    const picked = (
+      bound?.providerId && enabled.includes(bound.providerId as TTSProviderId)
+        ? bound.providerId
+        : enabled[0]
+    ) as TTSProviderId | undefined;
+    if (!picked) {
+      return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
+    }
+    providerId = picked;
+    const provider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
+    apiKey = resolveTTSApiKey(providerId);
+    if (provider?.requiresApiKey && !apiKey) {
+      return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
+    }
+    baseUrl = resolveTTSBaseUrl(providerId);
+    voice =
+      bound?.providerId === providerId && bound.voiceId
+        ? bound.voiceId
+        : DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || '';
+    modelId =
+      resolveTTSModel(
+        providerId,
+        DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+        voice,
+      ) || '';
   }
-  const provider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
-  const apiKey = resolveTTSApiKey(providerId);
-  if (provider?.requiresApiKey && !apiKey) {
-    return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
-  }
-  const voice =
-    bound?.providerId === providerId && bound.voiceId
-      ? bound.voiceId
-      : DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || '';
-  const modelId =
-    resolveTTSModel(
-      providerId,
-      DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
-      voice,
-    ) || '';
   let generated = 0;
   let skipped = 0;
   const failed: string[] = [];
@@ -102,7 +134,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
           requestSpeed: speech.speed,
           requestModelId: modelId,
           apiKey,
-          baseUrl: resolveTTSBaseUrl(providerId),
+          baseUrl,
         },
         actionSpeed: speech.speed,
         governedSubjectLookup: governedSubjectFromStore,
@@ -127,6 +159,7 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
         // Usage on the agent path is not an approved off-mode change (DEC-003).
         recordUsage: speechConfig.mode !== 'off',
         signal: input.signal,
+        routeId: route?.routeId,
       });
       if (input.signal?.aborted) throw new Error('aborted');
       if (outcome.outcome === 'failed' || !outcome.audioRef) {

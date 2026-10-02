@@ -116,6 +116,8 @@ describe('generateTTSForClassroom with SCIENTIFIC_TTS_MODE=on', () => {
     vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');
     // Rendering path (O-4 gates an unapproved policy otherwise).
     vi.stubEnv('SATTS_ALLOW_EXPERIMENTAL', 'true');
+    // Arabic MATH routes to Qwen Plus (Teaching Engine TTS routing).
+    vi.stubEnv('TTS_QWEN_API_KEY', 'server-qwen-key');
   });
 
   it('AS-005 / FR-022: a second pass reuses current audio and makes zero provider calls', async () => {
@@ -157,11 +159,13 @@ describe('flag off keeps today\'s provider config; turning the flag on does not 
   it('R-9: audio made with the flag off on a non-scientific Arabic Stage stays current when the flag turns on', async () => {
     const { generateTTSForClassroom } = await load();
     const input = scenes();
-    const biology = { subjectCode: 'BIOLOGY', language: 'ar-SA' };
-    await generateTTSForClassroom(input, 'stage-1', '', { stage: biology });
+    // An Arabic subject no TTS route matches keeps today's provider resolution.
+    vi.stubEnv('TTS_QWEN_API_KEY', 'server-qwen-key');
+    const social = { subjectCode: 'SOCIAL_STUDIES', language: 'ar-SA' };
+    await generateTTSForClassroom(input, 'stage-1', '', { stage: social });
     mocks.generateTTS.mockClear();
     vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');
-    const summary = await generateTTSForClassroom(input, 'stage-1', '', { stage: biology });
+    const summary = await generateTTSForClassroom(input, 'stage-1', '', { stage: social });
     expect(mocks.generateTTS).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ reused: 2 });
     // A MATH Stage's off-mode audio is legitimately stale once the renderer applies.

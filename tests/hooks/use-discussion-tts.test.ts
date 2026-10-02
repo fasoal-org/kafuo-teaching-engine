@@ -478,7 +478,16 @@ describe('SATTS dynamic web speech (plan §7.6, FR-027)', () => {
     expect(requests[0]!.body).toMatchObject({ stageId: 'stage-9', dynamic: true });
   });
 
-  it('with the mode off (default), the request carries no Stage context', async () => {
+  it('with the mode off (default), a Stage still sends its id and dynamic: true (TTS routing)', async () => {
+    const { useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 } } as never);
+    await seal('A');
+    expect(requests[0]!.body).toMatchObject({ stageId: 'stage-9', dynamic: true });
+  });
+
+  it('without a Stage the request carries no Stage context (unrouted)', async () => {
+    const { useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: null } as never);
     await seal('A');
     expect(requests[0]!.body).not.toHaveProperty('stageId');
     expect(requests[0]!.body).not.toHaveProperty('dynamic');

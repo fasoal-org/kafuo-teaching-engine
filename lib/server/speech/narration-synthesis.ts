@@ -302,6 +302,8 @@ export interface SynthesisRequest {
   signal?: AbortSignal;
   /** Injected for tests; defaults to a jittered real delay. */
   sleep?: (ms: number) => Promise<void>;
+  /** The Teaching Engine route applied (`prepareNarration().route`), logged with the outcome. */
+  routeId?: string | null;
 }
 
 export interface SynthesisOutcome {
@@ -354,6 +356,7 @@ function outcomeEvent(
       providerId: req.profile.providerId,
       modelId: req.profile.modelId,
       voice: req.profile.voice,
+      ...(req.routeId ? { routeId: req.routeId } : {}),
       segments: outcome.usage.segments,
       originalChars: req.action.text.length,
       preparedChars: outcome.usage.preparedChars,
@@ -404,7 +407,10 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
             ? { language: req.config.arLocale }
             : {}),
         }
-      : {}),
+      : // A routed profile carries its Stage language (Cartesia needs it in every mode).
+        profile.locale
+        ? { language: profile.locale }
+        : {}),
   };
 
   const parts: Uint8Array[] = [];

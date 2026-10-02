@@ -90,6 +90,17 @@ export function isQwenVoiceCloneModel(modelId?: string, configuredModelId?: stri
   );
 }
 
+/** DashScope international region; serves the Qwen-Audio SpeechSynthesizer models. */
+export const QWEN_INTL_BASE_URL = 'https://dashscope-intl.aliyuncs.com/api/v1';
+
+/**
+ * Qwen-Audio 3.0 TTS models (`qwen-audio-3.0-tts-*`) are served by the
+ * SpeechSynthesizer endpoint, not Qwen3 TTS's multimodal-generation endpoint.
+ */
+export function isQwenAudioSynthesizerModel(modelId?: string): boolean {
+  return !!modelId && /^qwen-audio-3\.0-tts-/u.test(modelId);
+}
+
 /** A Qwen catalog voice is provider-owned and must never use the clone model. */
 export function isQwenCatalogVoice(voiceId?: string): boolean {
   return !!voiceId && TTS_PROVIDERS['qwen-tts'].voices.some((voice) => voice.id === voiceId);
@@ -353,6 +364,7 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
       { id: 'qwen3-tts-flash', name: 'Qwen3 TTS Flash' },
       { id: 'qwen3-tts-instruct-flash', name: 'Qwen3 TTS Instruct Flash' },
       { id: 'qwen-tts', name: 'Qwen TTS' },
+      { id: 'qwen-audio-3.0-tts-plus', name: 'Qwen-Audio 3.0 TTS Plus' },
       { id: QWEN_TTS_VOICE_CLONE_MODEL, name: 'Qwen3 TTS Voice Clone' },
     ],
     defaultModelId: 'qwen3-tts-flash',
@@ -702,6 +714,14 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
         language: 'zh-HK',
         gender: 'female',
         description: 'qwenVoiceKiki',
+      },
+      // Qwen-Audio 3.0 (SpeechSynthesizer) catalog voice: the Teaching Engine's
+      // Arabic route for MATH, PHYSICS, ARABIC and BIOLOGY.
+      {
+        id: 'longanlufeng',
+        name: 'Longan Lufeng (longanlufeng)',
+        language: 'ar',
+        compatibleModels: ['qwen-audio-3.0-tts-plus'],
       },
     ],
     supportedFormats: ['mp3', 'wav', 'pcm'],

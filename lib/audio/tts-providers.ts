@@ -94,8 +94,19 @@
 
 import type { TTSModelConfig } from './types';
 import { isCustomTTSProvider } from './types';
-import { isQwenCloneVoice, resolveTTSModelForVoice, TTS_PROVIDERS } from './constants';
-import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
+import {
+  isQwenAudioSynthesizerModel,
+  isQwenCloneVoice,
+  QWEN_INTL_BASE_URL,
+  resolveTTSModelForVoice,
+  TTS_PROVIDERS,
+} from './constants';
+import {
+  audioFormat,
+  downloadAudio,
+  QwenVoiceCloneError,
+  synthesizeQwenVoiceClone,
+} from './qwen-voice-clone';
 import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import {
@@ -936,11 +947,15 @@ async function generateQwenTTS(
     }
   }
 
+  const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
+  if (isQwenAudioSynthesizerModel(modelId)) {
+    return await generateQwenAudioSynthesizerTTS(config, text, modelId!, signal);
+  }
+
   // Calculate speed: Qwen3 uses rate parameter from -500 to 500
   // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
 
-  const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
   const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
@@ -975,14 +990,27 @@ async function generateQwenTTS(
   }
 
   // Download audio from URL
-  let downloaded;
+  const downloaded = await downloadQwenTTSAudio(data.output.audio.url, signal, baseUrl);
+
+  return {
+    audio: downloaded.bytes,
+    format: 'wav', // Qwen3 TTS returns WAV format
+  };
+}
+
+/** Downloads a generated Qwen audio URL through the safe VC downloader, with neutral (non-VC) errors. */
+async function downloadQwenTTSAudio(
+  rawUrl: unknown,
+  signal: AbortSignal,
+  baseUrl: string | undefined,
+): Promise<Awaited<ReturnType<typeof downloadAudio>>> {
   try {
-    downloaded = await downloadAudio(data.output.audio.url, signal, baseUrl);
+    return await downloadAudio(String(rawUrl), signal, baseUrl);
   } catch (error) {
     if (error instanceof QwenVoiceCloneError) {
       const host = (() => {
         try {
-          return new URL(String(data.output.audio.url)).hostname || 'unknown';
+          return new URL(String(rawUrl)).hostname || 'unknown';
         } catch {
           return 'invalid';
         }
@@ -996,11 +1024,70 @@ async function generateQwenTTS(
     }
     throw error;
   }
+}
 
-  return {
-    audio: downloaded.bytes,
-    format: 'wav', // Qwen3 TTS returns WAV format
-  };
+/**
+ * Qwen-Audio 3.0 TTS (`qwen-audio-3.0-tts-*`, e.g. the Teaching Engine's
+ * Arabic route): DashScope's SpeechSynthesizer endpoint in the international
+ * region (spike `scripts/spikes/satts/t12-qwen-accent.ts`). Request is
+ * `{ model, input: { text, voice } }` — no `language_type` (the voice carries
+ * the language), no rate, no instructions (the model ignores them).
+ */
+async function generateQwenAudioSynthesizerTTS(
+  config: TTSModelConfig,
+  text: string,
+  modelId: string,
+  signal: AbortSignal,
+): Promise<TTSGenerationResult> {
+  const baseUrl = qwenAudioSynthesizerBaseUrl(config.baseUrl);
+  const response = await fetch(`${baseUrl}${QWEN_AUDIO_SYNTHESIZER_PATH}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({ model: modelId, input: { text, voice: config.voice } }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throwIfTtsRateLimited('Qwen', response.status);
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new QwenTTSError(`Qwen TTS request failed: ${errorText}`, response.status);
+  }
+
+  const data = await response.json().catch(() => null);
+  const rawUrl = typeof data?.output?.audio?.url === 'string' ? data.output.audio.url.trim() : '';
+  if (!rawUrl) {
+    throw new QwenTTSError('Qwen TTS returned no audio URL.');
+  }
+
+  const downloaded = await downloadQwenTTSAudio(rawUrl, signal, baseUrl);
+  const format = audioFormat(downloaded.contentType, data.output.audio.format, downloaded.url);
+  // Same non-audio guard as every directly-returned provider body.
+  const validated = await validateTTSAudioResponse(
+    new Response(new Blob([downloaded.bytes as BlobPart]), {
+      headers: downloaded.contentType ? { 'content-type': downloaded.contentType } : {},
+    }),
+    'Qwen',
+    format,
+  );
+  return { audio: validated.audio, format };
+}
+
+const QWEN_AUDIO_SYNTHESIZER_PATH = '/services/audio/tts/SpeechSynthesizer';
+
+/**
+ * The SpeechSynthesizer models are served from the international region. The
+ * provider's built-in (mainland) default base URL is treated as "not
+ * configured"; an operator-configured `TTS_QWEN_BASE_URL` is used as given.
+ */
+function qwenAudioSynthesizerBaseUrl(configured?: string): string {
+  const value = configured?.trim().replace(/\/+$/, '');
+  if (!value || value === TTS_PROVIDERS['qwen-tts'].defaultBaseUrl?.replace(/\/+$/, '')) {
+    return QWEN_INTL_BASE_URL;
+  }
+  return value;
 }
 
 /**

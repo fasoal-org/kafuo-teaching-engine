@@ -61,10 +61,11 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('SCIENTIFIC_TTS_MODE=off (default)', () => {
-  it('reads no Stage and sends the original text with today\'s config; usage = original chars', async () => {
+  it('reads the Stage (TTS routing); an unrouted Stage sends the original text with today\'s config', async () => {
+    mocks.loadStage.mockResolvedValue({ ...mathStage, stage: { subjectCode: 'SOCIAL_STUDIES', language: 'ar-SA' } });
     const { status, json } = await post({ stageId: 'stage-1', actionId: 'a1' });
     expect(status).toBe(200);
-    expect(mocks.loadStage).not.toHaveBeenCalled();
+    expect(mocks.loadStage).toHaveBeenCalledWith(expect.anything(), 'stage-1', 'write');
     const [config, text] = mocks.generateTTS.mock.calls[0]!;
     expect(text).toBe('نحسب x² + 1');
     expect(config).not.toHaveProperty('instructions');
@@ -86,6 +87,8 @@ describe('SCIENTIFIC_TTS_MODE=on', () => {
     vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');
     // The rendering path; without it the unapproved policy is gated (O-4, below).
     vi.stubEnv('SATTS_ALLOW_EXPERIMENTAL', 'true');
+    // The Arabic MATH fixture routes to Qwen Plus (Teaching Engine TTS routing).
+    vi.stubEnv('TTS_QWEN_API_KEY', 'server-qwen-key');
   });
 
   it('O-4: without SATTS_ALLOW_EXPERIMENTAL an unapproved policy sends the narration as authored', async () => {

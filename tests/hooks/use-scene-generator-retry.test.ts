@@ -520,7 +520,7 @@ describe('browser scene generation retry wrappers', () => {
       expect((target.actions![1] as { audioId: string }).audioId).not.toBe('ast_stale');
     });
 
-    it('with the flag off: no assess call and today\'s request body (no stage context)', async () => {
+    it('with the flag off: no assess call; the Stage id is sent for TTS routing, no SATTS action context', async () => {
       mocks.settingsState.mockReturnValue({ ...mocks.settingsState(), scientificSpeechMode: 'off' });
       const { generateTTSForScene } = await import('@/lib/hooks/use-scene-generator');
       mockFetch.mockImplementation(async () => jsonResponse(200, { success: true, base64: btoa('audio'), format: 'mp3' }));
@@ -529,8 +529,11 @@ describe('browser scene generation retry wrappers', () => {
       for (const [url, init] of mockFetch.mock.calls) {
         expect(url).toBe('/api/generate/tts');
         const body = JSON.parse((init as RequestInit).body as string);
-        expect(body).not.toHaveProperty('stageId');
+        // The server routes the provider from the persisted Stage in every mode.
+        expect(body).toMatchObject({ stageId: 'stage-1' });
         expect(body).not.toHaveProperty('actionId');
+        expect(body).not.toHaveProperty('reason');
+        expect(body).not.toHaveProperty('dynamic');
       }
     });
 

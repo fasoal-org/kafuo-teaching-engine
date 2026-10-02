@@ -79,6 +79,9 @@ async function run(action: SpeechAction, env: Record<string, string> = ON, overr
     config,
     fallback,
     governedCredentials: creds,
+    // These tests exercise the TTS_AR_* governed profile itself; Teaching
+    // Engine routing (Arabic MATH → Qwen) is covered in tts-route-teaching-routing.
+    route: null,
   });
   const outcome = await synthesizeNarration({
     action,
@@ -251,7 +254,7 @@ describe('assessNarrationAudio — reuse and targeted invalidation (FR-022, FR-0
     const config = readSpeechConfig(ON);
     let calls = 0;
     for (const action of actions) {
-      const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds });
+      const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
       const assessment = assessNarrationAudio(action, plan, profile, config.mode);
       if (assessment.status === 'current') continue;
       expect(action.id).toBe('a1');
@@ -268,7 +271,7 @@ describe('assessNarrationAudio — reuse and targeted invalidation (FR-022, FR-0
     const { outcome } = await run(action);
     const stored = { ...action, audioId: outcome.audioRef, audioProvenance: outcome.provenance };
     const config = readSpeechConfig({ ...ON, TTS_AR_VOICE: 'cedar' });
-    const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds });
+    const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
     expect(assessNarrationAudio(stored, plan, profile, 'on')).toMatchObject({ status: 'stale', reason: 'voice' });
     expect(assessNarrationAudio({ ...action, audioId: 'x' }, plan, profile, 'on').status).toBe('legacy');
     expect(assessNarrationAudio(action, plan, profile, 'on').status).toBe('missing');
@@ -330,7 +333,7 @@ describe('speech.narration.outcome events (FR-037, plan §16.1)', () => {
 
   it('reused and skipped (no provider call)', async () => {
     const config = readSpeechConfig(ON);
-    const { plan } = await prepareNarration({ text: 'نحسب x²', stage, stageId: 'stage-1', config, fallback, governedCredentials: creds });
+    const { plan } = await prepareNarration({ text: 'نحسب x²', stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
     recordReuse('batch', { id: 'a1' }, plan, 'current');
     recordReuse('agent', { id: 'a2' }, plan, 'legacy');
     expect(events().map((e) => e.outcome)).toEqual(['reused', 'skipped']);
