@@ -41,6 +41,8 @@ interface RegenerateSlideDialogProps {
   readonly stageId: string;
   readonly sceneId: string;
   readonly sceneTitle: string;
+  /** The scene's type (3 Oct 2026: quizzes are regenerable too) — picks the wording. */
+  readonly sceneType?: 'slide' | 'quiz';
   /** Test seam. */
   readonly run?: typeof runSlideRegeneration;
 }
@@ -75,9 +77,21 @@ export function RegenerateSlideDialog({
   stageId,
   sceneId,
   sceneTitle,
+  sceneType = 'slide',
   run = runSlideRegeneration,
 }: RegenerateSlideDialogProps) {
   const { t, locale } = useI18n();
+  // Quiz wording where it differs; every other key falls back to the slide text.
+  const tr = useCallback(
+    (key: string, options?: Record<string, unknown>) =>
+      sceneType === 'quiz'
+        ? t(`edit.quizRegeneration.${key}`, {
+            ...options,
+            defaultValue: t(`edit.slideRegeneration.${key}`, options),
+          })
+        : t(`edit.slideRegeneration.${key}`, options),
+    [t, sceneType],
+  );
   const dir = locale.startsWith('ar') ? 'rtl' : 'ltr';
   const instructionId = useId();
   const reasonId = useId();
@@ -100,7 +114,7 @@ export function RegenerateSlideDialog({
   const errorText = (field: Field) => {
     const error = errors[field];
     if (!error || !touched[field]) return null;
-    if (error.rule === 'required') return t('edit.slideRegeneration.errorRequired');
+    if (error.rule === 'required') return tr('errorRequired');
     return t(
       error.rule === 'min' ? 'edit.slideRegeneration.errorMin' : 'edit.slideRegeneration.errorMax',
       { limit: error.limit },
@@ -111,8 +125,8 @@ export function RegenerateSlideDialog({
     (outcome: Extract<RegenerationOutcome, { kind: 'failed' }>) =>
       KNOWN_ERROR_CODES.has(outcome.code)
         ? t(`edit.slideRegeneration.errors.${outcome.code}`)
-        : t('edit.slideRegeneration.errors.generic', { code: outcome.code }),
-    [t],
+        : tr('errors.generic', { code: outcome.code }),
+    [t, tr],
   );
 
   const submit = async () => {
@@ -133,14 +147,13 @@ export function RegenerateSlideDialog({
       switch (outcome.kind) {
         case 'success': {
           const regenerationId = outcome.regenerationId;
-          toast.success(t('edit.slideRegeneration.success'), {
+          toast.success(tr('success'), {
             action: {
-              label: t('edit.slideRegeneration.restoreAction'),
+              label: tr('restoreAction'),
               onClick: () => {
                 void restoreSlideRegeneration(stageId, regenerationId).then((restored) => {
-                  if (restored.ok) toast.success(t('edit.slideRegeneration.restored'));
-                  else
-                    toast.error(t('edit.slideRegeneration.restoreFailed', { code: restored.code }));
+                  if (restored.ok) toast.success(tr('restored'));
+                  else toast.error(tr('restoreFailed', { code: restored.code }));
                 });
               },
             },
@@ -152,14 +165,14 @@ export function RegenerateSlideDialog({
           break;
         }
         case 'changed-since':
-          toast(t('edit.slideRegeneration.changedSince'));
+          toast(tr('changedSince'));
           onOpenChange(false);
           break;
         case 'stale':
           onOpenChange(false);
           break;
         case 'not-durable':
-          setFailure(t('edit.slideRegeneration.notDurable'));
+          setFailure(tr('notDurable'));
           break;
         case 'failed':
           setFailure(failureMessage(outcome));
@@ -167,7 +180,7 @@ export function RegenerateSlideDialog({
       }
     } catch (error) {
       setFailure(
-        t('edit.slideRegeneration.errors.generic', {
+        tr('errors.generic', {
           code: error instanceof Error ? error.name : 'ERROR',
         }),
       );
@@ -178,7 +191,7 @@ export function RegenerateSlideDialog({
   };
 
   const counter = (field: Field, value: string) =>
-    t('edit.slideRegeneration.counter', {
+    tr('counter', {
       count: value.trim().length,
       max: REGENERATION_LIMITS[field].max,
     });
@@ -208,10 +221,10 @@ export function RegenerateSlideDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>{t('edit.slideRegeneration.title')}</DialogTitle>
+          <DialogTitle>{tr('title')}</DialogTitle>
           <DialogDescription>
             <span className="block font-medium text-foreground">{sceneTitle}</span>
-            <span className="block">{t('edit.slideRegeneration.scope')}</span>
+            <span className="block">{tr('scope')}</span>
           </DialogDescription>
         </DialogHeader>
 
@@ -223,9 +236,9 @@ export function RegenerateSlideDialog({
           }}
         >
           <div className="grid gap-1.5">
-            <Label htmlFor={instructionId}>{t('edit.slideRegeneration.instructionLabel')}</Label>
+            <Label htmlFor={instructionId}>{tr('instructionLabel')}</Label>
             <p id={`${instructionId}-help`} className="text-xs text-muted-foreground">
-              {t('edit.slideRegeneration.instructionHelp')}
+              {tr('instructionHelp')}
             </p>
             <Textarea
               id={instructionId}
@@ -234,7 +247,7 @@ export function RegenerateSlideDialog({
               value={instruction}
               disabled={running}
               rows={4}
-              placeholder={t('edit.slideRegeneration.instructionPlaceholder')}
+              placeholder={tr('instructionPlaceholder')}
               aria-describedby={`${instructionId}-help ${instructionId}-error`}
               aria-invalid={Boolean(errorText('instruction'))}
               onChange={(event) => setInstruction(event.target.value)}
@@ -251,9 +264,9 @@ export function RegenerateSlideDialog({
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor={reasonId}>{t('edit.slideRegeneration.reasonLabel')}</Label>
+            <Label htmlFor={reasonId}>{tr('reasonLabel')}</Label>
             <p id={`${reasonId}-help`} className="text-xs text-muted-foreground">
-              {t('edit.slideRegeneration.reasonHelp')}
+              {tr('reasonHelp')}
             </p>
             <Textarea
               id={reasonId}
@@ -262,7 +275,7 @@ export function RegenerateSlideDialog({
               value={reason}
               disabled={running}
               rows={2}
-              placeholder={t('edit.slideRegeneration.reasonPlaceholder')}
+              placeholder={tr('reasonPlaceholder')}
               aria-describedby={`${reasonId}-help ${reasonId}-error`}
               aria-invalid={Boolean(errorText('reason'))}
               onChange={(event) => setReason(event.target.value)}
@@ -285,7 +298,7 @@ export function RegenerateSlideDialog({
               role="status"
             >
               <Loader2 className="size-4 animate-spin" aria-hidden />
-              {t('edit.slideRegeneration.running')}
+              {tr('running')}
             </p>
           ) : null}
           {failure ? (
@@ -301,10 +314,10 @@ export function RegenerateSlideDialog({
               disabled={running}
               onClick={() => onOpenChange(false)}
             >
-              {t('edit.slideRegeneration.cancel')}
+              {tr('cancel')}
             </Button>
             <Button type="submit" disabled={running || !valid} data-testid="regenerate-submit">
-              {t('edit.slideRegeneration.submit')}
+              {tr('submit')}
             </Button>
           </DialogFooter>
         </form>

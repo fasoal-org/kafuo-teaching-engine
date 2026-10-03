@@ -2,7 +2,10 @@ import { callLLM } from '@/lib/ai/llm';
 import { createStageAPI } from '@/lib/api/stage-api';
 import type { StageStore } from '@/lib/api/stage-api-types';
 import {
+  analyzeOutlines,
   applyOutlineFallbacks,
+  blockingOutlineDiagnostics,
+  formatBlockingOutlineDiagnostics,
   generateSceneOutlinesFromRequirements,
   generateSceneActions,
   generateSceneContent,
@@ -12,12 +15,16 @@ import {
   PBLGenerationError,
   withGenerationRetry,
   buildVisionUserContent,
+  interactiveWidgetTypeOf,
+  isProhibitedWidgetOutline,
   type AICallFn,
   type AgentInfo,
+  type OutlineDiagnostic,
   type PdfImage,
   type SceneActionsFallback,
   type SceneFlowContext,
   type TeachingFlowEntry,
+  type WidgetType,
 } from '@openmaic/generation';
 import { createSceneWithActions } from '@/lib/server/scene-generation';
 import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
@@ -49,7 +56,17 @@ import {
 } from '@/lib/server/classroom-media-generation';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
-import { resolveTextDirection, type Scene, type Stage } from '@/lib/types/stage';
+import {
+  resolveTextDirection,
+  type Scene,
+  type SceneGenerationIssue,
+  type Stage,
+} from '@/lib/types/stage';
+import {
+  placeholderQuizContent,
+  placeholderSlideContent,
+} from '@/lib/server/teaching-package/placeholder-slide';
+import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import type {
   SourceVisualManifestEntry,
   TeachingFlowEntry as AppTeachingFlowEntry,
@@ -83,6 +100,7 @@ import {
   SourceVisualProcessingError,
 } from '@/lib/server/teaching-package/source-images';
 import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
+import { GenerationCorrectionRequiredError } from '@/lib/server/teaching-package/outline-correction';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
@@ -117,13 +135,21 @@ export async function generateRegisterCompliantActions<T extends { type: string;
   policy: SpeechRegisterPolicy | null,
   scene: { title: string; outlineId: string },
   signposting?: NarrationSceneContext,
+  /**
+   * Package generation (3 Oct 2026): record a still-noncompliant narration on
+   * the scene instead of failing the package. When supplied, the last answer is
+   * returned after this is called; absent → the typed error is thrown as before.
+   */
+  onNoncompliant?: (error: TeachingPackageError) => void,
 ): Promise<T[]> {
   if (!policy) return generate();
   let correctiveContext: string | undefined;
   let issues: SpeechRegisterIssue[] = [];
   let structure: NarrationSignpostingIssue[] = [];
+  let last: T[] = [];
   for (let attempt = 1; attempt <= SPEECH_REGISTER_MAX_ATTEMPTS; attempt += 1) {
     const actions = await generate(correctiveContext);
+    last = actions;
     const texts = spokenTexts(actions);
     issues = validateSpeechRegister(texts, policy);
     structure = signposting ? validateNarrationSignposting(texts, signposting) : [];
@@ -143,7 +169,7 @@ export async function generateRegisterCompliantActions<T extends { type: string;
       ...(issues.length > 0 ? [formatSpeechRegisterCorrection(issues, policy)] : []),
     ].join('\n\n');
   }
-  throw new TeachingPackageError(
+  const error = new TeachingPackageError(
     'SPEECH_REGISTER_NONCOMPLIANT',
     `scene ${JSON.stringify(scene.title)} narration still breaks the ${policy.register} narration policy after ${SPEECH_REGISTER_MAX_ATTEMPTS} attempts (${[
       ...issues,
@@ -165,10 +191,92 @@ export async function generateRegisterCompliantActions<T extends { type: string;
       ],
     },
   );
+  if (!onNoncompliant) throw error;
+  onNoncompliant(error);
+  return last;
+}
+
+/**
+ * Record generation issues on a kept scene, de-duplicated by code (3 Oct 2026).
+ * Mutated in place, like the media pass's own scene edits, so every reference to
+ * the scene (the store and any captured scene list) persists the same marker.
+ */
+/** Scene types a reviewer can regenerate one at a time (3 Oct 2026). */
+function isReviewerRegenerable(type: string): boolean {
+  return type === 'slide' || type === 'quiz';
+}
+
+/** The placeholder a governed slide/quiz position keeps when nothing usable came back. */
+function placeholderContentFor(
+  outline: { type: string; title: string; description?: string; keyPoints?: string[] },
+  textDirection?: 'rtl' | 'ltr',
+) {
+  return outline.type === 'quiz'
+    ? placeholderQuizContent(outline, textDirection)
+    : placeholderSlideContent(outline, textDirection);
+}
+
+/**
+ * Governed runs (3 Oct 2026): instead of pausing the attempt for an admin, a
+ * structurally invalid Action (unknown type, malformed, or a dangling element /
+ * media / agent reference) is removed from its scene and the scene is marked —
+ * the reviewer regenerates it. Returns how many scenes were repaired.
+ */
+export function repairInvalidActions(scenes: Scene[], stage: Stage): number {
+  const findings = validateSceneActionStructure(scenes, { stage });
+  if (findings.length === 0) return 0;
+  const bySceneId = new Map<string, typeof findings>();
+  for (const finding of findings) {
+    bySceneId.set(finding.sceneId, [...(bySceneId.get(finding.sceneId) ?? []), finding]);
+  }
+  for (const [sceneId, sceneFindings] of bySceneId) {
+    const scene = scenes.find((item) => item.id === sceneId);
+    if (!scene) continue;
+    const invalidIds = new Set(
+      sceneFindings.flatMap((finding) => (finding.actionId ? [finding.actionId] : [])),
+    );
+    const before = scene.actions?.length ?? 0;
+    scene.actions = (scene.actions ?? []).filter((action) => {
+      const id = (action as { id?: unknown }).id;
+      return typeof id === 'string' && id !== '' && !invalidIds.has(id);
+    }) as typeof scene.actions;
+    const removed = before - (scene.actions?.length ?? 0);
+    const first = sceneFindings[0]!;
+    const merged = [...(scene.generationIssues ?? [])];
+    if (!merged.some((issue) => issue.code === first.code)) {
+      merged.push({
+        code: first.code,
+        message: `${removed} invalid narration/animation step(s) were removed: ${first.message}`,
+      });
+    }
+    scene.generationIssues = merged;
+  }
+  return bySceneId.size;
+}
+
+function markSceneIssues(
+  store: { getState: () => { scenes: Scene[] } },
+  sceneId: string,
+  issues: readonly SceneGenerationIssue[],
+): void {
+  const scene = store.getState().scenes.find((item) => item.id === sceneId);
+  if (!scene) return;
+  const merged = [...(scene.generationIssues ?? [])];
+  for (const issue of issues) {
+    if (!merged.some((existing) => existing.code === issue.code)) {
+      merged.push({ code: issue.code, message: issue.message });
+    }
+  }
+  scene.generationIssues = merged;
 }
 
 /** Legacy outline attempts per run; governed package generation is single-shot. */
 const MAX_OUTLINE_GATE_ATTEMPTS = 3;
+/** The correction sent with the one re-ask of an unparseable governed scene answer. */
+const INVALID_SCENE_OUTPUT_CORRECTION =
+  'Your previous answer for this slide could not be used: it was not a valid JSON object with an "elements" array. Answer again with ONLY the complete slide JSON object in the required schema — no prose, no markdown fences, and no wrapper object around it.';
+/** Corrective-context prefix for collected (admin-correctable) outline findings. */
+const OUTLINE_CORRECTION_PREFIX = 'OUTLINE_CORRECTION_REQUIRED';
 /** Outline-gate rejections that a corrective re-roll can fix. */
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
@@ -238,6 +346,16 @@ export interface GenerateClassroomInput {
    * pre-integration path.
    */
   teachingFlow?: TeachingFlowEntry[];
+  /**
+   * Interactive widget types this run must never generate (Kafuo Release 1:
+   * `['game']`, set by the Teaching Package runner). The outline planner is told,
+   * an outline that would still build one is an admin-correctable
+   * `WIDGET_TYPE_PROHIBITED` finding (initial, re-asked and resumed outlines
+   * alike), and a Scene that would build one is refused with
+   * `GAME_GENERATION_DEFERRED` before any content call. Absent → prompts and
+   * behavior are byte-identical.
+   */
+  prohibitedWidgetTypes?: readonly WidgetType[];
   /**
    * `pdfContent.text` is an approved Kafuo normalized package projected as
    * Content Units (never Blocks). Propagated to the outline prompt, which then
@@ -353,6 +471,11 @@ export interface GenerateClassroomResult {
   scenes: Scene[];
   /** The outlines the run produced — the exact-flow gate reads these. */
   outlines: SceneOutline[];
+  /**
+   * Metadata repairs applied to the outlines (e.g. an incompatible
+   * `contentKind` dropped, role kept) — recorded so they stay visible.
+   */
+  outlineRepairs: OutlineDiagnostic[];
   scenesCount: number;
   createdAt: string;
 }
@@ -529,6 +652,59 @@ const filesystemClassroomSink: ClassroomPersistenceSink = {
   release: releaseClassroomReservation,
 };
 
+/**
+ * Admin-correction support (slide-classification-admin-correction-plan §3),
+ * present only for a run that can pause for a person (a Kafuo attempt).
+ * Without it every prompt, gate and failure behaves exactly as before.
+ */
+export interface GenerationCorrectionOptions {
+  /**
+   * App-authority outline findings (Content-Unit grounding, Teaching Skill
+   * selections), reported as admin-correctable diagnostics. Runs after the
+   * authority gate (`validateOutlines`) and before any Stage reservation.
+   */
+  collectOutlineIssues?: (
+    outlines: SceneOutline[],
+  ) => OutlineDiagnostic[] | Promise<OutlineDiagnostic[]>;
+  /**
+   * Resume from a saved, administrator-corrected outline candidate: no
+   * research and no outline generation; the candidate is revalidated with the
+   * same analysis before anything is reserved.
+   */
+  resumeOutlines?: {
+    outlines: SceneOutline[];
+    courseTitle: string | null;
+    languageDirective: string;
+  };
+  /**
+   * Resume a `scenes` checkpoint: the retained (unbound) Stage keeps every
+   * valid Scene; only the listed outlines' Scenes (and any outline without a
+   * Scene) are generated again, with their own media and narration audio, and
+   * the same Stage id is persisted again.
+   */
+  resumeScenes?: {
+    stageId: string;
+    stage: Stage;
+    scenes: Scene[];
+    regenerateOutlineIds: readonly string[];
+    sourceServingMapping: Record<string, string>;
+    sourceManifest: SourceVisualManifestEntry[];
+  };
+}
+
+/** The agents a retained Stage was generated with (resume of a `scenes` checkpoint). */
+function agentsFromStage(stage: Stage): AgentInfo[] {
+  const configs = (stage as { generatedAgentConfigs?: Array<Record<string, unknown>> })
+    .generatedAgentConfigs;
+  if (!Array.isArray(configs) || configs.length === 0) return getDefaultAgents();
+  return configs.map((config) => ({
+    id: String(config.id),
+    name: String(config.name ?? ''),
+    role: String(config.role ?? 'assistant'),
+    persona: String(config.persona ?? ''),
+  }));
+}
+
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
@@ -543,6 +719,8 @@ export async function generateClassroom(
      * compensation has nothing to undo because nothing was reserved yet.
      */
     validateOutlines?: (outlines: SceneOutline[]) => void | Promise<void>;
+    /** Pause-for-correction and resume support; absent → unchanged behaviour. */
+    correction?: GenerationCorrectionOptions;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
@@ -625,6 +803,12 @@ export async function generateClassroom(
   // errors into `null` / `success: false` / fallback Actions and would
   // otherwise re-roll the CALL — the plan re-rolls the RUN, in the runner.
   let routeFailure: TeachingModelUnavailableError | null = null;
+  // 3 Oct 2026: while ONE governed slide/quiz is being generated, a NON-retryable
+  // refusal (safety_refused / request_rejected) is that scene's problem, not the
+  // run's — it is collected here instead of poisoning `routeFailure`, the scene
+  // keeps a marked placeholder / default narration, and the run continues. A
+  // retryable failure (the route is down) still fails the run as before.
+  let sceneRefusalScope: { refusals: TeachingModelUnavailableError[] } | null = null;
   const teachingContext = (stage: string): TeachingCallContext => ({
     tenantId: routed!.attribution.tenantId,
     capability: 'package_generation',
@@ -666,7 +850,8 @@ export async function generateClassroom(
       return result.text;
     } catch (error) {
       if (error instanceof TeachingModelUnavailableError) {
-        routeFailure ??= error;
+        if (!error.retryable && sceneRefusalScope) sceneRefusalScope.refusals.push(error);
+        else routeFailure ??= error;
         // The generation package's retry helper reads `isRetryable` first:
         // the executor already spent the whole route, so a per-call retry
         // would only add attempts the run is going to discard.
@@ -1017,9 +1202,14 @@ export async function generateClassroom(
     scenesGenerated: 0,
   });
 
-  // Web search (optional, graceful degradation)
+  const correction = options.correction;
+  const resumeOutlines = correction?.resumeOutlines;
+  const resumeScenes = correction?.resumeScenes;
+
+  // Web search (optional, graceful degradation). A resumed run re-uses its
+  // saved outline candidate, which is the only consumer of research context.
   let researchContext: string | undefined;
-  if (input.enableWebSearch) {
+  if (input.enableWebSearch && !resumeOutlines) {
     const webSearchConfig = resolveClassroomWebSearchConfig(input);
     if (webSearchConfig) {
       // Re-resolve the query-rewrite model only when explicitly routed. If
@@ -1094,54 +1284,108 @@ export async function generateClassroom(
   // The shared TTS-ready spoken-script + signposting policy, from the same
   // authoritative inputs (absent → Action prompts render exactly as before).
   const spokenScript = resolveSpokenScriptOptions(input.language, registerPolicy);
-  let outlinesResult: Awaited<ReturnType<typeof generateSceneOutlinesFromRequirements>> | undefined;
-  let correctiveContext: string | undefined;
-  const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
-  for (let attempt = 1; attempt <= maxOutlineGateAttempts; attempt += 1) {
-    outlinesResult = await generateSceneOutlinesFromRequirements(
-      requirements,
-      pdfText,
-      hasSourceVisuals ? sourceImages : undefined,
-      outlineAiCall,
-      {
-        imageGenerationEnabled: input.enableImageGeneration,
-        videoGenerationEnabled: input.enableVideoGeneration,
-        researchContext,
-        // NO teacherContext — agents haven't been generated yet
-        ...(hasSourceVisuals ? { imageMapping: sourceImageMapping, visionEnabled: true } : {}),
-        ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
-          ? { teachingFlow: input.teachingFlow }
-          : {}),
-        ...(input.normalizedGrounding ? { normalizedGrounding: true } : {}),
-        // W1: the outline contract boolean DERIVES from the single governed-mode
-        // predicate — no second discriminator exists anywhere in the pipeline.
-        ...(input.governed ? { skillPolicy: true } : {}),
-        ...(correctiveContext ? { correctiveContext } : {}),
-        // Authoritative lesson language → embedded-text policy for planned
-        // images (RTL lessons get text-free images with native labels).
-        ...(outlineLanguage ? { language: outlineLanguage } : {}),
-        ...(outlineTextDirection ? { textDirection: outlineTextDirection } : {}),
-        ...(registerPolicy ? { authoritativeLanguageDirective: registerPolicy.directive } : {}),
-      },
+  let courseTitle: string | undefined;
+  let outlines: SceneOutline[];
+  let modelLanguageDirective: string;
+  // Admin-correctable findings of the final candidate, and the metadata repairs
+  // applied to it (only ever non-empty for a run that supports correction).
+  let outlineBlocking: OutlineDiagnostic[] = [];
+  let outlineRepairs: OutlineDiagnostic[] = [];
+  if (resumeOutlines) {
+    // Resumed from an administrator-corrected checkpoint: NO outline call. The
+    // saved candidate is revalidated with the same analysis the run uses.
+    const analysis = analyzeOutlines(resumeOutlines.outlines, {
+      ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
+        ? { teachingFlow: input.teachingFlow }
+        : {}),
+      sourceImages: sourceImages ?? [],
+      ...(input.prohibitedWidgetTypes?.length
+        ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
+        : {}),
+    });
+    outlines = analysis.outlines;
+    outlineRepairs = analysis.repairs;
+    outlineBlocking = blockingOutlineDiagnostics(analysis);
+    courseTitle = resumeOutlines.courseTitle ?? undefined;
+    modelLanguageDirective = resumeOutlines.languageDirective;
+  } else {
+    let outlinesResult:
+      | Awaited<ReturnType<typeof generateSceneOutlinesFromRequirements>>
+      | undefined;
+    let correctiveContext: string | undefined;
+    const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
+    for (let attempt = 1; attempt <= maxOutlineGateAttempts; attempt += 1) {
+      outlinesResult = await generateSceneOutlinesFromRequirements(
+        requirements,
+        pdfText,
+        hasSourceVisuals ? sourceImages : undefined,
+        outlineAiCall,
+        {
+          imageGenerationEnabled: input.enableImageGeneration,
+          videoGenerationEnabled: input.enableVideoGeneration,
+          researchContext,
+          // NO teacherContext — agents haven't been generated yet
+          ...(hasSourceVisuals ? { imageMapping: sourceImageMapping, visionEnabled: true } : {}),
+          ...(input.teachingFlow !== undefined && input.teachingFlow.length > 0
+            ? { teachingFlow: input.teachingFlow }
+            : {}),
+          ...(input.normalizedGrounding ? { normalizedGrounding: true } : {}),
+          ...(input.prohibitedWidgetTypes?.length
+            ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
+            : {}),
+          // W1: the outline contract boolean DERIVES from the single governed-mode
+          // predicate — no second discriminator exists anywhere in the pipeline.
+          ...(input.governed ? { skillPolicy: true } : {}),
+          ...(correctiveContext ? { correctiveContext } : {}),
+          // Authoritative lesson language → embedded-text policy for planned
+          // images (RTL lessons get text-free images with native labels).
+          ...(outlineLanguage ? { language: outlineLanguage } : {}),
+          ...(outlineTextDirection ? { textDirection: outlineTextDirection } : {}),
+          ...(registerPolicy ? { authoritativeLanguageDirective: registerPolicy.directive } : {}),
+          // A run that can pause for a person receives admin-correctable
+          // findings as diagnostics instead of a failed answer.
+          ...(correction ? { collectCorrectableIssues: true } : {}),
+        },
+      );
+
+      // A routed call whose both targets failed is not a bad answer to re-roll.
+      assertRouteAvailable();
+      const rejection = outlinesResult.success ? undefined : outlinesResult.error;
+      // Collected findings get the SAME bounded re-roll a rejection always got;
+      // only the last answer's findings reach a person.
+      const collected = outlinesResult.success
+        ? (outlinesResult.data?.diagnostics ?? []).filter(
+            (diagnostic) => diagnostic.disposition === 'admin_correctable',
+          )
+        : [];
+      if (collected.length > 0 && attempt < maxOutlineGateAttempts) {
+        correctiveContext = formatBlockingOutlineDiagnostics(collected, OUTLINE_CORRECTION_PREFIX);
+        log.warn(
+          `Outline attempt ${attempt}/${maxOutlineGateAttempts} needs correction: ${correctiveContext}`,
+        );
+        continue;
+      }
+      if (!rejection || !OUTLINE_GATE_ERROR.test(rejection)) break;
+      log.warn(`Outline attempt ${attempt}/${maxOutlineGateAttempts} rejected: ${rejection}`);
+      correctiveContext = rejection;
+    }
+
+    if (!outlinesResult?.success || !outlinesResult.data) {
+      log.error('Failed to generate outlines:', outlinesResult?.error);
+      throw new Error(outlinesResult?.error || 'Failed to generate scene outlines');
+    }
+
+    ({ courseTitle, outlines } = outlinesResult.data);
+    modelLanguageDirective = outlinesResult.data.languageDirective;
+    const diagnostics = outlinesResult.data.diagnostics ?? [];
+    outlineRepairs = diagnostics.filter((diagnostic) => diagnostic.disposition === 'repaired');
+    outlineBlocking = diagnostics.filter(
+      (diagnostic) => diagnostic.disposition === 'admin_correctable',
     );
-
-    // A routed call whose both targets failed is not a bad answer to re-roll.
-    assertRouteAvailable();
-    const rejection = outlinesResult.success ? undefined : outlinesResult.error;
-    if (!rejection || !OUTLINE_GATE_ERROR.test(rejection)) break;
-    log.warn(`Outline attempt ${attempt}/${maxOutlineGateAttempts} rejected: ${rejection}`);
-    correctiveContext = rejection;
   }
-
-  if (!outlinesResult?.success || !outlinesResult.data) {
-    log.error('Failed to generate outlines:', outlinesResult?.error);
-    throw new Error(outlinesResult?.error || 'Failed to generate scene outlines');
-  }
-
-  const { courseTitle, outlines } = outlinesResult.data;
   // Under a register policy the directive is the server's, whatever the
   // outline answered; it is what the Stage persists and every prompt receives.
-  const languageDirective = registerPolicy?.directive ?? outlinesResult.data.languageDirective;
+  const languageDirective = registerPolicy?.directive ?? modelLanguageDirective;
   log.info(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
@@ -1175,10 +1419,33 @@ export async function generateClassroom(
   // any media write. Throwing here reaches the caller with nothing to compensate.
   await options.validateOutlines?.(outlines);
 
+  // Admin-correction checkpoint (plan §3.2): still BEFORE any Stage reservation,
+  // Scene, media or TTS. A candidate a person can fix pauses the run with
+  // everything needed to resume — it is never compensated or failed. A resumed
+  // `scenes` checkpoint already passed this point once and is not re-paused here.
+  if (correction && !resumeScenes) {
+    const appIssues = (await correction.collectOutlineIssues?.(outlines)) ?? [];
+    const blocking = [...outlineBlocking, ...appIssues];
+    if (blocking.length > 0) {
+      log.warn(`Outline candidate paused for admin correction: ${blocking.length} issue(s)`);
+      throw new GenerationCorrectionRequiredError({
+        phase: 'outline',
+        outlines,
+        courseTitle: courseTitle ?? null,
+        languageDirective,
+        diagnostics: blocking,
+        repairs: outlineRepairs,
+      });
+    }
+  }
+
   // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective
   let agents: AgentInfo[];
   const agentMode = input.agentMode || 'default';
-  if (agentMode === 'generate') {
+  if (resumeScenes) {
+    // The retained Stage already names its agents; its Scenes were voiced by them.
+    agents = agentsFromStage(resumeScenes.stage);
+  } else if (agentMode === 'generate') {
     log.info('Generating custom agent profiles via LLM...');
     try {
       const agentProfilesCall = await getAgentProfilesAiCall();
@@ -1200,54 +1467,57 @@ export async function generateClassroom(
   const contentLanguage = input.language?.trim() || undefined;
   const textDirection = resolveTextDirection(contentLanguage);
 
-  const { id: stageId, stage } = await sink.reserve((id) => ({
-    id,
-    name: courseTitle || outlines[0]?.title || requirement.slice(0, 50),
-    description: undefined,
-    languageDirective,
-    ...(contentLanguage !== undefined ? { language: contentLanguage } : {}),
-    ...(textDirection !== undefined ? { textDirection } : {}),
-    ...(isSubjectCode(input.subjectCode) ? { subjectCode: input.subjectCode } : {}),
-    ...(registerPolicy
-      ? {
-          speechRegister: {
-            policyVersion: registerPolicy.version,
-            register: registerPolicy.register,
-          },
-        }
-      : {}),
-    videoManifest: buildVideoManifestFromOutlines(outlines),
-    style: 'interactive',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    // For LLM-generated agents, embed full configs so the client can
-    // hydrate the agent registry without prior IndexedDB data.
-    // For default agents, just record IDs — the client already has them.
-    ...(agentMode === 'generate'
-      ? {
-          generatedAgentConfigs: agents.map((a, i) => ({
-            id: a.id,
-            name: a.name,
-            role: a.role,
-            persona: a.persona || '',
-            avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
-            color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
-            priority: a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5,
-          })),
-        }
-      : {
-          agentIds: agents.map((a) => a.id),
-        }),
-  }));
+  const { id: stageId, stage } = resumeScenes
+    ? { id: resumeScenes.stageId, stage: resumeScenes.stage }
+    : await sink.reserve((id) => ({
+        id,
+        name: courseTitle || outlines[0]?.title || requirement.slice(0, 50),
+        description: undefined,
+        languageDirective,
+        ...(contentLanguage !== undefined ? { language: contentLanguage } : {}),
+        ...(textDirection !== undefined ? { textDirection } : {}),
+        ...(isSubjectCode(input.subjectCode) ? { subjectCode: input.subjectCode } : {}),
+        ...(registerPolicy
+          ? {
+              speechRegister: {
+                policyVersion: registerPolicy.version,
+                register: registerPolicy.register,
+              },
+            }
+          : {}),
+        videoManifest: buildVideoManifestFromOutlines(outlines),
+        style: 'interactive',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        // For LLM-generated agents, embed full configs so the client can
+        // hydrate the agent registry without prior IndexedDB data.
+        // For default agents, just record IDs — the client already has them.
+        ...(agentMode === 'generate'
+          ? {
+              generatedAgentConfigs: agents.map((a, i) => ({
+                id: a.id,
+                name: a.name,
+                role: a.role,
+                persona: a.persona || '',
+                avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
+                color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
+                priority: a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5,
+              })),
+            }
+          : {
+              agentIds: agents.map((a) => a.id),
+            }),
+      }));
 
   // Source-visual selection + materialization (plan §4.3.6): selection is the
   // union of the outlines' suggestedImageIds intersected with the normalized
   // source image ids; ONLY the selected images are materialized under the
   // reserved Stage's media directory. A materialization failure of a selected
   // image fails the run (never silently substituted by AI media).
-  let sourceServingMapping: Record<string, string> = {};
-  let sourceManifest: SourceVisualManifestEntry[] = [];
-  if (hasSourceVisuals && options.sourceVisuals) {
+  let sourceServingMapping: Record<string, string> = resumeScenes?.sourceServingMapping ?? {};
+  let sourceManifest: SourceVisualManifestEntry[] = resumeScenes?.sourceManifest ?? [];
+  // A retained Stage already holds its materialized source visuals.
+  if (hasSourceVisuals && options.sourceVisuals && !resumeScenes) {
     const availableIds = new Set(sourceImages!.map((image) => image.id));
     const selectedIds = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
     const selected = sourceImages!.filter((image) => selectedIds.has(image.id));
@@ -1278,10 +1548,37 @@ export async function generateClassroom(
     let generatedScenes = 0;
     let previousSpeeches: string[] = [];
 
+    // Resume of a `scenes` checkpoint: every valid Scene of the retained Stage is
+    // kept as-is; only the pending outlines (and any outline without a Scene)
+    // are generated again.
+    const regenerate = new Set(resumeScenes?.regenerateOutlineIds ?? []);
+    const retainedByOutline = new Map<string, Scene>();
+    for (const scene of resumeScenes?.scenes ?? []) {
+      if (scene.outlineId && !regenerate.has(scene.outlineId)) {
+        retainedByOutline.set(scene.outlineId, scene);
+      }
+    }
+    const retainedSceneIds = new Set<string>();
+
+    let refusedScenes = 0;
+    let firstRefusal: TeachingModelUnavailableError | undefined;
     for (const [index, outline] of outlines.entries()) {
+      const retained = retainedByOutline.get(outline.id);
+      if (retained) {
+        store.setState({ scenes: [...store.getState().scenes, retained] });
+        retainedSceneIds.add(retained.id);
+        generatedScenes += 1;
+        previousSpeeches = spokenTexts(retained.actions ?? []);
+        continue;
+      }
       const safeOutline = applyOutlineFallbacks(outline, true, {
         allowProceduralSkill: vocationalActive,
       });
+      const sceneRefusals: TeachingModelUnavailableError[] = [];
+      sceneRefusalScope =
+        input.governed && isReviewerRegenerable(safeOutline.type)
+          ? { refusals: sceneRefusals }
+          : null;
       const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
 
       await options.onProgress?.({
@@ -1308,6 +1605,21 @@ export async function generateClassroom(
         });
       };
 
+      // A caller-prohibited widget (Kafuo Release 1 defers games) is refused
+      // before any content spend — including one inferred from a legacy config,
+      // and one in retained-scene resumes that reach generation.
+      if (isProhibitedWidgetOutline(safeOutline, input.prohibitedWidgetTypes)) {
+        throw new TeachingPackageError(
+          'GAME_GENERATION_DEFERRED',
+          `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) would generate a "${interactiveWidgetTypeOf(safeOutline)}" widget, which this generation may not create (Kafuo Release 1 defers learning games)`,
+          {
+            outlineId: safeOutline.id,
+            teachingStage: safeOutline.teachingStage,
+            widgetType: interactiveWidgetTypeOf(safeOutline),
+          },
+        );
+      }
+
       // Resolve this scene's content model lazily, per outline type. The package
       // gets the provider-bound AICallFn and the app injects its agentic PBL loop
       // as the classified fallback, preserving single-call → loop routing.
@@ -1327,7 +1639,10 @@ export async function generateClassroom(
             [])
           : undefined;
       let contentFailure: { code: string; detail?: string } | undefined;
-      const content = await (async () => {
+      // 3 Oct 2026: a governed slide problem is recorded on the scene and the
+      // package keeps going — the reviewer regenerates the slide afterwards.
+      const sceneIssues: SceneGenerationIssue[] = [];
+      const generateContent = async (correctiveNote?: string) => {
         try {
           return await withGenerationRetry(
             () =>
@@ -1336,6 +1651,9 @@ export async function generateClassroom(
                 languageDirective,
                 ...(textDirection !== undefined ? { textDirection } : {}),
                 allowProceduralSkill: vocationalActive,
+                ...(input.prohibitedWidgetTypes?.length
+                  ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
+                  : {}),
                 ...(resolvedSkills ? { resolvedSkills } : {}),
                 ...(outlineAssignedImages && outlineAssignedImages.length > 0
                   ? {
@@ -1362,6 +1680,10 @@ export async function generateClassroom(
                         ),
                     }
                   : {}),
+                ...(correctiveNote ? { correctiveNote } : {}),
+                ...(input.governed
+                  ? { onVisualIssue: (issue) => void sceneIssues.push(issue) }
+                  : {}),
                 logger: log,
                 onFailure: (failure) => {
                   contentFailure = failure;
@@ -1381,15 +1703,69 @@ export async function generateClassroom(
           );
         } catch (error) {
           assertRouteAvailable();
+          if (
+            sceneRefusalScope &&
+            error instanceof TeachingModelUnavailableError &&
+            !error.retryable
+          ) {
+            // Recorded on the scene below; the run continues.
+            contentFailure = { code: 'model-refused', detail: error.message };
+            return null;
+          }
           return containPBLGenerationError(error, safeOutline.title);
         }
-      })();
+      };
+      let content = await generateContent();
       assertRouteAvailable();
+      // Governed runs stay single-shot per scene, with ONE exception: an answer
+      // that could not even be parsed (`invalid-model-output`) is re-asked once,
+      // for THIS scene only and with a correction — one extra call instead of
+      // losing every Scene already generated for the package.
+      if (
+        !content &&
+        input.governed &&
+        contentFailure?.code === 'invalid-model-output' &&
+        routeFailure === null
+      ) {
+        log.warn(
+          `Scene ${index + 1}/${outlines.length} content was not usable JSON; re-asking once: ${safeOutline.title}`,
+        );
+        await reportSceneRetry('content', {
+          attempt: 1,
+          maxAttempts: 2,
+          reason: 'invalid-model-output',
+        });
+        contentFailure = undefined;
+        content = await generateContent(INVALID_SCENE_OUTPUT_CORRECTION);
+        assertRouteAvailable();
+      }
+      const regenerable = isReviewerRegenerable(safeOutline.type);
+      if (!content && input.governed && regenerable) {
+        // 3 Oct 2026: a slide or quiz can be regenerated by the reviewer, so it
+        // never fails the package. Its flow position is kept with a placeholder
+        // built from the outline alone, and the scene is marked for regeneration.
+        const failureReason = contentFailure
+          ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
+          : 'no scene content was returned';
+        sceneIssues.push({
+          code:
+            contentFailure?.code === 'model-refused'
+              ? 'TEACHING_MODEL_REFUSED'
+              : 'GOVERNED_SCENE_GENERATION_FAILED',
+          message: `the ${safeOutline.type} could not be generated (${failureReason}); a placeholder was kept`,
+        });
+        log.warn(
+          `Scene ${index + 1}/${outlines.length} could not be generated (${failureReason}); keeping a placeholder: ${safeOutline.title}`,
+        );
+        content = placeholderContentFor(safeOutline, textDirection);
+      }
       if (!content) {
         // Module 3/4 W2 (TAE-RQ-017): on a governed run a dropped Scene is a
         // dropped Flow position. Skipping it here would surface later as a
         // misattributed TEACHING_MODEL_FLOW_MISMATCH; refuse with the
         // Scene-generation code instead. Non-governed runs keep the skip.
+        // (A governed *slide* never reaches here: it is kept as a placeholder
+        // above. Quiz / interactive / PBL positions have no reviewer remedy yet.)
         if (input.governed) {
           const failureReason = contentFailure
             ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
@@ -1424,6 +1800,7 @@ export async function generateClassroom(
         allTitles: outlines.map((planned) => planned.title),
         previousSpeeches,
       };
+      let actionsFellBack = false;
       const actions = await generateRegisterCompliantActions(
         async (correctiveContext) => {
           let attemptProducedFallback = false;
@@ -1465,25 +1842,75 @@ export async function generateClassroom(
           // The Action generator falls back to a model-free sequence on a call
           // failure; on a routed run a failed ROUTE must fail the run instead.
           assertRouteAvailable();
-          if (input.governed && attemptProducedFallback) {
-            throw new TeachingPackageError(
-              'GOVERNED_ACTION_GENERATION_FAILED',
-              `a governed scene's Action generation produced no canonical sequence after bounded retries (outline ${JSON.stringify(safeOutline.id)})`,
-              { outlineId: safeOutline.id, teachingStage: safeOutline.teachingStage },
-            );
-          }
+          // 3 Oct 2026: a governed fallback no longer fails the package — the
+          // model-free sequence is kept and the scene is marked for the reviewer.
+          actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
           return generated;
         },
         registerPolicy,
         { title: safeOutline.title, outlineId: safeOutline.id },
         { outline: safeOutline, ctx: sceneCtx },
+        input.governed
+          ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
+          : undefined,
       );
+      if (actionsFellBack) {
+        sceneIssues.push({
+          code: 'GOVERNED_ACTION_GENERATION_FAILED',
+          message: 'the narration and actions could not be generated; a default narration was kept',
+        });
+      }
       log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
-      const sceneId = createSceneWithActions(safeOutline, content, actions, api);
+      let sceneId: string | null = null;
+      let assemblyFailure: string | undefined;
+      try {
+        sceneId = createSceneWithActions(safeOutline, content, actions, api);
+      } catch (error) {
+        // A governed slide/quiz whose generated content cannot be assembled
+        // (e.g. invalid slide semantics) is kept as a placeholder instead of
+        // failing the package; anything else keeps today's contract.
+        if (!input.governed || !regenerable) throw error;
+        assemblyFailure = error instanceof Error ? error.message : String(error);
+      }
+      if (!sceneId && input.governed && regenerable) {
+        sceneIssues.push({
+          code: 'GOVERNED_SCENE_GENERATION_FAILED',
+          message: `the generated ${safeOutline.type} could not be assembled (${assemblyFailure ?? 'scene creation failed'}); a placeholder was kept`,
+        });
+        log.warn(
+          `Scene "${safeOutline.title}" could not be assembled; keeping a placeholder for review`,
+        );
+        sceneId = createSceneWithActions(
+          safeOutline,
+          placeholderContentFor(safeOutline, textDirection),
+          actions,
+          api,
+        );
+      }
       if (!sceneId) {
         log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
         continue;
+      }
+
+      if (sceneRefusals.length > 0) {
+        refusedScenes += 1;
+        firstRefusal ??= sceneRefusals[0];
+        if (!sceneIssues.some((issue) => issue.code === 'TEACHING_MODEL_REFUSED')) {
+          sceneIssues.push({
+            code: 'TEACHING_MODEL_REFUSED',
+            message: `the AI refused part of this ${safeOutline.type} (${sceneRefusals[0]!.message}); defaults were kept`,
+          });
+        }
+      }
+      sceneRefusalScope = null;
+      if (sceneIssues.length > 0) {
+        markSceneIssues(store, sceneId, sceneIssues);
+        log.warn(
+          `Scene "${safeOutline.title}" kept with ${sceneIssues.length} generation issue(s) for review: ${sceneIssues
+            .map((issue) => issue.code)
+            .join(', ')}`,
+        );
       }
 
       generatedScenes += 1;
@@ -1500,7 +1927,21 @@ export async function generateClassroom(
       });
     }
 
+    sceneRefusalScope = null;
+    // Every generated scene refused is not a scene problem — it is the route
+    // (e.g. a rejected request for every call): fail the run as before.
+    const freshCount = outlines.length - retainedSceneIds.size;
+    if (input.governed && firstRefusal && refusedScenes >= freshCount) throw firstRefusal;
+
     const scenes = store.getState().scenes;
+    // On a `scenes` resume only the newly generated Scenes need source-visual
+    // precedence, media and narration audio; retained Scenes already have them.
+    const freshScenes = resumeScenes
+      ? scenes.filter((scene) => !retainedSceneIds.has(scene.id))
+      : scenes;
+    const freshOutlines = resumeScenes
+      ? outlines.filter((outline) => !retainedByOutline.has(outline.id))
+      : outlines;
     log.info(`Pipeline complete: ${scenes.length} scenes generated`);
 
     if (scenes.length === 0) {
@@ -1514,7 +1955,7 @@ export async function generateClassroom(
     // the selected source visuals keep their requests. AI image generation is
     // never disabled globally or per outline.
     if (Object.keys(sourceServingMapping).length > 0) {
-      applySourceVisualPrecedence(scenes, outlines, sourceServingMapping);
+      applySourceVisualPrecedence(freshScenes, freshOutlines, sourceServingMapping);
     }
 
     // Phase: Media generation (after all scenes generated)
@@ -1528,7 +1969,7 @@ export async function generateClassroom(
       });
 
       try {
-        const mediaMap = await generateMediaForClassroom(outlines, stageId, options.baseUrl, {
+        const mediaMap = await generateMediaForClassroom(freshOutlines, stageId, options.baseUrl, {
           // Embedded-text policy from the Stage's AUTHORITATIVE direction only.
           textPolicy: resolveImageTextPolicy(stage.textDirection),
           withholdUnscreenedVideo: Boolean(input.governed),
@@ -1567,23 +2008,47 @@ export async function generateClassroom(
         visualPlan: { mode: 'native' as const },
       };
       const contentCall = await resolveSceneContentCall('slide');
-      const regenerated = await generateSceneContent(nativeOutline, contentCall.aiCall, {
-        agents,
-        languageDirective,
-        ...(textDirection !== undefined ? { textDirection } : {}),
-        editDirective: NATIVE_VISUAL_DIRECTIVE,
-        baselineContent: { elements: canvas.elements as never, background: canvas.background },
-      });
-      assertRouteAvailable();
-      if (!regenerated || !('elements' in regenerated)) {
-        throw new OrientationVisualMissingError(
-          scene.title,
-          'native regeneration produced no slide',
-        );
+      const nativeIssues: SceneGenerationIssue[] = [];
+      const nativeRefusals: TeachingModelUnavailableError[] = [];
+      sceneRefusalScope = input.governed ? { refusals: nativeRefusals } : null;
+      let regenerated: Awaited<ReturnType<typeof generateSceneContent>> = null;
+      try {
+        regenerated = await generateSceneContent(nativeOutline, contentCall.aiCall, {
+          agents,
+          languageDirective,
+          ...(textDirection !== undefined ? { textDirection } : {}),
+          editDirective: NATIVE_VISUAL_DIRECTIVE,
+          baselineContent: { elements: canvas.elements as never, background: canvas.background },
+          ...(input.governed ? { onVisualIssue: (issue) => void nativeIssues.push(issue) } : {}),
+        });
+      } catch (error) {
+        assertRouteAvailable();
+        if (!(error instanceof TeachingModelUnavailableError) || error.retryable) throw error;
+        if (!input.governed) throw error;
+        nativeIssues.push({ code: 'TEACHING_MODEL_REFUSED', message: error.message });
       }
-      canvas.elements = regenerated.elements as never;
+      assertRouteAvailable();
+      if (!regenerated || !('elements' in regenerated) || nativeIssues.length > 0) {
+        const message = nativeIssues[0]?.message ?? 'native regeneration produced no slide';
+        if (!input.governed) throw new OrientationVisualMissingError(scene.title, message);
+        // 3 Oct 2026: keep the slide exactly as it was (elements and actions
+        // still agree) and mark it; the reviewer regenerates it.
+        markSceneIssues(store, scene.id, [
+          {
+            code:
+              nativeIssues[0]?.code === 'TEACHING_MODEL_REFUSED'
+                ? 'TEACHING_MODEL_REFUSED'
+                : 'ORIENTATION_VISUAL_MISSING',
+            message: `the planned visual is missing: ${message}`,
+          },
+        ]);
+        log.warn(`Scene "${scene.title}" kept without its planned visual for review`);
+        sceneRefusalScope = null;
+        continue;
+      }
       const nativeActionsAiCall = await getSceneActionsAiCall();
-      scene.actions = (await generateRegisterCompliantActions(
+      const nativeRegisterIssues: SceneGenerationIssue[] = [];
+      const nativeActions = await generateRegisterCompliantActions(
         (correctiveContext) =>
           generateSceneActions(nativeOutline, regenerated, nativeActionsAiCall, {
             agents,
@@ -1594,8 +2059,39 @@ export async function generateClassroom(
           }),
         registerPolicy,
         { title: scene.title, outlineId: planned.id },
-      )) as never;
+        undefined,
+        input.governed
+          ? (error) => void nativeRegisterIssues.push({ code: error.code, message: error.message })
+          : undefined,
+      );
       assertRouteAvailable();
+      sceneRefusalScope = null;
+      if (nativeRefusals.length > 0) {
+        // The narration call was refused: keep the slide as it was, marked.
+        markSceneIssues(store, scene.id, [
+          {
+            code: 'TEACHING_MODEL_REFUSED',
+            message: `the planned visual is missing; the AI refused its narration (${nativeRefusals[0]!.message})`,
+          },
+        ]);
+        continue;
+      }
+      // Elements and actions are replaced together, only once both exist, so a
+      // kept scene never pairs new element ids with old cues.
+      canvas.elements = regenerated.elements as never;
+      scene.actions = nativeActions as never;
+      if (nativeRegisterIssues.length > 0) markSceneIssues(store, scene.id, nativeRegisterIssues);
+    }
+
+    // 3 Oct 2026: on a governed run an invalid Action no longer pauses the
+    // attempt for an admin after persisting — it is removed here and its scene
+    // is marked, so the runner's Action gate finds nothing and the package
+    // completes for the reviewer. Before TTS, so no audio is made for it.
+    if (input.governed) {
+      const repaired = repairInvalidActions(scenes, stage);
+      if (repaired > 0) {
+        log.warn(`Removed invalid Actions from ${repaired} scene(s); marked them for review`);
+      }
     }
 
     // Phase: TTS generation
@@ -1609,7 +2105,7 @@ export async function generateClassroom(
       });
 
       try {
-        const ttsSummary = await generateTTSForClassroom(scenes, stageId, options.baseUrl, {
+        const ttsSummary = await generateTTSForClassroom(freshScenes, stageId, options.baseUrl, {
           stage,
         });
         log.info('TTS generation complete', ttsSummary ? JSON.stringify(ttsSummary) : '');
@@ -1658,6 +2154,7 @@ export async function generateClassroom(
       stage: persisted.stage,
       scenes: persisted.scenes,
       outlines,
+      outlineRepairs,
       scenesCount: persisted.scenes.length,
       createdAt: persisted.createdAt,
     };

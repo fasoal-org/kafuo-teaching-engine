@@ -104,7 +104,7 @@ export function regenerationInvariantViolations(pre: AppScene, candidate: AppSce
     check('canvas.type', pre.content.canvas.type, candidate.content.canvas.type);
     check('contentRole', pre.content.contentRole, candidate.content.contentRole);
     check('contentKind', pre.content.contentKind, candidate.content.contentKind);
-  } else {
+  } else if (pre.content.type !== 'quiz' || candidate.content.type !== 'quiz') {
     violations.push('content.type');
   }
   check('teachingStage', pre.teachingStage, candidate.teachingStage);
@@ -123,8 +123,9 @@ export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
   const pre = input.scene;
+  if (pre.type === 'quiz' && pre.content.type === 'quiz') return regenerateQuizScene(input);
   if (pre.type !== 'slide' || pre.content.type !== 'slide') {
-    return failure('SCENE_TYPE_NOT_REGENERABLE', 'only slides can be regenerated');
+    return failure('SCENE_TYPE_NOT_REGENERABLE', 'only slides and quizzes can be regenerated');
   }
   const assertRoute = input.assertRouteAvailable ?? (() => {});
   const generateContent = input.generateContent ?? generateSceneContent;
@@ -320,6 +321,170 @@ export async function regenerateOneScene(
     return failure(
       'SCENE_CONTENT_GENERATION_FAILED',
       `the regenerated slide is not a valid scene: ${validation.errors
+        .map((error) => `${error.path || '/'}: ${error.message}`)
+        .join('; ')}`,
+    );
+  }
+  return { ok: true, scene: storable };
+}
+
+/**
+ * A reviewer's regeneration of one quiz Scene (3 Oct 2026) — the slide path's
+ * contract, minus the canvas: the outline seeded from the persisted Scene, the
+ * reviewer's requirements (with the current questions) as the edit directive,
+ * single-shot content, Actions under the register policy with fallbacks
+ * refused, and the same invariant, Action and write-boundary validation.
+ */
+async function regenerateQuizScene(
+  input: RegenerateOneSceneInput,
+): Promise<RegenerateOneSceneResult> {
+  const pre = input.scene;
+  if (pre.content.type !== 'quiz') {
+    return failure('SCENE_TYPE_NOT_REGENERABLE', 'only slides and quizzes can be regenerated');
+  }
+  const assertRoute = input.assertRouteAvailable ?? (() => {});
+  const generateContent = input.generateContent ?? generateSceneContent;
+  const generateActions = input.generateActions ?? generateSceneActions;
+  const now = input.now ?? Date.now;
+
+  const seeded = outlineFromScene(pre as Scene, input.outlineSnapshot);
+  const { mediaGenerations: _stripped, ...withoutMedia } = seeded as SceneOutline & {
+    mediaGenerations?: unknown;
+  };
+  const outline: SceneOutline = {
+    ...withoutMedia,
+    type: 'quiz',
+    ...(pre.teachingStage ? { teachingStage: pre.teachingStage } : {}),
+    ...(pre.teachingSkills ? { teachingSkills: pre.teachingSkills } : {}),
+    ...(pre.sourceContentUnitIds ? { sourceContentUnitIds: [...pre.sourceContentUnitIds] } : {}),
+  };
+
+  const stage = input.stage;
+  const agents = stage.generatedAgentConfigs;
+  const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
+  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(pre.content.questions)}`;
+  let contentFailure: { code: string; detail?: string } | undefined;
+  let content: Awaited<ReturnType<typeof generateSceneContent>>;
+  try {
+    content = await generateContent(outline, input.aiCallFor(sceneContentStage('quiz')), {
+      agents,
+      languageDirective,
+      editDirective,
+      ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+      onFailure: (event) => {
+        contentFailure = event;
+      },
+    });
+  } catch (error) {
+    assertRoute();
+    if (error instanceof TeachingPackageError)
+      return failure(error.code, error.message, error.details);
+    throw error;
+  }
+  assertRoute();
+  if (!content || !('questions' in content) || content.questions.length === 0) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      'the quiz could not be generated; nothing was written',
+      contentFailure ? { failure: contentFailure.code } : undefined,
+    );
+  }
+
+  const fallbackCode: TeachingPackageErrorCode = input.governed
+    ? 'GOVERNED_ACTION_GENERATION_FAILED'
+    : 'SCENE_ACTION_GENERATION_FAILED';
+  let actions;
+  try {
+    const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
+    const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
+    actions = await generateRegisterCompliantActions(
+      async (correctiveContext) => {
+        let fellBack: SceneActionsFallback | undefined;
+        const generated = await generateActions(
+          outline,
+          content,
+          input.aiCallFor('scene-actions'),
+          {
+            ctx: sceneCtx,
+            agents,
+            languageDirective,
+            ...(input.registerPolicy
+              ? { spokenLanguagePolicy: input.registerPolicy.directive }
+              : {}),
+            ...(spokenScript ? { spokenScript } : {}),
+            ...(correctiveContext ? { correctiveContext } : {}),
+            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
+            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+            onFallback: (info) => {
+              fellBack = info;
+            },
+          },
+        );
+        if (fellBack && input.refuseFallbackActions) {
+          assertRoute();
+          throw new TeachingPackageError(
+            fallbackCode,
+            'the narration could not be generated (the model answer was unusable); nothing was written',
+            { fallback: fellBack.code },
+          );
+        }
+        return filterKnownActions(generated);
+      },
+      input.registerPolicy,
+      { title: pre.title, outlineId: outline.id },
+      { outline, ctx: sceneCtx },
+    );
+  } catch (error) {
+    assertRoute();
+    if (error instanceof TeachingPackageError)
+      return failure(error.code, error.message, error.details);
+    throw error;
+  }
+  assertRoute();
+
+  const built = buildCompleteScene(outline, content, actions, pre.stageId, {
+    sceneId: pre.id,
+  }) as AppScene | null;
+  if (!built || built.content.type !== 'quiz') {
+    return failure('SCENE_CONTENT_GENERATION_FAILED', 'the quiz could not be assembled');
+  }
+  let candidate: AppScene = {
+    ...built,
+    createdAt: pre.createdAt,
+    updatedAt: now(),
+    ...(pre.teachingStage !== undefined ? { teachingStage: pre.teachingStage } : {}),
+    ...(pre.teachingSkills !== undefined ? { teachingSkills: pre.teachingSkills } : {}),
+    ...(pre.learningObjectives !== undefined ? { learningObjectives: pre.learningObjectives } : {}),
+    ...(pre.sourceContentUnitIds !== undefined
+      ? { sourceContentUnitIds: pre.sourceContentUnitIds }
+      : {}),
+  } as AppScene;
+  if (input.governed) {
+    const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
+    if (stamped) candidate = { ...candidate, alignmentBaseline: stamped };
+  }
+
+  const violations = regenerationInvariantViolations(pre, candidate);
+  if (violations.length > 0) {
+    return failure(
+      'SCENE_CONTENT_GENERATION_FAILED',
+      `the regenerated quiz changed fields it must keep: ${violations.join(', ')}`,
+    );
+  }
+  const others = input.scenes.filter((scene) => scene.id !== pre.id);
+  const findings = validateSceneActionStructure([...others, candidate], { stage }).filter(
+    (finding) => finding.sceneId === pre.id,
+  );
+  if (findings.length > 0) {
+    const first = findings[0]!;
+    return failure(first.code, first.message, { findings: findings.length });
+  }
+  const storable = omitUndefinedObjectMembers(candidate);
+  const validation = validateAppScene(storable);
+  if (!validation.valid) {
+    return failure(
+      'SCENE_CONTENT_GENERATION_FAILED',
+      `the regenerated quiz is not a valid scene: ${validation.errors
         .map((error) => `${error.path || '/'}: ${error.message}`)
         .join('; ')}`,
     );

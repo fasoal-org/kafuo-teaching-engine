@@ -45,6 +45,7 @@ import {
   type TeachingSkillsGovernance,
   validateExactTeachingFlow,
 } from '@/lib/server/teaching-package/exact-flow';
+import { findGameScenesOutsideFlow } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import {
   compareSuccessorMaterialScenes,
   isCloneOnlySuccessor,
@@ -441,6 +442,19 @@ async function prepareSubmitValidation(
       'TEACHING_MODEL_FLOW_MISMATCH',
       `the scene sequence does not cover the exact Teaching Model Flow (${check.violation.reason})`,
       { offendingSceneIds: check.violation.offendingSceneIds },
+    );
+  }
+  // Kafuo Release 1 defers generated games: under a policy-carrying flow
+  // (g5.v5+) a game Scene may sit only at a position whose own pinned policy
+  // permits one. A g5.v5 draft's game at its game position is history and
+  // passes; a game inserted into a game-free g5.v6 package (editor save,
+  // agent tool) is refused here; approval requires that same revision unchanged.
+  const misplacedGames = findGameScenesOutsideFlow(document.scenes, flow);
+  if (misplacedGames.length > 0) {
+    throw new TeachingPackageError(
+      'GAME_GENERATION_DEFERRED',
+      `${misplacedGames.length} learning game Scene(s) sit at a Teaching Model Flow position that does not allow a game; Kafuo Release 1 does not include learning games, so remove them before submitting`,
+      { offendingSceneIds: misplacedGames },
     );
   }
   if (legacySuccessor) {

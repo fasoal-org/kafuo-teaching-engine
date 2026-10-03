@@ -21,6 +21,7 @@ import {
   buildKafuoStartRequest,
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
+import { assertKafuoFlowWithoutGames } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
   readJsonObject,
@@ -114,6 +115,9 @@ export async function POST(req: NextRequest) {
           { subjectCode: kafuo.subjectCode, subjectOffering: kafuo.subjectOffering },
         );
       }
+      // Kafuo Release 1 defers generated games: a flow that requires or allows
+      // a game is refused HERE, 422 and non-retryable, before any attempt row.
+      assertKafuoFlowWithoutGames(request.teachingModel, 'generate');
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay

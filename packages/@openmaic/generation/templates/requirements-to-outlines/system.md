@@ -96,6 +96,7 @@ Rules — NON-NEGOTIABLE:
 2. The outlines, in `order` sequence, must cover the flow positions in order `0, 1, 2, …` with **no gaps, no reordering, no re-entry**: one flow position may produce ONE OR MORE consecutive outlines, but position `k` never appears again once position `k+1` has started.
 3. Never invent a stage key that is not in the list, never renumber the indices, and never derive `teachingStage` from a title, a scene type, or the outline order.
 4. Choose each outline's `type` (`slide`/`quiz`/`interactive`/`pbl`) freely to serve the flow position's `instructions`, subject to the scene-type constraints elsewhere in this prompt.
+{{/if}}{{#if hasScenePolicies}}5. When a position lists a `policy`, every outline at that position MUST satisfy it: its `type` (and an interactive scene's `widgetType`) is one of the listed values; a slide's `slideType` and `contentRole` are among the listed values; `visual` states the visual requirement; `outlines: exactly one` means a single outline at that position.
 {{/if}}{{#if normalizedGrounding}}
 ---
 
@@ -391,7 +392,7 @@ Rules:
 | type              | string                   | ✅       | `"slide"`, `"quiz"`, `"interactive"`, or `"pbl"`                                                 |
 | slideType         | string                   | ✅ (for slide) | `"cover"`, `"contents"`, `"transition"`, `"content"`, or `"end"` — slide scenes only (see Slide Classification) |
 | contentRole       | string                   | ✅ (for instructional slides) | The slide's pedagogical purpose — slide scenes only; omitted only on a purely structural `contents` / `transition` / `end` slide (see Slide Classification) |
-| contentKind       | string                   | ✅ (for `explanation` / `activity` / `practice`) | The role's specialization; omitted entirely for every other role          |
+| contentKind       | string                   | ❌ (optional; `explanation` / `activity` / `practice` only) | The role's optional specialization; omitted entirely for every other role |
 | visualPlan        | object                   | ✅ (for the `cover` + `orientation` opening) | Planner-only `{ mode: "image" \| "native" \| "omitted", omissionReason? }` (see The lesson opening) |
 | assistancePlan    | object                   | ✅ (for `practice` + `independent`) | Planner-only `{ hint, help, explanation }`; allowed only with `practice` / `check_understanding` (see Slide Classification) |
 | title             | string                   | ✅       | Scene title, concise and clear                                                                   |
@@ -475,7 +476,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 **Scene-level rules:**
 
 4. `type` is one of `"slide"`, `"quiz"`, `"interactive"`, `"pbl"`.
-   - Every `slide` scene carries `slideType`, and every instructional slide a `contentRole`, chosen by pedagogical intent (only a purely structural `contents` / `transition` / `end` slide omits the role); `explanation`, `activity` and `practice` also carry a `contentKind` from their own list, and every other role omits `contentKind`. `practice` + `independent` also carries an `assistancePlan` with `hint` and `explanation`, and its `description` / `keyPoints` hold the task only. `quiz`, `interactive` and `pbl` scenes carry none of these fields. A missing, unknown or mismatched classification invalidates the entire response.
+   - Every `slide` scene carries `slideType`, and every instructional slide a `contentRole`, chosen by pedagogical intent (only a purely structural `contents` / `transition` / `end` slide omits the role); `explanation`, `activity` and `practice` MAY add a `contentKind` from their own list, and every other role omits `contentKind`. `practice` + `independent` also carries an `assistancePlan` with `hint` and `explanation`, and its `description` / `keyPoints` hold the task only. `quiz`, `interactive` and `pbl` scenes carry none of these fields. A missing or unknown `contentRole` or `slideType` invalidates the entire response; a `contentKind` outside the role's own list is discarded.
    - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.

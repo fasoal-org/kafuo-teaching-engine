@@ -92,7 +92,9 @@ export type {
 export {
   DEFAULT_LANGUAGE_DIRECTIVE,
   OUTLINE_TEACHING_FLOW_ERROR,
+  analyzeOutlines,
   applyOutlineFallbacks,
+  blockingOutlineDiagnostics,
   resolveImageTextPolicyText,
   withCorrectiveContext,
   buildOutlinePrompt,
@@ -100,10 +102,24 @@ export {
   sanitizeProceduralSkillOutline,
 } from './outline-generator.js';
 export type {
+  OutlineAnalysis,
+  OutlineAnalysisContext,
   OutlineFallbackOptions,
+  OutlineGenerationData,
   OutlineGenerationOptions,
   OutlinePromptContext,
 } from './outline-generator.js';
+export {
+  LEGACY_STAGE_SCENE_POLICIES,
+  SOURCE_VISUAL_NORMALIZED,
+  describeScenePolicy,
+  flowHasScenePolicies,
+  narrowDiagnosticsToPositionPolicy,
+  normalizeSourceGroundedVisuals,
+  parseTeachingScenePolicy,
+  scenePolicyFor,
+  teachingFlowDiagnostics,
+} from './teaching-flow-policy.js';
 export { changeOutlineType } from './outline-type.js';
 export {
   generatedSlideLayoutIssue,
@@ -119,8 +135,18 @@ export {
   slideSemanticsFromOutline,
   stripEmptyOutlineSemantics,
   validateOutlineSlideSemantics,
+  ASSISTANCE_PLAN_REMOVED,
+  CONTENT_KIND_DROPPED,
+  outlineSemanticsDiagnostics,
+  repairOutlineSlideSemantics,
+  repairOutlinesSlideSemantics,
 } from './outline-semantics.js';
 export type { OutlineSemanticsIssue } from './outline-semantics.js';
+export {
+  formatBlockingOutlineDiagnostics,
+  hasBlockingOutlineDiagnostics,
+} from './outline-diagnostics.js';
+export type { OutlineDiagnostic, OutlineDiagnosticDisposition } from './outline-diagnostics.js';
 export {
   OUTLINE_SCENE_CONFIG_ERROR,
   SCENE_CAP_CONFLICT,
@@ -140,6 +166,14 @@ export type {
   RuntimeSceneFamily,
   SceneHardLimits,
 } from './outline-runtime.js';
+export {
+  WIDGET_TYPE_PROHIBITED,
+  WidgetTypeProhibitedError,
+  describeProhibitedWidgetTypes,
+  interactiveWidgetTypeOf,
+  isProhibitedWidgetOutline,
+  prohibitedWidgetDiagnostics,
+} from './widget-type-policy.js';
 export {
   toAssistancePlan,
   toPlannerGuidance,
@@ -211,6 +245,8 @@ export type {
   SlideOutlineSemantics,
   TeachingFlowEntry,
   TeachingRequiredSkillRule,
+  TeachingScenePolicy,
+  TeachingSceneType,
   TeachingSkillCombinationRestriction,
   TeachingSkillPolicy,
   TeachingStageRef,

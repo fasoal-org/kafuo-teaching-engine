@@ -7,8 +7,13 @@ import { describe, expect, it } from 'vitest';
 import { SLIDE_CONTENT_KINDS_BY_ROLE, SLIDE_CONTENT_ROLES } from '@openmaic/dsl';
 
 import {
+  ASSISTANCE_PLAN_REMOVED,
+  CONTENT_KIND_DROPPED,
   OUTLINE_SLIDE_SEMANTICS_ERROR,
   OUTLINE_SLIDE_TYPES,
+  outlineSemanticsDiagnostics,
+  repairOutlineSlideSemantics,
+  repairOutlinesSlideSemantics,
   buildOutlinePrompt,
   formatOutlineSemanticsIssues,
   stripEmptyOutlineSemantics,
@@ -93,10 +98,10 @@ describe('validateOutlineSlideSemantics', () => {
     expect(issues).toEqual([expect.objectContaining({ index: 0, field: 'contentKind' })]);
   });
 
-  it('requires a contentKind on the roles that define kinds', () => {
+  it('treats contentKind as optional on the roles that define kinds', () => {
     for (const contentRole of ['explanation', 'activity', 'practice']) {
       expect(validateOutlineSlideSemantics([slide({ slideType: 'content', contentRole })])).toEqual(
-        [expect.objectContaining({ field: 'contentKind' })],
+        [],
       );
     }
   });
@@ -330,5 +335,103 @@ describe('outline prompt — slide classification contract', () => {
     expect(flow.system).toContain('a stage key is context, never a value of');
     expect(plain.system).not.toContain('Teaching Model Flow decides which positions exist');
     expect(flow.system).not.toContain('{{');
+  });
+});
+
+describe('repairOutlineSlideSemantics (machine-repairable metadata only)', () => {
+  it('drops a kind the role does not define and keeps the role (the reported case)', () => {
+    const outline = slide({
+      slideType: 'content',
+      contentRole: 'explanation',
+      contentKind: 'procedure',
+    });
+    const { outline: repaired, repairs } = repairOutlineSlideSemantics(outline, 3);
+    expect(repaired.contentRole).toBe('explanation');
+    expect(repaired).not.toHaveProperty('contentKind');
+    expect(repairs).toEqual([
+      expect.objectContaining({
+        code: CONTENT_KIND_DROPPED,
+        disposition: 'repaired',
+        outlineIndex: 3,
+        outlineId: outline.id,
+        field: 'contentKind',
+        previousValue: 'procedure',
+        allowedValues: [...SLIDE_CONTENT_KINDS_BY_ROLE.explanation],
+      }),
+    ]);
+    // The input is never mutated, and the repaired outline validates.
+    expect(outline.contentKind).toBe('procedure');
+    expect(validateOutlineSlideSemantics([repaired])).toEqual([]);
+  });
+
+  it('never changes or invents a role', () => {
+    for (const contentRole of SLIDE_CONTENT_ROLES) {
+      const { outline } = repairOutlineSlideSemantics(
+        slide({ slideType: 'content', contentRole, contentKind: 'nonsense' }),
+        0,
+      );
+      expect(outline.contentRole).toBe(contentRole);
+    }
+    // No role: the kind is dropped, the role stays missing and is still reported.
+    const { outline: roleless, repairs } = repairOutlineSlideSemantics(
+      slide({ slideType: 'content', contentKind: 'concept' }),
+      0,
+    );
+    expect(roleless).not.toHaveProperty('contentRole');
+    expect(repairs.map((repair) => repair.code)).toEqual([CONTENT_KIND_DROPPED]);
+    expect(validateOutlineSlideSemantics([roleless]).map((issue) => issue.field)).toEqual([
+      'contentRole',
+    ]);
+  });
+
+  it('leaves a kind beside an UNKNOWN role for the person who fixes the role', () => {
+    const outline = slide({ slideType: 'content', contentRole: 'lecture', contentKind: 'concept' });
+    expect(repairOutlineSlideSemantics(outline, 0)).toEqual({ outline, repairs: [] });
+  });
+
+  it('removes an assistancePlan the role cannot use, and unknown or empty tiers', () => {
+    const stray = repairOutlineSlideSemantics(
+      slide({ slideType: 'content', contentRole: 'explanation', assistancePlan: PLAN }),
+      0,
+    );
+    expect(stray.outline).not.toHaveProperty('assistancePlan');
+    expect(stray.repairs.map((repair) => repair.code)).toEqual([ASSISTANCE_PLAN_REMOVED]);
+
+    const tiers = repairOutlineSlideSemantics(
+      slide({
+        slideType: 'content',
+        contentRole: 'practice',
+        contentKind: 'guided',
+        assistancePlan: { hint: 'h', answer: 'x', help: '  ' },
+      }),
+      0,
+    );
+    expect(tiers.outline.assistancePlan).toEqual({ hint: 'h' });
+    expect(tiers.repairs[0]?.previousValue).toEqual(['answer', 'help']);
+  });
+
+  it('is idempotent and leaves valid or non-slide outlines untouched', () => {
+    const valid = slide({ slideType: 'content', contentRole: 'practice', contentKind: 'guided' });
+    expect(repairOutlineSlideSemantics(valid, 0)).toEqual({ outline: valid, repairs: [] });
+    const quiz = { ...valid, type: 'quiz' } as SceneOutline;
+    expect(repairOutlineSlideSemantics(quiz, 0).outline).toBe(quiz);
+    const once = repairOutlinesSlideSemantics([
+      slide({ slideType: 'content', contentRole: 'summary', contentKind: 'guided' }),
+    ]);
+    const twice = repairOutlinesSlideSemantics(once.outlines);
+    expect(twice.repairs).toEqual([]);
+    expect(twice.outlines).toEqual(once.outlines);
+  });
+
+  it('maps every remaining issue to an admin-correctable diagnostic with allowed values', () => {
+    const diagnostics = outlineSemanticsDiagnostics([slide({ slideType: 'content' })]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CONTENT_ROLE_MISSING',
+        disposition: 'admin_correctable',
+        field: 'contentRole',
+        allowedValues: [...SLIDE_CONTENT_ROLES],
+      }),
+    ]);
   });
 });

@@ -31,6 +31,37 @@ describe('scene content model-output failures', () => {
     },
   );
 
+  it('logs the start of an unusable slide answer for diagnosis', async () => {
+    const error = vi.fn();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error };
+    const response = JSON.stringify({ slide: { elements: [] } });
+
+    await generateSceneContent(
+      slideOutline(),
+      vi.fn(async () => response),
+      { logger },
+    );
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('parsed keys: slide'));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('response starts:'));
+  });
+
+  it('appends a correctiveNote to the slide prompt only when one is given', async () => {
+    const prompts: string[] = [];
+    const aiCall: AICallFn = vi.fn(async (_system, user) => {
+      prompts.push(user);
+      return JSON.stringify({ elements: [] });
+    });
+
+    await generateSceneContent(slideOutline(), aiCall, {});
+    await generateSceneContent(slideOutline(), aiCall, { correctiveNote: 'FIX THE JSON' });
+
+    expect(prompts[0]).not.toContain('Correction Required');
+    expect(prompts[1]).toContain('## Correction Required');
+    expect(prompts[1]).toContain('FIX THE JSON');
+    expect(prompts[1]!.startsWith(prompts[0]!)).toBe(true);
+  });
+
   it('does not classify capability gates, PBL failures, or provider exceptions', async () => {
     const gateFailures: SceneContentFailure[] = [];
     const gateAiCall: AICallFn = vi.fn();

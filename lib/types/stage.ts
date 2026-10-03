@@ -194,8 +194,25 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * baseline. `sceneRev` is not part of the binding.
    */
   alignmentBaseline?: SceneAlignmentBaseline;
+  /**
+   * Problems package generation recorded on this scene instead of failing the
+   * whole package (3 Oct 2026): the scene was kept as generated (or as a
+   * placeholder when nothing usable came back) and the reviewer decides —
+   * regenerate it, edit it, or publish it. App-layer, optional, additive;
+   * never read at runtime and never shown to learners. A successful
+   * single-slide regeneration builds a fresh scene without it.
+   */
+  generationIssues?: SceneGenerationIssue[];
 };
 export type Scene = AppScene;
+
+/** One problem package generation recorded on a scene it kept. */
+export interface SceneGenerationIssue {
+  /** The typed failure code that used to fail the package (e.g. ORIENTATION_VISUAL_MISSING). */
+  code: string;
+  /** The human-readable reason, shown to the reviewer. */
+  message: string;
+}
 
 /**
  * A partial update for {@link AppScene} — the patch shape used by `updateScene` /

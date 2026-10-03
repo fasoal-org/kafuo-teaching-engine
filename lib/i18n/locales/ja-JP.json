@@ -403,7 +403,18 @@
       "sceneIncomplete": "このページの内容が未完成です",
       "addPage": "ページを追加",
       "nextPage": "次のページ",
-      "prevPage": "前のページ"
+      "prevPage": "前のページ",
+      "sceneGenerationIssue": "This slide needs review: generation had a problem",
+      "generationIssue": {
+        "ORIENTATION_VISUAL_MISSING": "The textbook image chosen for this slide is missing.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "This slide could not be generated; a placeholder was kept.",
+        "GOVERNED_ACTION_GENERATION_FAILED": "The narration could not be generated; a default narration was kept.",
+        "SPEECH_REGISTER_NONCOMPLIANT": "The narration does not follow the required spoken style.",
+        "TEACHING_MODEL_REFUSED": "The AI refused to generate part of this slide; defaults were kept.",
+        "ACTION_REFERENCE_INVALID": "Invalid narration or animation steps were removed from this slide.",
+        "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
+        "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide."
+      }
     },
     "zorder": {
       "toFront": "最前面へ移動",
@@ -709,6 +720,22 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
+      }
+    },
+    "quizRegeneration": {
+      "menuItem": "Regenerate quiz",
+      "title": "Regenerate this quiz",
+      "scope": "Only this quiz is regenerated. Its place in the lesson, its learning objectives and its teaching skills stay the same; its questions and narration are replaced.",
+      "instructionHelp": "Describe what the new questions must do. This text, with the current questions, is sent to the AI.",
+      "instructionPlaceholder": "For example: make the questions check the idea, not memorised numbers, and fix the wrong answer in question 2.",
+      "reasonHelp": "Why this quiz needs regenerating. It is kept in the review history only and is never sent to the AI.",
+      "reasonPlaceholder": "For example: question 2 has two correct answers.",
+      "submit": "Regenerate this quiz",
+      "running": "Regenerating this quiz. This can take a minute; keep this tab open.",
+      "success": "The quiz was regenerated.",
+      "restored": "The previous version of the quiz was restored.",
+      "errors": {
+        "generic": "The quiz could not be regenerated ({{code}}). Nothing was saved."
       }
     }
   },

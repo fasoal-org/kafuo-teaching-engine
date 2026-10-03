@@ -366,6 +366,7 @@ describe('teaching engine integration configuration validation', () => {
   const base = {
     serviceKey: 'svc-key',
     isProduction: false,
+    allowInsecureLoopbackWebhook: false,
     databaseUrl: 'postgres://localhost/te',
     webhookUrl: 'http://localhost:8000/api/v2/integrations/teaching-engine/webhooks',
     webhookSecret: 'whsec-distinct',

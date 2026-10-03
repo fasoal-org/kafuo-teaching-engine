@@ -121,6 +121,39 @@ function flowOutline(order: number, flowIndex: number) {
   };
 }
 
+/**
+ * The two Stage-1 gates exactly where the real `generateClassroom` runs them —
+ * after outlines, BEFORE `reserve`: the authority gate (`validateOutlines`,
+ * throws), then the admin-correction checkpoint (slide-classification-admin-
+ * correction-plan §3.2): app-authority findings (Content-Unit grounding,
+ * Teaching Skill selections) pause the attempt instead of failing it. The
+ * error class is imported here, at call time, so it is the instance the
+ * freshly imported runner checks against.
+ */
+async function outlineGates(
+  options: {
+    validateOutlines?: (outlines: never) => unknown;
+    correction?: { collectOutlineIssues?: (outlines: never) => unknown };
+  },
+  outlines: unknown[],
+) {
+  await options.validateOutlines?.(outlines as never);
+  const issues = ((await options.correction?.collectOutlineIssues?.(outlines as never)) ??
+    []) as import('@openmaic/generation').OutlineDiagnostic[];
+  if (issues.length > 0) {
+    const { GenerationCorrectionRequiredError } =
+      await import('@/lib/server/teaching-package/outline-correction');
+    throw new GenerationCorrectionRequiredError({
+      phase: 'outline',
+      outlines: outlines as never,
+      courseTitle: null,
+      languageDirective: '',
+      diagnostics: issues,
+      repairs: [],
+    });
+  }
+}
+
 /** The successful-run mock: reserve → persist → valid flow scenes. */
 function mockValidRun(stageId = 'stage-run-1') {
   mocks.generateClassroom.mockImplementation(async (_execution, options) => {
@@ -133,7 +166,7 @@ function mockValidRun(stageId = 'stage-run-1') {
         ? { sourceContentUnitIds: ['cu-1'] }
         : {}),
     }));
-    await options.validateOutlines?.(outlines);
+    await outlineGates(options, outlines);
     mocks.sceneGenerationReached();
     const reserved = await options.persistence.reserve((id: string) => ({
       id,
@@ -185,7 +218,7 @@ function mockGenerateWithCitations(citations: {
       ...flowOutline(index + 1, index),
       ...citations,
     }));
-    await options.validateOutlines?.(outlines);
+    await outlineGates(options, outlines);
     mocks.sceneGenerationReached();
     const reserved = await options.persistence.reserve((id: string) => ({
       id,
@@ -287,6 +320,30 @@ function normalizedKafuoContext() {
       checksumSha256: 'b'.repeat(64),
     },
   };
+}
+
+/** The admin-correction checkpoint a paused attempt persisted (plan §3.1). */
+async function checkpointOf(
+  pool: { query: PGlitePool['query'] },
+  attemptId: string,
+): Promise<{
+  phase: string;
+  state: string;
+  revision: number;
+  diagnostics: Array<{ code: string; field?: string; message: string; allowedValues?: unknown[] }>;
+}> {
+  const result = await pool.query<{
+    phase: string;
+    state: string;
+    revision: number;
+    diagnostics: unknown;
+  }>(
+    `SELECT phase, state, revision, diagnostics
+       FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+    [attemptId],
+  );
+  const row = result.rows[0]!;
+  return { ...row, diagnostics: row.diagnostics as never };
 }
 
 describe('teaching package generation runner — Kafuo Layer B', () => {
@@ -797,7 +854,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
     it('refuses ids that name nothing in the manifest', async () => {
       /* The check the normalization must not throw away: a hallucinated citation is still
-         ungrounded, whatever its JSON type. */
+         ungrounded, whatever its JSON type. Since the admin-correction plan (§2.4) the
+         grounding is admin-correctable: the attempt pauses for a person instead of failing. */
       mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
       mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
 
@@ -807,10 +865,13 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
         [attemptId],
       );
-      expect(row.rows[0]).toMatchObject({
-        status: 'failed',
-        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
-      });
+      expect(row.rows[0]).toMatchObject({ status: 'awaiting_admin_correction', error_code: null });
+      const checkpoint = await checkpointOf(pool, attemptId);
+      expect(checkpoint).toMatchObject({ phase: 'outline', state: 'awaiting', revision: 1 });
+      expect(checkpoint.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+        'GROUNDING_UNKNOWN',
+        'GROUNDING_UNKNOWN',
+      ]);
     });
 
     it('refuses an outline that cites nothing at all', async () => {
@@ -823,10 +884,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
         [attemptId],
       );
-      expect(row.rows[0]).toMatchObject({
-        status: 'failed',
-        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
-      });
+      expect(row.rows[0]).toMatchObject({ status: 'awaiting_admin_correction', error_code: null });
+      const checkpoint = await checkpointOf(pool, attemptId);
+      expect(checkpoint.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+        'GROUNDING_MISSING',
+        'GROUNDING_MISSING',
+      ]);
     });
 
     it('refuses an outline with no sourceContentUnitIds field at all', async () => {
@@ -840,10 +903,16 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = $1`,
         [attemptId],
       );
-      expect(row.rows[0]).toMatchObject({
-        status: 'failed',
-        error_code: 'OUTLINE_CONTENT_UNIT_GROUNDING_INVALID',
-      });
+      expect(row.rows[0]).toMatchObject({ status: 'awaiting_admin_correction', error_code: null });
+      const checkpoint = await checkpointOf(pool, attemptId);
+      expect(
+        checkpoint.diagnostics.every(
+          (diagnostic) =>
+            diagnostic.code === 'GROUNDING_MISSING' &&
+            diagnostic.field === 'sourceContentUnitIds' &&
+            diagnostic.message.includes('sourceContentUnitIds missing'),
+        ),
+      ).toBe(true);
     });
 
     it('does not reuse NORMALIZED_CONTENT_LINEAGE_MISMATCH for a model output error', async () => {
@@ -897,20 +966,23 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
     });
 
-    it('logs the rejected citations and what the manifest offered', async () => {
+    it('records the rejected citations and what the manifest offered', async () => {
+      /* The refusal used to be diagnosable only from a log line because the run's
+         compensation discarded the outlines. A paused attempt now KEEPS them: the
+         checkpoint carries the offending values and the ids an administrator may choose. */
       mocks.acquireNormalizedContentResource.mockResolvedValue(normalizedSourceWithManifest());
       mockGenerateWithCitations({ sourceContentUnitIds: [9999] });
 
-      await startKafuo(normalizedKafuoContext());
+      const attemptId = await startKafuo(normalizedKafuoContext());
 
       const logged = mocks.logWarn.mock.calls.flat().join(' ');
-      expect(logged).toContain('rejected outline grounding');
-      // The offending values, and a sample of the real ones, so the next diagnosis does
-      // not need the database.
-      expect(logged).toContain('9999');
-      expect(logged).toContain('2900');
+      expect(logged).toContain('paused for admin correction');
+      const checkpoint = await checkpointOf(pool, attemptId);
+      const [first] = checkpoint.diagnostics;
+      expect(first!.message).toContain('9999');
+      expect(first!.allowedValues).toEqual(['2900']);
       // Blocks are internal: the refusal never reports missing block grounding.
-      expect(logged).not.toContain('sourceBlockIds');
+      expect(JSON.stringify(checkpoint.diagnostics)).not.toContain('sourceBlockIds');
     });
   });
 
@@ -1121,6 +1193,21 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       return row.rows[0]!;
     }
 
+    /** Paused (not failed) with one checkpoint diagnostic of `code` on the Skill field. */
+    async function expectPausedFor(attemptId: string, code: string) {
+      const row = await attemptRow(attemptId);
+      expect(row).toMatchObject({
+        status: 'awaiting_admin_correction',
+        error_code: null,
+        error_retryable: null,
+      });
+      const checkpoint = await checkpointOf(pool, attemptId);
+      expect(checkpoint.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+      expect(
+        checkpoint.diagnostics.every((diagnostic) => diagnostic.field === 'teachingSkills'),
+      ).toBe(true);
+    }
+
     /** A run whose outlines carry the `teachingSkills` selections the test dictates. */
     function mockGenerateWithSelections(
       selections: Array<
@@ -1137,7 +1224,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           ...flowOutline(index + 1, index),
           ...(selections[index] ? { teachingSkills: selections[index] } : {}),
         }));
-        await options.validateOutlines?.(outlines);
+        await outlineGates(options, outlines);
         mocks.sceneGenerationReached();
         const reserved = await options.persistence.reserve((id: string) => ({
           id,
@@ -1169,7 +1256,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       });
     }
 
-    it('governed + out-of-policy selection: refuses SKILL_ASSIGNMENT_INVALID with no Stage, Scene, or re-roll', async () => {
+    it('governed + out-of-policy selection: pauses on SKILL_ASSIGNMENT_INVALID with no Stage, Scene, or re-roll', async () => {
       // lecture-style resolves in the live catalog but is not in the position's
       // permitted set — the unrestricted catalog is never a fallback (BR-TS-048).
       mockGenerateWithSelections([
@@ -1183,9 +1270,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
       const row = await attemptRow(attemptId);
 
-      expect(row.status).toBe('failed');
-      expect(row.error_code).toBe('SKILL_ASSIGNMENT_INVALID');
-      expect(row.error_retryable).toBe(false);
+      // A Skill SELECTION is the model's answer, not authority data: since the
+      // admin-correction plan (§2.4) it pauses for a person instead of failing.
+      await expectPausedFor(attemptId, 'SKILL_ASSIGNMENT_INVALID');
       expect(row.version_id).toBeNull();
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
       const stages = await pool.query(`SELECT count(*)::int AS n FROM stage_meta`);
@@ -1193,7 +1280,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(mocks.generateClassroom).toHaveBeenCalledTimes(1);
     });
 
-    it('governed + invented identity: refuses SKILL_NOT_FOUND from the selection itself', async () => {
+    it('governed + invented identity: pauses on SKILL_NOT_FOUND from the selection itself', async () => {
       mockGenerateWithSelections([
         undefined,
         {
@@ -1205,12 +1292,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
       const row = await attemptRow(attemptId);
 
-      expect(row.status).toBe('failed');
-      expect(row.error_code).toBe('SKILL_NOT_FOUND');
+      expect(row.version_id).toBeNull();
+      await expectPausedFor(attemptId, 'SKILL_NOT_FOUND');
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
     });
 
-    it('governed + unresolvable exact version on a selection: refuses SKILL_VERSION_UNRESOLVED, never substitutes', async () => {
+    it('governed + unresolvable exact version on a selection: pauses on SKILL_VERSION_UNRESOLVED, never substitutes', async () => {
       mockGenerateWithSelections([
         undefined,
         {
@@ -1222,12 +1309,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const attemptId = await startKafuo(governedContext(governedFlow(() => policy())));
       const row = await attemptRow(attemptId);
 
-      expect(row.status).toBe('failed');
-      expect(row.error_code).toBe('SKILL_VERSION_UNRESOLVED');
+      expect(row.version_id).toBeNull();
+      await expectPausedFor(attemptId, 'SKILL_VERSION_UNRESOLVED');
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
     });
 
-    it('governed + required scope/role ignored: refuses SKILL_REQUIREMENT_UNSATISFIED', async () => {
+    it('governed + required scope/role ignored: pauses on SKILL_REQUIREMENT_UNSATISFIED', async () => {
       // Position 1 requires feynman as primary somewhere in the position; the
       // only selection there is learning-to-learn as primary — permitted, but
       // the required rule is unsatisfied (VAL-TS-005: preferred-legal is not
@@ -1257,8 +1344,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       );
       const row = await attemptRow(attemptId);
 
-      expect(row.status).toBe('failed');
-      expect(row.error_code).toBe('SKILL_REQUIREMENT_UNSATISFIED');
+      expect(row.version_id).toBeNull();
+      await expectPausedFor(attemptId, 'SKILL_REQUIREMENT_UNSATISFIED');
       expect(mocks.sceneGenerationReached).not.toHaveBeenCalled();
     });
 
@@ -1962,6 +2049,160 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(
         await readContentUnitsForAttempt(qp(), pdfAttemptId, { tenantId: 'tenant-k' }),
       ).toEqual([]);
+    });
+  });
+
+  describe('Kafuo Release 1 defers generated games', () => {
+    /** g5.v6's positions for one objective: opener, map, objective slides, native quiz. */
+    const V6_FLOW: TeachingFlowEntry[] = [
+      {
+        stage: 'lesson_opener',
+        instructions: 'Open.',
+        scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+      },
+      {
+        stage: 'lesson_learning_map',
+        instructions: 'Map.',
+        scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+      },
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: 'Teach o1.',
+        scenePolicy: { sceneTypes: ['slide'], cardinality: 'one_or_more' },
+      },
+      {
+        stage: 'outcome_check_understanding',
+        instructions: 'Check o1.',
+        scenePolicy: { sceneTypes: ['quiz'], cardinality: 'exactly_one' },
+      },
+    ];
+    /** g5.v5: the same positions plus the final learning game. */
+    const V5_FLOW: TeachingFlowEntry[] = [
+      ...V6_FLOW,
+      {
+        stage: 'lesson_learning_game',
+        instructions: 'Play.',
+        scenePolicy: {
+          sceneTypes: ['interactive'],
+          widgetTypes: ['game'],
+          cardinality: 'exactly_one',
+        },
+      },
+    ];
+
+    function contextFor(flow: TeachingFlowEntry[], version: string) {
+      return { ...kafuoContext(), teachingFlow: flow, teachingModel: { key: 'g5', version } };
+    }
+
+    async function startWith(context: ReturnType<typeof contextFor>) {
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const runner = await freshModules();
+      const started = await startGenerationAttempt(txPool(), {
+        tenantId: context.aggregate.tenantId,
+        learningItem: context.aggregate.learningItem,
+        teachingModel: context.teachingModel,
+        generation: { requirement: 'req', teachingFlow: context.teachingFlow },
+        actorRef: 'actor-1',
+        requestId: `kafuo-run-${randomUUID()}`,
+        requestDigest: 'a'.repeat(64),
+        teachingFlow: context.teachingFlow,
+        contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      });
+      await runner.runGenerationAttempt(started.attempt.id, started.execution, context);
+      return started.attempt.id;
+    }
+
+    /** A faithful game-free run over `V6_FLOW`: slides for the slide positions, a quiz for the check. */
+    function mockGameFreeRun() {
+      mocks.generateClassroom.mockImplementation(async (_execution, options) => {
+        const outlines = V6_FLOW.map((entry, index) => ({
+          id: `outline-v6-${index}`,
+          type: entry.scenePolicy!.sceneTypes[0],
+          title: entry.stage,
+          description: '',
+          keyPoints: [],
+          order: index + 1,
+          teachingStage: { key: entry.stage, flowIndex: index },
+        }));
+        await outlineGates(options, outlines);
+        mocks.sceneGenerationReached();
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'Generated',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        const scenes = V6_FLOW.map((entry, index) => {
+          const slide = makeSlideScene(`scene-v6-${index}`, reserved.id, index + 1, entry.stage);
+          const scene =
+            entry.stage === 'outcome_check_understanding'
+              ? { ...slide, type: 'quiz', content: { type: 'quiz', questions: [] } }
+              : slide;
+          return { ...scene, teachingStage: { key: entry.stage, flowIndex: index } } as AppScene;
+        });
+        await options.persistence.persist(
+          {
+            id: reserved.id,
+            stage: reserved.stage,
+            scenes: scenes as never,
+            outlines: outlines as never,
+          },
+          options.baseUrl,
+        );
+        return {
+          id: reserved.id,
+          url: '',
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: outlines as never,
+          scenesCount: scenes.length,
+          createdAt: new Date().toISOString(),
+        };
+      });
+    }
+
+    it('generates, submits and approves a game-free g5.v6 package that keeps its native quiz', async () => {
+      mockGameFreeRun();
+      const attemptId = await startWith(contextFor(V6_FLOW, 'g5.v6'));
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      const attempt = (await readAttemptById(qp(), attemptId))!;
+      expect(attempt.status).toBe('succeeded');
+      // Every Kafuo run generates with games prohibited.
+      expect(mocks.generateClassroom.mock.calls[0]![0]).toMatchObject({
+        prohibitedWidgetTypes: ['game'],
+        teachingFlow: V6_FLOW,
+      });
+
+      const { getOwnerScopedDocumentStore } =
+        await import('@/lib/server/agent-runtime/owner-scoped-documents');
+      const { TEACHING_PACKAGE_STAGE_OWNER } = await import('@/lib/server/teaching-package/owner');
+      const { readVersion } = await import('@/lib/persistence/teaching-package');
+      const version = (await readVersion(qp(), attempt.versionId!, { tenantId: 'tenant-k' }))!;
+      const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+      const document = (await store.loadDocument(version.currentStageId))!;
+      expect(document.scenes.map((scene) => scene.type)).toEqual([
+        'slide',
+        'slide',
+        'slide',
+        'quiz',
+      ]);
+      expect(document.scenes.some((scene) => scene.type === 'interactive')).toBe(false);
+
+      const { submitForReview, approve } = await import('@/lib/server/teaching-package/lifecycle');
+      const command = { tenantId: 'tenant-k', versionId: version.id, actorRef: 'reviewer-1' };
+      expect((await submitForReview(txPool(), command)).status).toBe('in_review');
+      expect((await approve(txPool(), command)).status).toBe('approved');
+    });
+
+    it('fails a game-bearing g5.v5 attempt before any acquisition or generation', async () => {
+      const attemptId = await startWith(contextFor(V5_FLOW, 'g5.v5'));
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      const attempt = (await readAttemptById(qp(), attemptId))!;
+      expect(attempt.status).toBe('failed');
+      expect(attempt.errorCode).toBe('GAME_GENERATION_DEFERRED');
+      expect(attempt.error).toContain('lesson_learning_game');
+      expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+      expect(mocks.generateClassroom).not.toHaveBeenCalled();
     });
   });
 });

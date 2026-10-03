@@ -1,9 +1,13 @@
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   ambiguousSearchMinScore,
   assessmentRuleset,
+  checkKafuoGroundingConnection,
   DEFAULT_SHADOW_SAMPLE,
+  KAFUO_GROUNDING_LOOPBACK_HOSTS,
   evidenceFloor,
   groundingSourceSetting,
   isDirectGroundingTenant,
@@ -139,9 +143,157 @@ describe('P6: the reader pool, the shadow sample and the boot check', () => {
     expect(() =>
       validateKafuoGroundingConfig({
         TUTOR_GROUNDING_SOURCE: 'direct',
-        KAFUO_GROUNDING_DATABASE_URL: 'postgres://kafuo_grounding_reader:x@db/kafuo',
+        KAFUO_GROUNDING_DATABASE_URL:
+          'postgres://kafuo_grounding_reader:x@db/kafuo?sslmode=verify-full',
       }),
     ).not.toThrow();
     expect(kafuoGroundingDatabaseUrl({ KAFUO_GROUNDING_DATABASE_URL: ' ' })).toBeNull();
+  });
+});
+
+describe('M-1: the reader DSN needs TLS (loopback excepted) and the libpq env cannot weaken it', () => {
+  const REMOTE = 'postgres://kafuo_grounding_reader:s3cret@kafuo-db.example.com:25060/kafuo';
+  const VERIFY_FULL = `${REMOTE}?sslmode=verify-full`;
+  const boot = (url: string, extra: Record<string, string> = {}, source = 'direct') =>
+    validateKafuoGroundingConfig({
+      TUTOR_GROUNDING_SOURCE: source,
+      KAFUO_GROUNDING_DATABASE_URL: url,
+      ...extra,
+    });
+  const reason = (url: string, env: Record<string, string> = {}) => {
+    const check = checkKafuoGroundingConnection(url, env);
+    return check.ok ? null : check.reason;
+  };
+
+  it('the loopback exception is explicit: exactly localhost, 127.0.0.1 and ::1', () => {
+    expect(KAFUO_GROUNDING_LOOPBACK_HOSTS).toEqual(['localhost', '127.0.0.1', '::1']);
+  });
+
+  it('accepts a loopback DSN without TLS (local dev), for shadow and direct', () => {
+    for (const url of [
+      'postgres://kafuo_grounding_reader:pw@localhost:5432/fasol_ai_tutor',
+      'postgres://kafuo_grounding_reader:pw@127.0.0.1/fasol_ai_tutor',
+      'postgresql://kafuo_grounding_reader:pw@[::1]:5432/fasol_ai_tutor',
+      'postgres://kafuo_grounding_reader:pw@LOCALHOST/fasol_ai_tutor?sslmode=disable',
+    ]) {
+      const check = checkKafuoGroundingConnection(url, {});
+      expect(check.ok && check.connection.tls, url).toBe('off');
+      expect(() => boot(url), url).not.toThrow();
+      expect(() => boot(url, {}, 'shadow'), url).not.toThrow();
+    }
+    // PGSSLMODE cannot weaken a connection that has no TLS; the pool passes ssl: false.
+    expect(reason('postgres://r:pw@127.0.0.1/db', { PGSSLMODE: 'require' })).toBeNull();
+  });
+
+  it('refuses a remote DSN without sslmode, and never echoes the DSN', () => {
+    expect(reason(REMOTE)).toBe('a non-loopback host needs sslmode=verify-full');
+    expect(() => boot(REMOTE)).toThrow(
+      /KAFUO_GROUNDING_DATABASE_URL is refused: a non-loopback host needs sslmode=verify-full/,
+    );
+    expect(() => boot(REMOTE, {}, 'shadow')).toThrow(/needs sslmode=verify-full/);
+    try {
+      boot(REMOTE);
+    } catch (error) {
+      expect(String(error)).not.toContain('s3cret');
+      expect(String(error)).not.toContain('kafuo-db.example.com');
+    }
+    // A host that merely looks local is not loopback.
+    expect(reason('postgres://r:pw@127.0.0.2/db')).toMatch(/needs sslmode=verify-full/);
+    expect(reason('postgres://r:pw@localhost.example.com/db')).toMatch(/needs sslmode=verify-full/);
+  });
+
+  it('accepts sslmode=verify-full on a remote host and parses the parts the pool will use', () => {
+    const check = checkKafuoGroundingConnection(
+      'postgresql://kafuo_grounding_reader:p%40ss%3Aw%2Fd@kafuo-db.example.com:25060/kafuo?sslmode=verify-full',
+      {},
+    );
+    expect(check).toEqual({
+      ok: true,
+      connection: {
+        host: 'kafuo-db.example.com',
+        port: 25060,
+        user: 'kafuo_grounding_reader',
+        password: 'p@ss:w/d',
+        database: 'kafuo',
+        tls: 'verify-full',
+        caFile: null,
+      },
+    });
+    expect(() => boot(VERIFY_FULL)).not.toThrow();
+  });
+
+  it('refuses every weaker or ambiguous sslmode', () => {
+    for (const mode of ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'no-verify']) {
+      expect(reason(`${REMOTE}?sslmode=${mode}`), mode).toMatch(/is not accepted|needs/);
+      expect(() => boot(`${REMOTE}?sslmode=${mode}`), mode).toThrow(/is refused/);
+    }
+    // On loopback too: only no sslmode, disable or verify-full.
+    expect(reason('postgres://r:pw@localhost/db?sslmode=require')).toMatch(
+      /sslmode=require is not accepted/,
+    );
+  });
+
+  it('refuses any DSN parameter node-postgres would merge over the pool config', () => {
+    for (const param of [
+      'options=-c%20statement_timeout%3D0',
+      'statement_timeout=0',
+      'host=evil.example.com',
+      'uselibpqcompat=true',
+      'ssl=false',
+      'application_name=x',
+      'sslcert=/tmp/c',
+    ]) {
+      expect(reason(`${VERIFY_FULL}&${param}`), param).toMatch(/is not accepted/);
+      expect(reason(`postgres://r:pw@127.0.0.1/db?${param}`), param).toMatch(/is not accepted/);
+    }
+    expect(reason(`${VERIFY_FULL}&sslmode=disable`)).toMatch(/given twice/);
+  });
+
+  it('refuses a DSN that leaves the host, user or database to PGHOST / PGUSER / PGDATABASE', () => {
+    expect(reason('postgres://127.0.0.1/db')).toMatch(/host, the user and the database/);
+    expect(reason('postgres://r:pw@127.0.0.1/')).toMatch(/host, the user and the database/);
+    expect(reason('postgres:///db?sslmode=verify-full')).toMatch(/host, the user and the database/);
+    expect(reason('mysql://r:pw@127.0.0.1/db')).toMatch(/postgres:\/\//);
+    expect(reason('not a url')).toBe('it is not a valid URL');
+  });
+
+  it('PGOPTIONS set is refused (boot and check), even on loopback; empty is fine', () => {
+    const options = { PGOPTIONS: '-c statement_timeout=0' };
+    expect(reason(VERIFY_FULL, options)).toMatch(/PGOPTIONS is set/);
+    expect(reason('postgres://r:pw@127.0.0.1/db', options)).toMatch(/PGOPTIONS is set/);
+    expect(() => boot(VERIFY_FULL, options)).toThrow(/PGOPTIONS is set/);
+    expect(() => boot(VERIFY_FULL, { PGOPTIONS: '' })).not.toThrow();
+  });
+
+  it('PGSSLMODE weaker than the DSN mode is refused; verify-full or unset is fine', () => {
+    for (const mode of ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'no-verify']) {
+      expect(() => boot(VERIFY_FULL, { PGSSLMODE: mode }), mode).toThrow(
+        new RegExp(`PGSSLMODE=${mode} is weaker`),
+      );
+    }
+    expect(() => boot(VERIFY_FULL, { PGSSLMODE: 'verify-full' })).not.toThrow();
+  });
+
+  it('sslrootcert: only with verify-full, and boot refuses an unreadable file', () => {
+    const readable = fileURLToPath(import.meta.url);
+    const withCa = `${VERIFY_FULL}&sslrootcert=${encodeURIComponent(readable)}`;
+    const check = checkKafuoGroundingConnection(withCa, {});
+    expect(check.ok && check.connection.caFile).toBe(readable);
+    expect(() => boot(withCa)).not.toThrow();
+    const missing = `${VERIFY_FULL}&sslrootcert=${encodeURIComponent('/no/such/ca.crt')}`;
+    expect(() => boot(missing)).toThrow(/sslrootcert file named in KAFUO_GROUNDING_DATABASE_URL/);
+    expect(() => boot(missing)).not.toThrow(/no\/such/);
+    expect(reason(`postgres://r:pw@127.0.0.1/db?sslrootcert=${readable}`)).toMatch(
+      /sslrootcert needs sslmode=verify-full/,
+    );
+  });
+
+  it('the default kafuo_http boot checks nothing (unaffected by the DSN or PGOPTIONS)', () => {
+    expect(() =>
+      validateKafuoGroundingConfig({ KAFUO_GROUNDING_DATABASE_URL: REMOTE, PGOPTIONS: '-c x=1' }),
+    ).not.toThrow();
+    expect(() =>
+      validateKafuoGroundingConfig({ TUTOR_GROUNDING_SOURCE: 'kafuo_http', PGSSLMODE: 'disable' }),
+    ).not.toThrow();
   });
 });

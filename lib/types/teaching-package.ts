@@ -6,6 +6,8 @@
  * runtime state is never present (BR-022). The logical "Teaching Package" is
  * identified by the Learning Item key `(type, id)`; versions are rows.
  */
+import type { OutlineDiagnostic, TeachingScenePolicy } from '@openmaic/generation';
+
 import type {
   ClassroomGenerationProgress,
   GenerateClassroomInput,
@@ -166,6 +168,13 @@ export interface TeachingFlowEntry {
   instructions: string;
   /** Projected Skill Policy; absent on pre-Module-2 (legacy) requests. */
   skillPolicy?: TeachingSkillPolicy;
+  /**
+   * Projected machine-readable scene policy of this position (g5.v5+): the
+   * allowed scene types, slide types and content roles, the visual requirement
+   * and the cardinality. Absent on earlier Teaching Model versions, whose
+   * positions keep the stage-keyed legacy rules (`scenePolicyFor`).
+   */
+  scenePolicy?: TeachingScenePolicy;
 }
 
 /** Teaching-stage identity carried by every Kafuo-generated outline and Scene. */
@@ -265,6 +274,17 @@ export interface GenerationInputSnapshot {
   fallbackModel?: string;
   /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
   ledgerIncomplete?: boolean;
+  /**
+   * Outline metadata the run repaired (e.g. an incompatible `contentKind`
+   * dropped with the role kept) — written by the runner before binding.
+   */
+  outlineRepairs?: Array<{
+    code: string;
+    outlineId?: string;
+    field?: string;
+    previousValue?: unknown;
+    message: string;
+  }>;
   requestedAt: number;
   /** ---- Kafuo integration additions (FRD §9.2/§17.1) ---- */
   /** Effective Kafuo tenant; `LEGACY_TENANT_ID` for pre-tenant rows. */
@@ -379,7 +399,107 @@ export interface ReviewEvent {
 
 export type GenerationAttemptKind = 'initial' | 'regeneration';
 
-export type GenerationAttemptStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+/**
+ * `awaiting_admin_correction` is the durable, non-terminal pause of an attempt
+ * whose candidate needs a person (slide-classification-admin-correction-plan
+ * §3): it is in flight, never reclaimed as stale, never a failure, and resumes
+ * the SAME attempt.
+ */
+export type GenerationAttemptStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_admin_correction'
+  | 'succeeded'
+  | 'failed';
+
+/** Where a paused attempt stopped: before any Stage (`outline`) or on a retained Stage (`scenes`). */
+export type GenerationCheckpointPhase = 'outline' | 'scenes';
+
+/** `awaiting` a person, `resumed` (by the revision recorded), or `abandoned`. */
+export type GenerationCheckpointState = 'awaiting' | 'resumed' | 'abandoned';
+
+/** Metadata of one screened-and-approved source visual — never its bytes or URL. */
+export interface CheckpointSourceImage {
+  id: string;
+  sha256: string;
+  pageNumber: number | null;
+  sourceContentUnitIds?: string[];
+  caption?: string;
+  figureLabel?: string;
+  description?: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * The secret-free references a resume needs (plan §3.1). Everything the
+ * candidate was validated against is pinned here, so an edit is revalidated
+ * against exactly the same authority and a resume can prove the re-acquired
+ * source is the one the candidate was planned from.
+ */
+export interface GenerationCheckpointSourceRefs {
+  /** sha256 of the attempt's authoritative `teachingFlow` (snapshot). */
+  flowDigest: string;
+  /** The attempt's canonical request digest; a resume must present the same. */
+  requestDigest: string | null;
+  /** The classroom run the candidate belongs to (ledger attribution on resume). */
+  generationRun: number;
+  sourceKind: 'pdf_fallback' | 'kafuo_normalized';
+  contentResourceId: string;
+  /** Measured sha256 of the acquired source; re-acquisition must match it. */
+  measuredSha256: string;
+  normalizedPackageId?: string;
+  /** The exact Content Unit id set the grounding gate used; null = no gate. */
+  contentUnitIds: string[] | null;
+  /** Content Unit choices for a person (id, order, title, role) — no text. */
+  contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
+  /** Screening verdicts reused on resume instead of screening again. */
+  visualVerdicts: {
+    approved: Array<{ id: string; sha256: string }>;
+    withheld: Array<{ id: string; sha256: string; verdict: string }>;
+  };
+  /** Approved source visuals offered to the planner (metadata only). */
+  sourceImages: CheckpointSourceImage[];
+}
+
+export interface GenerationCheckpointLogEntry {
+  revision: number;
+  event: 'paused' | 'edited' | 'resumed' | 'abandoned';
+  actorRef: string;
+  at: number;
+  phase?: GenerationCheckpointPhase;
+  blockingCount?: number;
+  operations?: unknown[];
+  reason?: string;
+}
+
+export interface GenerationCheckpoint {
+  attemptId: string;
+  tenantId: string;
+  phase: GenerationCheckpointPhase;
+  state: GenerationCheckpointState;
+  /** Optimistic-concurrency token; every edit increments it. */
+  revision: number;
+  outlines: import('@/lib/types/generation').SceneOutline[];
+  courseTitle: string | null;
+  languageDirective: string;
+  /** Open admin-correctable findings. Empty ⇒ the candidate may resume. */
+  diagnostics: OutlineDiagnostic[];
+  /** Machine repairs applied to the candidate (visible, not blocking). */
+  repairs: OutlineDiagnostic[];
+  sourceRefs: GenerationCheckpointSourceRefs;
+  /** `scenes` phase: the retained, unbound Stage. */
+  reservedStageId: string | null;
+  /** `scenes` phase: the outlines whose Scenes a resume regenerates. */
+  pendingOutlineIds: string[] | null;
+  editLog: GenerationCheckpointLogEntry[];
+  resumedRevision: number | null;
+  pauseCount: number;
+  pausedAt: number;
+  updatedAt: number;
+  resumedAt: number | null;
+  abandonedAt: number | null;
+}
 
 export interface GenerationAttempt {
   /** `tpa-` + 12 base64url chars. */
@@ -533,13 +653,36 @@ export interface KafuoGenerationRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Teaching Engine → Kafuo webhook contract (FRD §9.8). Exactly three types.
+// Teaching Engine → Kafuo webhook contract (FRD §9.8) plus the admin-correction pause.
 // ---------------------------------------------------------------------------
 
 export type TeachingEngineWebhookType =
   | 'teaching_package.generation_succeeded'
   | 'teaching_package.generation_failed'
-  | 'teaching_package.status_changed';
+  | 'teaching_package.status_changed'
+  | 'teaching_package.generation_awaiting_correction';
+
+/**
+ * The attempt paused for an administrator (plan §3.1). Identity-only: no
+ * outline text, no source content, no retrieval URL.
+ */
+export interface GenerationAwaitingCorrectionEventData {
+  requestId: string;
+  attempt: {
+    id: string;
+    kind: GenerationAttemptKind;
+    status: 'awaiting_admin_correction';
+    versionId: string | null;
+    startedAt: number | null;
+    pausedAt: number;
+    generationRuns: number;
+  };
+  correction: {
+    phase: GenerationCheckpointPhase;
+    revision: number;
+    blockingIssueCount: number;
+  };
+}
 
 export interface GenerationSucceededEventData {
   requestId: string;

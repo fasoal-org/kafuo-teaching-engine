@@ -11,6 +11,8 @@
  */
 import { createHash } from 'node:crypto';
 
+import { parseTeachingScenePolicy } from '@openmaic/generation';
+
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
@@ -290,11 +292,31 @@ function parseFlow(raw: unknown): TeachingFlowEntry[] {
     // TE never re-derives it (plan §G). Structural validation happens here, at
     // this single seam; exact-version resolution against the W1 canonical
     // registry happens separately in the skill-policy module.
-    if (record.skillPolicy === undefined) return { stage, instructions };
+    //
+    // The scene policy (g5.v5+) is validated at the same seam and kept exactly
+    // as received: the prompt and the outline validator both read it, and it
+    // participates in the shared canonical digest.
+    let scenePolicy: TeachingFlowEntry['scenePolicy'];
+    if (record.scenePolicy !== undefined) {
+      try {
+        scenePolicy = parseTeachingScenePolicy(
+          record.scenePolicy,
+          `teachingModel.flow[${index}] (stage "${stage}").scenePolicy`,
+        );
+      } catch (error) {
+        throw new TeachingPackageError(
+          'FLOW_INVALID',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     return {
       stage,
       instructions,
-      skillPolicy: parseSkillPolicy(record.skillPolicy, index, stage),
+      ...(record.skillPolicy !== undefined
+        ? { skillPolicy: parseSkillPolicy(record.skillPolicy, index, stage) }
+        : {}),
+      ...(scenePolicy !== undefined ? { scenePolicy } : {}),
     };
   });
 }
@@ -727,6 +749,9 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
         // VAL-TS-022): silent policy drift must surface as a digest change.
         // Absent policy stays absent — the legacy digest is byte-stable.
         ...(e.skillPolicy !== undefined ? { skillPolicy: e.skillPolicy } : {}),
+        // Same rule for the scene policy (g5.v5+): mirrored by the Backend's
+        // `canonical_request_digest`, absent on every earlier version.
+        ...(e.scenePolicy !== undefined ? { scenePolicy: e.scenePolicy } : {}),
       })),
     },
     contentResource: {

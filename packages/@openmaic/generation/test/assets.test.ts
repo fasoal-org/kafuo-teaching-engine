@@ -68,7 +68,7 @@ describe('packaged prompt assets', () => {
   ]).sort();
   const expectedSnippetFiles = SNIPPET_IDS.map((snippetId) => `snippets/${snippetId}.md`).sort();
   // Per-role guidance is resolved in TypeScript (`slide-role-guidance.ts`), not
-  // via `{{snippet:…}}`: one file per approved variant (17) plus `structural`.
+  // via `{{snippet:…}}`: one file per approved variant (20) plus `structural`.
   const expectedRoleFiles = [...SLIDE_ROLE_VARIANTS, 'structural'].map(
     (variant) => `snippets/slide-roles/${variant}.md`,
   );

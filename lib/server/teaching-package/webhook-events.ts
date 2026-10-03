@@ -11,7 +11,9 @@
  * loses nothing: the pending row IS the outbox, and the boot/interval sweep
  * delivers it.
  *
- * Exactly the three FRD §9.8 event types exist. `createSuccessor` emits none:
+ * The three FRD §9.8 event types exist, plus `generation_awaiting_correction`
+ * for the admin-correction pause (slide-classification-admin-correction-plan
+ * §3.1; Kafuo must accept it before a TE emitting it is deployed). `createSuccessor` emits none:
  * successor creation is not a `previousStatus → status` transition, and Kafuo
  * projects it from the synchronous `201 { version }` response.
  */
@@ -36,7 +38,8 @@ export async function enqueueWebhookEvent(
   eventType:
     | 'teaching_package.generation_succeeded'
     | 'teaching_package.generation_failed'
-    | 'teaching_package.status_changed',
+    | 'teaching_package.status_changed'
+    | 'teaching_package.generation_awaiting_correction',
   buildPayload: (sequence: number, eventId: string) => Record<string, unknown>,
 ): Promise<void> {
   await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [

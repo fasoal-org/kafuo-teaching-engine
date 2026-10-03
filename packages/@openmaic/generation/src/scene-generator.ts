@@ -53,6 +53,7 @@ import type {
 } from './outline-types.js';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator.js';
 import { postProcessInteractiveHtml } from './interactive-post-processor.js';
+import { inferWidgetType, WidgetTypeProhibitedError } from './widget-type-policy.js';
 import {
   injectGameDragRuntime,
   validateGameDragContract,
@@ -155,6 +156,15 @@ export interface SceneContentOptions {
    * when an outline happens to carry a `teachingSkills` carrier.
    */
   resolvedSkills?: ResolvedSkillDefinition[];
+  /**
+   * Slide only: record a planned-visual problem instead of throwing (3 Oct 2026).
+   * When supplied, a slide whose selected textbook visual or planned visual is
+   * missing is RETURNED as generated and the problem is reported here — package
+   * generation keeps it, marks it, and lets the reviewer regenerate it. Absent →
+   * the typed `OrientationVisualMissingError` is thrown exactly as before (the
+   * reviewer's own single-slide regeneration keeps that contract).
+   */
+  onVisualIssue?: (issue: { code: string; message: string }) => void;
   agents?: AgentInfo[];
   languageDirective?: string;
   /**
@@ -172,6 +182,13 @@ export interface SceneContentOptions {
   userRequirements?: UserRequirements;
   allowProceduralSkill?: boolean;
   /**
+   * Interactive only: widget types this generation must never build (e.g.
+   * Kafuo Release 1 defers `game`). A scene that would build one — explicitly,
+   * inferred from a legacy `interactiveConfig`, or by fallback — is refused with
+   * `WidgetTypeProhibitedError` before any widget model call. Absent → unchanged.
+   */
+  prohibitedWidgetTypes?: readonly WidgetType[];
+  /**
    * Natural-language edit instruction for whole-slide regeneration (MAIC Editor
    * agent `regenerate_scene`). When set, the slide content prompt switches to
    * EDIT MODE. slide-only; ignored by other scene types.
@@ -185,6 +202,12 @@ export interface SceneContentOptions {
   baselineContent?: GeneratedSlideContent;
   /** Optional host fallback for the app-only loop planner. */
   pblLoopFallback?: (input: PBLPlannerV2Input) => Promise<PBLProject>;
+  /**
+   * Slide only: a correction appended to the user prompt when the caller
+   * re-asks after an unusable answer (e.g. the previous response was not valid
+   * slide JSON). Absent → the prompt is byte-for-byte unchanged.
+   */
+  correctiveNote?: string;
   onFailure?: (failure: SceneContentFailure) => void;
   logger?: GenerationLogger;
 }
@@ -430,37 +453,6 @@ function convertInteractiveConfigToWidget(
 }
 
 /**
- * Infer widget type from concept characteristics
- */
-function inferWidgetType(subject: string, concept: string, designIdea: string): WidgetType {
-  const text = (subject + ' ' + concept + ' ' + designIdea).toLowerCase();
-
-  // Rule-based inference
-  if (
-    /physics|chemistry|力学|化学|运动|反应|force|motion|equilibrium|wave|电路|circuit/.test(text)
-  ) {
-    return 'simulation';
-  }
-  if (/programming|code|algorithm|编程|算法|python|javascript|function|代码/.test(text)) {
-    return 'code';
-  }
-  if (/process|workflow|步骤|流程|逻辑|step|flow|系统|system/.test(text)) {
-    return 'diagram';
-  }
-  if (
-    /biology|anatomy|cell|molecular|生物|细胞|分子|3d|三维|solar|planet|skeleton|organ/.test(text)
-  ) {
-    return 'visualization3d';
-  }
-  if (/game|quiz|practice|练习|游戏|puzzle|match|challenge|挑战/.test(text)) {
-    return 'game';
-  }
-
-  // Default fallback
-  return 'simulation';
-}
-
-/**
  * Build widgetOutline from interactiveConfig for backward compatibility
  */
 function buildWidgetOutline(
@@ -538,6 +530,12 @@ export async function generateSceneContent(
       };
     }
 
+    // A caller-prohibited widget is refused here, after the same conversion and
+    // fallback that decide what would be built, and before any widget call.
+    if (options.prohibitedWidgetTypes?.includes(outline.widgetType as WidgetType)) {
+      throw new WidgetTypeProhibitedError(outline.widgetType as WidgetType, outline.title);
+    }
+
     // Route to widget generation (handles all 5 types)
     return generateWidgetContent(outline, aiCall, languageDirective, {
       allowProceduralSkill,
@@ -570,6 +568,7 @@ export async function generateSceneContent(
           options.onFailure,
           options.resolvedSkills,
           textDirection,
+          options.correctiveNote,
         );
       let slide = await generateCanvas();
       if (!slide) return null;
@@ -582,12 +581,20 @@ export async function generateSceneContent(
           ? requiredSourceVisualIssue(assignedImages, imageMapping, slide.elements)
           : undefined;
       if (sourceVisualIssue) {
-        throw new OrientationVisualMissingError(outline.title, sourceVisualIssue);
+        const error = new OrientationVisualMissingError(outline.title, sourceVisualIssue);
+        if (!options.onVisualIssue) throw error;
+        // Kept as generated and marked; no native approximation of a book figure.
+        options.onVisualIssue({ code: error.code, message: sourceVisualIssue });
+        log.warn(`${error.message}; keeping the slide and marking it for review`);
       }
       // The planned visual is ENFORCED: one regeneration asking for the
       // native-elements fallback, then the typed quality failure — never a log
       // line and never a bare opening.
-      const visualIssue = plannedVisualIssue(guidance.visualPlan, slide.elements);
+      // A missing book figure that was just marked is the reviewer's to repair:
+      // it is never replaced by a native approximation behind their back.
+      const visualIssue = sourceVisualIssue
+        ? undefined
+        : plannedVisualIssue(guidance.visualPlan, slide.elements);
       if (visualIssue) {
         log.warn(`Slide "${outline.title}": ${visualIssue}; regenerating with native elements`);
         const native = await generateSlideContent(
@@ -614,9 +621,17 @@ export async function generateSceneContent(
           ? plannedVisualIssue({ mode: 'native' }, native.elements)
           : 'regeneration produced no slide';
         if (!native || stillMissing) {
-          throw new OrientationVisualMissingError(outline.title, stillMissing ?? visualIssue);
+          const error = new OrientationVisualMissingError(
+            outline.title,
+            stillMissing ?? visualIssue,
+          );
+          if (!options.onVisualIssue) throw error;
+          // Keep the slide the model authored; the reviewer regenerates it.
+          options.onVisualIssue({ code: error.code, message: stillMissing ?? visualIssue });
+          log.warn(`${error.message}; keeping the slide and marking it for review`);
+        } else {
+          slide = native;
         }
-        slide = native;
       }
       // Step 2 — assistance authoring. The ONLY call that sees the hidden
       // plan; it is fed the task as the canvas actually rendered it. A slide
@@ -683,6 +698,7 @@ export async function generateSceneContent(
         log,
         options.onFailure,
         options.resolvedSkills,
+        editDirective,
       );
     case 'pbl':
       return generatePBLSceneContent(
@@ -1060,6 +1076,7 @@ async function generateSlideContent(
   onFailure?: (failure: SceneContentFailure) => void,
   resolvedSkills?: ResolvedSkillDefinition[],
   textDirection?: TextDirection,
+  correctiveNote?: string,
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -1227,11 +1244,26 @@ async function generateSlideContent(
       `Return the full updated slide content in the same schema.`;
   }
 
+  if (correctiveNote) {
+    userPrompt = `${userPrompt}\n\n---\n\n## Correction Required\n\n${correctiveNote}`;
+  }
+
   const response = await aiCall(prompts.system, userPrompt, visionImages);
   const generatedData = parseJsonResponse<GeneratedSlideData>(response);
 
   if (!generatedData || !generatedData.elements || !Array.isArray(generatedData.elements)) {
-    log.error(`Failed to parse AI response for: ${visible.title}`);
+    // The start of the unusable answer is logged so the cause can be diagnosed
+    // (it is not persisted anywhere else).
+    const raw = typeof response === 'string' ? response : String(response);
+    log.error(
+      `Failed to parse AI response for: ${visible.title} (${raw.length} chars; parsed keys: ${
+        generatedData && typeof generatedData === 'object'
+          ? Object.keys(generatedData as object)
+              .slice(0, 10)
+              .join(', ') || 'none'
+          : 'none'
+      }); response starts: ${JSON.stringify(raw.slice(0, 800))}`,
+    );
     onFailure?.({
       code: 'invalid-model-output',
       detail: 'the model response was not valid slide JSON with an elements array',
@@ -1351,6 +1383,11 @@ async function generateQuizContent(
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
   resolvedSkills?: ResolvedSkillDefinition[],
+  /**
+   * A reviewer's single-scene regeneration (3 Oct 2026): their requirements,
+   * appended to the user prompt. Absent → the prompt is byte-identical to before.
+   */
+  editDirective?: string,
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig = outline.quizConfig || {
     questionCount: 3,
@@ -1375,7 +1412,10 @@ async function generateQuizContent(
   }
 
   log.debug(`Generating quiz content for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
+  const user = editDirective
+    ? `${prompts.user}\n\n## Reviewer requirements for this regeneration\n${editDirective}\n\nAnswer with ONLY the JSON array of questions in the required schema.`
+    : prompts.user;
+  const response = await aiCall(prompts.system, user);
   const generatedQuestions = parseJsonResponse<QuizQuestion[]>(response);
 
   if (!generatedQuestions || !Array.isArray(generatedQuestions)) {

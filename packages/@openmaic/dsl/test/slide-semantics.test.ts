@@ -256,9 +256,18 @@ describe('validateGeneratedSlideSemantics (strict, newly generated content only)
     ]);
   });
 
-  it('requires the kind where the role defines kinds and forbids it elsewhere', () => {
+  it('treats the kind as optional where the role defines kinds and forbids it elsewhere', () => {
+    for (const contentRole of ['explanation', 'activity', 'practice']) {
+      expect(validateGeneratedSlideSemantics(slide('content', { contentRole }))).toEqual({
+        valid: true,
+      });
+    }
     expect(
-      errors(validateGeneratedSlideSemantics(slide('content', { contentRole: 'explanation' }))),
+      errors(
+        validateGeneratedSlideSemantics(
+          slide('content', { contentRole: 'explanation', contentKind: 'procedure' }),
+        ),
+      ),
     ).toEqual(['/contentKind']);
     expect(
       errors(

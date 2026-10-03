@@ -205,11 +205,12 @@ const sameSkillPair = (a: TeachingSkillRef, b: TeachingSkillRef) =>
  * `non-instructional` counts as instructional — omitting the classification can
  * never dodge a requirement (BR-TS-054).
  */
-export function validateOutlineSkillSelections(
+export function findOutlineSkillSelectionIssues(
   outlines: readonly OutlineSkillSelectionShape[],
   flow: readonly TeachingFlowEntry[],
   dir: string = skillsDir,
-): void {
+): TeachingPackageError[] {
+  const issues: TeachingPackageError[] = [];
   // Per-outline permission checks first, so an invented identity is reported as
   // SKILL_NOT_FOUND rather than as a generic out-of-policy assignment.
   for (const outline of outlines) {
@@ -223,22 +224,28 @@ export function validateOutlineSkillSelections(
 
     const stageRef = outline.teachingStage;
     if (!stageRef || stageRef.flowIndex < 0 || stageRef.flowIndex >= flow.length) {
-      throw new TeachingPackageError(
-        'SKILL_ASSIGNMENT_INVALID',
-        `outline ${JSON.stringify(outline.id)} carries a Skill selection but no usable teachingStage flow position to attribute it to`,
-        { offendingSceneIds: [outline.id] },
+      issues.push(
+        new TeachingPackageError(
+          'SKILL_ASSIGNMENT_INVALID',
+          `outline ${JSON.stringify(outline.id)} carries a Skill selection but no usable teachingStage flow position to attribute it to`,
+          { offendingSceneIds: [outline.id] },
+        ),
       );
+      continue;
     }
     const entry = flow[stageRef.flowIndex]!;
     const policy = entry.skillPolicy;
     if (!policy) {
       // Unreachable behind requireCompleteFlowPolicies on the assembled gate;
       // kept fail-closed so the validator is safe to call independently.
-      throw new TeachingPackageError(
-        'SKILL_POLICY_REQUIRED',
-        `outline ${JSON.stringify(outline.id)} selects Skills at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which carries no Skill Policy`,
-        { offendingSceneIds: [outline.id], flowIndex: stageRef.flowIndex, stage: entry.stage },
+      issues.push(
+        new TeachingPackageError(
+          'SKILL_POLICY_REQUIRED',
+          `outline ${JSON.stringify(outline.id)} selects Skills at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which carries no Skill Policy`,
+          { offendingSceneIds: [outline.id], flowIndex: stageRef.flowIndex, stage: entry.stage },
+        ),
       );
+      continue;
     }
 
     for (const { role, ref } of selections) {
@@ -252,35 +259,40 @@ export function validateOutlineSkillSelections(
         if (error instanceof TeachingPackageError) {
           const base =
             error.details && typeof error.details === 'object' ? (error.details as object) : {};
-          throw new TeachingPackageError(
-            error.code,
-            `outline ${JSON.stringify(outline.id)}: ${error.message}`,
-            {
-              ...base,
-              offendingSceneIds: [outline.id],
-              sceneId: outline.id,
-              flowIndex: stageRef.flowIndex,
-              stage: entry.stage,
-              role,
-            },
+          issues.push(
+            new TeachingPackageError(
+              error.code,
+              `outline ${JSON.stringify(outline.id)}: ${error.message}`,
+              {
+                ...base,
+                offendingSceneIds: [outline.id],
+                sceneId: outline.id,
+                flowIndex: stageRef.flowIndex,
+                stage: entry.stage,
+                role,
+              },
+            ),
           );
+          continue;
         }
         throw error;
       }
       const permitted = policy.allowed.some((allowedRef) => sameSkillPair(allowedRef, ref));
       if (!permitted) {
-        throw new TeachingPackageError(
-          'SKILL_ASSIGNMENT_INVALID',
-          `outline ${JSON.stringify(outline.id)} selects ${JSON.stringify(ref.skillId)}@${JSON.stringify(ref.version)} as ${role} at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which is outside that position's permitted Skills — the unrestricted catalog is never a fallback`,
-          {
-            offendingSceneIds: [outline.id],
-            sceneId: outline.id,
-            flowIndex: stageRef.flowIndex,
-            stage: entry.stage,
-            skillId: ref.skillId,
-            skillVersion: ref.version,
-            role,
-          },
+        issues.push(
+          new TeachingPackageError(
+            'SKILL_ASSIGNMENT_INVALID',
+            `outline ${JSON.stringify(outline.id)} selects ${JSON.stringify(ref.skillId)}@${JSON.stringify(ref.version)} as ${role} at flow position ${stageRef.flowIndex} (stage "${entry.stage}"), which is outside that position's permitted Skills — the unrestricted catalog is never a fallback`,
+            {
+              offendingSceneIds: [outline.id],
+              sceneId: outline.id,
+              flowIndex: stageRef.flowIndex,
+              stage: entry.stage,
+              skillId: ref.skillId,
+              skillVersion: ref.version,
+              role,
+            },
+          ),
         );
       }
     }
@@ -313,18 +325,20 @@ export function validateOutlineSkillSelections(
       if (rule.scope === 'every_instructional_scene') {
         const offenders = instructional.filter((outline) => !satisfied(outline));
         if (offenders.length > 0) {
-          throw new TeachingPackageError(
-            'SKILL_REQUIREMENT_UNSATISFIED',
-            `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=every_instructional_scene) is missing from ${offenders.length === 1 ? 'an instructional outline' : `${offenders.length} instructional outlines`} at flow position ${flowIndex} (stage "${entry.stage}")`,
-            {
-              offendingSceneIds: offenders.map((outline) => outline.id),
-              flowIndex,
-              stage: entry.stage,
-              skillId: rule.skill.skillId,
-              skillVersion: rule.skill.version,
-              role,
-              requiredScope: rule.scope,
-            },
+          issues.push(
+            new TeachingPackageError(
+              'SKILL_REQUIREMENT_UNSATISFIED',
+              `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=every_instructional_scene) is missing from ${offenders.length === 1 ? 'an instructional outline' : `${offenders.length} instructional outlines`} at flow position ${flowIndex} (stage "${entry.stage}")`,
+              {
+                offendingSceneIds: offenders.map((outline) => outline.id),
+                flowIndex,
+                stage: entry.stage,
+                skillId: rule.skill.skillId,
+                skillVersion: rule.skill.version,
+                role,
+                requiredScope: rule.scope,
+              },
+            ),
           );
         }
         continue;
@@ -334,20 +348,37 @@ export function validateOutlineSkillSelections(
       // else was already refused at the parse seam, so this is exhaustive.
       const anySatisfied = atPosition.some(satisfied);
       if (!anySatisfied) {
-        throw new TeachingPackageError(
-          'SKILL_REQUIREMENT_UNSATISFIED',
-          `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=flow_position) is not selected anywhere at flow position ${flowIndex} (stage "${entry.stage}")`,
-          {
-            offendingSceneIds: atPosition.map((outline) => outline.id),
-            flowIndex,
-            stage: entry.stage,
-            skillId: rule.skill.skillId,
-            skillVersion: rule.skill.version,
-            role,
-            requiredScope: rule.scope,
-          },
+        issues.push(
+          new TeachingPackageError(
+            'SKILL_REQUIREMENT_UNSATISFIED',
+            `required Skill ${JSON.stringify(rule.skill.skillId)}@${JSON.stringify(rule.skill.version)} (role=${role}, scope=flow_position) is not selected anywhere at flow position ${flowIndex} (stage "${entry.stage}")`,
+            {
+              offendingSceneIds: atPosition.map((outline) => outline.id),
+              flowIndex,
+              stage: entry.stage,
+              skillId: rule.skill.skillId,
+              skillVersion: rule.skill.version,
+              role,
+              requiredScope: rule.scope,
+            },
+          ),
         );
       }
     }
   }
+  return issues;
+}
+
+/**
+ * The fail-closed form of {@link findOutlineSkillSelectionIssues}: throws the
+ * first issue, exactly as the gate always has. A caller that can pause for an
+ * administrator uses the collector instead and reports every issue.
+ */
+export function validateOutlineSkillSelections(
+  outlines: readonly OutlineSkillSelectionShape[],
+  flow: readonly TeachingFlowEntry[],
+  dir: string = skillsDir,
+): void {
+  const [first] = findOutlineSkillSelectionIssues(outlines, flow, dir);
+  if (first) throw first;
 }

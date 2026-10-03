@@ -363,6 +363,11 @@ export async function startGenerationAttempt(
         }
       }
 
+      // A unique violation aborts the enclosing transaction (SQLSTATE 25P02 on
+      // every later statement); the savepoint keeps it usable for the
+      // race-recovery read below, so a refused admission surfaces as
+      // GENERATION_IN_PROGRESS / a replay instead of a 25P02.
+      await tx.query('SAVEPOINT tpa_admission_insert');
       try {
         const inserted = await insertAttempt(tx, {
           id: `tpa-${randomBytes(9).toString('base64url')}`,
@@ -379,9 +384,11 @@ export async function startGenerationAttempt(
           inputSnapshot: snapshot,
           now: Date.now(),
         });
+        await tx.query('RELEASE SAVEPOINT tpa_admission_insert');
         return { attempt: inserted, created: true };
       } catch (error) {
         if (isPgUniqueViolation(error)) {
+          await tx.query('ROLLBACK TO SAVEPOINT tpa_admission_insert');
           if (request.requestId) {
             // Race recovery is a replay too: another request with this id won the
             // insert, so this call created nothing and must not run the runner.
@@ -401,6 +408,13 @@ export async function startGenerationAttempt(
   );
 
   return { attempt: admitted.attempt, execution: request.generation, created: admitted.created };
+}
+
+/** The marked-scene count the runner recorded on the attempt, 0 when absent. */
+function scenesNeedingReviewOf(attempt: GenerationAttempt): number {
+  const value = (attempt.inputSnapshot as { scenesNeedingReview?: unknown } | undefined)
+    ?.scenesNeedingReview;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
 }
 
 /** Emit `teaching_package.generation_succeeded` inside the binding transaction. */
@@ -424,6 +438,8 @@ async function emitGenerationSucceeded(
       startedAt: attempt.startedAt ?? now,
       completedAt: now,
       generationRuns: attempt.generationRuns,
+      // 3 Oct 2026: scenes kept with a generation problem marker (a count only).
+      scenesNeedingReview: scenesNeedingReviewOf(attempt),
     },
     version: {
       id: version.id,
@@ -467,6 +483,9 @@ export async function failGenerationAttempt(
   failure?: { code?: string; retryable?: boolean },
 ): Promise<void> {
   const before = await readAttemptById(pool, attemptId);
+  // A paused attempt waits for a person: no failure path may overwrite it (the
+  // only way out is a resume or an explicit abandon).
+  if (before?.status === 'awaiting_admin_correction') return;
   await updateAttempt(pool, attemptId, {
     status: 'failed',
     error: message.slice(0, 2000),

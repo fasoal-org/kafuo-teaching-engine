@@ -313,6 +313,122 @@
         "teachingSkills": "kafuo.teaching-skills.v1"
       },
       "digest": "cafe1bee8cf3b8a6df9602198406f3c161535d2c62f0ec56935586a2a9e16328"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-1",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "10",
+            "name": "Science",
+            "code": "BIOLOGY",
+            "nameAr": "العلوم",
+            "nameEn": "Science",
+            "academicLanguage": "ar"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v5",
+          "flow": [
+            {
+              "stage": "lesson_opener",
+              "instructions": "Open the lesson.",
+              "scenePolicy": {
+                "sceneTypes": [
+                  "slide"
+                ],
+                "slideTypes": [
+                  "cover"
+                ],
+                "contentRoles": [
+                  "orientation"
+                ],
+                "visual": "required",
+                "cardinality": "exactly_one"
+              }
+            },
+            {
+              "stage": "outcome_visual_explanations",
+              "instructions": "Teach O1 with a textbook visual.",
+              "scenePolicy": {
+                "sceneTypes": [
+                  "slide"
+                ],
+                "contentRoles": [
+                  "explanation",
+                  "procedure",
+                  "worked_example",
+                  "example",
+                  "activity"
+                ],
+                "visual": "source_grounded",
+                "cardinality": "one_or_more"
+              }
+            },
+            {
+              "stage": "outcome_check_understanding",
+              "instructions": "Check O1.",
+              "scenePolicy": {
+                "sceneTypes": [
+                  "quiz"
+                ],
+                "cardinality": "exactly_one"
+              }
+            },
+            {
+              "stage": "lesson_learning_game",
+              "instructions": "Play.",
+              "scenePolicy": {
+                "sceneTypes": [
+                  "interactive"
+                ],
+                "widgetTypes": [
+                  "game"
+                ],
+                "cardinality": "exactly_one"
+              }
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "actorRef": "42"
+      },
+      "digest": "4112d45db15717cc6b6b164cd254018d47498357e56419991c6bccc20c2f177e"
     }
   ]
 }

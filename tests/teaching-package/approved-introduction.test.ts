@@ -261,6 +261,12 @@ describe('projectApprovedIntroduction (g5.v3)', () => {
     );
   });
 
+  it('projects g5.v5 exactly as g5.v3: the opener and learning map are unchanged', () => {
+    expect(projectApprovedIntroduction({ key: 'g5', version: 'g5.v5' }, lesson284Scenes())).toEqual(
+      projectApprovedIntroduction(G5_V3, lesson284Scenes()),
+    );
+  });
+
   it('fails closed for a teaching model with no projection', () => {
     expect(() =>
       projectApprovedIntroduction({ key: 'g5', version: 'g5.v1' }, lesson284Scenes()),

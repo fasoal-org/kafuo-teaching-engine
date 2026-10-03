@@ -150,7 +150,8 @@ describe('teaching package schema', () => {
       'tpv_tenant_item_version_unique',
       'tpv_tenant_single_approved',
       'tpv_tenant_single_active',
-      'tpa_tenant_single_inflight',
+      // Counts the admin-correction pause (slide-classification-admin-correction-plan §3.1).
+      'tpa_tenant_single_inflight_v2',
       'tpa_tenant_request_id_unique',
     ]) {
       expect(names).toContain(canonical);
@@ -162,6 +163,8 @@ describe('teaching package schema', () => {
       'teaching_package_versions_item_version_idx',
       'teaching_package_attempts_single_inflight',
       'teaching_package_attempts_request_id_unique',
+      // Superseded by tpa_tenant_single_inflight_v2.
+      'tpa_tenant_single_inflight',
     ]) {
       expect(names).not.toContain(obsolete);
     }

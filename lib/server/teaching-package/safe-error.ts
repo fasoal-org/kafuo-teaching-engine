@@ -44,9 +44,10 @@ export function describeErrorSafely(error: unknown): SafeErrorDescriptor {
  *
  * Only two rules stay production-specific:
  *
- * * the scheme — production demands `https://`, while development may name an
- *   explicit `http://localhost` (or `http://127.0.0.1`) receiver, because that
- *   is the real local topology and the alternative is no local validation at all;
+ * * the scheme — production demands `https://` by default. Development may name
+ *   an explicit `http://localhost` (or `http://127.0.0.1`) receiver, and a local
+ *   standalone production build may do the same only through the explicit
+ *   `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK` opt-in;
  * * the `ACCESS_CODE` incompatibility, unchanged, so a local operator poking at
  *   a gated dev instance is not newly refused a boot.
  *
@@ -56,6 +57,7 @@ export function describeErrorSafely(error: unknown): SafeErrorDescriptor {
 export function validateTeachingEngineIntegrationConfig(env: {
   serviceKey: string;
   isProduction: boolean;
+  allowInsecureLoopbackWebhook: boolean;
   databaseUrl: string;
   webhookUrl: string;
   webhookSecret: string;
@@ -75,7 +77,13 @@ export function validateTeachingEngineIntegrationConfig(env: {
       `INTEGRATION_NOT_CONFIGURED: TEACHING_ENGINE_WEBHOOK_URL is required when TEACHING_ENGINE_SERVICE_KEY is set${where}`,
     );
   }
-  if (!isAcceptableWebhookUrl(env.webhookUrl, env.isProduction)) {
+  if (
+    !isAcceptableWebhookUrl(
+      env.webhookUrl,
+      env.isProduction,
+      env.allowInsecureLoopbackWebhook,
+    )
+  ) {
     throw new Error(
       env.isProduction
         ? 'INTEGRATION_NOT_CONFIGURED: TEACHING_ENGINE_WEBHOOK_URL must be an https URL when TEACHING_ENGINE_SERVICE_KEY is set in production'
@@ -104,10 +112,15 @@ export function validateTeachingEngineIntegrationConfig(env: {
 
 /**
  * `https://` anywhere; additionally an explicit loopback `http://` host in
- * development. Parsed rather than prefix-matched, so `https://evil/?x=localhost`
- * and `http://localhost.attacker.test` are judged on their real host.
+ * development, or in production with the local-only opt-in. Parsed rather than
+ * prefix-matched, so `https://evil/?x=localhost` and
+ * `http://localhost.attacker.test` are judged on their real host.
  */
-function isAcceptableWebhookUrl(rawUrl: string, isProduction: boolean): boolean {
+function isAcceptableWebhookUrl(
+  rawUrl: string,
+  isProduction: boolean,
+  allowInsecureLoopbackWebhook: boolean,
+): boolean {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -115,6 +128,8 @@ function isAcceptableWebhookUrl(rawUrl: string, isProduction: boolean): boolean 
     return false;
   }
   if (url.protocol === 'https:') return true;
-  if (isProduction || url.protocol !== 'http:') return false;
-  return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  if (url.protocol !== 'http:') return false;
+  const isLoopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  if (!isLoopback) return false;
+  return !isProduction || allowInsecureLoopbackWebhook;
 }

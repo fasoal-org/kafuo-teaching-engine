@@ -43,6 +43,7 @@ import { toGenerationContent } from './generation-content';
 import { checkScenesAgainstSkill } from './skills';
 import { isMediaPlaceholder } from '@/lib/store/media-generation';
 import { createLogger } from '@/lib/logger';
+import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 
 const MAX_GENERATE_SCENE_MEDIA = 8;
 const SUPPORTED_SCENE_TYPES = new Set(['slide', 'quiz', 'interactive', 'pbl']);
@@ -177,6 +178,13 @@ export interface GenerationToolDeps extends CourseToolDeps {
     stageId: string,
     scene: Pick<Scene, 'teachingStage'>,
   ) => Promise<GovernedRegenerationContext | undefined>;
+  /**
+   * Kafuo Release 1 defers generated games: answers whether a Stage belongs to a
+   * Kafuo Teaching Package, where `generate_scene` refuses a game widget.
+   * Absent → the lazy default (package lineage read when a DATABASE_URL is
+   * configured; `false` otherwise).
+   */
+  isKafuoPackageStage?: (stageId: string) => Promise<boolean>;
 }
 
 function sceneIdFor(scenes: readonly Scene[], order: number) {
@@ -361,6 +369,14 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
       return resolveGovernedRegenerationContextForStage(stageId, scene);
     });
 
+  const isKafuoStage =
+    deps.isKafuoPackageStage ??
+    (async (stageId: string) => {
+      const { isKafuoPackageStage } =
+        await import('@/lib/server/teaching-package/kafuo-game-deferral');
+      return isKafuoPackageStage(stageId);
+    });
+
   /** Resolve the governed context for a Scene, or map the refusal to a tool error result. */
   const governedContextFor = async (
     stageId: string,
@@ -464,6 +480,18 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         return result(
           'generate_scene needs widgetOutline to be an object matching widgetType.',
           { error: 'invalid-widget-outline' },
+          true,
+        );
+      }
+      if (
+        params.type === 'interactive' &&
+        params.widgetType !== undefined &&
+        KAFUO_DEFERRED_WIDGET_TYPES.includes(params.widgetType) &&
+        (await isKafuoStage(params.stageId))
+      ) {
+        return result(
+          `generate_scene cannot create a "${params.widgetType}" page in a Kafuo Teaching Package: Kafuo Release 1 does not generate learning games. Nothing was written; plan the page its flow position requires instead.`,
+          { error: 'GAME_GENERATION_DEFERRED', stageId: params.stageId },
           true,
         );
       }

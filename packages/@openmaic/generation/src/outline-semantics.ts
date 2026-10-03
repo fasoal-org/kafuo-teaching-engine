@@ -3,11 +3,16 @@
  *
  * The outline prompt asks the model to classify every `type: 'slide'` outline
  * by pedagogical intent: `slideType` (the intended `Slide.type`), `contentRole`
- * and, where the role defines specializations, `contentKind`. This module is
- * the deterministic check of that answer. It only ever ACCEPTS or REPORTS — it
- * never picks a role, a kind, or a slide type on the model's behalf: a
- * classification the model did not make correctly is a bad model answer, and
- * the remedy is the caller's existing re-roll, not a guess.
+ * and, optionally, a `contentKind` that specializes the role. This module is
+ * the deterministic check of that answer. It never picks a role or a slide type
+ * on the model's behalf: a missing, unknown or disallowed `contentRole` is
+ * reported, and a run that supports checkpoints pauses it for a person.
+ *
+ * The ONLY things it repairs are metadata that cannot be valid beside the
+ * purpose the model chose ({@link repairOutlineSlideSemantics}): a
+ * `contentKind` the role does not define is dropped and the role is KEPT —
+ * never the other way round — and a planner-only `assistancePlan` the role
+ * cannot use is removed. Every repair is recorded as a `repaired` diagnostic.
  *
  * The role/kind vocabulary and the pairing table come from `@openmaic/dsl`
  * (`SLIDE_CONTENT_KINDS_BY_ROLE`); nothing is restated here.
@@ -19,6 +24,7 @@ import {
   SLIDE_ASSISTANCE_ROLES,
   SLIDE_ASSISTANCE_TIERS,
   SLIDE_CONTENT_KINDS_BY_ROLE,
+  SLIDE_CONTENT_ROLES,
   SLIDE_TYPES,
   isSlideContentKindForRole,
   isSlideContentRole,
@@ -26,6 +32,7 @@ import {
   slideRoleAllowsAssistance,
   slideSemanticsRequireAssistance,
 } from '@openmaic/dsl';
+import type { OutlineDiagnostic } from './outline-diagnostics.js';
 import type { SceneOutline, SlideOutlineSemantics } from './outline-types.js';
 
 /** Every `Slide.type` value an outline may plan — the `@openmaic/dsl` list. */
@@ -71,9 +78,10 @@ export interface OutlineSemanticsIssue {
  * - `contentRole` is required on an instructional slide (`cover` / `content`)
  *   and optional on a structural one (`contents` / `transition` / `end`); when
  *   present, on any slide type, it must be a known role;
- * - `contentKind` is required when the role defines kinds, must be one of that
- *   role's kinds, and must be absent when the role defines none (or when there
- *   is no role);
+ * - `contentKind` is optional; when present it must be one of the role's kinds,
+ *   and it must be absent when the role defines none (or when there is no
+ *   role). {@link repairOutlineSlideSemantics} removes such a kind first, so a
+ *   repaired outline never reports it;
  * - `assistancePlan` is allowed only beside `practice` / `check_understanding`,
  *   is required (`hint` + `explanation`) for `practice` / `independent`, and is
  *   reported — never silently dropped — anywhere else.
@@ -149,13 +157,7 @@ export function validateOutlineSlideSemantics(outlines: SceneOutline[]): Outline
           field: 'contentKind',
           message: `contentRole "${contentRole}" has no content kinds; got ${JSON.stringify(contentKind)}`,
         });
-    } else if (!hasKind) {
-      issues.push({
-        index,
-        field: 'contentKind',
-        message: `contentRole "${contentRole}" requires a contentKind (one of: ${allowed.join(', ')})`,
-      });
-    } else if (!isSlideContentKindForRole(contentRole, contentKind)) {
+    } else if (hasKind && !isSlideContentKindForRole(contentRole, contentKind)) {
       issues.push({
         index,
         field: 'contentKind',
@@ -244,6 +246,203 @@ function assistancePlanIssues(contentRole: string, contentKind: unknown, plan: u
       );
   }
   return messages;
+}
+
+/** Diagnostic code recorded when an incompatible `contentKind` is dropped. */
+export const CONTENT_KIND_DROPPED = 'CONTENT_KIND_DROPPED';
+/** Diagnostic code recorded when an unusable `assistancePlan` (or tier) is removed. */
+export const ASSISTANCE_PLAN_REMOVED = 'ASSISTANCE_PLAN_REMOVED';
+
+/**
+ * Repair the metadata of ONE slide outline that cannot be valid beside the
+ * purpose the model chose, and record each repair:
+ *
+ * - a `contentKind` the role does not define (including any kind on a role
+ *   without kinds) is dropped — the `contentRole` is KEPT and is never derived
+ *   from the kind;
+ * - a `contentKind` on a slide with no `contentRole` is dropped (a kind
+ *   specializes a purpose; without one it means nothing). The missing role is
+ *   NOT supplied: it stays a reported issue;
+ * - an `assistancePlan` beside a known role that cannot use it is removed, and
+ *   unknown or empty tiers of an allowed plan are removed (an allowed plan left
+ *   with no tier is removed whole).
+ *
+ * A `contentKind` beside an UNKNOWN role is left alone: the role is the issue,
+ * and once a valid role is chosen this repair runs again. Non-slide outlines
+ * are returned untouched. Returns the same object when nothing changed.
+ */
+export function repairOutlineSlideSemantics(
+  outline: SceneOutline,
+  index: number,
+): { outline: SceneOutline; repairs: OutlineDiagnostic[] } {
+  if (outline?.type !== 'slide') return { outline, repairs: [] };
+  const record = outline as unknown as Record<string, unknown>;
+  const { contentRole, contentKind, assistancePlan } = record;
+  const repairs: OutlineDiagnostic[] = [];
+  const base = { disposition: 'repaired' as const, outlineIndex: index, outlineId: outline.id };
+  let repaired: Record<string, unknown> | undefined;
+  const edit = () => (repaired ??= { ...record });
+
+  const hasRole = contentRole !== undefined && contentRole !== null;
+  if (contentKind !== undefined && contentKind !== null) {
+    if (!hasRole) {
+      delete edit().contentKind;
+      repairs.push({
+        ...base,
+        code: CONTENT_KIND_DROPPED,
+        field: 'contentKind',
+        previousValue: contentKind,
+        message: `contentKind ${JSON.stringify(contentKind)} was dropped: a kind specializes a contentRole and this slide has none`,
+      });
+    } else if (
+      isSlideContentRole(contentRole) &&
+      !isSlideContentKindForRole(contentRole, contentKind)
+    ) {
+      const kinds: readonly string[] = SLIDE_CONTENT_KINDS_BY_ROLE[contentRole];
+      delete edit().contentKind;
+      repairs.push({
+        ...base,
+        code: CONTENT_KIND_DROPPED,
+        field: 'contentKind',
+        previousValue: contentKind,
+        allowedValues: [...kinds],
+        message:
+          kinds.length === 0
+            ? `contentKind ${JSON.stringify(contentKind)} was dropped: contentRole "${contentRole}" has no content kinds; the role was kept`
+            : `contentKind ${JSON.stringify(contentKind)} was dropped: it is not a kind of contentRole "${contentRole}" (kinds: ${kinds.join(', ')}); the role was kept and generic ${contentRole} guidance applies`,
+      });
+    }
+  }
+
+  if (assistancePlan !== undefined && assistancePlan !== null && isSlideContentRole(contentRole)) {
+    if (!slideRoleAllowsAssistance(contentRole)) {
+      delete edit().assistancePlan;
+      repairs.push({
+        ...base,
+        code: ASSISTANCE_PLAN_REMOVED,
+        field: 'assistancePlan',
+        previousValue: assistancePlan,
+        message: `assistancePlan was removed: contentRole "${contentRole}" does not use on-demand assistance (only ${SLIDE_ASSISTANCE_ROLES.join(' / ')})`,
+      });
+    } else if (typeof assistancePlan !== 'object' || Array.isArray(assistancePlan)) {
+      delete edit().assistancePlan;
+      repairs.push({
+        ...base,
+        code: ASSISTANCE_PLAN_REMOVED,
+        field: 'assistancePlan',
+        previousValue: assistancePlan,
+        message: 'assistancePlan was removed: it is not an object of assistance tiers',
+      });
+    } else {
+      const known: readonly string[] = SLIDE_ASSISTANCE_TIERS;
+      const kept: Record<string, string> = {};
+      const removed: string[] = [];
+      for (const [tier, value] of Object.entries(assistancePlan as Record<string, unknown>)) {
+        if (known.includes(tier) && typeof value === 'string' && value.trim() !== '') {
+          kept[tier] = value;
+        } else if (value !== undefined && value !== null) {
+          removed.push(tier);
+        }
+      }
+      if (removed.length > 0) {
+        if (Object.keys(kept).length === 0) delete edit().assistancePlan;
+        else edit().assistancePlan = kept;
+        repairs.push({
+          ...base,
+          code: ASSISTANCE_PLAN_REMOVED,
+          field: 'assistancePlan',
+          previousValue: removed,
+          message: `assistancePlan tier(s) ${removed.map((tier) => JSON.stringify(tier)).join(', ')} were removed: unknown or empty (tiers: ${SLIDE_ASSISTANCE_TIERS.join(', ')})`,
+        });
+      }
+    }
+  }
+
+  return {
+    outline: repaired ? (repaired as unknown as SceneOutline) : outline,
+    repairs,
+  };
+}
+
+/** {@link repairOutlineSlideSemantics} over a whole outline list, in order. */
+export function repairOutlinesSlideSemantics(outlines: readonly SceneOutline[]): {
+  outlines: SceneOutline[];
+  repairs: OutlineDiagnostic[];
+} {
+  const repairs: OutlineDiagnostic[] = [];
+  const repaired = outlines.map((outline, index) => {
+    const result = repairOutlineSlideSemantics(outline, index);
+    repairs.push(...result.repairs);
+    return result.outline;
+  });
+  return { outlines: repaired, repairs };
+}
+
+/** The values an administrator may choose for a semantics field, where enumerable. */
+function semanticsAllowedValues(
+  issue: OutlineSemanticsIssue,
+  outline: SceneOutline | undefined,
+): Array<string | number> | undefined {
+  switch (issue.field) {
+    case 'slideType':
+      return [...SLIDE_TYPES];
+    case 'contentRole':
+      return [...SLIDE_CONTENT_ROLES];
+    case 'contentKind': {
+      const role = outline?.contentRole;
+      return isSlideContentRole(role) ? [...SLIDE_CONTENT_KINDS_BY_ROLE[role]] : undefined;
+    }
+    case 'visualPlan':
+      return [...VISUAL_PLAN_MODES];
+    default:
+      return undefined;
+  }
+}
+
+/** Stable diagnostic code for a semantics issue (field + the shape of the fault). */
+function semanticsIssueCode(issue: OutlineSemanticsIssue): string {
+  const missing = / is missing$/.test(issue.message) || /requires /.test(issue.message);
+  switch (issue.field) {
+    case 'slideType':
+      return /at most one/.test(issue.message)
+        ? 'SLIDE_TYPE_DUPLICATED'
+        : missing
+          ? 'SLIDE_TYPE_MISSING'
+          : 'SLIDE_TYPE_INVALID';
+    case 'contentRole':
+      return missing ? 'CONTENT_ROLE_MISSING' : 'CONTENT_ROLE_INVALID';
+    case 'contentKind':
+      return 'CONTENT_KIND_INVALID';
+    case 'assistancePlan':
+      return 'ASSISTANCE_PLAN_INVALID';
+    case 'visualPlan':
+      return 'VISUAL_PLAN_INVALID';
+  }
+}
+
+/**
+ * The semantics contract as admin-correctable diagnostics: every issue
+ * {@link validateOutlineSlideSemantics} reports, with the field, the reason and
+ * the values a person may choose. Run {@link repairOutlinesSlideSemantics}
+ * first so repairable metadata is not reported as blocking.
+ */
+export function outlineSemanticsDiagnostics(outlines: SceneOutline[]): OutlineDiagnostic[] {
+  return validateOutlineSlideSemantics(outlines).map((issue) => {
+    const outline = outlines[issue.index];
+    const allowedValues = semanticsAllowedValues(issue, outline);
+    return {
+      code: semanticsIssueCode(issue),
+      disposition: 'admin_correctable' as const,
+      outlineIndex: issue.index,
+      ...(outline?.id ? { outlineId: outline.id } : {}),
+      field: issue.field,
+      message: issue.message,
+      ...(allowedValues ? { allowedValues } : {}),
+      ...(outline?.teachingStage
+        ? { flowIndex: outline.teachingStage.flowIndex, stage: outline.teachingStage.key }
+        : {}),
+    };
+  });
 }
 
 /** One-line failure message for a response that violates the contract. */

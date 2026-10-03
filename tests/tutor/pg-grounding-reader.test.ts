@@ -17,6 +17,13 @@ vi.mock('@/lib/logger', () => ({
   },
 }));
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { Client } from 'pg';
+
+import { checkKafuoGroundingConnection } from '@/lib/server/tutor/grounding/grounding-config';
 import {
   GROUNDING_APPLICATION_NAME,
   ITEM_EMBEDDING_PROFILE_SQL,
@@ -24,7 +31,11 @@ import {
   RESOLVE_ITEMS_SQL,
   SEARCH_UNITS_SQL,
   VALIDATE_UNITS_SQL,
+  closeKafuoGroundingReader,
+  createKafuoGroundingPool,
+  getKafuoGroundingReader,
   kafuoGroundingHealth,
+  kafuoGroundingPoolConfig,
   mapResolveRows,
   type GroundingPgClient,
   type GroundingPgPool,
@@ -819,5 +830,140 @@ describe('kafuoGroundingHealth', () => {
 
   it('the pool is tagged with the te-grounding application name', () => {
     expect(GROUNDING_APPLICATION_NAME).toBe('te-grounding');
+  });
+});
+
+describe('M-1: the pool is built from the checked DSN and the environment cannot weaken it', () => {
+  const SETTINGS = { max: 2, admissionTimeoutMs: 300, idleTimeoutMs: 1_000, queryTimeoutMs: 2_500 };
+  const REMOTE = 'postgres://kafuo_grounding_reader:s3cret@kafuo-db.example.com:25060/kafuo';
+  const VERIFY_FULL = `${REMOTE}?sslmode=verify-full`;
+  const LOOPBACK = 'postgres://kafuo_grounding_reader:s3cret@127.0.0.1/fasol_ai_tutor';
+
+  interface EffectiveParameters {
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    database: string;
+    ssl: unknown;
+    options: string | undefined;
+    application_name: string | undefined;
+  }
+
+  /** What node-postgres would connect with: a Client is built, nothing is opened. */
+  function effective(url: string): EffectiveParameters {
+    const check = checkKafuoGroundingConnection(url, {});
+    if (!check.ok) throw new Error(check.reason);
+    const client = new Client(kafuoGroundingPoolConfig(check.connection, SETTINGS));
+    return (client as unknown as { connectionParameters: EffectiveParameters })
+      .connectionParameters;
+  }
+
+  beforeEach(() => {
+    logs.lines.length = 0;
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await closeKafuoGroundingReader();
+  });
+
+  it('verify-full: an explicit ssl with certificate checks, whatever PGSSLMODE or NODE_TLS_REJECT_UNAUTHORIZED say', () => {
+    vi.stubEnv('PGSSLMODE', 'disable');
+    vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0');
+    expect(effective(VERIFY_FULL).ssl).toEqual({ rejectUnauthorized: true });
+    vi.stubEnv('PGSSLMODE', 'no-verify');
+    expect(effective(VERIFY_FULL).ssl).toEqual({ rejectUnauthorized: true });
+  });
+
+  it('loopback without TLS: ssl is false, whatever PGSSLMODE says', () => {
+    vi.stubEnv('PGSSLMODE', 'verify-full');
+    expect(effective(LOOPBACK).ssl).toBe(false);
+    vi.stubEnv('PGSSLMODE', 'no-verify');
+    expect(effective(LOOPBACK).ssl).toBe(false);
+  });
+
+  it('host, port, user and database come from the DSN, never PG* env; an encoded password does not move the host', () => {
+    vi.stubEnv('PGHOST', 'evil.example.com');
+    vi.stubEnv('PGPORT', '6543');
+    vi.stubEnv('PGUSER', 'postgres');
+    vi.stubEnv('PGDATABASE', 'postgres');
+    vi.stubEnv('PGAPPNAME', 'renamed');
+    const params = effective(
+      'postgresql://kafuo_grounding_reader:p%40ss%3Aw%2Fd%23x%3Fy@kafuo-db.example.com:25060/kafuo?sslmode=verify-full',
+    );
+    expect({
+      host: params.host,
+      port: params.port,
+      user: params.user,
+      password: params.password,
+      database: params.database,
+      application_name: params.application_name,
+    }).toEqual({
+      host: 'kafuo-db.example.com',
+      port: 25060,
+      user: 'kafuo_grounding_reader',
+      password: 'p@ss:w/d#x?y',
+      database: 'kafuo',
+      application_name: 'te-grounding',
+    });
+    expect(effective(LOOPBACK).port).toBe(5432);
+    expect(effective('postgres://r:pw@[::1]:5433/db').host).toBe('::1');
+  });
+
+  it('sslrootcert: the CA file is read into an explicit ssl.ca', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kafuo-grounding-ca-'));
+    try {
+      const caFile = join(dir, 'ca.crt');
+      writeFileSync(caFile, '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n');
+      expect(effective(`${VERIFY_FULL}&sslrootcert=${encodeURIComponent(caFile)}`).ssl).toEqual({
+        rejectUnauthorized: true,
+        ca: '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('PGOPTIONS cannot be suppressed through the config, so pool creation refuses it', () => {
+    vi.stubEnv('PGOPTIONS', '-c statement_timeout=0');
+    // The reason the refusal exists: node-postgres falls back to PGOPTIONS.
+    expect(effective(LOOPBACK).options).toBe('-c statement_timeout=0');
+    expect(() =>
+      createKafuoGroundingPool(LOOPBACK, SETTINGS, () => undefined, {
+        PGOPTIONS: '-c statement_timeout=0',
+      }),
+    ).toThrow(/KAFUO_GROUNDING_DATABASE_URL is refused: PGOPTIONS is set/);
+    vi.unstubAllEnvs();
+    expect(effective(LOOPBACK).options).toBeUndefined();
+  });
+
+  it('pool creation refuses a remote DSN without TLS, and never echoes the DSN', () => {
+    let message = '';
+    try {
+      createKafuoGroundingPool(REMOTE, SETTINGS, () => undefined, {});
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toMatch(/a non-loopback host needs sslmode=verify-full/);
+    expect(message).not.toContain('s3cret');
+    expect(message).not.toContain('kafuo-db.example.com');
+  });
+
+  it('getKafuoGroundingReader is undefined while refused (fail closed), logged once, re-checked before the cached reader', () => {
+    const ok = { KAFUO_GROUNDING_DATABASE_URL: LOOPBACK };
+    const withOptions = { ...ok, PGOPTIONS: '-c statement_timeout=0' };
+    expect(getKafuoGroundingReader(withOptions)).toBeUndefined();
+    expect(getKafuoGroundingReader(withOptions)).toBeUndefined();
+    expect(getKafuoGroundingReader({ KAFUO_GROUNDING_DATABASE_URL: REMOTE })).toBeUndefined();
+    const refusals = logs.lines.filter((line) => line.includes('tutor.grounding_reader_refused'));
+    expect(refusals).toHaveLength(2);
+    expect(logs.lines.join('\n')).not.toContain('s3cret');
+
+    // Lazy: no connection is opened by creating the reader.
+    const reader = getKafuoGroundingReader(ok);
+    expect(reader).toBeInstanceOf(PgGroundingReader);
+    expect(getKafuoGroundingReader(ok)).toBe(reader);
+    expect(getKafuoGroundingReader(withOptions)).toBeUndefined();
   });
 });

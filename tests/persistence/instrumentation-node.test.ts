@@ -161,6 +161,37 @@ describe('node instrumentation', () => {
     await expect(again.registerNodeInstrumentation()).resolves.toBeUndefined();
   });
 
+  it('refuses to start shadow|direct on a remote reader DSN without sslmode=verify-full, or with PGOPTIONS set (M-1)', async () => {
+    mockInstrumentationSeams();
+    const signals = captureSignalHandlers();
+    vi.stubEnv('TUTOR_GROUNDING_SOURCE', 'direct');
+    vi.stubEnv(
+      'KAFUO_GROUNDING_DATABASE_URL',
+      'postgres://kafuo_grounding_reader:x@kafuo-db:5432/kafuo',
+    );
+
+    const { registerNodeInstrumentation } = await import('@/lib/server/instrumentation-node');
+    await expect(registerNodeInstrumentation()).rejects.toThrow(/needs sslmode=verify-full/);
+    expect(signals.registered).toEqual([]);
+
+    vi.resetModules();
+    mockInstrumentationSeams();
+    vi.stubEnv(
+      'KAFUO_GROUNDING_DATABASE_URL',
+      'postgres://kafuo_grounding_reader:x@kafuo-db:5432/kafuo?sslmode=verify-full',
+    );
+    vi.stubEnv('PGOPTIONS', '-c statement_timeout=0');
+    const withOptions = await import('@/lib/server/instrumentation-node');
+    await expect(withOptions.registerNodeInstrumentation()).rejects.toThrow(/PGOPTIONS is set/);
+
+    // The default kafuo_http boot is unaffected by either.
+    vi.resetModules();
+    mockInstrumentationSeams();
+    vi.stubEnv('TUTOR_GROUNDING_SOURCE', '');
+    const byDefault = await import('@/lib/server/instrumentation-node');
+    await expect(byDefault.registerNodeInstrumentation()).resolves.toBeUndefined();
+  });
+
   it('installs one SIGTERM and one SIGINT handler', async () => {
     mockInstrumentationSeams();
     const signals = captureSignalHandlers();

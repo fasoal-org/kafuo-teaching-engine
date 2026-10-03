@@ -474,10 +474,10 @@ async function startOnce(
     if (!live) {
       throw new TeachingPackageError('SCENE_NOT_FOUND', 'the slide is not part of this stage');
     }
-    if (live.scene.type !== 'slide') {
+    if (live.scene.type !== 'slide' && live.scene.type !== 'quiz') {
       return refused(
         'SCENE_TYPE_NOT_REGENERABLE',
-        `only slides can be regenerated; this scene is a ${live.scene.type}`,
+        `only slides and quizzes can be regenerated; this scene is a ${live.scene.type}`,
         true,
         versionStatus,
       );

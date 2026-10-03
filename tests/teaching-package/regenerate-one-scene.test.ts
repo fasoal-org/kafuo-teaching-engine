@@ -257,14 +257,76 @@ describe('regenerateOneScene — AT-G', () => {
     expect(result).toMatchObject({ ok: false, code: 'SCENE_ACTION_GENERATION_FAILED' });
   });
 
-  it('refuses a non-slide Scene', async () => {
-    const quiz = {
+  it('refuses a Scene that is neither a slide nor a quiz', async () => {
+    const interactive = {
+      ...preImage(),
+      type: 'interactive',
+      content: { type: 'interactive', html: '<div></div>' },
+    } as unknown as AppScene;
+    const { result } = await run(content([]), { pre: interactive });
+    expect(result).toMatchObject({ ok: false, code: 'SCENE_TYPE_NOT_REGENERABLE' });
+  });
+});
+
+// 3 Oct 2026: a quiz is regenerated like a slide, minus the canvas.
+describe('regenerateOneScene — quiz', () => {
+  const currentQuestion = {
+    id: 'placeholder_q1',
+    type: 'short_answer',
+    question: 'CURRENT-QUESTION-MARK',
+    hasAnswer: false,
+  };
+  function quizPre(): AppScene {
+    return {
       ...preImage(),
       type: 'quiz',
-      content: { type: 'quiz', questions: [] },
+      content: { type: 'quiz', questions: [currentQuestion] },
+      actions: [{ id: 'a1', type: 'speech', text: SAUDI }],
+      generationIssues: [{ code: 'GOVERNED_SCENE_GENERATION_FAILED', message: 'placeholder' }],
     } as unknown as AppScene;
-    const { result } = await run(content([]), { pre: quiz });
-    expect(result).toMatchObject({ ok: false, code: 'SCENE_TYPE_NOT_REGENERABLE' });
+  }
+  const quizOutline = () =>
+    snapshot({
+      type: 'quiz',
+      quizConfig: { questionCount: 1, difficulty: 'medium', questionTypes: ['single'] },
+      suggestedImageIds: undefined,
+      visualPlan: undefined,
+      slideType: undefined,
+      contentRole: undefined,
+    });
+  const QUESTIONS = JSON.stringify([
+    {
+      type: 'single',
+      question: 'ما الحد التالي؟ 2، 4، 6، ...',
+      options: ['7', '8', '9', '10'],
+      answer: ['B'],
+      analysis: 'نضيف 2 كل مرة.',
+    },
+  ]);
+
+  it('sends the instruction and the current questions to the quiz model and keeps every invariant', async () => {
+    const { result, prompts, pre } = await run(QUESTIONS, {
+      pre: quizPre(),
+      outline: quizOutline(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const contentPrompt = prompts.find((prompt) => prompt.stage === 'scene-content:quiz');
+    expect(contentPrompt?.user).toContain('INSTRUCTION-MARK');
+    expect(contentPrompt?.user).toContain('CURRENT-QUESTION-MARK');
+    expect(result.scene.id).toBe(pre.id);
+    expect(result.scene.type).toBe('quiz');
+    expect(result.scene.content.type).toBe('quiz');
+    if (result.scene.content.type === 'quiz') {
+      expect(result.scene.content.questions).toHaveLength(1);
+    }
+    // The regenerated scene is fresh: the generation marker is gone.
+    expect(result.scene.generationIssues).toBeUndefined();
+  });
+
+  it('an unparsable quiz answer fails and writes nothing', async () => {
+    const { result } = await run('not json', { pre: quizPre(), outline: quizOutline() });
+    expect(result).toMatchObject({ ok: false, code: 'SCENE_CONTENT_GENERATION_FAILED' });
   });
 });
 

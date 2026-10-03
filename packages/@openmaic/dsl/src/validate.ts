@@ -465,8 +465,8 @@ const INSTRUCTIONAL_SLIDE_TYPES: readonly string[] = ['cover', 'content'];
  * - an instructional slide (`cover` / `content`) requires a `contentRole`; a
  *   purely structural `contents` / `transition` / `end` slide may omit it;
  * - a role, when present on any slide type, must be known; its `contentKind`
- *   is required when the role defines kinds, must be one of them, and is
- *   forbidden otherwise;
+ *   is an OPTIONAL specialization — when present it must be one of the role's
+ *   kinds, and it is forbidden on a role that defines none;
  * - `assistance` is an object of non-empty string tiers, allowed only beside a
  *   `practice` / `check_understanding` role, and required (`hint` +
  *   `explanation`) for `practice` / `independent`.
@@ -514,16 +514,9 @@ export function validateGeneratedSlideSemantics(
         message: `an instructional slide (${slideType}) requires a \`contentRole\``,
       });
     }
-  } else if (isSlideContentRole(contentRole)) {
-    const allowed: readonly string[] = SLIDE_CONTENT_KINDS_BY_ROLE[contentRole];
-    if (allowed.length > 0 && contentKind === undefined) {
-      errors.push({
-        path: '/contentKind',
-        message: `content role ${JSON.stringify(contentRole)} requires a content kind (one of: ${allowed.join(', ')})`,
-      });
-    }
   }
-  // Unknown role, kind without a role, kind outside its role's list.
+  // `contentKind` is an optional specialization: an absent kind is valid for
+  // every role. Unknown role, kind without a role, kind outside its role's list.
   checkSlideContentSemantics(doc, '', errors);
 
   if (assistance !== undefined) {

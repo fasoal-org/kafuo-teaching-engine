@@ -157,7 +157,9 @@ describe('planner prose never becomes learner content (T-07)', () => {
 
   it('gives an unclassified (legacy) slide no role guidance, and every approved variant some', () => {
     expect(buildSlideRoleContext({})).toEqual({ hasRoleGuidance: false, roleGuidance: '' });
-    expect(SLIDE_ROLE_VARIANTS).toHaveLength(17);
+    // 17 role / role-kind variants + the generic explanation / activity / practice
+    // guidance used when the optional contentKind is absent.
+    expect(SLIDE_ROLE_VARIANTS).toHaveLength(20);
     for (const variant of SLIDE_ROLE_VARIANTS) {
       const [contentRole, contentKind] = variant.split('-') as [never, never];
       const canvas = buildSlideRoleContext({ slideType: 'content', contentRole, contentKind });
@@ -166,6 +168,23 @@ describe('planner prose never becomes learner content (T-07)', () => {
       // Guidance prose never names the internal tokens it was resolved from.
       expect(findInternalLeaks([canvas.roleGuidance, narration.roleGuidance]), variant).toEqual([]);
     }
+    // An absent kind is a valid classification with generic, non-revealing guidance.
+    for (const contentRole of ['explanation', 'activity', 'practice'] as const) {
+      const canvas = buildSlideRoleContext({ slideType: 'content', contentRole });
+      const narration = buildSlideNarrationRoleContext({ contentRole });
+      expect(canvas.hasRoleGuidance && narration.hasRoleGuidance, contentRole).toBe(true);
+    }
+    expect(buildSlideNarrationRoleContext({ contentRole: 'practice' }).roleGuidance).toContain(
+      'Do NOT give the full solution',
+    );
+    // A kind the role does not define falls back to the generic role guidance.
+    expect(
+      buildSlideRoleContext({
+        slideType: 'content',
+        contentRole: 'explanation',
+        contentKind: 'procedure' as never,
+      }).roleGuidance,
+    ).toBe(buildSlideRoleContext({ slideType: 'content', contentRole: 'explanation' }).roleGuidance);
     expect(buildSlideRoleContext({ slideType: 'transition' }).roleGuidance).toContain(
       'purely structural',
     );

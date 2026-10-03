@@ -198,6 +198,76 @@ describe('generateClassroom Stage-1 outline gate', () => {
     mocks.generateClassroomId.mockReturnValue('stagesink1');
   });
 
+  describe('prohibited widget types (Kafuo Release 1 defers games)', () => {
+    const gameOutline = {
+      id: 'outline-game',
+      type: 'interactive',
+      title: 'Fraction race',
+      description: 'Practise',
+      keyPoints: ['fractions'],
+      order: 2,
+      widgetType: 'game',
+      widgetOutline: { concept: 'fractions', gameType: 'quiz' },
+    } as const;
+    const inferredGameOutline = {
+      id: 'outline-legacy',
+      type: 'interactive',
+      title: 'Practice puzzle',
+      description: 'Puzzle',
+      keyPoints: ['puzzle'],
+      order: 2,
+      interactiveConfig: {
+        conceptName: 'matching puzzle',
+        conceptOverview: 'match pairs',
+        designIdea: 'a practice game with a challenge',
+      },
+    } as const;
+
+    it('tells the planner and the scene generator which widgets are prohibited', async () => {
+      await generateWith({ input: { prohibitedWidgetTypes: ['game'] } });
+      expect(mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4]).toMatchObject({
+        prohibitedWidgetTypes: ['game'],
+      });
+      expect(mocks.generateSceneContent.mock.calls[0]![2]).toMatchObject({
+        prohibitedWidgetTypes: ['game'],
+      });
+    });
+
+    it.each([
+      ['an explicit game outline', gameOutline],
+      ['a game inferred from a legacy interactiveConfig', inferredGameOutline],
+    ])(
+      'refuses %s with GAME_GENERATION_DEFERRED before any content call',
+      async (_label, planned) => {
+        mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+          success: true,
+          data: { languageDirective: 'Use English.', outlines: [outline, planned] },
+        });
+        await expect(
+          generateWith({ input: { prohibitedWidgetTypes: ['game'] } }),
+        ).rejects.toMatchObject({ code: 'GAME_GENERATION_DEFERRED' });
+        // The slide before it was generated; the game never reached a model call.
+        expect(mocks.generateSceneContent).toHaveBeenCalledTimes(1);
+        expect(mocks.generateSceneContent.mock.calls[0]![0]).toMatchObject({ id: 'outline-1' });
+      },
+    );
+
+    it('keeps generating games when no widget is prohibited (non-Kafuo callers)', async () => {
+      mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+        success: true,
+        data: { languageDirective: 'Use English.', outlines: [outline, gameOutline] },
+      });
+      await generateWith({});
+      expect(mocks.generateSceneContent).toHaveBeenCalledTimes(2);
+      expect(mocks.generateSceneOutlinesFromRequirements.mock.calls[0]![4]).not.toHaveProperty(
+        'prohibitedWidgetTypes',
+      );
+      expect(mocks.generateSceneContent.mock.calls[1]![2]).not.toHaveProperty(
+        'prohibitedWidgetTypes',
+      );
+    });
+  });
+
   it('runs the validator on the generated outlines before reserving a Stage', async () => {
     const { sink, calls } = makeRecordingSink();
     const seen: SceneOutline[][] = [];

@@ -26,7 +26,7 @@ import {
 } from '@/lib/server/teaching-package/lifecycle';
 import type { AppScene } from '@/lib/types/stage';
 import type { AppStage } from '@/lib/document-store/persistence-types';
-import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
+import type { TeachingFlowEntry, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 import { insertAttempt } from '@/lib/persistence/teaching-package';
 
@@ -162,6 +162,7 @@ describe('teaching package lifecycle', () => {
   describe('submitForReview exact-flow gate', () => {
     async function seedFlowBackedVersion(
       buildScenes: (stageId: string) => AppScene[],
+      recordedFlow?: TeachingFlowEntry[],
     ): Promise<string> {
       const { versionId, stageId } = await seedVersion({ status: 'draft' });
       // Overwrite the version's own stage document with the given scenes
@@ -176,7 +177,7 @@ describe('teaching package lifecycle', () => {
       await store.saveDocument(makeDocument(stageId, 'Flow', buildScenes(stageId)));
       // A generation attempt carrying the authoritative flow, linked as the
       // version's producing attempt.
-      const flow = [
+      const flow = recordedFlow ?? [
         { stage: 'lesson_introduction', instructions: 'i' },
         { stage: 'outcome_teaching_cards', instructions: 'c' },
       ];
@@ -212,6 +213,115 @@ describe('teaching package lifecycle', () => {
       );
       return versionId;
     }
+
+    describe('Kafuo Release 1 game deferral', () => {
+      /** g5.v6's positions for one objective: opener, map, objective slides, native quiz. */
+      const V6_FLOW: TeachingFlowEntry[] = [
+        {
+          stage: 'lesson_opener',
+          instructions: 'Open.',
+          scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+        },
+        {
+          stage: 'lesson_learning_map',
+          instructions: 'Map.',
+          scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+        },
+        {
+          stage: 'outcome_visual_explanations',
+          instructions: 'Teach O1.',
+          scenePolicy: { sceneTypes: ['slide'], cardinality: 'one_or_more' },
+        },
+        {
+          stage: 'outcome_check_understanding',
+          instructions: 'Check O1.',
+          scenePolicy: { sceneTypes: ['quiz'], cardinality: 'exactly_one' },
+        },
+      ];
+      /** g5.v5: the same positions plus the final learning game. */
+      const V5_FLOW: TeachingFlowEntry[] = [
+        ...V6_FLOW,
+        {
+          stage: 'lesson_learning_game',
+          instructions: 'Play.',
+          scenePolicy: {
+            sceneTypes: ['interactive'],
+            widgetTypes: ['game'],
+            cardinality: 'exactly_one',
+          },
+        },
+      ];
+      const at = (scene: AppScene, flow: TeachingFlowEntry[], flowIndex: number) =>
+        ({ ...scene, teachingStage: { key: flow[flowIndex]!.stage, flowIndex } }) as AppScene;
+      const quiz = (id: string, stageId: string, order: number) =>
+        ({
+          ...makeSlideScene(id, stageId, order),
+          type: 'quiz',
+          content: { type: 'quiz', questions: [] },
+        }) as unknown as AppScene;
+      const game = (id: string, stageId: string, order: number) =>
+        ({
+          ...makeSlideScene(id, stageId, order),
+          type: 'interactive',
+          content: { type: 'interactive', html: '<html></html>', widgetType: 'game' },
+        }) as unknown as AppScene;
+      const gameFree = (stageId: string, flow: TeachingFlowEntry[]) => [
+        at(makeSlideScene('s1', stageId, 1), flow, 0),
+        at(makeSlideScene('s2', stageId, 2), flow, 1),
+        at(makeSlideScene('s3', stageId, 3), flow, 2),
+        at(quiz('q1', stageId, 4), flow, 3),
+      ];
+
+      it('submits and approves a game-free g5.v6 package with its native quiz', async () => {
+        const versionId = await seedFlowBackedVersion(
+          (stageId) => gameFree(stageId, V6_FLOW),
+          V6_FLOW,
+        );
+        const submitted = await submitForReview(tx(), {
+          tenantId: 'tenant-test',
+          versionId,
+          actorRef: 'reviewer-1',
+        });
+        expect(submitted.status).toBe('in_review');
+        const approved = await approve(tx(), {
+          tenantId: 'tenant-test',
+          versionId,
+          actorRef: 'reviewer-1',
+        });
+        expect(approved.status).toBe('approved');
+      });
+
+      it('refuses a game inserted into a game-free g5.v6 package', async () => {
+        const versionId = await seedFlowBackedVersion(
+          (stageId) => [
+            ...gameFree(stageId, V6_FLOW).slice(0, 3),
+            at(game('g1', stageId, 4), V6_FLOW, 2),
+            at(quiz('q1', stageId, 5), V6_FLOW, 3),
+          ],
+          V6_FLOW,
+        );
+        await expect(
+          submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' }),
+        ).rejects.toMatchObject({
+          code: 'GAME_GENERATION_DEFERRED',
+          status: 422,
+          details: { offendingSceneIds: ['g1'] },
+        });
+      });
+
+      it('keeps a historical g5.v5 draft with its game at the game position submittable', async () => {
+        const versionId = await seedFlowBackedVersion(
+          (stageId) => [...gameFree(stageId, V5_FLOW), at(game('g1', stageId, 5), V5_FLOW, 4)],
+          V5_FLOW,
+        );
+        const submitted = await submitForReview(tx(), {
+          tenantId: 'tenant-test',
+          versionId,
+          actorRef: 'reviewer-1',
+        });
+        expect(submitted.status).toBe('in_review');
+      });
+    });
 
     it('blocks submission when a scene sequence violates the recorded flow', async () => {
       const versionId = await seedFlowBackedVersion((stageId) => [

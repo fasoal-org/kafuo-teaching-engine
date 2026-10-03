@@ -11,9 +11,11 @@
  * arrangements, so no role has a rigid template.
  *
  * Sources: `snippets/slide-roles/<variant>.md` — one file per approved variant
- * (17) plus `structural.md` for a role-less `contents` / `transition` / `end`
- * slide. An unclassified (legacy) slide has NO guidance: it keeps today's
- * generic prompt, byte for byte.
+ * (17 role or role-kind variants, plus the generic `explanation` / `activity` /
+ * `practice` used when the optional `contentKind` is absent) and
+ * `structural.md` for a role-less `contents` / `transition` / `end` slide. An
+ * unclassified (legacy) slide has NO guidance: it keeps today's generic
+ * prompt, byte for byte.
  *
  * The prompt loader supports only truthiness conditionals and leaves undefined
  * variables as literal `{{name}}`, so both returned variables are ALWAYS
@@ -50,13 +52,14 @@ const STRUCTURAL_SLIDE_TYPES: readonly string[] = ['contents', 'transition', 'en
 const PRECEDENCE =
   "**Precedence.** This purpose defines what the slide is for and what it must contain. The Teaching Model Flow positions the slide in the lesson. Selected Teaching Skills govern HOW it is taught within these obligations. An edit instruction changes specifics but cannot change this slide's obligations.";
 
-/** Every approved variant file name (role, or role-kind), in vocabulary order. */
+/**
+ * Every approved variant file name, in vocabulary order: the role itself (for a
+ * role with kinds this is the generic guidance used when `contentKind` is
+ * absent), then each `role-kind` specialization.
+ */
 export const SLIDE_ROLE_VARIANTS: readonly string[] = (
   Object.keys(SLIDE_CONTENT_KINDS_BY_ROLE) as SlideContentRole[]
-).flatMap((role) => {
-  const kinds = SLIDE_CONTENT_KINDS_BY_ROLE[role];
-  return kinds.length === 0 ? [role] : kinds.map((kind) => `${role}-${kind}`);
-});
+).flatMap((role) => [role, ...SLIDE_CONTENT_KINDS_BY_ROLE[role].map((kind) => `${role}-${kind}`)]);
 
 /** The guidance file for a classification, or `undefined` when there is none. */
 function variantFile(input: SlideRoleGuidanceInput): string | undefined {
@@ -66,12 +69,13 @@ function variantFile(input: SlideRoleGuidanceInput): string | undefined {
       ? 'structural'
       : undefined;
   }
-  if (SLIDE_CONTENT_KINDS_BY_ROLE[contentRole].length === 0) return contentRole;
-  // A role that defines kinds has no guidance without a valid kind: nothing is
-  // guessed, and generation gates reject such a slide before this point.
+  // `contentKind` is an optional specialization: a valid one selects its
+  // specific guidance; an absent one (or one the role does not define, which the
+  // outline gate drops before this point) gets the role's generic guidance —
+  // never a guessed kind.
   return isSlideContentKindForRole(contentRole, contentKind)
     ? `${contentRole}-${contentKind}`
-    : undefined;
+    : contentRole;
 }
 
 function loadVariant(file: string): string {
@@ -112,12 +116,16 @@ const VISUAL_PLAN_GUIDANCE: Readonly<Record<string, string>> = {
 /** What narration must respect, per variant, beyond elaborating the canvas. */
 const NARRATION_RULES: Readonly<Record<string, string>> = {
   orientation: 'Open with the hook, then frame the context, the objectives and the big idea.',
+  activity:
+    'Set up the activity and what to do or notice. Do NOT reveal the finding, analysis, or finished work it asks for.',
   'activity-investigation':
     'Set up the investigation and what to observe. Do NOT reveal the finding or conclusion.',
   'activity-source_analysis':
     'Frame the source and the prompts. Do NOT give the analysis or interpretation.',
   'activity-reflection': 'Invite reflection. Do NOT supply model answers.',
   'activity-production': 'Clarify the output and success criteria. Do NOT complete the task.',
+  practice:
+    'Present the task and walk through any visible scaffolding. Do NOT give the full solution or final answer.',
   'practice-guided':
     'Walk through the visible scaffolding. Do NOT give the full solution or final answer.',
   'practice-independent':

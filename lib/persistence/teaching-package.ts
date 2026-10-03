@@ -76,6 +76,37 @@ const REVIEW_EVENT_TYPES = [
 ] as const;
 const REVIEW_EVENT_TYPES_SQL = REVIEW_EVENT_TYPES.map((type) => `'${type}'`).join(',');
 
+/**
+ * The generation attempt status vocabulary. `awaiting_admin_correction` is the
+ * durable, NON-terminal pause of an attempt whose candidate needs a person
+ * (slide-classification-admin-correction-plan §3): it counts as in flight,
+ * is never reclaimed as stale, and resumes the same attempt. An existing
+ * database is widened by the guarded DO block in `TEACHING_PACKAGE_EVOLUTION`.
+ */
+const ATTEMPT_STATUSES = [
+  'queued',
+  'running',
+  'awaiting_admin_correction',
+  'succeeded',
+  'failed',
+] as const;
+const ATTEMPT_STATUSES_SQL = ATTEMPT_STATUSES.map((status) => `'${status}'`).join(',');
+
+/** The in-flight statuses: at most one attempt per aggregate may hold one. */
+const IN_FLIGHT_ATTEMPT_STATUSES_SQL = `'queued','running','awaiting_admin_correction'`;
+
+/**
+ * Outbound webhook event types (FRD §9.8 plus the admin-correction pause). An
+ * existing delivery table is widened by `WEBHOOK_DELIVERY_EVOLUTION`.
+ */
+const WEBHOOK_EVENT_TYPES = [
+  'teaching_package.generation_succeeded',
+  'teaching_package.generation_failed',
+  'teaching_package.status_changed',
+  'teaching_package.generation_awaiting_correction',
+] as const;
+const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
+
 /** Tables only — created before the evolution block runs. */
 const TEACHING_PACKAGE_TABLES = `
 CREATE TABLE IF NOT EXISTS teaching_package_versions (
@@ -136,7 +167,7 @@ CREATE TABLE IF NOT EXISTS teaching_package_generation_attempts (
   learning_item_id TEXT NOT NULL,
   version_id TEXT REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
   kind TEXT NOT NULL CHECK (kind IN ('initial','regeneration')),
-  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
+  status TEXT NOT NULL CHECK (status IN (${ATTEMPT_STATUSES_SQL})),
   request_id TEXT,
   request_digest TEXT,
   teaching_skills_contract TEXT,
@@ -169,9 +200,7 @@ CREATE TABLE IF NOT EXISTS teaching_package_webhook_deliveries (
   learning_item_id TEXT NOT NULL,
   sequence BIGINT NOT NULL,
   event_type TEXT NOT NULL CHECK (event_type IN (
-    'teaching_package.generation_succeeded',
-    'teaching_package.generation_failed',
-    'teaching_package.status_changed'
+    ${WEBHOOK_EVENT_TYPES_SQL}
   )),
   occurred_at DOUBLE PRECISION NOT NULL,
   payload JSONB NOT NULL,
@@ -197,6 +226,68 @@ CREATE INDEX IF NOT EXISTS tpwd_status_next_attempt_idx
 CREATE INDEX IF NOT EXISTS tpwd_terminal_failed_idx
   ON teaching_package_webhook_deliveries (terminal_failed_at)
   WHERE terminal_failed_at IS NOT NULL;
+`;
+
+/**
+ * Widen the inline event-type CHECK of an existing delivery table for the
+ * admin-correction pause event. Guarded on the constraint's own text.
+ */
+const WEBHOOK_DELIVERY_EVOLUTION = `
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_package_webhook_deliveries_event_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%generation_awaiting_correction%'
+  ) THEN
+    ALTER TABLE teaching_package_webhook_deliveries
+      DROP CONSTRAINT IF EXISTS teaching_package_webhook_deliveries_event_type_check;
+    ALTER TABLE teaching_package_webhook_deliveries
+      ADD CONSTRAINT teaching_package_webhook_deliveries_event_type_check
+      CHECK (event_type IN (${WEBHOOK_EVENT_TYPES_SQL}));
+  END IF;
+END;
+$$;
+`;
+
+/**
+ * The admin-correction checkpoint (slide-classification-admin-correction-plan
+ * §3.1): one row per paused attempt, updated in place across pauses. It holds
+ * the candidate outlines, the blocking and repaired diagnostics, and the
+ * secret-free references a resume needs — the flow and request digests, the
+ * measured source identity, the exact Content Unit id set the grounding gate
+ * used, and the screening verdicts + metadata of the approved source visuals.
+ * Never source bytes, never a URL, never a credential. `phase = 'scenes'`
+ * additionally names the retained (unbound) Stage and the outlines to
+ * regenerate. `revision` is the optimistic-concurrency token of every edit.
+ */
+const GENERATION_CHECKPOINT_TABLES = `
+CREATE TABLE IF NOT EXISTS teaching_package_generation_checkpoints (
+  attempt_id TEXT PRIMARY KEY
+    REFERENCES teaching_package_generation_attempts(id) ON DELETE RESTRICT,
+  ${TENANT_CHECK},
+  phase TEXT NOT NULL CHECK (phase IN ('outline','scenes')),
+  state TEXT NOT NULL CHECK (state IN ('awaiting','resumed','abandoned')),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  outlines JSONB NOT NULL,
+  course_title TEXT,
+  language_directive TEXT NOT NULL,
+  diagnostics JSONB NOT NULL,
+  repairs JSONB NOT NULL,
+  source_refs JSONB NOT NULL,
+  reserved_stage_id TEXT,
+  pending_outline_ids JSONB,
+  edit_log JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resumed_revision INTEGER,
+  pause_count INTEGER NOT NULL DEFAULT 1,
+  paused_at DOUBLE PRECISION NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  resumed_at DOUBLE PRECISION,
+  abandoned_at DOUBLE PRECISION
+);
+
+CREATE INDEX IF NOT EXISTS tpgc_tenant_state_idx
+  ON teaching_package_generation_checkpoints (tenant_id, state);
 `;
 
 /**
@@ -303,6 +394,32 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Admin-correction pause (slide-classification-admin-correction-plan §3.1):
+-- widen the inline attempt status CHECK of an existing database, guarded on the
+-- constraint's own text so a re-run (or a fresh database) is a no-op.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_package_generation_attempts_status_check'
+       AND pg_get_constraintdef(oid) LIKE '%awaiting_admin_correction%'
+  ) THEN
+    ALTER TABLE teaching_package_generation_attempts
+      DROP CONSTRAINT IF EXISTS teaching_package_generation_attempts_status_check;
+    ALTER TABLE teaching_package_generation_attempts
+      ADD CONSTRAINT teaching_package_generation_attempts_status_check
+      CHECK (status IN (${ATTEMPT_STATUSES_SQL}));
+  END IF;
+END;
+$$;
+-- When a paused attempt last resumed: the stale reclaim measures a resumed
+-- attempt from here, never from its original created_at. NULL = never resumed.
+ALTER TABLE teaching_package_generation_attempts ADD COLUMN IF NOT EXISTS last_resumed_at DOUBLE PRECISION;
+-- The single-in-flight index must count the paused status, and IF NOT EXISTS
+-- never changes an existing index's predicate: the old name is dropped here and
+-- the widened index is created under a new name in TEACHING_PACKAGE_INDEXES.
+DROP INDEX IF EXISTS tpa_tenant_single_inflight;
 `;
 
 const SOURCE_CONTEXT_EVOLUTION = `
@@ -416,9 +533,9 @@ CREATE INDEX IF NOT EXISTS tpv_tenant_item_version_idx
 CREATE INDEX IF NOT EXISTS teaching_package_review_events_version_idx
   ON teaching_package_review_events (version_id, id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS tpa_tenant_single_inflight
+CREATE UNIQUE INDEX IF NOT EXISTS tpa_tenant_single_inflight_v2
   ON teaching_package_generation_attempts (tenant_id, learning_item_type, learning_item_id)
-  WHERE status IN ('queued','running');
+  WHERE status IN (${IN_FLIGHT_ATTEMPT_STATUSES_SQL});
 
 CREATE UNIQUE INDEX IF NOT EXISTS tpa_tenant_request_id_unique
   ON teaching_package_generation_attempts (
@@ -446,6 +563,8 @@ const OBSOLETE_INDEX_NAMES = [
   'teaching_package_versions_item_version_idx',
   'teaching_package_attempts_single_inflight',
   'teaching_package_attempts_request_id_unique',
+  // Superseded by tpa_tenant_single_inflight_v2 (counts the paused status).
+  'tpa_tenant_single_inflight',
 ] as const;
 
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}
@@ -466,6 +585,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
   for (const statement of splitSqlStatements(WEBHOOK_DELIVERY_TABLES)) {
     await queryable.query(statement);
   }
+  for (const statement of splitSqlStatements(WEBHOOK_DELIVERY_EVOLUTION)) {
+    await queryable.query(statement);
+  }
   for (const statement of splitSqlStatements(SOURCE_CONTEXT_TABLES)) {
     await queryable.query(statement);
   }
@@ -476,6 +598,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(SCENE_REGENERATION_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(GENERATION_CHECKPOINT_TABLES)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique
@@ -1205,7 +1330,8 @@ export async function readAttemptByRequestId(
 
 /**
  * Reclaim attempts whose runner died in-process: both `queued` (the `after()`
- * never ran) and `running` rows older than `staleBefore` fail with
+ * never ran) and `running` rows older than `staleBefore` — measured from the
+ * last resume of a resumed attempt, else from creation — fail with
  * `ATTEMPT_RECLAIMED_STALE`. Returns the reclaimed rows so a caller can emit
  * the Phase 4 `generation_failed` event. `scope = null` reclaims across every
  * aggregate (the periodic sweep); a scoped call reclaims one aggregate under
@@ -1227,7 +1353,7 @@ export async function reclaimStaleAttempts(
             error_retryable = TRUE,
             completed_at = $1
       WHERE status IN ('queued', 'running')
-        AND created_at < $2
+        AND COALESCE(last_resumed_at, created_at) < $2
         ${scoped ? 'AND tenant_id = $3 AND learning_item_type = $4 AND learning_item_id = $5' : ''}
       RETURNING ${ATTEMPT_COLUMNS}`,
     scoped
@@ -1236,6 +1362,8 @@ export async function reclaimStaleAttempts(
   );
   return result.rows.map(rowToAttempt);
 }
+// A paused (`awaiting_admin_correction`) attempt is outside the reclaim set by
+// construction: it waits for a person, not for a runner, and survives restarts.
 
 /** +1 on the full-classroom generation run counter (Layer B, plan §4.3.8). */
 export async function incrementGenerationRuns(
@@ -2009,4 +2137,102 @@ export async function readContentUnitsForVersion(
     hops += 1;
   }
   return unavailable;
+}
+
+/**
+ * Reject anything a checkpoint must never hold: credential-bearing retrieval
+ * URLs (the same rule as the attempt snapshot) and inline `data:` payloads —
+ * a checkpoint carries references and metadata, never source bytes.
+ */
+export function assertCheckpointPersistable(value: unknown, path = 'checkpoint'): void {
+  assertNoCredentialUrls(value, path);
+  const visit = (entry: unknown, at: string): void => {
+    if (typeof entry === 'string') {
+      if (/^data:/i.test(entry)) {
+        throw new Error(`a generation checkpoint must not carry inline data (at ${at})`);
+      }
+      return;
+    }
+    if (Array.isArray(entry)) {
+      entry.forEach((item, index) => visit(item, `${at}[${index}]`));
+      return;
+    }
+    if (entry && typeof entry === 'object') {
+      for (const [key, item] of Object.entries(entry as Record<string, unknown>)) {
+        visit(item, `${at}.${key}`);
+      }
+    }
+  };
+  visit(value, path);
+}
+
+// ---------------------------------------------------------------------------
+// Admin-correction pause / resume transitions (slide-classification-admin-
+// correction-plan §3). Each is a compare-and-set: the status predicate lives in
+// the UPDATE, so a racing caller changes nothing and gets `null`.
+// ---------------------------------------------------------------------------
+
+/** `running → awaiting_admin_correction` (the runner's pause, inside its transaction). */
+export async function markAttemptAwaitingCorrection(
+  queryable: Queryable,
+  id: string,
+  progress: GenerationAttempt['progress'],
+): Promise<GenerationAttempt | null> {
+  const result = await queryable.query<RawAttemptRow>(
+    `UPDATE teaching_package_generation_attempts
+        SET status = 'awaiting_admin_correction',
+            progress = $2::jsonb
+      WHERE id = $1 AND status = 'running'
+      RETURNING ${ATTEMPT_COLUMNS}`,
+    [id, progress === null ? null : JSON.stringify(progress)],
+  );
+  const row = result.rows[0];
+  return row ? rowToAttempt(row) : null;
+}
+
+/**
+ * `awaiting_admin_correction → queued` for a resume of the SAME attempt. Stamps
+ * `last_resumed_at`, from which the stale reclaim measures the resumed run.
+ */
+export async function requeueAttemptForResume(
+  queryable: Queryable,
+  id: string,
+  now: number,
+  progress: GenerationAttempt['progress'],
+): Promise<GenerationAttempt | null> {
+  const result = await queryable.query<RawAttemptRow>(
+    `UPDATE teaching_package_generation_attempts
+        SET status = 'queued',
+            last_resumed_at = $2,
+            progress = $3::jsonb,
+            error = NULL,
+            error_code = NULL,
+            error_retryable = NULL
+      WHERE id = $1 AND status = 'awaiting_admin_correction'
+      RETURNING ${ATTEMPT_COLUMNS}`,
+    [id, now, progress === null ? null : JSON.stringify(progress)],
+  );
+  const row = result.rows[0];
+  return row ? rowToAttempt(row) : null;
+}
+
+/** `awaiting_admin_correction → failed` when an administrator abandons the candidate. */
+export async function markAttemptAbandoned(
+  queryable: Queryable,
+  id: string,
+  input: { message: string; code: string; now: number },
+): Promise<GenerationAttempt | null> {
+  const result = await queryable.query<RawAttemptRow>(
+    `UPDATE teaching_package_generation_attempts
+        SET status = 'failed',
+            error = $2,
+            error_code = $3,
+            error_retryable = TRUE,
+            completed_at = $4
+      WHERE id = $1 AND status = 'awaiting_admin_correction'
+      RETURNING ${ATTEMPT_COLUMNS}`,
+    [id, input.message.slice(0, 2000), input.code, input.now],
+  );
+  const row = result.rows[0];
+  return row ? rowToAttempt(row) : null;
 }

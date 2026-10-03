@@ -200,7 +200,7 @@ describe('Learning Item 155 regression: the outline model cannot choose MSA', ()
     expect(routed.contentCalls()).toBe(1);
   });
 
-  it('a governed run gets the same scene-level budget and the same clear code', async () => {
+  it('a governed run gets the same scene-level budget and keeps the slide marked with the code', async () => {
     const flow = [{ stage: 'lesson_introduction', instructions: 'Open the lesson.' }];
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
@@ -216,17 +216,20 @@ describe('Learning Item 155 regression: the outline model cannot choose MSA', ()
       },
     });
     const routed = routeModel([speech(MSA_NARRATION)]);
-    await expect(
-      generate({
-        ...arabicMath,
-        teachingFlow: flow,
-        governed: {
-          contract: 'kafuo.teaching-skills.v1',
-          teachingModel: { key: 'g5', version: 'g5.v1' },
-          flow,
-        },
-      }),
-    ).rejects.toMatchObject({ code: 'SPEECH_REGISTER_NONCOMPLIANT' });
+    // 3 Oct 2026: the slide is kept (the reviewer regenerates it) instead of
+    // failing the package; the same budget is spent and the code is recorded.
+    const result = await generate({
+      ...arabicMath,
+      teachingFlow: flow,
+      governed: {
+        contract: 'kafuo.teaching-skills.v1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        flow,
+      },
+    });
+    expect(result.scenes[0]!.generationIssues?.map((issue) => issue.code)).toEqual([
+      'SPEECH_REGISTER_NONCOMPLIANT',
+    ]);
     expect(routed.actionPrompts).toHaveLength(3);
   });
 });

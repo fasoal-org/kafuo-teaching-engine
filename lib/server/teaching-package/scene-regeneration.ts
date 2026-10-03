@@ -63,7 +63,7 @@ export const SCENE_REGENERATION_LIMITS = {
   idempotencyKey: { min: 8, max: 128 },
 } as const;
 
-export const SUPPORTED_REGENERATION_SCENE_TYPES = ['slide'] as const;
+export const SUPPORTED_REGENERATION_SCENE_TYPES = ['slide', 'quiz'] as const;
 
 const EDITABLE: readonly TeachingPackageStatus[] = ['draft', 'rejected'];
 

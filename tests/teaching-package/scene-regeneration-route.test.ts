@@ -86,6 +86,15 @@ function cookieFor(
   };
 }
 
+/** Neither a slide nor a quiz: still not regenerable (3 Oct 2026 added quiz). */
+function interactiveScene(id: string, stageId: string, order: number): AppScene {
+  return {
+    ...makeSlideScene(id, stageId, order, 'Interactive'),
+    type: 'interactive',
+    content: { type: 'interactive', html: '<div></div>' },
+  } as unknown as AppScene;
+}
+
 function quizScene(id: string, stageId: string, order: number): AppScene {
   return {
     ...makeSlideScene(id, stageId, order, 'Quiz'),
@@ -165,6 +174,7 @@ describe('slide regeneration routes', () => {
         makeSlideScene('scene-1', STAGE, 1),
         makeSlideScene('scene-2', STAGE, 2),
         quizScene('scene-q', STAGE, 3),
+        interactiveScene('scene-i', STAGE, 4),
       ]),
     );
     await store.saveDocument(
@@ -380,13 +390,13 @@ describe('slide regeneration routes', () => {
     expect(mocks.regenerate).not.toHaveBeenCalled();
   });
 
-  it('AT-A: an unknown scene → 404 SCENE_NOT_FOUND; a quiz → 422 SCENE_TYPE_NOT_REGENERABLE', async () => {
+  it('AT-A: an unknown scene → 404 SCENE_NOT_FOUND; an interactive scene → 422 SCENE_TYPE_NOT_REGENERABLE', async () => {
     const missing = await post('scene-nope', body());
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ error: { code: 'SCENE_NOT_FOUND' } });
-    const quiz = await post('scene-q', body());
-    expect(quiz.status).toBe(422);
-    await expect(quiz.json()).resolves.toMatchObject({
+    const interactive = await post('scene-i', body());
+    expect(interactive.status).toBe(422);
+    await expect(interactive.json()).resolves.toMatchObject({
       error: { code: 'SCENE_TYPE_NOT_REGENERABLE' },
     });
     expect(await rows()).toHaveLength(0);
@@ -767,7 +777,7 @@ describe('slide regeneration routes', () => {
       capability: 'write',
       editable: true,
       versionStatus: 'draft',
-      supportedSceneTypes: ['slide'],
+      supportedSceneTypes: ['slide', 'quiz'],
       running: [],
     });
     await expect((await gate(cookieFor(STAGE, 'read').cookie)).json()).resolves.toMatchObject({
@@ -803,7 +813,12 @@ describe('slide regeneration routes', () => {
       rev: number;
       scenes: Array<{ id: string; rev: number }>;
     };
-    expect(manifest.scenes.map((scene) => scene.id)).toEqual(['scene-1', 'scene-2', 'scene-q']);
+    expect(manifest.scenes.map((scene) => scene.id)).toEqual([
+      'scene-1',
+      'scene-2',
+      'scene-q',
+      'scene-i',
+    ]);
     expect(manifest.rev).toBeGreaterThan(0);
     expect((await call('')).status).toBe(404);
     expect((await call(cookieFor(OTHER, 'read').cookie)).status).toBe(404);

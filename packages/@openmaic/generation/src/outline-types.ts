@@ -90,6 +90,45 @@ export interface TeachingFlowEntry {
    * `OutlinePromptContext.skillPolicy`, never inferred from this field.
    */
   skillPolicy?: TeachingSkillPolicy;
+  /**
+   * The machine-readable scene policy of this flow position: which scene types,
+   * slide types and content roles may fill it, its visual requirement and how
+   * many outlines it takes. Authored by the Teaching Model owner on the flow
+   * definition item and projected onto every resolved position, like
+   * `skillPolicy`. Absent on entries from Teaching Model versions that predate
+   * it — those keep the stage-keyed rules of `LEGACY_STAGE_SCENE_POLICIES`
+   * (`scenePolicyFor`), so an older version never changes meaning.
+   */
+  scenePolicy?: TeachingScenePolicy;
+}
+
+/** A scene type a Teaching Model Flow position may be filled with. */
+export type TeachingSceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
+
+/**
+ * The scene policy of one Teaching Model Flow position (see
+ * `TeachingFlowEntry.scenePolicy`). The prompt renders it and the outline
+ * validator enforces it from the same value — there is no second copy.
+ */
+export interface TeachingScenePolicy {
+  /** The scene types allowed at this position (non-empty). */
+  sceneTypes: TeachingSceneType[];
+  /** For `slide` scenes: the allowed `slideType` values (absent = any). */
+  slideTypes?: SlideType[];
+  /** For `slide` scenes: the allowed `contentRole` values (absent = any known role). */
+  contentRoles?: SlideContentRole[];
+  /** For `interactive` scenes: the allowed `widgetType` values (absent = any). */
+  widgetTypes?: WidgetType[];
+  /**
+   * For `slide` scenes: `required` — a meaningful planned visual
+   * (`visualPlan.mode` `image` or `native`); `source_grounded` — that, and the
+   * visual comes from the authoritative textbook (a selected source image of
+   * the same Content Unit, otherwise a native diagram built only from the
+   * source content), never an AI-generated image.
+   */
+  visual?: 'required' | 'source_grounded';
+  /** `exactly_one` outline at this position, or `one_or_more` consecutive outlines. */
+  cardinality: 'exactly_one' | 'one_or_more';
 }
 
 /**

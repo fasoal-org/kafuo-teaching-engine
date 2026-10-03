@@ -78,8 +78,12 @@ export function SlideNavRail() {
     gate: RegenerationGate | null;
   } | null>(null);
   // Keyed by Stage, so a navigation never shows the previous Stage's answer.
-  const regenerationGate = gateState?.stageId === stageId ? gateState.gate : null;
-  const [regenerating, setRegenerating] = useState<{ id: string; title: string } | null>(null);
+  const regenerationGate = gateState && gateState.stageId === stageId ? gateState.gate : null;
+  const [regenerating, setRegenerating] = useState<{
+    id: string;
+    title: string;
+    type: 'slide' | 'quiz';
+  } | null>(null);
   useEffect(() => {
     if (!stageId || !isTeachingPackageGrantSession()) return;
     let cancelled = false;
@@ -514,7 +518,12 @@ export function SlideNavRail() {
                       onDelete={() => handleDelete(scene.id)}
                       onRegenerate={
                         canRegenerateScene(regenerationGate, scene)
-                          ? () => setRegenerating({ id: scene.id, title: scene.title })
+                          ? () =>
+                              setRegenerating({
+                                id: scene.id,
+                                title: scene.title,
+                                type: scene.type === 'quiz' ? 'quiz' : 'slide',
+                              })
                           : undefined
                       }
                     />
@@ -542,6 +551,7 @@ export function SlideNavRail() {
           stageId={stageId}
           sceneId={regenerating.id}
           sceneTitle={regenerating.title}
+          sceneType={regenerating.type}
         />
       ) : null}
     </aside>

@@ -173,6 +173,7 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
   const base = {
     serviceKey: 'svc-key',
     isProduction: true,
+    allowInsecureLoopbackWebhook: false,
     databaseUrl: 'postgres://configured',
     webhookUrl: 'https://kafuo.test/hook',
     webhookSecret: 'whsec-distinct',
@@ -181,6 +182,23 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
 
   it('accepts a fully configured production deployment', () => {
     expect(() => validateTeachingEngineIntegrationConfig({ ...base })).not.toThrow();
+  });
+
+  it('allows an explicitly opted-in loopback webhook for a local production build', () => {
+    expect(() =>
+      validateTeachingEngineIntegrationConfig({
+        ...base,
+        allowInsecureLoopbackWebhook: true,
+        webhookUrl: 'http://localhost:8000/webhooks',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateTeachingEngineIntegrationConfig({
+        ...base,
+        allowInsecureLoopbackWebhook: true,
+        webhookUrl: 'http://kafuo.internal/webhooks',
+      }),
+    ).toThrow(/must be an https URL/);
   });
 
   it('refuses the missing webhook URL, missing secret, shared secret, and ACCESS_CODE combinations', () => {

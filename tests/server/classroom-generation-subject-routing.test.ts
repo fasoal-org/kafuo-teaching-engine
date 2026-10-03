@@ -486,6 +486,87 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     ]);
   });
 
+  // 3 Oct 2026: a NON-retryable refusal for ONE governed slide is that slide's
+  // problem — it keeps a marked placeholder and the run continues; refusing
+  // every slide is the route's problem and still fails the run.
+  describe('governed scene-scoped refusals', () => {
+    const flow = [
+      { stage: 'lesson_introduction', instructions: 'Open the lesson.' },
+      { stage: 'outcome_teaching_cards', instructions: 'Teach the outcome.' },
+    ];
+    const governedOutlines = [
+      {
+        ...outline,
+        id: 'g1',
+        order: 1,
+        teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+        teachingSkills: { classification: 'non-instructional' as const },
+      },
+      {
+        ...outline,
+        id: 'g2',
+        order: 2,
+        title: 'Refused slide',
+        teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+        teachingSkills: { classification: 'non-instructional' as const },
+      },
+    ];
+    const governed = {
+      contract: 'kafuo.teaching-skills.v1',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      flow,
+    };
+    function refuseContentAfter(okCalls: number) {
+      let contentCalls = 0;
+      mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+        async (_req, _pdf, images, aiCall) => {
+          await aiCall('sys-outline', 'user-outline', images);
+          return {
+            success: true,
+            data: { languageDirective: 'Use English.', outlines: governedOutlines },
+          };
+        },
+      );
+      mocks.callLLM.mockImplementation(async (_params, source: string) => {
+        if (source === 'scene-content:slide') {
+          contentCalls += 1;
+          if (contentCalls > okCalls) throw apiError(400);
+        }
+        return ok(source === 'agent-profiles' ? AGENTS_JSON : `generated for ${source}`);
+      });
+    }
+
+    it('keeps the refused slide as a marked placeholder and completes the run', async () => {
+      const policy = await policyFor('MATH');
+      refuseContentAfter(1);
+      const result = await generate({
+        modelPolicy: policy,
+        attribution: ATTRIBUTION,
+        teachingFlow: flow,
+        governed,
+      } as never);
+      expect(result.scenes).toHaveLength(2);
+      expect(result.scenes[0]!.generationIssues).toBeUndefined();
+      expect(result.scenes[1]!.generationIssues?.map((issue) => issue.code)).toEqual([
+        'TEACHING_MODEL_REFUSED',
+      ]);
+    });
+
+    it('fails the run when every slide is refused', async () => {
+      const policy = await policyFor('MATH');
+      refuseContentAfter(0);
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      await expect(
+        generate({
+          modelPolicy: policy,
+          attribution: ATTRIBUTION,
+          teachingFlow: flow,
+          governed,
+        } as never),
+      ).rejects.toBeInstanceOf(TeachingModelUnavailableError);
+    });
+  });
+
   it('a policy without attribution is refused before any call', async () => {
     const policy = await policyFor('MATH');
     await expect(generate({ modelPolicy: policy })).rejects.toThrow(/attribution/);
@@ -508,8 +589,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
 
   describe('Stage.subjectCode stamping (SATTS W1-4)', () => {
     const persistedStage = () =>
-      (mocks.persistClassroom.mock.calls.at(-1)?.[0] as { stage: Record<string, unknown> })
-        .stage;
+      (mocks.persistClassroom.mock.calls.at(-1)?.[0] as { stage: Record<string, unknown> }).stage;
 
     it('stamps a known Kafuo subject code on the Stage beside the language', async () => {
       // An Arabic MATH run validates its narration (register + signposting):

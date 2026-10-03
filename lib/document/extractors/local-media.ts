@@ -180,10 +180,12 @@ export function isSupportedMediaMime(mime: string): boolean {
 async function resolveExecutable(name: 'ffmpeg' | 'ffprobe'): Promise<string> {
   const candidates = new Set<string>();
   for (const directory of (process.env.PATH ?? '').split(delimiter)) {
-    if (directory) candidates.add(resolvePath(directory, name));
+    if (directory) {
+      candidates.add(resolvePath(/* turbopackIgnore: true */ directory, name));
+    }
   }
   for (const directory of ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin']) {
-    candidates.add(join(directory, name));
+    candidates.add(join(/* turbopackIgnore: true */ directory, name));
   }
   for (const candidate of candidates) {
     try {

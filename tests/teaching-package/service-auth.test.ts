@@ -109,6 +109,12 @@ describe('teaching package service auth', () => {
 
   describe('error mapping', () => {
     const EXPECTED_STATUSES: Record<TeachingPackageErrorCode, number> = {
+      CORRECTION_NOT_AWAITING: 409,
+      CORRECTION_INCOMPLETE: 409,
+      CORRECTION_REQUEST_MISMATCH: 409,
+      CORRECTION_SOURCE_DRIFT: 409,
+      ADMIN_CORRECTION_ABANDONED: 409,
+      GAME_GENERATION_DEFERRED: 422,
       NOT_FOUND: 404,
       INVALID_REQUEST: 400,
       ACTOR_REQUIRED: 400,

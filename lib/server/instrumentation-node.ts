@@ -65,6 +65,9 @@ export async function registerNodeInstrumentation(): Promise<void> {
     validateTeachingEngineIntegrationConfig({
       serviceKey: process.env.TEACHING_ENGINE_SERVICE_KEY?.trim() ?? '',
       isProduction: process.env.NODE_ENV === 'production',
+      allowInsecureLoopbackWebhook: ['true', '1'].includes(
+        process.env.TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK?.trim().toLowerCase() ?? '',
+      ),
       databaseUrl: process.env.DATABASE_URL?.trim() ?? '',
       webhookUrl: process.env.TEACHING_ENGINE_WEBHOOK_URL?.trim() ?? '',
       webhookSecret: process.env.TEACHING_ENGINE_WEBHOOK_SECRET?.trim() ?? '',

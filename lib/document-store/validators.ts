@@ -110,6 +110,33 @@ function validateTeachingStage(value: Record<string, unknown>, errors: Validatio
 }
 
 /**
+ * Validate the app-layer `generationIssues` marker (3 Oct 2026): absent →
+ * untouched; present → a list of `{ code, message }` non-empty strings. Written
+ * by package generation on a scene it kept instead of failing the package.
+ */
+function validateGenerationIssues(value: Record<string, unknown>, errors: ValidationIssue[]): void {
+  if (value.generationIssues === undefined) return;
+  const issues = value.generationIssues;
+  if (
+    !Array.isArray(issues) ||
+    issues.some((issue) => {
+      const entry = objectValue(issue);
+      return (
+        !entry ||
+        typeof entry.code !== 'string' ||
+        entry.code === '' ||
+        typeof entry.message !== 'string'
+      );
+    })
+  ) {
+    errors.push({
+      path: '/generationIssues',
+      message: '`generationIssues` must be an array of { code, message } when present',
+    });
+  }
+}
+
+/**
  * Validate the contract's `sourceContentUnitIds` binding (Kafuo R1 plan
  * §5.1) on the app write boundary for the scene kinds the DSL validator does
  * not see here (interactive / PBL): absent → untouched (unknown, never
@@ -226,6 +253,7 @@ export const validateAppScene: SceneValidator = (scene) => {
     validateLearningObjectives(value, errors);
     validateTeachingStage(value, errors);
     validateAlignmentBaseline(value, errors);
+    validateGenerationIssues(value, errors);
     return errors.length === 0 ? { valid: true } : { valid: false, errors };
   }
 
@@ -356,6 +384,7 @@ export const validateAppScene: SceneValidator = (scene) => {
   validateTeachingStage(value, errors);
   validateAlignmentBaseline(value, errors);
   validateSourceContentUnitIds(value, errors);
+  validateGenerationIssues(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

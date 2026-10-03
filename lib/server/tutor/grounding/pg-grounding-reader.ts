@@ -22,19 +22,30 @@
  *    parameter would override the role's own settings (migration 294). It does
  *    send `application_name = te-grounding`, the same value the role sets, so a
  *    stray `PGAPPNAME` cannot rename the sessions ops look for.
+ *  - M-1 (security pre-review): the pool config is built from the CHECKED DSN
+ *    parts (`checkKafuoGroundingConnection`), never from the raw DSN, whose query
+ *    parameters node-postgres would merge over it. `ssl` is always explicit
+ *    (`verify-full` → `{ rejectUnauthorized: true, ca? }`; loopback → `false`), so
+ *    `PGSSLMODE` and `NODE_TLS_REJECT_UNAUTHORIZED` cannot change it. `PGOPTIONS`
+ *    cannot be suppressed through the config, so a set `PGOPTIONS` refuses the
+ *    pool (at boot, at pool creation, and on every `getKafuoGroundingReader`).
  *
  * `poolWaitMs` (admission + connect) is returned on every result, for the
  * turn's timings and `tutor_turn_groundings.pool_wait_ms`.
  */
-import { Pool } from 'pg';
+import { readFileSync } from 'node:fs';
+
+import { Pool, type PoolConfig } from 'pg';
 
 import { createLogger } from '@/lib/logger';
 
 import {
+  checkKafuoGroundingConnection,
   groundingSourceSetting,
   kafuoGroundingDatabaseUrl,
   kafuoGroundingPoolSettings,
   type GroundingSource,
+  type KafuoGroundingConnection,
   type KafuoGroundingPoolSettings,
 } from './grounding-config';
 import type {
@@ -671,20 +682,48 @@ export class PgGroundingReader implements KafuoGroundingReader {
 // Process singleton (lazy; health never instantiates it)
 // ---------------------------------------------------------------------------
 
-export function createKafuoGroundingPool(
-  url: string,
+/**
+ * The pool config for a checked connection (M-1). Every connection field is
+ * explicit, so `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGSSLMODE` and
+ * `NODE_TLS_REJECT_UNAUTHORIZED` cannot change where or how it connects. The
+ * `sslrootcert` file is read here (an unreadable file throws).
+ */
+export function kafuoGroundingPoolConfig(
+  connection: KafuoGroundingConnection,
   settings: KafuoGroundingPoolSettings,
-  onError: (code: string) => void,
-): Pool {
-  const pool = new Pool({
-    connectionString: url,
+): PoolConfig {
+  return {
+    host: connection.host,
+    port: connection.port,
+    user: connection.user,
+    ...(connection.password !== undefined ? { password: connection.password } : {}),
+    database: connection.database,
+    ssl:
+      connection.tls === 'verify-full'
+        ? {
+            rejectUnauthorized: true,
+            ...(connection.caFile !== null ? { ca: readFileSync(connection.caFile, 'utf8') } : {}),
+          }
+        : false,
     max: settings.max,
     connectionTimeoutMillis: settings.admissionTimeoutMs,
     idleTimeoutMillis: settings.idleTimeoutMs,
     query_timeout: settings.queryTimeoutMs,
     application_name: GROUNDING_APPLICATION_NAME,
     allowExitOnIdle: true,
-  });
+  };
+}
+
+/** Throws (without echoing the DSN) when the DSN or the environment breaks the M-1 rules. */
+export function createKafuoGroundingPool(
+  url: string,
+  settings: KafuoGroundingPoolSettings,
+  onError: (code: string) => void,
+  env: Record<string, string | undefined> = process.env,
+): Pool {
+  const check = checkKafuoGroundingConnection(url, env);
+  if (!check.ok) throw new Error(`KAFUO_GROUNDING_DATABASE_URL is refused: ${check.reason}`);
+  const pool = new Pool(kafuoGroundingPoolConfig(check.connection, settings));
   // Mandatory: an idle client that dies emits `error` on the pool, which would
   // otherwise crash the process.
   pool.on('error', (error) => onError(errorKind(error)));
@@ -696,6 +735,16 @@ const READER_KEY = Symbol.for('openmaic.tutor.kafuo-grounding-reader');
 interface ReaderRegistry {
   reader?: PgGroundingReader;
   url?: string;
+  /** The last refusal logged, so a refused configuration logs once, not per turn. */
+  refusal?: string;
+}
+
+function noteRefusal(state: ReaderRegistry, reason: string): undefined {
+  if (state.refusal !== reason) {
+    state.refusal = reason;
+    log.warn(JSON.stringify({ event: 'tutor.grounding_reader_refused', reason }));
+  }
+  return undefined;
 }
 
 function registry(): ReaderRegistry {
@@ -706,6 +755,11 @@ function registry(): ReaderRegistry {
 /**
  * The process reader, created on first use when `KAFUO_GROUNDING_DATABASE_URL`
  * is set (no connection is opened until a call); `undefined` otherwise.
+ *
+ * Also `undefined` (fail closed: `direct` falls back to `kafuo_http`, shadow
+ * records "not available") while the DSN or the environment breaks the M-1
+ * rules. That check is cheap and runs on every call, before the cached reader
+ * is returned; a refusal is logged once per distinct reason.
  */
 export function getKafuoGroundingReader(
   env: Record<string, string | undefined> = process.env,
@@ -713,13 +767,23 @@ export function getKafuoGroundingReader(
   const url = kafuoGroundingDatabaseUrl(env);
   if (!url) return undefined;
   const state = registry();
+  const check = checkKafuoGroundingConnection(url, env);
+  if (!check.ok) return noteRefusal(state, check.reason);
+  state.refusal = undefined;
   if (state.reader && state.url === url) return state.reader;
   const settings = kafuoGroundingPoolSettings(env);
-  // The pool's error listener fires only later, after `reader` is initialized.
-  const reader: PgGroundingReader = new PgGroundingReader({
-    pool: createKafuoGroundingPool(url, settings, (code) => reader.recordError(code)),
-    max: settings.max,
-  });
+  let config: PoolConfig;
+  try {
+    config = kafuoGroundingPoolConfig(check.connection, settings);
+  } catch (error) {
+    // The `sslrootcert` file is unreadable; the code only, never the path.
+    return noteRefusal(state, `sslrootcert_unreadable:${errorKind(error)}`);
+  }
+  const pool = new Pool(config);
+  const reader = new PgGroundingReader({ pool, max: settings.max });
+  // Mandatory: an idle client that dies emits `error` on the pool, which would
+  // otherwise crash the process.
+  pool.on('error', (error) => reader.recordError(errorKind(error)));
   const previous = state.reader;
   state.reader = reader;
   state.url = url;

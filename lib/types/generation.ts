@@ -183,6 +183,9 @@ export interface SceneOutline {
   // Never rendered and never an input to canvas or narration generation — the
   // solution path lives here, not in `description` / `keyPoints`.
   assistancePlan?: { hint?: string; help?: string; explanation?: string };
+  // Planner-only visual plan of a slide (`image` / `native` / `omitted` with a
+  // reason) — the same field the generation package plans and validates.
+  visualPlan?: import('@openmaic/generation').VisualPlan;
   // Teaching Skills assignment + instructional classification (Module 2 W9
   // carrier, populated by W10's generation-time selection). Absent on legacy
   // and non-governed runs — that absence is explicit, never fabricated.

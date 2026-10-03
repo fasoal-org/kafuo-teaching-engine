@@ -258,6 +258,105 @@ describe('POST /api/teaching-packages/generate', () => {
     expect(kafuo).toMatchObject({ subjectCode: 'BIOLOGY', subjectOffering: ROUTED_SUBJECT });
   });
 
+  describe('Kafuo Release 1 defers generated games', () => {
+    const gameEntry = {
+      stage: 'lesson_learning_game',
+      instructions: 'Play.',
+      scenePolicy: {
+        sceneTypes: ['interactive'],
+        widgetTypes: ['game'],
+        cardinality: 'exactly_one',
+      },
+    };
+
+    it.each([
+      [
+        'a g5.v5 final-game position',
+        {
+          key: 'g5',
+          version: 'g5.v5',
+          flow: [{ stage: 'lesson_introduction', instructions: 'Introduce once.' }, gameEntry],
+        },
+      ],
+      [
+        'a policy-less g5.v4 game stage',
+        {
+          key: 'g5',
+          version: 'g5.v4',
+          flow: [
+            { stage: 'lesson_introduction', instructions: 'Introduce once.' },
+            { stage: 'lesson_learning_game', instructions: 'Play.' },
+          ],
+        },
+      ],
+      [
+        'an interactive position with no widget restriction',
+        {
+          key: 'g5',
+          version: 'g5.v9',
+          flow: [
+            {
+              stage: 'any',
+              instructions: 'Do.',
+              scenePolicy: { sceneTypes: ['interactive'], cardinality: 'one_or_more' },
+            },
+          ],
+        },
+      ],
+    ])(
+      'refuses %s with 422 GAME_GENERATION_DEFERRED before any attempt exists',
+      async (_label, teachingModel) => {
+        const response = await post(kafuoShapedBody({ teachingModel }));
+        expect(response.status).toBe(422);
+        const body = await response.json();
+        expect(body.error.code).toBe('GAME_GENERATION_DEFERRED');
+        expect(body.error.message).toContain('game-free Teaching Model version');
+        expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+        expect(mocks.afterCallbacks).toHaveLength(0);
+      },
+    );
+
+    it('accepts a game-free flow (g5.v6 shape)', async () => {
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(
+        kafuoShapedBody({
+          teachingModel: {
+            key: 'g5',
+            version: 'g5.v6',
+            flow: [
+              {
+                stage: 'lesson_opener',
+                instructions: 'Open.',
+                scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+              },
+              {
+                stage: 'outcome_check_understanding',
+                instructions: 'Check.',
+                scenePolicy: { sceneTypes: ['quiz'], cardinality: 'exactly_one' },
+              },
+            ],
+          },
+        }),
+      );
+      expect(response.status).toBe(202);
+      expect(mocks.startGenerationAttempt).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the non-Kafuo (legacy) generation path untouched', async () => {
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(fullBody);
+      expect(response.status).toBe(202);
+    });
+  });
+
   describe('subject routing at the request boundary (R1 contracts §6, AMB-04)', () => {
     it('refuses `code: null` (an unrouted master subject) with 422 SUBJECT_ROUTE_UNAVAILABLE before any attempt exists', async () => {
       const response = await post(

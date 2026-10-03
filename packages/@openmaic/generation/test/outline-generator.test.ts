@@ -444,10 +444,70 @@ describe('generateSceneOutlinesFromRequirements', () => {
   });
 
   test.each([
+    ['example + concept', 'example', 'concept'],
+    ['summary + guided', 'summary', 'guided'],
+    ['procedure + observation', 'procedure', 'observation'],
+    ['explanation + procedure (a role used as a kind)', 'explanation', 'procedure'],
+  ])(
+    'repairs %s by dropping the kind and keeping the role',
+    async (_label, contentRole, contentKind) => {
+      const warn = vi.fn();
+      const logger: GenerationLogger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+      const aiCall: AICallFn = vi.fn(async () =>
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Photosynthesis',
+          outlines: [{ ...baseOutline, contentRole, contentKind }],
+        }),
+      );
+
+      const result = await generateSceneOutlinesFromRequirements(
+        { requirement: 'Teach photosynthesis' },
+        undefined,
+        undefined,
+        aiCall,
+        { logger },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data?.outlines[0]?.contentRole).toBe(contentRole);
+      expect(result.data?.outlines[0]).not.toHaveProperty('contentKind');
+      expect(result.data?.diagnostics).toEqual([
+        expect.objectContaining({
+          code: 'CONTENT_KIND_DROPPED',
+          disposition: 'repaired',
+          outlineIndex: 0,
+          field: 'contentKind',
+          previousValue: contentKind,
+        }),
+      ]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('CONTENT_KIND_DROPPED'));
+      // A metadata repair costs no re-roll.
+      expect(aiCall).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test('accepts explanation / activity / practice slides without a contentKind', async () => {
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      undefined,
+      async () =>
+        JSON.stringify({
+          outlines: ['explanation', 'activity', 'practice'].map((contentRole, index) => ({
+            ...baseOutline,
+            id: `s${index}`,
+            contentRole,
+            contentKind: undefined,
+          })),
+        }),
+    );
+    expect(result.success).toBe(true);
+    expect(result.data?.diagnostics).toEqual([]);
+  });
+
+  test.each([
     ['an unclassified slide', { slideType: undefined, contentRole: undefined }],
-    ['example + concept', { contentRole: 'example', contentKind: 'concept' }],
-    ['summary + guided', { contentRole: 'summary', contentKind: 'guided' }],
-    ['procedure + observation', { contentRole: 'procedure', contentKind: 'observation' }],
     ['a Teaching Model stage name as a role', { contentRole: 'lesson_introduction' }],
   ])('rejects %s instead of guessing a classification', async (_label, patch) => {
     const warn = vi.fn();

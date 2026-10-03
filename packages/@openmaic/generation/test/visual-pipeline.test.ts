@@ -137,4 +137,40 @@ describe('the planned visual is enforced, not logged (RSS 7.5.7)', () => {
       code: 'ORIENTATION_VISUAL_MISSING',
     });
   });
+
+  // 3 Oct 2026: package generation keeps the slide and marks it instead.
+  it('with onVisualIssue, keeps a slide missing its textbook visual and reports it once', async () => {
+    const issues: Array<{ code: string; message: string }> = [];
+    let calls = 0;
+    const content = (await generateSceneContent(
+      { ...opening, visualPlan: { mode: 'image' } },
+      async () => {
+        calls += 1;
+        return native;
+      },
+      {
+        assignedImages: [{ id: 'book-1', src: '', pageNumber: 3 }],
+        imageMapping: { 'book-1': '/book-1.png' },
+        onVisualIssue: (issue) => issues.push(issue),
+      },
+    )) as GeneratedSlideContent;
+    expect(content.elements.length).toBeGreaterThan(0);
+    expect(issues).toEqual([
+      {
+        code: 'ORIENTATION_VISUAL_MISSING',
+        message: 'the selected textbook visual is absent from the generated slide',
+      },
+    ]);
+    // No native approximation of the book figure is generated behind the reviewer.
+    expect(calls).toBe(1);
+  });
+
+  it('with onVisualIssue, keeps a still-bare opening and reports it instead of throwing', async () => {
+    const issues: Array<{ code: string; message: string }> = [];
+    const content = (await generateSceneContent(opening, async () => bare, {
+      onVisualIssue: (issue) => issues.push(issue),
+    })) as GeneratedSlideContent;
+    expect(content).toBeTruthy();
+    expect(issues.map((issue) => issue.code)).toEqual(['ORIENTATION_VISUAL_MISSING']);
+  });
 });

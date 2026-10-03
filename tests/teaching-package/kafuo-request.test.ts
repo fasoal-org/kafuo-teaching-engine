@@ -275,3 +275,54 @@ describe('buildKafuoStartRequest', () => {
     expect(kafuo.normalizedContentResource?.url).toContain('X-Amz-Signature');
   });
 });
+
+describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {
+  const POLICY = {
+    sceneTypes: ['slide'],
+    contentRoles: ['explanation', 'procedure', 'worked_example', 'example', 'activity'],
+    visual: 'source_grounded',
+    cardinality: 'one_or_more',
+  };
+  const withPolicy = (scenePolicy: unknown) =>
+    body({
+      teachingModel: {
+        key: 'g5',
+        version: 'g5.v5',
+        flow: [
+          { stage: 'outcome_visual_explanations', instructions: 'Teach O1.', scenePolicy },
+        ],
+      },
+    });
+
+  it('parses the policy exactly as received and carries it into the run context', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(withPolicy(POLICY));
+    expect(request.teachingModel.flow[0]?.scenePolicy).toEqual(POLICY);
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(kafuo.teachingFlow[0]?.scenePolicy).toEqual(POLICY);
+    expect(start.teachingFlow?.[0]?.scenePolicy).toEqual(POLICY);
+  });
+
+  it('refuses a malformed policy at the parse seam (FLOW_INVALID)', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(withPolicy({ ...POLICY, contentRoles: ['lecture'] })),
+    ).toThrowError(expect.objectContaining({ code: 'FLOW_INVALID' }));
+  });
+
+  it('participates in the digest only when present', () => {
+    const plain = parseKafuoGenerationRequest(
+      body({
+        teachingModel: {
+          key: 'g5',
+          version: 'g5.v5',
+          flow: [{ stage: 'outcome_visual_explanations', instructions: 'Teach O1.' }],
+        },
+      }),
+    ).request;
+    const governed = parseKafuoGenerationRequest(withPolicy(POLICY)).request;
+    const widened = parseKafuoGenerationRequest(
+      withPolicy({ ...POLICY, contentRoles: [...POLICY.contentRoles, 'summary'] }),
+    ).request;
+    expect(canonicalRequestDigest(plain)).not.toBe(canonicalRequestDigest(governed));
+    expect(canonicalRequestDigest(governed)).not.toBe(canonicalRequestDigest(widened));
+  });
+});

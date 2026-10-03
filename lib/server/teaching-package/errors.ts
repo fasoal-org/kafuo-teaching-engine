@@ -276,9 +276,33 @@ export type TeachingPackageErrorCode =
   /** A grant-delegated Scene write carried no revision precondition. */
   | 'PRECONDITION_REQUIRED'
   /** A grant-delegated Scene write was based on a revision that is no longer current. */
-  | 'SCENE_REVISION_CONFLICT';
+  | 'SCENE_REVISION_CONFLICT'
+  // --- Admin-correction pause / resume (slide-classification-admin-correction-plan §3) ---
+  /** The attempt is not paused for correction (or its checkpoint is not awaiting). */
+  | 'CORRECTION_NOT_AWAITING'
+  /** A resume was asked while admin-correctable issues remain on the candidate. */
+  | 'CORRECTION_INCOMPLETE'
+  /** The re-sent request is not the attempt's request (canonical digest differs). */
+  | 'CORRECTION_REQUEST_MISMATCH'
+  /** The re-acquired source is not the source the candidate was planned from. */
+  | 'CORRECTION_SOURCE_DRIFT'
+  /** An administrator abandoned the paused attempt (terminal, retryable by a new attempt). */
+  | 'ADMIN_CORRECTION_ABANDONED'
+  // --- Kafuo Release 1 game deferral (kafuo-game-deferral.ts) ---
+  /**
+   * A Kafuo request, outline or Scene would generate a learning game, which
+   * Kafuo Release 1 defers. Non-retryable: the remedy is the game-free Teaching
+   * Model version (or abandoning an attempt started before the deferral).
+   */
+  | 'GAME_GENERATION_DEFERRED';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
+  CORRECTION_NOT_AWAITING: 409,
+  CORRECTION_INCOMPLETE: 409,
+  CORRECTION_REQUEST_MISMATCH: 409,
+  CORRECTION_SOURCE_DRIFT: 409,
+  ADMIN_CORRECTION_ABANDONED: 409,
+  GAME_GENERATION_DEFERRED: 422,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,
