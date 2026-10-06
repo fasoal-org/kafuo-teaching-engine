@@ -1,0 +1,43 @@
+# Kafuo staging: the Teaching Engine, next to the backend on the staging server.
+#
+# Used only by deploy/staging/deploy.sh and by hand on the server, always with this file:
+#   docker compose -f /srv/kafuo/kafuo-teaching-engine/deploy/staging/compose.yml ps
+# Never run plain `docker compose config`: it prints every secret. Use `--services`.
+#
+# Its own project, not kafuo-staging: the backend's deploy runs `up --remove-orphans`, which
+# would remove any container of its project that its own compose file does not list.
+# The volume is kafuo-staging-te_te-data, so this name must never change.
+name: kafuo-staging-te
+
+services:
+  te:
+    image: kafuo-te:staging
+    # Secrets live outside git, in /srv/kafuo/env (deploy-only, 600).
+    env_file: [/srv/kafuo/env/te.env]
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    # Loopback only: Tailscale Serve (:8443) is the only way in from devices. Never publish on
+    # 0.0.0.0, because Docker's port rules bypass ufw.
+    ports: ["127.0.0.1:3000:3000"]
+    # Classrooms, audio and media (CLASSROOMS_DIR is /app/data/classrooms). Owned by uid 1001.
+    volumes:
+      - te-data:/app/data
+    # The backend's network: the TE reaches api:8000 and postgres:5432 by name, and the edge
+    # reaches it as te:3000.
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  backend:
+    name: kafuo-staging_default
+    external: true
+
+volumes:
+  te-data: {}

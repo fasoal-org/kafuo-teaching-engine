@@ -1,0 +1,62 @@
+# Staging CD for the Teaching Engine. See deploy/staging/README.md.
+#
+#   push to staging (a merge)  -> deploy that commit to the staging server
+#   "Run workflow" button      -> the same, for the staging branch's current commit
+#
+# No test job here: the image build on the server (next build, with its type check) is the
+# gate, and a failed build leaves the running container untouched. The full suite runs in
+# ci.yml.
+# GitHub holds only the CI SSH key (secret) and the server's address and host key
+# (variables). The app's own secrets stay on the server in /srv/kafuo/env.
+name: Staging Teaching Engine
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+# One run at a time, and never cancel one halfway.
+concurrency:
+  group: staging-te
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to staging
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: staging
+      url: https://kafuo-staging.tailcd4398.ts.net:8443/api/health
+    steps:
+      # StrictHostKeyChecking with the pinned key: the job talks only to our server.
+      - name: Load the SSH key and the server's host key
+        env:
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/staging_ci
+          chmod 600 ~/.ssh/staging_ci
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The server runs only `deploy <SHA>` for this key (authorized_keys forced command
+      # /srv/kafuo/bin/ci-deploy-app te), and only for a commit that is on origin/staging.
+      - name: Deploy ${{ github.sha }}
+        env:
+          HOST: ${{ vars.STAGING_HOST }}
+          USER_NAME: ${{ vars.STAGING_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/staging_ci \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            "$USER_NAME@$HOST" "deploy $SHA"
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/staging_ci
