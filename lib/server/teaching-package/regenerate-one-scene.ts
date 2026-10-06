@@ -47,6 +47,11 @@ import {
   type TeachingPackageErrorCode,
 } from '@/lib/server/teaching-package/errors';
 import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
+import {
+  issuesAfterAudioRepair,
+  narrationAudioGap,
+  stageHasNarrationAudio,
+} from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene, Scene } from '@/lib/types/stage';
@@ -114,6 +119,50 @@ export function regenerationInvariantViolations(pre: AppScene, candidate: AppSce
   return violations;
 }
 
+/**
+ * The outline seeded from the persisted Scene, with the fields a regeneration
+ * must keep taken from the pre-image ONLY. The stored plan may carry values the
+ * persisted Scene never received (package Scenes are stored without
+ * `sourceContentUnitIds`), and `buildCompleteScene` copies them from the
+ * outline — which would fail the invariant check after both model calls.
+ */
+function seededOutline(pre: AppScene, snapshot: AppDocumentOutline | undefined): SceneOutline {
+  const seeded = outlineFromScene(pre as Scene, snapshot);
+  const {
+    mediaGenerations: _stripped,
+    teachingStage: _plannedStage,
+    teachingSkills: _plannedSkills,
+    sourceContentUnitIds: _plannedUnits,
+    ...withoutMedia
+  } = seeded as SceneOutline & { mediaGenerations?: unknown };
+  return {
+    ...withoutMedia,
+    ...(pre.teachingStage ? { teachingStage: pre.teachingStage } : {}),
+    ...(pre.teachingSkills ? { teachingSkills: pre.teachingSkills } : {}),
+    ...(pre.sourceContentUnitIds ? { sourceContentUnitIds: [...pre.sourceContentUnitIds] } : {}),
+  };
+}
+
+/**
+ * A regeneration writes new narration and never synthesizes audio (4 Oct
+ * 2026). On a package that uses TTS, its unvoiced lines are marked exactly as
+ * the package build marks them, so the reviewer sees "Regenerate audio"
+ * instead of a silent slide with no mark.
+ */
+function withNarrationAudioMark(candidate: AppScene, scenes: readonly AppScene[]): AppScene {
+  if (!stageHasNarrationAudio(scenes)) return candidate;
+  const issues = issuesAfterAudioRepair(candidate.generationIssues, narrationAudioGap(candidate));
+  const { generationIssues: _built, ...rest } = candidate;
+  return (issues ? { ...rest, generationIssues: issues } : rest) as AppScene;
+}
+
+/** A legacy Scene without `outlineId` keeps none (the outline id is its own id). */
+function withPreImageOutlineId(pre: AppScene, built: AppScene): AppScene {
+  if (pre.outlineId !== undefined) return built;
+  const { outlineId: _seeded, ...rest } = built;
+  return rest as AppScene;
+}
+
 function codeOf(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : undefined;
@@ -134,16 +183,7 @@ export async function regenerateOneScene(
 
   // 1. The outline, seeded from the persisted Scene and its stored plan. No AI
   //    image generation: planned media generations are stripped.
-  const seeded = outlineFromScene(pre as Scene, input.outlineSnapshot);
-  const { mediaGenerations: _stripped, ...withoutMedia } = seeded as SceneOutline & {
-    mediaGenerations?: unknown;
-  };
-  const outline: SceneOutline = {
-    ...withoutMedia,
-    ...(pre.teachingStage ? { teachingStage: pre.teachingStage } : {}),
-    ...(pre.teachingSkills ? { teachingSkills: pre.teachingSkills } : {}),
-    ...(pre.sourceContentUnitIds ? { sourceContentUnitIds: [...pre.sourceContentUnitIds] } : {}),
-  };
+  const outline = seededOutline(pre, input.outlineSnapshot);
   const legacyInPlace =
     outline.slideType === undefined &&
     outline.contentRole === undefined &&
@@ -273,7 +313,7 @@ export async function regenerateOneScene(
   }
   const preCanvas = pre.content.canvas;
   let candidate: AppScene = {
-    ...built,
+    ...withPreImageOutlineId(pre, built),
     createdAt: pre.createdAt,
     updatedAt: now(),
     content: {
@@ -315,7 +355,7 @@ export async function regenerateOneScene(
     const first = findings[0]!;
     return failure(first.code, first.message, { findings: findings.length });
   }
-  const storable = omitUndefinedObjectMembers(candidate);
+  const storable = omitUndefinedObjectMembers(withNarrationAudioMark(candidate, input.scenes));
   const validation = validateAppScene(storable);
   if (!validation.valid) {
     return failure(
@@ -347,17 +387,7 @@ async function regenerateQuizScene(
   const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
 
-  const seeded = outlineFromScene(pre as Scene, input.outlineSnapshot);
-  const { mediaGenerations: _stripped, ...withoutMedia } = seeded as SceneOutline & {
-    mediaGenerations?: unknown;
-  };
-  const outline: SceneOutline = {
-    ...withoutMedia,
-    type: 'quiz',
-    ...(pre.teachingStage ? { teachingStage: pre.teachingStage } : {}),
-    ...(pre.teachingSkills ? { teachingSkills: pre.teachingSkills } : {}),
-    ...(pre.sourceContentUnitIds ? { sourceContentUnitIds: [...pre.sourceContentUnitIds] } : {}),
-  };
+  const outline: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
 
   const stage = input.stage;
   const agents = stage.generatedAgentConfigs;
@@ -449,7 +479,7 @@ async function regenerateQuizScene(
     return failure('SCENE_CONTENT_GENERATION_FAILED', 'the quiz could not be assembled');
   }
   let candidate: AppScene = {
-    ...built,
+    ...withPreImageOutlineId(pre, built),
     createdAt: pre.createdAt,
     updatedAt: now(),
     ...(pre.teachingStage !== undefined ? { teachingStage: pre.teachingStage } : {}),
@@ -479,7 +509,7 @@ async function regenerateQuizScene(
     const first = findings[0]!;
     return failure(first.code, first.message, { findings: findings.length });
   }
-  const storable = omitUndefinedObjectMembers(candidate);
+  const storable = omitUndefinedObjectMembers(withNarrationAudioMark(candidate, input.scenes));
   const validation = validateAppScene(storable);
   if (!validation.valid) {
     return failure(

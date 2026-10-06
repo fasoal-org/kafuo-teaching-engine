@@ -66,3 +66,25 @@ describe('stage api scene.create — Teaching Skills carrier reaches the store',
     expect('teachingSkills' in scenes()[0]!).toBe(false);
   });
 });
+
+describe('stage api scene.create — Content Unit binding reaches the store', () => {
+  // CLS-C27: the generation path passed sourceContentUnitIds, but create()
+  // dropped it, so every generated scene was stored without its binding and
+  // Stage Help refused every question (HELP_GROUNDING_UNAVAILABLE).
+  it('persists the ids on the created scene when supplied', () => {
+    const { api, scenes } = mockStore();
+    const ids = ['cu-2', 'cu-1'];
+    const r = api.create({ type: 'quiz', title: 'T', sourceContentUnitIds: ids });
+    expect(r.success).toBe(true);
+    expect(scenes()[0]!.sourceContentUnitIds).toEqual(['cu-2', 'cu-1']);
+    // A copy: the caller's array is not shared with the stored scene.
+    expect(scenes()[0]!.sourceContentUnitIds).not.toBe(ids);
+  });
+
+  it('leaves the key absent when not supplied (never fabricated)', () => {
+    const { api, scenes } = mockStore();
+    const r = api.create({ type: 'slide', title: 'T' });
+    expect(r.success).toBe(true);
+    expect('sourceContentUnitIds' in scenes()[0]!).toBe(false);
+  });
+});

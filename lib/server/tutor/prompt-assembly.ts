@@ -5,7 +5,7 @@
  * Fixed block order, each block its own system message so the stable head
  * can hit provider prefix caches:
  *
- *   1. rules            `tutor-rules@r1` (byte-stable across turns)
+ *   1. rules            `tutor-rules@r2` (byte-stable across turns)
  *   2. academic         subject names, curriculum, grade, academic language
  *   3. grounding        item header («Lesson / الدرس» or «Section / القسم» by
  *                       item type) + Content Units (stable order, no ids;

@@ -334,6 +334,19 @@ function spokenLetters(text: string): number {
   return count;
 }
 
+/**
+ * A provider failure message fit for the log: credentials-looking tokens redacted and
+ * capped, so a failed line names its cause (4 Oct 2026: a Cartesia refusal was logged
+ * as a bare SATTS_E_PROVIDER_FAILED and could not be told from a 5xx).
+ */
+export function loggableErrorMessage(message: string): string {
+  return message
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/\b(sk|pk|key)[-_][A-Za-z0-9._-]{8,}/gi, '***')
+    .replace(/((?:api[-_]?key|token|secret|password)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1***')
+    .slice(0, 300);
+}
+
 function outcomeEvent(
   req: SynthesisRequest,
   outcome: SynthesisOutcome,
@@ -363,6 +376,7 @@ function outcomeEvent(
       instructionsChars: req.profile.instructions?.length ?? 0,
       warningCodes: outcome.warnings.map((w) => w.code),
       errorCode: outcome.error?.code,
+      ...(outcome.error ? { errorMessage: loggableErrorMessage(outcome.error.message) } : {}),
       durationMs: Date.now() - startedAt,
       audioSeconds: outcome.audio?.durationSeconds ?? undefined,
     }),

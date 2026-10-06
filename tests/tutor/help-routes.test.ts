@@ -2,6 +2,7 @@ import { APICallError } from 'ai';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createSceneAPI } from '@/lib/api/stage-api-scene';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import { readFinalize } from '@/lib/persistence/meter-finalize-outbox';
@@ -32,10 +33,11 @@ import { setTutorRuntimeDepsForTests } from '@/lib/server/tutor/runtime-deps';
 import type { LearnerStudentContext } from '@/lib/server/tutor/student-context';
 import { countTokens, effectiveCap, UNIT_CHAR_CAP } from '@/lib/server/tutor/token-budget';
 import { HELP_SCOPE_TEXT, PARTIAL_SCENE_COVERAGE_TEXT } from '@/lib/server/tutor/tutor-rules';
-import type { AppScene } from '@/lib/types/stage';
+import type { SceneOutline } from '@/lib/types/generation';
+import type { AppScene, Stage, StageMode } from '@/lib/types/stage';
 import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
 
-import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
+import { makeDocument, makeOutline, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 import {
   asConnectable,
   createTutorPool,
@@ -611,6 +613,120 @@ describe('Stage Help routes', () => {
       expect(kafuo.reserve).not.toHaveBeenCalled();
       expect(mocks.streamLLM).not.toHaveBeenCalled();
       expect(await ledgerCount()).toBe(0);
+    });
+
+    it('a Scene created through the stage API keeps its Content Unit binding and is grounded (CLS-C27)', async () => {
+      const agg = aggregate();
+      const attemptId = await attempt(agg, {
+        sourceKind: 'kafuo_normalized',
+        units: [unit('cu-1', UNIT_TEXT['cu-1'], 'حفظ الكتلة')],
+      });
+      let sceneId = '';
+      const stageId = await stage('قانون حفظ الكتلة', (sid) => {
+        // The generation path's persistence seam: `createSceneWithActions`
+        // hands the outline's ids to `api.scene.create`, which used to drop them.
+        const state = {
+          stage: { id: sid, name: 'قانون حفظ الكتلة', createdAt: 1, updatedAt: 1 } as Stage,
+          scenes: [] as AppScene[],
+          currentSceneId: null as string | null,
+          mode: 'edit' as StageMode,
+        };
+        const created = createSceneAPI({
+          getState: () => state,
+          setState: (partial) => Object.assign(state, partial),
+          subscribe: () => () => {},
+        }).create({
+          type: 'slide',
+          title: 'حفظ الكتلة',
+          order: 1,
+          actions: [{ id: 'a-1', type: 'speech', text: 'كتلة المتفاعلات تساوي كتلة النواتج.' }],
+          sourceContentUnitIds: ['cu-1'],
+        });
+        expect(created.success).toBe(true);
+        sceneId = created.data!;
+        return state.scenes;
+      });
+      const versionId = await version(agg, {
+        version: 1,
+        status: 'approved',
+        currentAttemptId: attemptId,
+        stageId,
+      });
+      mocks.streamLLM.mockImplementationOnce(() => textStream('لأن الذرات لا تفنى.'));
+      const response = await turn(
+        anchorBody({ versionId, stageId }, sceneId),
+        learnerCookie({ versionId, stageId }),
+      );
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames[1]).toMatchObject({ event: 'grounding', data: { mode: 'scene' } });
+    });
+
+    it('a Scene stored without its binding is grounded through its own outline, and only that (CLS-C27, existing lessons)', async () => {
+      const agg = aggregate();
+      const attemptId = await attempt(agg, {
+        sourceKind: 'kafuo_normalized',
+        units: [unit('cu-1', UNIT_TEXT['cu-1'], 'حفظ الكتلة')],
+      });
+      const outline = (id: string, order: number, unitIds?: string[]): SceneOutline => ({
+        id,
+        type: 'slide',
+        title: `Outline ${id}`,
+        description: 'd',
+        keyPoints: ['k'],
+        order,
+        ...(unitIds ? { sourceContentUnitIds: unitIds } : {}),
+      });
+      // Every scene below lacks `sourceContentUnitIds`, as the generation path stored them.
+      const stageId = unique('stage');
+      const unbound = (id: string, order: number, outlineId?: string): AppScene =>
+        ({
+          ...scene(id, stageId, order, { text: 'كتلة المتفاعلات تساوي كتلة النواتج.' }),
+          ...(outlineId ? { outlineId } : {}),
+        }) as AppScene;
+      await documents().saveDocument(
+        makeDocument(
+          stageId,
+          'قانون حفظ الكتلة',
+          [
+            unbound('sc-outlined', 1, 'ol-1'),
+            unbound('sc-outline-without-ids', 2, 'ol-2'),
+            unbound('sc-without-outline', 3),
+          ],
+          {
+            ...makeOutline('قانون حفظ الكتلة'),
+            outlines: [outline('ol-1', 1, ['cu-1']), outline('ol-2', 2), outline('ol-3', 3, ['cu-1'])],
+          },
+        ),
+      );
+      const versionId = await version(agg, {
+        version: 1,
+        status: 'approved',
+        currentAttemptId: attemptId,
+        stageId,
+      });
+      const cookie = learnerCookie({ versionId, stageId });
+
+      // An outline with no ids, and a scene with no outlineId (never matched by order,
+      // although `ol-3` sits at its order and cites cu-1), stay refused.
+      for (const sceneId of ['sc-outline-without-ids', 'sc-without-outline']) {
+        const refused = await turn(anchorBody({ versionId, stageId }, sceneId), cookie);
+        expect(refused.status, sceneId).toBe(422);
+        await expect(refused.json()).resolves.toMatchObject({
+          error: { code: 'HELP_GROUNDING_UNAVAILABLE' },
+        });
+      }
+      expect(kafuo.reserve).not.toHaveBeenCalled();
+      expect(mocks.streamLLM).not.toHaveBeenCalled();
+
+      mocks.streamLLM.mockImplementationOnce(() => textStream('لأن الذرات لا تفنى.'));
+      const response = await turn(
+        anchorBody({ versionId, stageId }, 'sc-outlined', { clientMessageId: 'cm-outlined' }),
+        cookie,
+      );
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames[1]).toMatchObject({ event: 'grounding', data: { mode: 'scene' } });
     });
   });
 

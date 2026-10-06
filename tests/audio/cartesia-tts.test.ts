@@ -91,6 +91,19 @@ describe('Cartesia TTS', () => {
     );
   });
 
+  it('puts the HTTP status in the error, so a 5xx reads as transient to the narration retry', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => '{"error":"overloaded"}',
+      headers: { get: () => 'application/json' },
+    });
+    await expect(generateTTS({ providerId: 'cartesia-tts', apiKey: 'k', voice: REEM }, 'x')).rejects.toThrow(
+      /Cartesia TTS API error \(503\): \{"error":"overloaded"\}/,
+    );
+  });
+
   it('has a governed capability row for versioned Sonic models only (no instructions, per-character usage)', () => {
     const cap = providerCapability('cartesia-tts', 'sonic-3.6');
     expect(cap).toMatchObject({ supportsInstructions: false, usageSource: 'none', localeParam: 'language' });

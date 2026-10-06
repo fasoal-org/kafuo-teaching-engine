@@ -398,7 +398,8 @@
         "TEACHING_MODEL_REFUSED": "The AI refused to generate part of this slide; defaults were kept.",
         "ACTION_REFERENCE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
-        "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide."
+        "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
       }
     },
     "zorder": {
@@ -722,6 +723,14 @@
       "errors": {
         "generic": "The quiz could not be regenerated ({{code}}). Nothing was saved."
       }
+    },
+    "narrationAudio": {
+      "action": "Regenerate audio",
+      "running": "Generating audio…",
+      "success": "The audio was generated and the mark was removed.",
+      "partial": "Part of the audio was generated; {{missing}} line(s) still have no audio. Try again.",
+      "notDurable": "Your changes to this page could not be saved first, so nothing was sent. Try again.",
+      "failed": "The audio could not be generated ({{code}}). Nothing was saved."
     }
   },
   "stage": {

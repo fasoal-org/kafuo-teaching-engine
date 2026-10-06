@@ -32,6 +32,7 @@ import {
   type RegenerationGate,
 } from '@/lib/edit/scene-regeneration-client';
 import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
+import { runNarrationAudioRegeneration } from '@/lib/edit/narration-audio-client';
 import { onStageSaveConflict } from '@/lib/store/stage';
 
 // Collapsed, the rail is a slim edge handle — just wide enough to hold the
@@ -84,6 +85,32 @@ export function SlideNavRail() {
     title: string;
     type: 'slide' | 'quiz';
   } | null>(null);
+  // A scene's missing narration audio, regenerated on the server (4 Oct 2026).
+  const [regeneratingAudio, setRegeneratingAudio] = useState<ReadonlySet<string>>(() => new Set());
+  const regenerateAudio = useCallback(
+    async (sceneId: string) => {
+      if (!stageId) return;
+      setRegeneratingAudio((current) => new Set(current).add(sceneId));
+      try {
+        const outcome = await runNarrationAudioRegeneration({ stageId, sceneId });
+        if (outcome.kind === 'success') toast.success(t('edit.narrationAudio.success'));
+        else if (outcome.kind === 'partial') {
+          toast.warning(t('edit.narrationAudio.partial', { missing: outcome.missing }));
+        } else if (outcome.kind === 'not-durable') {
+          toast.error(t('edit.narrationAudio.notDurable'));
+        } else if (outcome.kind === 'failed') {
+          toast.error(t('edit.narrationAudio.failed', { code: outcome.code }));
+        }
+      } finally {
+        setRegeneratingAudio((current) => {
+          const next = new Set(current);
+          next.delete(sceneId);
+          return next;
+        });
+      }
+    },
+    [stageId, t],
+  );
   useEffect(() => {
     if (!stageId || !isTeachingPackageGrantSession()) return;
     let cancelled = false;
@@ -526,6 +553,12 @@ export function SlideNavRail() {
                               })
                           : undefined
                       }
+                      onRegenerateAudio={
+                        canRegenerateScene(regenerationGate, scene)
+                          ? () => void regenerateAudio(scene.id)
+                          : undefined
+                      }
+                      regeneratingAudio={regeneratingAudio.has(scene.id)}
                     />
                     {SCENE_CREATION_ENABLED && (
                       <InsertionZone

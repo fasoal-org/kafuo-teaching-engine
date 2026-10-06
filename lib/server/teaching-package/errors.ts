@@ -277,6 +277,11 @@ export type TeachingPackageErrorCode =
   | 'PRECONDITION_REQUIRED'
   /** A grant-delegated Scene write was based on a revision that is no longer current. */
   | 'SCENE_REVISION_CONFLICT'
+  // --- Reviewer audio repair of one Scene (scene-narration-audio-regeneration-plan) ---
+  /** The Stage's TTS route (or any server TTS provider) is not available now. */
+  | 'NARRATION_AUDIO_UNAVAILABLE'
+  /** No spoken line could be synthesized; nothing was written. */
+  | 'NARRATION_AUDIO_GENERATION_FAILED'
   // --- Admin-correction pause / resume (slide-classification-admin-correction-plan §3) ---
   /** The attempt is not paused for correction (or its checkpoint is not awaiting). */
   | 'CORRECTION_NOT_AWAITING'
@@ -405,6 +410,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SCENE_CHANGED_SINCE_REGENERATION: 409,
   PRECONDITION_REQUIRED: 428,
   SCENE_REVISION_CONFLICT: 409,
+  NARRATION_AUDIO_UNAVAILABLE: 503,
+  NARRATION_AUDIO_GENERATION_FAILED: 502,
 };
 
 export class TeachingPackageError extends Error {

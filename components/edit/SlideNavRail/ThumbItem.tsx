@@ -18,6 +18,7 @@ import type { Scene } from '@/lib/types/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { NARRATION_AUDIO_ISSUE_CODE } from '@/lib/edit/narration-audio-client';
 
 interface ThumbItemProps {
   readonly scene: Scene;
@@ -29,6 +30,10 @@ interface ThumbItemProps {
   readonly onDelete: () => void;
   /** Present only when this slide may be regenerated (write grant, editable package, slide). */
   readonly onRegenerate?: () => void;
+  /** Present only when this scene's missing narration audio may be regenerated (same gate). */
+  readonly onRegenerateAudio?: () => void;
+  /** The audio of this scene is being regenerated now. */
+  readonly regeneratingAudio?: boolean;
 }
 
 function ThumbItemComponent({
@@ -40,6 +45,8 @@ function ThumbItemComponent({
   onDuplicate,
   onDelete,
   onRegenerate,
+  onRegenerateAudio,
+  regeneratingAudio = false,
 }: ThumbItemProps) {
   const { t } = useI18n();
   const viewportSize = useCanvasStore.use.viewportSize();
@@ -292,24 +299,53 @@ function ThumbItemComponent({
                 {t(`edit.nav.generationIssue.${issue.code}`, { defaultValue: issue.message })}
               </p>
             ))}
-            {onRegenerate && (
-              <button
-                type="button"
-                data-testid="scene-generation-issue-regenerate"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRegenerate();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="mt-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
-              >
-                {t(
-                  scene.type === 'quiz'
-                    ? 'edit.quizRegeneration.menuItem'
-                    : 'edit.slideRegeneration.menuItem',
-                )}
-              </button>
-            )}
+            {/* The remedy follows the issue (4 Oct 2026): missing audio is
+                regenerated as audio; only other issues offer regenerating the
+                slide or quiz itself. */}
+            {onRegenerateAudio &&
+              scene.generationIssues!.some(
+                (issue) => issue.code === NARRATION_AUDIO_ISSUE_CODE,
+              ) && (
+                <button
+                  type="button"
+                  data-testid="scene-generation-issue-regenerate-audio"
+                  disabled={regeneratingAudio}
+                  aria-busy={regeneratingAudio}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRegenerateAudio();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="mt-1 me-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {t(
+                    regeneratingAudio
+                      ? 'edit.narrationAudio.running'
+                      : 'edit.narrationAudio.action',
+                  )}
+                </button>
+              )}
+            {onRegenerate &&
+              scene.generationIssues!.some(
+                (issue) => issue.code !== NARRATION_AUDIO_ISSUE_CODE,
+              ) && (
+                <button
+                  type="button"
+                  data-testid="scene-generation-issue-regenerate"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRegenerate();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="mt-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
+                >
+                  {t(
+                    scene.type === 'quiz'
+                      ? 'edit.quizRegeneration.menuItem'
+                      : 'edit.slideRegeneration.menuItem',
+                  )}
+                </button>
+              )}
           </div>
         )}
       </div>

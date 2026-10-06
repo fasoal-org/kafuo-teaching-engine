@@ -55,6 +55,7 @@ import {
   generateTTSForClassroom,
 } from '@/lib/server/classroom-media-generation';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
+import type { SpeechAction } from '@/lib/types/action';
 import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
 import {
   resolveTextDirection,
@@ -268,6 +269,31 @@ function markSceneIssues(
     }
   }
   scene.generationIssues = merged;
+}
+
+/**
+ * Marks every scene that has a spoken line (a speech Action with text) left
+ * without generated audio after the TTS phase. Students would hear the device
+ * voice (or nothing) for those lines instead of the teacher voice.
+ */
+export function markNarrationAudioGaps(
+  store: { getState: () => { scenes: Scene[] } },
+  scenes: readonly Scene[],
+): void {
+  for (const scene of scenes) {
+    const spoken = (scene.actions ?? []).filter(
+      (action) => action.type === 'speech' && Boolean((action as SpeechAction).text),
+    ) as SpeechAction[];
+    const missing = spoken.filter((action) => !action.audioId).length;
+    if (missing === 0) continue;
+    markSceneIssues(store, scene.id, [
+      {
+        code: 'NARRATION_AUDIO_FAILED',
+        message: `narration audio could not be generated for ${missing} of ${spoken.length} spoken line(s); students will not hear the teacher voice there`,
+      },
+    ]);
+    log.warn(`Scene "${scene.title}" kept without audio for ${missing}/${spoken.length} spoken line(s); marked for review`);
+  }
 }
 
 /** Legacy outline attempts per run; governed package generation is single-shot. */
@@ -2112,6 +2138,11 @@ export async function generateClassroom(
       } catch (err) {
         log.warn('TTS generation phase failed, continuing:', err);
       }
+      // 3 Oct 2026: a spoken line left without audio — its synthesis failed,
+      // the routed provider was unavailable, or the phase threw — no longer
+      // passes silently. Its scene is marked for the reviewer ("N slides need
+      // review") and the package still completes.
+      markNarrationAudioGaps(store, freshScenes);
     }
 
     await options.onProgress?.({
