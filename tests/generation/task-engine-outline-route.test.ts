@@ -85,6 +85,9 @@ describe('task-engine outline route', () => {
         {
           id: 'scene_slide',
           type: 'slide',
+          slideType: 'cover',
+          contentRole: 'orientation',
+          visualPlan: { mode: 'native' },
           title: '高压风险边界',
           description: '解释高压安全边界。',
           keyPoints: ['风险边界', '安全阈值'],
@@ -166,7 +169,7 @@ describe('task-engine outline route', () => {
           id: 'scene_illegal',
           type: 'quiz',
           title: '非法场景',
-          description: '非法类型应兜底。',
+          description: '测验场景保持为测验。',
           keyPoints: ['兜底'],
           order: 8,
           widgetOutline: {
@@ -200,8 +203,12 @@ describe('task-engine outline route', () => {
     expect(done).toBeDefined();
     expect(done.taskEngineMode).toBe(true);
     expect(done.outlines).toHaveLength(8);
+    // Task-Engine slides are classified and gated like every other mode's.
     expect(done.outlines[0]).toMatchObject({
       type: 'slide',
+      slideType: 'cover',
+      contentRole: 'orientation',
+      visualPlan: { mode: 'native' },
       title: '高压风险边界',
     });
     expect(done.outlines[0].widgetType).toBeUndefined();
@@ -256,12 +263,12 @@ describe('task-engine outline route', () => {
     expect(done.outlines[6].widgetOutline.visualizationType).toBeUndefined();
     expect(done.outlines[6].widgetOutline.objects).toBeUndefined();
     expect(done.outlines[6].widgetOutline.interactions).toBeUndefined();
+    // RSS W2: a quiz stays a quiz — the native quiz runtime is always
+    // available. (This assertion pinned the old convert-to-slide behaviour.)
     expect(done.outlines[7]).toMatchObject({
-      type: 'slide',
+      type: 'quiz',
       title: '非法场景',
     });
-    expect(done.outlines[7].widgetType).toBeUndefined();
-    expect(done.outlines[7].widgetOutline).toBeUndefined();
   });
 
   test('silently falls back to the existing interactive prompt when the server flag is off', async () => {
@@ -462,6 +469,8 @@ describe('task-engine outline route', () => {
             {
               id: 'scene_4',
               type: 'slide',
+              slideType: 'content',
+              contentRole: 'example',
               title: 'First Scene',
               description: 'First scene.',
               keyPoints: ['A'],
@@ -470,6 +479,8 @@ describe('task-engine outline route', () => {
             {
               id: 'scene_4',
               type: 'slide',
+              slideType: 'content',
+              contentRole: 'example',
               title: 'Second Scene',
               description: 'Second scene.',
               keyPoints: ['B'],
@@ -496,7 +507,180 @@ describe('task-engine outline route', () => {
     expect(ids[1]).not.toBe('scene_4');
   });
 
-  test('falls back to a slide for invalid task-engine outlines without regex promotion', async () => {
+  test('Interactive Mode gates its slides and runtime scenes like every other mode (RSS W2)', async () => {
+    vi.resetModules();
+    streamLLMMock.mockReset();
+    resolveModelFromRequestMock.mockReset();
+    resolveModelFromRequestMock.mockResolvedValue({
+      model: { provider: 'glm.chat', modelId: 'glm-5.1' },
+      modelInfo: { outputWindow: 4096, capabilities: {} },
+      modelString: 'glm:glm-5.1',
+      providerId: 'glm',
+      modelId: 'glm-5.1',
+      thinkingConfig: undefined,
+    });
+    const respond = (outlines: unknown[]) => ({
+      textStream: (async function* () {
+        yield JSON.stringify({ languageDirective: 'Teach in English.', outlines });
+      })(),
+    });
+    const base = { description: 'D', keyPoints: ['k'] };
+    const opening = { id: 's1', type: 'slide', title: 'Open', order: 1, ...base };
+    const widget = { id: 's2', type: 'interactive', title: 'Explore', order: 2, ...base };
+    streamLLMMock
+      // Attempt 1: an unclassified slide.
+      .mockReturnValueOnce(respond([opening]))
+      // Attempt 2: classified, but the interactive scene has no widget config.
+      .mockReturnValueOnce(
+        respond([
+          {
+            ...opening,
+            slideType: 'cover',
+            contentRole: 'orientation',
+            visualPlan: { mode: 'native' },
+          },
+          widget,
+        ]),
+      )
+      .mockReturnValueOnce(
+        respond([
+          {
+            ...opening,
+            slideType: 'cover',
+            contentRole: 'orientation',
+            visualPlan: { mode: 'native' },
+          },
+          { ...widget, widgetType: 'simulation', widgetOutline: { concept: 'motion' } },
+        ]),
+      );
+
+    const { POST } = await import('@/app/api/generate/scene-outlines-stream/route');
+    const response = await POST(
+      mockRequest({ requirement: 'Teach motion', interactiveMode: true }) as unknown as Parameters<
+        typeof POST
+      >[0],
+    );
+    const system = (streamLLMMock.mock.calls[0][0] as { system: string }).system;
+    expect(system).toContain('## Slide Classification');
+    expect(system).not.toContain('{{snippet');
+
+    const events = parseSseEvents(await readStreamBody(response));
+    expect(streamLLMMock).toHaveBeenCalledTimes(3);
+    const done = events.find((event) => event.type === 'done');
+    // The config-less interactive scene was re-rolled — it never became a slide.
+    expect(done.outlines.map((o: { type: string }) => o.type)).toEqual(['slide', 'interactive']);
+    expect(done.outlines[0]).toMatchObject({
+      slideType: 'cover',
+      contentRole: 'orientation',
+      visualPlan: { mode: 'native' },
+    });
+  });
+
+  test('re-rolls a standard-mode response whose slide classification is invalid', async () => {
+    vi.resetModules();
+    streamLLMMock.mockReset();
+    resolveModelFromRequestMock.mockReset();
+
+    resolveModelFromRequestMock.mockResolvedValue({
+      model: { provider: 'glm.chat', modelId: 'glm-5.1' },
+      modelInfo: { outputWindow: 4096, capabilities: {} },
+      modelString: 'glm:glm-5.1',
+      providerId: 'glm',
+      modelId: 'glm-5.1',
+      thinkingConfig: undefined,
+    });
+
+    const respond = (semantics: Record<string, unknown>) => ({
+      textStream: (async function* () {
+        yield JSON.stringify({
+          languageDirective: 'Teach in English.',
+          outlines: [
+            {
+              id: 'scene_1',
+              type: 'slide',
+              ...semantics,
+              title: 'Opening',
+              description: 'Open the lesson.',
+              keyPoints: ['A'],
+              order: 1,
+            },
+          ],
+        });
+      })(),
+    });
+    streamLLMMock
+      // `summary` defines no kinds — an invalid pairing, never repaired in place.
+      .mockReturnValueOnce(
+        respond({ slideType: 'content', contentRole: 'summary', contentKind: 'guided' }),
+      )
+      .mockReturnValueOnce(
+        respond({ slideType: 'cover', contentRole: 'orientation', visualPlan: { mode: 'native' } }),
+      );
+
+    const { POST } = await import('@/app/api/generate/scene-outlines-stream/route');
+    const response = await POST(
+      mockRequest({ requirement: 'Teach a topic' }) as unknown as Parameters<typeof POST>[0],
+    );
+
+    const events = parseSseEvents(await readStreamBody(response));
+    expect(streamLLMMock).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.type)).toContain('retry');
+    const done = events.find((event) => event.type === 'done');
+    expect(done.outlines).toHaveLength(1);
+    expect(done.outlines[0]).toMatchObject({
+      slideType: 'cover',
+      contentRole: 'orientation',
+      visualPlan: { mode: 'native' },
+    });
+    expect(done.outlines[0]).not.toHaveProperty('contentKind');
+  });
+
+  test('fails standard-mode outline generation when no attempt classifies its slides', async () => {
+    vi.resetModules();
+    streamLLMMock.mockReset();
+    resolveModelFromRequestMock.mockReset();
+
+    resolveModelFromRequestMock.mockResolvedValue({
+      model: { provider: 'glm.chat', modelId: 'glm-5.1' },
+      modelInfo: { outputWindow: 4096, capabilities: {} },
+      modelString: 'glm:glm-5.1',
+      providerId: 'glm',
+      modelId: 'glm-5.1',
+      thinkingConfig: undefined,
+    });
+
+    streamLLMMock.mockImplementation(() => ({
+      textStream: (async function* () {
+        yield JSON.stringify({
+          languageDirective: 'Teach in English.',
+          outlines: [
+            {
+              id: 'scene_1',
+              type: 'slide',
+              title: 'Unclassified',
+              description: 'No classification.',
+              keyPoints: ['A'],
+              order: 1,
+            },
+          ],
+        });
+      })(),
+    }));
+
+    const { POST } = await import('@/app/api/generate/scene-outlines-stream/route');
+    const response = await POST(
+      mockRequest({ requirement: 'Teach a topic' }) as unknown as Parameters<typeof POST>[0],
+    );
+
+    const events = parseSseEvents(await readStreamBody(response));
+    expect(streamLLMMock).toHaveBeenCalledTimes(3);
+    expect(events.find((event) => event.type === 'done')).toBeUndefined();
+    const error = events.find((event) => event.type === 'error');
+    expect(error.error).toContain('OUTLINE_SLIDE_SEMANTICS_INVALID');
+  });
+
+  // RSS W2: rewritten — Task Engine never restates a quiz / pbl as a slide.
+  test('keeps a task-engine quiz a quiz, and refuses an undeliverable pbl instead of converting it', async () => {
     vi.resetModules();
     streamLLMMock.mockReset();
     resolveModelFromRequestMock.mockReset();
@@ -542,10 +726,45 @@ describe('task-engine outline route', () => {
     const done = events.find((event) => event.type === 'done');
     expect(done).toBeDefined();
     expect(done.outlines[0]).toMatchObject({
-      type: 'slide',
+      type: 'quiz',
       title: 'Pythagorean theorem recap',
     });
-    expect(done.outlines[0].widgetType).toBeUndefined();
-    expect(done.outlines[0].widgetOutline).toBeUndefined();
+
+    // A pbl scene cannot run in Task Engine mode: every attempt is re-rolled
+    // with corrective context and the run ends in the typed conflict — no slide.
+    streamLLMMock.mockReset();
+    streamLLMMock.mockImplementation(() => ({
+      textStream: (async function* () {
+        yield JSON.stringify({
+          languageDirective: 'Teach in English.',
+          outlines: [
+            {
+              id: 'scene_pbl',
+              type: 'pbl',
+              title: 'Build a bridge',
+              description: 'Project',
+              keyPoints: ['plan'],
+              order: 1,
+              pblConfig: { projectTopic: 'Bridge', projectDescription: 'Build', targetSkills: [] },
+            },
+          ],
+        });
+      })(),
+    }));
+    const refused = await POST(
+      mockRequest({
+        requirement: 'Explain the Pythagorean theorem',
+        interactiveMode: true,
+        taskEngineMode: true,
+      }) as unknown as Parameters<typeof POST>[0],
+    );
+    const refusedEvents = parseSseEvents(await readStreamBody(refused));
+    expect(refusedEvents.find((event) => event.type === 'done')).toBeUndefined();
+    expect(refusedEvents.find((event) => event.type === 'error')).toMatchObject({
+      code: 'SCENE_RUNTIME_UNAVAILABLE',
+    });
+    expect(streamLLMMock).toHaveBeenCalledTimes(3);
+    const retryPrompt = streamLLMMock.mock.calls[1][0] as { prompt: string };
+    expect(retryPrompt.prompt).toContain('Correction Required');
   });
 });

@@ -187,6 +187,13 @@ export interface EmittedProject {
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_GSAP_PATH = 'assets/vendor/gsap.min.js';
 const DEFAULT_MANIFEST = 'openmaic-video-manifest.json';
+/**
+ * Product name in human-readable export metadata (README heading, page title).
+ * The emitter imports only in-module relatives, so this mirrors
+ * `DEFAULT_BRAND.productName` in `lib/brand/brand-config.ts`; a test pins the two
+ * together. `openmaic`-prefixed ids above stay as compatibility identifiers.
+ */
+export const EXPORT_PRODUCT_NAME = 'Teaching Engine';
 const DEFAULT_LOCALE = 'en-US';
 
 /** Language subtags written right-to-left; everything else renders LTR. */
@@ -1160,7 +1167,7 @@ function renderReadme(project: {
   const scriptFontSummary = project.quizScriptFonts.length
     ? `, ${project.quizScriptFonts.join(' and ')}`
     : '';
-  return `# ${project.stageName} — OpenMAIC video export
+  return `# ${project.stageName} — ${EXPORT_PRODUCT_NAME} video export
 
 Self-contained [Hyperframes](https://github.com/heygen-com/hyperframes) composition
 for the classroom **${project.stageName}**. Everything needed to render is in this
@@ -1309,7 +1316,7 @@ export function emitHyperframes(
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(ir.stage.name)} — OpenMAIC video</title>
+<title>${escapeHtml(ir.stage.name)} — ${escapeHtml(EXPORT_PRODUCT_NAME)} video</title>
 <style>
   ${INTER_FONT_FACE_CSS}${
     hasQuizQuestionList

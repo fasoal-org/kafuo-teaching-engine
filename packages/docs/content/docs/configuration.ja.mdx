@@ -3,7 +3,7 @@ title: 設定
 description: LLM プロバイダー、メディア生成、ドキュメント解析、TTS、ASR、アクセス制御、機能フラグ。
 ---
 
-OpenMAIC はサーバー起動時に環境変数を読み込みます。すべて任意項目なので、必要に応じて有効化してください。環境変数の例はリポジトリの [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example) を参照してください。組み込みモデル ID は[対応モデル](./supported-models.mdx)にあります。
+OpenMAIC はサーバー起動時に環境変数を読み込みます。すべて任意項目なので、必要に応じて有効化してください。環境変数の例はリポジトリの [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example) を参照してください。組み込みモデル ID は[対応モデル](./supported-models.mdx)にあります。
 
 環境変数のほかに、プロジェクトルートの `server-providers.yml` にコード内で登録済みのサーバー側 provider の設定を書くこともできます。環境変数は YAML の同名設定をフィールド単位で上書きします。カスタム OpenAI 互換 provider は設定画面から追加可能で、任意の環境変数 prefix や未知の YAML provider ID からは登録できません。
 
@@ -206,7 +206,7 @@ ACCESS_CODE=your-secret-code
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
-`MODEL_ROUTES` で生成の各フェーズに別モデルを割り当て可能です。未設定フェーズはクライアント指定モデルか `DEFAULT_MODEL` を使います。JSON オブジェクトで、キーがフェーズ名、値がモデル文字列または `model` と `thinking` を含むオブジェクトです。完全なフェーズ一覧と例はリポジトリの [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example) を参照してください。
+`MODEL_ROUTES` で生成の各フェーズに別モデルを割り当て可能です。未設定フェーズはクライアント指定モデルか `DEFAULT_MODEL` を使います。JSON オブジェクトで、キーがフェーズ名、値がモデル文字列または `model` と `thinking` を含むオブジェクトです。完全なフェーズ一覧と例はリポジトリの [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example) を参照してください。
 
 ## 機能フラグ
 

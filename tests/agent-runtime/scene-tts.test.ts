@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   providers: vi.fn(),
@@ -65,5 +65,53 @@ describe('scene TTS capability routing', () => {
     expect(mocks.persist).toHaveBeenCalledWith(
       expect.objectContaining({ stageId: 'stage-a', mime: 'audio/mpeg' }),
     );
+  });
+});
+
+describe('scene TTS skip rule and provenance (SATTS §7.3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.providers.mockReturnValue({ 'configured-tts': {} });
+    mocks.generate.mockResolvedValue({ audio: new Uint8Array([1, 2]), format: 'mp3' });
+    mocks.persist.mockImplementation(async ({ prefix }: { prefix: string }) => `/api/classroom-media/stage-a/media/${prefix}-h.mp3`);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('flag off: the provider receives exactly the pre-SATTS config (non-OpenAI provider, speed undefined)', async () => {
+    await synthesizeSceneNarration({ scene: structuredClone(scene), force: false });
+    expect(mocks.generate.mock.calls[0]![0]).toEqual({
+      providerId: 'configured-tts',
+      modelId: '',
+      apiKey: '',
+      baseUrl: undefined,
+      voice: '',
+      speed: undefined,
+    });
+    expect(mocks.generate.mock.calls[0]![1]).toBe('Hello');
+  });
+
+  it('flag off: an Action with audio is skipped exactly as before; new audio gets provenance; prefix unchanged', async () => {
+    const withAudio = structuredClone(scene);
+    (withAudio.actions![0] as { audioId?: string }).audioId = 'old';
+    expect(await synthesizeSceneNarration({ scene: withAudio, force: false })).toMatchObject({ skipped: 1, generated: 0 });
+    const fresh = structuredClone(scene);
+    await synthesizeSceneNarration({ scene: fresh, force: false });
+    expect(mocks.persist).toHaveBeenCalledWith(expect.objectContaining({ prefix: 'tts-speech-a' }));
+    expect(fresh.actions![0]).toHaveProperty('audioProvenance.fingerprint');
+  });
+
+  it('flag on: legacy audio is kept, stale audio is regenerated, current audio is reused', async () => {
+    vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');
+    const legacy = structuredClone(scene);
+    (legacy.actions![0] as { audioId?: string }).audioId = 'old';
+    expect(await synthesizeSceneNarration({ scene: legacy, force: false })).toMatchObject({ skipped: 1, generated: 0 });
+
+    const target = structuredClone(scene);
+    await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } });
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
+    expect(await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } })).toMatchObject({ skipped: 1, generated: 0 });
+    // A text change makes it stale → regenerated.
+    (target.actions![0] as { text: string }).text = 'Hello again';
+    expect(await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } })).toMatchObject({ generated: 1 });
   });
 });

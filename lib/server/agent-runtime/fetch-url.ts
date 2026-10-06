@@ -280,31 +280,9 @@ function pdfExtractionCandidates(): Array<{
   provider: DocumentExtractorProvider;
   config: DocumentExtractorConfig;
 }> {
-  const configured = getServerPDFProviders();
-  const ids: string[] = [];
-  if (configured.mineru) ids.push('mineru');
-  if (configured['mineru-cloud']) ids.push('mineru-cloud');
-  if (configured.alidocmind) ids.push('alidocmind');
-  ids.push('unpdf');
-  return ids
-    .map((id) => {
-      const provider = getDocumentExtractorProvider(id);
-      if (!provider) return null;
-      return {
-        provider,
-        config: {
-          providerId: id,
-          apiKey: resolvePDFApiKey(id) || undefined,
-          baseUrl: resolvePDFBaseUrl(id),
-          allowEnvFallback: true,
-          // fetch_url persists and returns text only. Avoid materializing
-          // attacker-controlled PDF rasters in the application process.
-          textOnly: true,
-        },
-      };
-    })
-    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-    .filter((candidate) => candidate.provider.supportedMimeTypes.includes('application/pdf'));
+  // fetch_url persists and returns text only. Avoid materializing
+  // attacker-controlled PDF rasters in the application process.
+  return resolveServerPdfExtractorCandidates({ textOnly: true });
 }
 
 async function extractPdfToMarkdown(
@@ -515,6 +493,136 @@ export async function fetchAndExtractUrl(
   } finally {
     await ownedAgent?.close().catch(() => undefined);
   }
+}
+
+export interface SecureBytesOptions extends FetchUrlOptions {
+  /** Content types the download may produce; defaults to `application/pdf`. */
+  allowedContentTypes?: ReadonlySet<string>;
+  /** Override the default byte cap for this download. */
+  maxBytes?: number;
+}
+
+/**
+ * The secure download half of `fetchAndExtractUrl`, returning raw bytes:
+ * strict URL normalization, pinned DNS/dispatcher resolution, manual bounded
+ * redirects revalidated per hop, cross-origin credential stripping, an
+ * optional content-type allowlist, and the absolute-deadline bounded body
+ * read. Extracted from the page fetch so the Teaching Package acquisition
+ * layer (plan §4.3.2) reuses the exact same controls without the markdown
+ * extraction shape.
+ */
+export async function fetchBytesSecurely(
+  input: string,
+  options: SecureBytesOptions = {},
+): Promise<{ bytes: Buffer; truncated: boolean; finalUrl: string; contentType: string }> {
+  const source = normalizeUrlForStrictFetch(input);
+  const ownedAgent = options.dispatcher ? null : createPinnedFetchAgent();
+  const dispatcher = options.dispatcher ?? ownedAgent!;
+  const fetchImpl = options.fetchImpl ?? (undiciFetch as unknown as FetchImplementation);
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const bodyTimeoutMs = options.bodyTimeoutMs ?? BODY_TIMEOUT_MS;
+  const allowed = options.allowedContentTypes ?? new Set(['application/pdf']);
+  let current = source;
+  let headers: Record<string, string> = { accept: [...allowed].join(', ') };
+  try {
+    if (options.signal?.aborted) {
+      throw new FetchUrlError('network', 'Operation aborted', { cause: options.signal.reason });
+    }
+    for (let redirects = 0; ; redirects += 1) {
+      const response = await fetchImpl(current, {
+        method: 'GET',
+        redirect: 'manual',
+        headers,
+        dispatcher,
+        headersTimeout: HEADERS_TIMEOUT_MS,
+        bodyTimeout: bodyTimeoutMs,
+        ...(options.signal ? { signal: options.signal } : {}),
+      } as UndiciRequestInit & { headersTimeout: number; bodyTimeout: number });
+      if (response.status >= 300 && response.status < 400) {
+        if (redirects >= MAX_REDIRECTS) {
+          throw new FetchUrlError('network', `Too many redirects (maximum ${MAX_REDIRECTS})`);
+        }
+        const location = response.headers.get('location');
+        if (!location) throw new FetchUrlError('network', 'Redirect response has no Location');
+        const next = normalizeUrlForStrictFetch(new URL(location, current).href);
+        await response.body?.cancel().catch(() => undefined);
+        if (options.isUrlAllowed && !(await options.isUrlAllowed(next.href))) {
+          throw new FetchUrlError(
+            'blocked',
+            'Redirect target is not allowed by the session URL trust gate',
+          );
+        }
+        if (next.origin !== current.origin) {
+          const { authorization: _authorization, cookie: _cookie, ...safeHeaders } = headers;
+          headers = safeHeaders;
+        }
+        current = next;
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new FetchUrlError('network', `Remote server returned HTTP ${response.status}`);
+      }
+      const contentType = mediaType(response);
+      if (!allowed.has(contentType)) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new FetchUrlError(
+          'unsupported_content_type',
+          `Unsupported content type: ${contentType || '(missing)'}`,
+        );
+      }
+      const downloaded = await readWithTruncation(response, maxBytes, options.signal, bodyTimeoutMs);
+      return {
+        bytes: downloaded.bytes,
+        truncated: downloaded.truncated,
+        finalUrl: current.href,
+        contentType,
+      };
+    }
+  } catch (error) {
+    if (error instanceof FetchUrlError) throw error;
+    throw new FetchUrlError('network', error instanceof Error ? error.message : String(error), {
+      cause: error,
+    });
+  } finally {
+    await ownedAgent?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * The configured PDF extractor candidates for SERVER-side document
+ * extraction, with `textOnly` configurable: the agent-runtime page fetch pins
+ * `textOnly: true` (no attacker-controlled rasters in that process), while
+ * the Teaching Package acquisition path passes `textOnly: false` because
+ * source visuals are REQUIRED product output (plan §4.3.2).
+ */
+export function resolveServerPdfExtractorCandidates(options: { textOnly: boolean }): Array<{
+  provider: DocumentExtractorProvider;
+  config: DocumentExtractorConfig;
+}> {
+  const configured = getServerPDFProviders();
+  const ids: string[] = [];
+  if (configured.mineru) ids.push('mineru');
+  if (configured['mineru-cloud']) ids.push('mineru-cloud');
+  if (configured.alidocmind) ids.push('alidocmind');
+  ids.push('unpdf');
+  return ids
+    .map((id) => {
+      const provider = getDocumentExtractorProvider(id);
+      if (!provider) return null;
+      return {
+        provider,
+        config: {
+          providerId: id,
+          apiKey: resolvePDFApiKey(id) || undefined,
+          baseUrl: resolvePDFBaseUrl(id),
+          allowEnvFallback: true,
+          textOnly: options.textOnly,
+        },
+      };
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+    .filter((candidate) => candidate.provider.supportedMimeTypes.includes('application/pdf'));
 }
 
 export function untrustedContentPolicyPromptBlock(): string {

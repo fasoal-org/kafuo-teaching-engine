@@ -308,3 +308,91 @@ describe('parseModelString — request-derived strings never warn', () => {
     }
   });
 });
+
+describe('validateSubjectRoutingConfig — Kafuo R1 subject routing fail-fast', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    clearConfigEnv();
+    delete process.env.TEACHING_SUBJECT_ROUTING;
+    delete process.env.TEACHING_ENGINE_SERVICE_KEY;
+    yamlOverride = null;
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    clearConfigEnv();
+    delete process.env.TEACHING_SUBJECT_ROUTING;
+    delete process.env.TEACHING_ENGINE_SERVICE_KEY;
+  });
+
+  it('is a no-op when TEACHING_SUBJECT_ROUTING=off, even with no keys at all', async () => {
+    vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'off');
+    const { validateSubjectRoutingConfig } = await import('@/lib/server/config-validation');
+    expect(() => validateSubjectRoutingConfig({ enforceable: true })).not.toThrow();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws (enforced, default) naming every policy provider without a key', async () => {
+    const { validateSubjectRoutingConfig } = await import('@/lib/server/config-validation');
+    expect(() => validateSubjectRoutingConfig({ enforceable: true })).toThrow(
+      /TEACHING_SUBJECT_ROUTING=enforced/,
+    );
+    let message = '';
+    try {
+      validateSubjectRoutingConfig({ enforceable: true });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    // Both providers of the policy are unkeyed: each must be named exactly once
+    // per model so the operator sees the full fix list in one boot failure.
+    expect(message).toContain('qwen:qwen3.7-flash');
+    expect(message).toContain('openai:gpt-5.6-luna');
+    expect(message).toContain('no API key configured');
+  });
+
+  it('passes silently when every policy model is registered and keyed', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
+    const { validateSubjectRoutingConfig, subjectRoutingConfigProblems } =
+      await import('@/lib/server/config-validation');
+    expect(subjectRoutingConfigProblems()).toEqual([]);
+    expect(() => validateSubjectRoutingConfig({ enforceable: true })).not.toThrow();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a partially keyed policy (only the unkeyed provider is named)', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const { subjectRoutingConfigProblems } = await import('@/lib/server/config-validation');
+    const problems = subjectRoutingConfigProblems();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('qwen:qwen3.7-flash');
+    expect(problems.join('\n')).not.toContain('openai:');
+  });
+
+  it('is enforceable by default exactly when the Teaching Package API is configured', async () => {
+    // Not configured: a plain OpenMAIC deployment cannot make a teaching call,
+    // so an unkeyed policy provider is a warning, never a boot failure.
+    const { validateSubjectRoutingConfig } = await import('@/lib/server/config-validation');
+    expect(() => validateSubjectRoutingConfig()).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0][0])).toContain('not fatal');
+
+    // Configured (service key + database): the same problem refuses to boot.
+    vi.resetModules();
+    vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'svc-key');
+    vi.stubEnv('DATABASE_URL', 'postgres://example/db');
+    const configured = await import('@/lib/server/config-validation');
+    expect(() => configured.validateSubjectRoutingConfig()).toThrow(/cannot resolve/);
+  });
+
+  it('leaves validateServerConfig warn-only (it never throws for the policy)', async () => {
+    vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'svc-key');
+    vi.stubEnv('DATABASE_URL', 'postgres://example/db');
+    const { validateServerConfig } = await import('@/lib/server/config-validation');
+    expect(() => validateServerConfig()).not.toThrow();
+  });
+});

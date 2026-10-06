@@ -74,6 +74,8 @@ export function createSceneAPI(store: StageStore) {
             order,
             actions: params.actions,
             ...(params.outlineId !== undefined && { outlineId: params.outlineId }),
+            ...(params.teachingStage !== undefined && { teachingStage: params.teachingStage }),
+            ...(params.teachingSkills !== undefined && { teachingSkills: params.teachingSkills }),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           },

@@ -1,10 +1,10 @@
-# Security Policy for OpenMAIC
+# Security Policy for Teaching Engine
 
-Thank you for helping us keep OpenMAIC secure! We take the security of our platform, multi-agent engine, and users very seriously. 
+Thank you for helping us keep Teaching Engine secure! We take the security of our platform, multi-agent engine, and users very seriously. 
 
 ## Supported Versions
 
-We currently provide security updates for the latest major release and the active `main` branch. Please ensure you are running the most recent version of OpenMAIC before submitting a report.
+We currently provide security updates for the latest major release and the active `main` branch. Please ensure you are running the most recent version of Teaching Engine before submitting a report.
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -14,10 +14,10 @@ We currently provide security updates for the latest major release and the activ
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in OpenMAIC, **please do not create a public GitHub issue.** Publicly disclosing a vulnerability can put other users and self-hosted instances at risk.
+If you discover a security vulnerability in Teaching Engine, **please do not create a public GitHub issue.** Publicly disclosing a vulnerability can put other users and self-hosted instances at risk.
 
 Instead, please report it privately using one of the following methods:
-**GitHub Private Vulnerability Reporting:** Go to the [Security tab](https://github.com/THU-MAIC/OpenMAIC/security) of the repository, click on "Advisories", and select "Report a vulnerability".
+**GitHub Private Vulnerability Reporting:** Go to the [Security tab](https://github.com/fasoal-org/kafuo-teaching-engine/security) of the repository, click on "Advisories", and select "Report a vulnerability".
 
 
 **What to include in your report:**
@@ -38,6 +38,6 @@ We will acknowledge receipt of your vulnerability report within 48 hours and str
 
 When a vulnerability is confirmed and patched, we will publish a GitHub Security Advisory detailing the issue, the impacted versions, and the fix. We will also credit the security researcher who reported the issue (unless they prefer to remain anonymous).
 
-* For every accepted advisory the maintainers request a CVE identifier through GitHub at publication time, so the CVE description, affected versions, and score match the advisory. Please do not request a CVE for an OpenMAIC advisory from another CNA; if one already exists, tell us and we will link it.
+* For every accepted advisory the maintainers request a CVE identifier through GitHub at publication time, so the CVE description, affected versions, and score match the advisory. Please do not request a CVE for an Teaching Engine advisory from another CNA; if one already exists, tell us and we will link it.
 * Publication happens after the fix is released. The advisory, the release notes, and the CVE record are published together.
 * Advisory collaborators should not edit a published advisory's severity or description without raising it in the thread first; maintainers keep the published advisory consistent with the CVE record.

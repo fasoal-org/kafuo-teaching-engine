@@ -1,0 +1,378 @@
+{
+  "table": "chem-letters",
+  "description": "Latin letter names in Arabic script (D-9): chemical element letters and Physics symbols. Counts are Arabic numerals in the «اثنين» register (O-1), read from numbers-structural.",
+  "roles": [
+    "variable",
+    "element"
+  ],
+  "domains": [
+    "PHYSICS",
+    "CHEMISTRY"
+  ],
+  "entries": [
+    {
+      "key": "A",
+      "natural": "إيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "B",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "C",
+      "natural": "سي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "D",
+      "natural": "دي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "E",
+      "natural": "إي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "F",
+      "natural": "إف",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "G",
+      "natural": "جي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "H",
+      "natural": "إتش",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "I",
+      "natural": "آي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "J",
+      "natural": "جيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "K",
+      "natural": "كيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "L",
+      "natural": "إل",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "M",
+      "natural": "إم",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "N",
+      "natural": "إن",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "O",
+      "natural": "أو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "P",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Arabic has no /p/; spelled بي as in class (collides with B). Reviewer to decide on پي"
+    },
+    {
+      "key": "Q",
+      "natural": "كيو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "R",
+      "natural": "آر",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "S",
+      "natural": "إس",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "T",
+      "natural": "تي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "U",
+      "natural": "يو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "V",
+      "natural": "ڤي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Spelled ڤي so it never collides with the word «في» (times), e.g. I = V/R. Reviewer to confirm the TTS voices ڤ as /v/"
+    },
+    {
+      "key": "W",
+      "natural": "دبليو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "X",
+      "natural": "إكس",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "Y",
+      "natural": "واي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "Z",
+      "natural": "زد",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": ""
+    },
+    {
+      "key": "a",
+      "natural": "إيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "b",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "c",
+      "natural": "سي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "d",
+      "natural": "دي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "e",
+      "natural": "إي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "f",
+      "natural": "إف",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "g",
+      "natural": "جي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "h",
+      "natural": "إتش",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "i",
+      "natural": "آي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "j",
+      "natural": "جيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "k",
+      "natural": "كيه",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "l",
+      "natural": "إل",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "m",
+      "natural": "إم",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "n",
+      "natural": "إن",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "o",
+      "natural": "أو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "p",
+      "natural": "بي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "q",
+      "natural": "كيو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "r",
+      "natural": "آر",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "s",
+      "natural": "إس",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "t",
+      "natural": "تي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "u",
+      "natural": "يو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "v",
+      "natural": "ڤي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "w",
+      "natural": "دبليو",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "x",
+      "natural": "إكس",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "y",
+      "natural": "واي",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    },
+    {
+      "key": "z",
+      "natural": "زد",
+      "status": "proposed",
+      "source": "Latin letter names as read aloud in Saudi classrooms (D-9: chemistry reads element symbols by letter names; Physics symbols use the same names)",
+      "notes": "Lower case; case is not audible"
+    }
+  ]
+}

@@ -90,6 +90,17 @@ export function isQwenVoiceCloneModel(modelId?: string, configuredModelId?: stri
   );
 }
 
+/** DashScope international region; serves the Qwen-Audio SpeechSynthesizer models. */
+export const QWEN_INTL_BASE_URL = 'https://dashscope-intl.aliyuncs.com/api/v1';
+
+/**
+ * Qwen-Audio 3.0 TTS models (`qwen-audio-3.0-tts-*`) are served by the
+ * SpeechSynthesizer endpoint, not Qwen3 TTS's multimodal-generation endpoint.
+ */
+export function isQwenAudioSynthesizerModel(modelId?: string): boolean {
+  return !!modelId && /^qwen-audio-3\.0-tts-/u.test(modelId);
+}
+
 /** A Qwen catalog voice is provider-owned and must never use the clone model. */
 export function isQwenCatalogVoice(voiceId?: string): boolean {
   return !!voiceId && TTS_PROVIDERS['qwen-tts'].voices.some((voice) => voice.id === voiceId);
@@ -353,6 +364,7 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
       { id: 'qwen3-tts-flash', name: 'Qwen3 TTS Flash' },
       { id: 'qwen3-tts-instruct-flash', name: 'Qwen3 TTS Instruct Flash' },
       { id: 'qwen-tts', name: 'Qwen TTS' },
+      { id: 'qwen-audio-3.0-tts-plus', name: 'Qwen-Audio 3.0 TTS Plus' },
       { id: QWEN_TTS_VOICE_CLONE_MODEL, name: 'Qwen3 TTS Voice Clone' },
     ],
     defaultModelId: 'qwen3-tts-flash',
@@ -703,6 +715,14 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
         gender: 'female',
         description: 'qwenVoiceKiki',
       },
+      // Qwen-Audio 3.0 (SpeechSynthesizer) catalog voice: the Teaching Engine's
+      // Arabic route for MATH, PHYSICS, ARABIC and BIOLOGY.
+      {
+        id: 'longanlufeng',
+        name: 'Longan Lufeng (longanlufeng)',
+        language: 'ar',
+        compatibleModels: ['qwen-audio-3.0-tts-plus'],
+      },
     ],
     supportedFormats: ['mp3', 'wav', 'pcm'],
   },
@@ -903,6 +923,24 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
     ],
     supportedFormats: ['mp3'],
     speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
+  'cartesia-tts': {
+    id: 'cartesia-tts',
+    name: 'Cartesia TTS',
+    requiresApiKey: true,
+    defaultBaseUrl: 'https://api.cartesia.ai',
+    models: [{ id: 'sonic-3.6', name: 'Sonic 3.6' }],
+    defaultModelId: 'sonic-3.6',
+    voices: [
+      {
+        id: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+        name: 'Reem',
+        language: 'ar',
+        gender: 'female',
+        description: 'Arabic (Gulf) voice: clear, assured, helpful (Cartesia library "Reem - Solution Provider")',
+      },
+    ],
+    supportedFormats: ['mp3', 'wav'],
   },
   'elevenlabs-tts': {
     id: 'elevenlabs-tts',
@@ -1341,6 +1379,7 @@ export const DEFAULT_TTS_VOICES: Record<BuiltInTTSProviderId, string> = {
   'voxcpm-tts': VOXCPM_AUTO_VOICE_ID,
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
   'elevenlabs-tts': 'EXAVITQu4vr4xnSDxMaL',
+  'cartesia-tts': '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
   'minimax-tts': 'female-yujie',
   'lemonade-tts': 'af_heart',
   'browser-native-tts': 'default',
@@ -1354,6 +1393,7 @@ export const DEFAULT_TTS_MODELS: Record<BuiltInTTSProviderId, string> = {
   'voxcpm-tts': VOXCPM_VLLM_MODEL_ID,
   'doubao-tts': '',
   'elevenlabs-tts': 'eleven_multilingual_v2',
+  'cartesia-tts': 'sonic-3.6',
   'minimax-tts': 'speech-2.8-hd',
   'lemonade-tts': 'kokoro-v1',
   'browser-native-tts': '',

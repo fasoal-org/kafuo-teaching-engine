@@ -16,10 +16,21 @@
  * dependencies.
  */
 import { isActionType } from './action.js';
-import type { ActionType } from './action.js';
+import type { ActionType, SpeechAudioProvenance } from './action.js';
 import { isWidgetType } from './interactive.js';
 import { isPBLProject } from './pbl.js';
-import { isSceneType } from './stage.js';
+import { isSceneType, isSpeechReadingMode } from './stage.js';
+import { isSlideType } from './slides.js';
+import {
+  REQUIRED_SLIDE_ASSISTANCE_TIERS,
+  SLIDE_ASSISTANCE_ROLES,
+  SLIDE_ASSISTANCE_TIERS,
+  SLIDE_CONTENT_KINDS_BY_ROLE,
+  isSlideContentRole,
+  slideRoleAllowsAssistance,
+  slideSemanticsRequireAssistance,
+} from './slide-semantics.js';
+import { isTextDirection } from './language.js';
 import { isIsoTimestamp, isRuntimeSessionStatus } from './runtime.js';
 import { isWellFormedDslVersion } from './version.js';
 
@@ -240,6 +251,51 @@ function checkPBLContent(doc: unknown, path: string, errors: ValidationIssue[]):
   }
 }
 
+/**
+ * Check the optional pedagogical metadata on slide content (see
+ * `./slide-semantics.ts`). Both fields absent is valid — that is every document
+ * written before the fields existed. When present: `contentRole` must be a known
+ * role, and `contentKind` requires a `contentRole` that lists it as one of its
+ * specializations (a role with no specializations accepts no kind at all).
+ *
+ * This role<->kind pairing is a value-level rule the generated JSON Schema does
+ * not express (it checks each field's enum independently), so this function is
+ * its authoritative check.
+ */
+function checkSlideContentSemantics(
+  content: Record<string, unknown>,
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  const { contentRole, contentKind } = content;
+  if (contentRole !== undefined && !isSlideContentRole(contentRole)) {
+    errors.push({
+      path: `${path}/contentRole`,
+      message: `unknown content role: ${JSON.stringify(contentRole)}`,
+    });
+  }
+  if (contentKind === undefined) return;
+  if (contentRole === undefined) {
+    errors.push({
+      path: `${path}/contentKind`,
+      message: '`contentKind` requires a `contentRole`',
+    });
+    return;
+  }
+  // An unknown role was already reported; its kind can't be judged against it.
+  if (!isSlideContentRole(contentRole)) return;
+  const allowed: readonly string[] = SLIDE_CONTENT_KINDS_BY_ROLE[contentRole];
+  if (typeof contentKind !== 'string' || !allowed.includes(contentKind)) {
+    errors.push({
+      path: `${path}/contentKind`,
+      message:
+        allowed.length === 0
+          ? `content role ${JSON.stringify(contentRole)} has no content kinds; got ${JSON.stringify(contentKind)}`
+          : `content kind ${JSON.stringify(contentKind)} is not valid for content role ${JSON.stringify(contentRole)} (expected one of: ${allowed.join(', ')})`,
+    });
+  }
+}
+
 function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void {
   if (!isObject(doc)) {
     errors.push({ path: path || '/', message: 'scene must be an object' });
@@ -260,6 +316,18 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
     });
   }
 
+  // Optional Content Unit binding: absent is "unknown" and passes untouched;
+  // present, it must be a list of non-empty strings (never repaired).
+  if (doc.sourceContentUnitIds !== undefined) {
+    const ids = doc.sourceContentUnitIds;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || id === '')) {
+      errors.push({
+        path: `${path}/sourceContentUnitIds`,
+        message: '`sourceContentUnitIds` must be an array of non-empty strings when present',
+      });
+    }
+  }
+
   const content = doc.content;
   if (!isObject(content)) {
     errors.push({ path: `${path}/content`, message: 'scene `content` must be an object' });
@@ -269,11 +337,14 @@ function checkScene(doc: unknown, path: string, errors: ValidationIssue[]): void
         path: `${path}/content/type`,
         message: `content type ${JSON.stringify(content.type)} does not match scene type ${JSON.stringify(t)}`,
       });
-    } else if (t === 'slide' && !isObject(content.canvas)) {
-      errors.push({
-        path: `${path}/content/canvas`,
-        message: 'slide content requires an object `canvas`',
-      });
+    } else if (t === 'slide') {
+      if (!isObject(content.canvas)) {
+        errors.push({
+          path: `${path}/content/canvas`,
+          message: 'slide content requires an object `canvas`',
+        });
+      }
+      checkSlideContentSemantics(content, `${path}/content`, errors);
     } else if (t === 'quiz' && !Array.isArray(content.questions)) {
       errors.push({
         path: `${path}/content/questions`,
@@ -304,13 +375,190 @@ export function validateStage(doc: unknown): ValidationResult {
   reqString(doc, 'name', '', errors);
   reqNumber(doc, 'createdAt', '', errors);
   reqNumber(doc, 'updatedAt', '', errors);
+  // Optional language metadata (see `./language.ts`). Both absent is valid —
+  // that is every stage written before the fields existed.
+  if (doc.language !== undefined && (typeof doc.language !== 'string' || !doc.language.trim())) {
+    errors.push({ path: '/language', message: '`language` must be a non-empty string' });
+  }
+  if (doc.textDirection !== undefined && !isTextDirection(doc.textDirection)) {
+    errors.push({
+      path: '/textDirection',
+      message: `unknown text direction: ${JSON.stringify(doc.textDirection)} (expected "ltr" or "rtl")`,
+    });
+  }
+  // Optional speech metadata. Absent is valid (legacy and non-governed stages).
+  if (
+    doc.subjectCode !== undefined &&
+    (typeof doc.subjectCode !== 'string' || !doc.subjectCode.trim())
+  ) {
+    errors.push({ path: '/subjectCode', message: '`subjectCode` must be a non-empty string' });
+  }
+  if (doc.speechReadingMode !== undefined && !isSpeechReadingMode(doc.speechReadingMode)) {
+    errors.push({
+      path: '/speechReadingMode',
+      message: `unknown speech reading mode: ${JSON.stringify(doc.speechReadingMode)} (expected "natural" or "accessible")`,
+    });
+  }
   return done(errors);
+}
+
+/**
+ * Read-side guard for `SpeechAction.audioProvenance`. A malformed provenance
+ * never fails validation — it is dropped on read and the audio is treated as
+ * legacy. Returns the value when it is an object whose `fingerprint`,
+ * `providerId`, `modelId`, `voice` and `preparedDigest` are strings, otherwise
+ * `undefined`. Never throws.
+ */
+export function sanitizeAudioProvenance(value: unknown): SpeechAudioProvenance | undefined {
+  if (!isObject(value)) return undefined;
+  for (const key of ['fingerprint', 'providerId', 'modelId', 'voice', 'preparedDigest']) {
+    if (typeof value[key] !== 'string') return undefined;
+  }
+  return value as unknown as SpeechAudioProvenance;
 }
 
 /** Validate a {@link Scene} aggregate, including its nested content + actions. */
 export function validateScene(doc: unknown): ValidationResult {
   const errors: ValidationIssue[] = [];
   checkScene(doc, '', errors);
+  return done(errors);
+}
+
+/**
+ * Validate the optional `contentRole` / `contentKind` pair on its own — the
+ * same check `validateScene` applies to slide content. Accepts any object
+ * carrying the two fields (slide content, or a producer's draft before it is
+ * attached to a scene); an object with neither field is valid.
+ */
+export function validateSlideContentSemantics(doc: unknown): ValidationResult {
+  if (!isObject(doc)) {
+    return {
+      valid: false,
+      errors: [{ path: '/', message: 'slide content semantics must be an object' }],
+    };
+  }
+  const errors: ValidationIssue[] = [];
+  checkSlideContentSemantics(doc, '', errors);
+  return done(errors);
+}
+
+export interface GeneratedSlideSemanticsOptions {
+  /**
+   * Whether independent practice must already carry its `assistance`. Default
+   * `true`. A caller validating a slide BEFORE its separate assistance-authoring
+   * step has run passes `false`; the assembled scene is checked with the default.
+   */
+  requireAssistance?: boolean;
+}
+
+/** Slide types that teach: a newly generated one must state its role. */
+const INSTRUCTIONAL_SLIDE_TYPES: readonly string[] = ['cover', 'content'];
+
+/**
+ * STRICT semantic check for NEWLY GENERATED scene content. It is deliberately
+ * separate from the lenient {@link validateSlideContentSemantics} /
+ * `validateScene` pair, which must keep accepting every persisted legacy
+ * document: nothing here may run on a read path.
+ *
+ * Slide content:
+ * - `canvas.type` is required and must be a known `SlideType`;
+ * - an instructional slide (`cover` / `content`) requires a `contentRole`; a
+ *   purely structural `contents` / `transition` / `end` slide may omit it;
+ * - a role, when present on any slide type, must be known; its `contentKind`
+ *   is an OPTIONAL specialization — when present it must be one of the role's
+ *   kinds, and it is forbidden on a role that defines none;
+ * - `assistance` is an object of non-empty string tiers, allowed only beside a
+ *   `practice` / `check_understanding` role, and required (`hint` +
+ *   `explanation`) for `practice` / `independent`.
+ *
+ * Non-slide content must not carry any of the slide-only fields.
+ *
+ * It only reports — it never assigns, defaults, or repairs a classification.
+ */
+export function validateGeneratedSlideSemantics(
+  doc: unknown,
+  options: GeneratedSlideSemanticsOptions = {},
+): ValidationResult {
+  if (!isObject(doc)) {
+    return { valid: false, errors: [{ path: '/', message: 'scene content must be an object' }] };
+  }
+  const errors: ValidationIssue[] = [];
+  if (doc.type !== 'slide') {
+    for (const field of ['contentRole', 'contentKind', 'assistance']) {
+      if (doc[field] !== undefined) {
+        errors.push({
+          path: `/${field}`,
+          message: `\`${field}\` is slide-only and must not appear on ${JSON.stringify(doc.type)} content`,
+        });
+      }
+    }
+    return done(errors);
+  }
+
+  const slideType = isObject(doc.canvas) ? doc.canvas.type : undefined;
+  if (!isSlideType(slideType)) {
+    errors.push({
+      path: '/canvas/type',
+      message:
+        slideType === undefined
+          ? 'a generated slide requires a canvas `type`'
+          : `unknown slide type: ${JSON.stringify(slideType)}`,
+    });
+  }
+
+  const { contentRole, contentKind, assistance } = doc;
+  if (contentRole === undefined) {
+    if (isSlideType(slideType) && INSTRUCTIONAL_SLIDE_TYPES.includes(slideType)) {
+      errors.push({
+        path: '/contentRole',
+        message: `an instructional slide (${slideType}) requires a \`contentRole\``,
+      });
+    }
+  }
+  // `contentKind` is an optional specialization: an absent kind is valid for
+  // every role. Unknown role, kind without a role, kind outside its role's list.
+  checkSlideContentSemantics(doc, '', errors);
+
+  if (assistance !== undefined) {
+    if (!slideRoleAllowsAssistance(contentRole)) {
+      errors.push({
+        path: '/assistance',
+        message: `\`assistance\` is only allowed with content role ${SLIDE_ASSISTANCE_ROLES.join(' / ')}`,
+      });
+    }
+    if (!isObject(assistance)) {
+      errors.push({ path: '/assistance', message: '`assistance` must be an object' });
+    } else {
+      const tiers: readonly string[] = SLIDE_ASSISTANCE_TIERS;
+      for (const [key, value] of Object.entries(assistance)) {
+        if (!tiers.includes(key)) {
+          errors.push({ path: `/assistance/${key}`, message: `unknown assistance tier: ${key}` });
+        } else if (typeof value !== 'string' || value.trim() === '') {
+          errors.push({
+            path: `/assistance/${key}`,
+            message: `assistance tier \`${key}\` must be a non-empty string`,
+          });
+        }
+      }
+      if (Object.keys(assistance).length === 0) {
+        errors.push({ path: '/assistance', message: '`assistance` must carry at least one tier' });
+      }
+    }
+  }
+  if (
+    options.requireAssistance !== false &&
+    slideSemanticsRequireAssistance(contentRole, contentKind)
+  ) {
+    const given = isObject(assistance) ? assistance : {};
+    for (const tier of REQUIRED_SLIDE_ASSISTANCE_TIERS) {
+      if (typeof given[tier] !== 'string' || given[tier].trim() === '') {
+        errors.push({
+          path: `/assistance/${tier}`,
+          message: `independent practice requires on-demand assistance \`${tier}\``,
+        });
+      }
+    }
+  }
   return done(errors);
 }
 

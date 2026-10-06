@@ -21,6 +21,30 @@ describe('persistence client bootstrap', () => {
     vi.unstubAllGlobals();
   });
 
+  it('prefers the editor grant learner-key cookie over the device key', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PERSISTENCE', '1');
+    vi.stubEnv('NEXT_PUBLIC_PERSISTENCE_TOKEN', 'test-dev-token');
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.stubGlobal('document', {
+      cookie: 'teaching_package_learner_key=tp%3Agrant-nonce-1',
+    });
+
+    const { getPersistenceLearnerKey } = await import('@/lib/persistence/bootstrap');
+    await expect(getPersistenceLearnerKey()).resolves.toBe('tp:grant-nonce-1');
+  });
+
+  it('falls back to the device key when the grant cookie is absent', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PERSISTENCE', '1');
+    vi.stubEnv('NEXT_PUBLIC_PERSISTENCE_TOKEN', 'test-dev-token');
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.stubGlobal('document', { cookie: '' });
+
+    const { getPersistenceLearnerKey } = await import('@/lib/persistence/bootstrap');
+    await expect(getPersistenceLearnerKey()).resolves.toMatch(/^anon:/);
+  });
+
   it('leaves all sealed storage seams untouched when the flag is unset', async () => {
     vi.stubEnv('NEXT_PUBLIC_PERSISTENCE', '');
 

@@ -9,6 +9,7 @@ import {
   getParallelSceneConcurrency,
 } from '@/lib/server/provider-config';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { readSpeechConfig } from '@/lib/server/speech/config';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ServerProviders');
@@ -26,6 +27,8 @@ export async function GET() {
       generation: {
         parallelSceneConcurrency: getParallelSceneConcurrency(),
       },
+      // SATTS: lets the browser keep its narration requests identical to today's while off.
+      speech: { scientificMode: readSpeechConfig().mode },
     });
   } catch (error) {
     log.error('Error fetching server providers:', error);

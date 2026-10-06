@@ -1,0 +1,40 @@
+{
+  "table": "states",
+  "description": "State markers (s) (l) (g) (aq).",
+  "roles": [
+    "state"
+  ],
+  "domains": [
+    "CHEMISTRY"
+  ],
+  "entries": [
+    {
+      "key": "s",
+      "natural": "صلب",
+      "status": "proposed",
+      "source": "Draft common Arabic chemistry names (Saudi school chemistry, MSA); pending curriculum-chemistry approval (D-9b: the approved list is empty at launch)",
+      "notes": ""
+    },
+    {
+      "key": "l",
+      "natural": "سائل",
+      "status": "proposed",
+      "source": "Draft common Arabic chemistry names (Saudi school chemistry, MSA); pending curriculum-chemistry approval (D-9b: the approved list is empty at launch)",
+      "notes": ""
+    },
+    {
+      "key": "g",
+      "natural": "غاز",
+      "status": "proposed",
+      "source": "Draft common Arabic chemistry names (Saudi school chemistry, MSA); pending curriculum-chemistry approval (D-9b: the approved list is empty at launch)",
+      "notes": ""
+    },
+    {
+      "key": "aq",
+      "natural": "محلول مائي",
+      "status": "proposed",
+      "source": "Draft common Arabic chemistry names (Saudi school chemistry, MSA); pending curriculum-chemistry approval (D-9b: the approved list is empty at launch)",
+      "notes": "Review finding 3 (30 Sep 2026): the state name only (was «في محلول مائي»)"
+    }
+  ]
+}

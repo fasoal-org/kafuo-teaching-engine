@@ -20,6 +20,7 @@ export type {
   SpotlightAction,
   LaserAction,
   SpeechAction,
+  SpeechAudioProvenance,
   WbOpenAction,
   WbDrawTextAction,
   WbDrawShapeAction,
@@ -47,3 +48,7 @@ export type {
 // value re-exported — a bare `export type {}` would erase them and leave the
 // imports as `undefined` at runtime.
 export { FIRE_AND_FORGET_ACTIONS, SLIDE_ONLY_ACTIONS, SYNC_ACTIONS } from '@openmaic/dsl';
+
+// Read-side guard for `SpeechAction.audioProvenance` (runtime function, so a
+// value re-export): malformed provenance is dropped, never rejected.
+export { sanitizeAudioProvenance } from '@openmaic/dsl';

@@ -44,6 +44,10 @@ const GUARD_RULES = ['@typescript-eslint/no-restricted-imports', 'no-restricted-
 const GUARDED_PATHS = [
   'lib/pbl/v2/agents/probe',
   'lib/server/probe',
+  // Kafuo R1: the teaching executor is the only teaching-stage caller of the
+  // wrappers, and it must itself reach the SDK only through them.
+  'lib/server/teaching-model/probe',
+  'lib/server/tutor/probe',
   'app/api/probe/route',
   'components/probe',
   'packages/@openmaic/renderer/src/probe',

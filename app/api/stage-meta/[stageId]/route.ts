@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server';
 import { isServerPersistenceConfigured } from '@/lib/config/feature-flags';
 import { resolveStageAccess } from '@/lib/server/stage-access';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
+import { readEditorGrant } from '@/lib/server/teaching-package/editor-grant';
 
 // Per-viewer and mutable on every publish/unpublish/delete: this response must
 // never be cached, by Next or by anything in front of it.
@@ -59,8 +60,25 @@ export async function GET(req: NextRequest, { params }: Params) {
       // Identity comparison, and nothing else: this boolean is the client's
       // ONLY owner signal, so a `true` here must mean every write through the
       // owner-bound store will be accepted (the store re-checks the owner
-      // scope inside its write transactions).
-      const isOwner = access.ownerId === ownerId;
+      // scope inside its write transactions). A Stage-scoped Editor grant
+      // counts too — but only its `write` capability: a `read` grant leaves
+      // the classroom read-only, so preview stays read-only in the UI.
+      const editorGrant = readEditorGrant(req.headers, stageId);
+      let editorWriteCounts = editorGrant?.capability === 'write';
+      if (editorWriteCounts) {
+        // A write grant counts only for the Stage's own tenant (plan §4.4.5).
+        const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+        const { getServerPersistenceProvider } = await import(
+          '@/lib/persistence/server-provider'
+        );
+        try {
+          const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+          editorWriteCounts = await stageBelongsToTenant(pool, stageId, editorGrant!.tenantId);
+        } catch {
+          editorWriteCounts = false;
+        }
+      }
+      const isOwner = access.ownerId === ownerId || editorWriteCounts;
 
       return NextResponse.json(
         {

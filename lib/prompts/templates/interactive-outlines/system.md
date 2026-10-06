@@ -170,7 +170,7 @@ Interactive 3D scenes using Three.js for immersive learning experiences.
 
 ## Widget Distribution Guidelines
 
-1. **Opening scenes (slides)**: Introduction, learning objectives, context setting
+1. **Opening scene (slide)**: ONE `cover` + `orientation` slide carrying the title, hook, short context, concise learning objectives and the big idea together — never a separate learning-objectives slide
 2. **Middle scenes (widgets)**: Hands-on exploration, practice, discovery
 3. **Transition scenes (slides)**: Concept explanations between widgets
 4. **Closing scenes (slides)**: Summary, key takeaways, next steps
@@ -248,6 +248,8 @@ For **shorter courses (<10 scenes)**:
 {{snippet:media-safety-guidelines}}
 {{/if}}
 
+{{snippet:slide-classification-contract}}
+
 ## Output Format
 
 ### Top-level shape — NON-NEGOTIABLE
@@ -278,8 +280,11 @@ Rules:
     {
       "id": "scene_1",
       "type": "slide",
+      "slideType": "cover",
+      "contentRole": "orientation",
+      "visualPlan": { "mode": "native" },
       "title": "Introduction to Projectile Motion",
-      "description": "Introduce the concept and learning objectives",
+      "description": "Open the lesson: hook, short context, concise learning objectives and the big idea",
       "keyPoints": ["What is projectile motion", "Real-world examples", "Key variables"],
       "order": 1
     },
@@ -314,6 +319,7 @@ Rules:
 5. **Widget variety**: Use different widget types throughout the course when appropriate.
 6. **Flow**: Slides should introduce concepts, widgets should let students explore.
 7. **Language**: Apply the Language Inference decision rules above when producing `languageDirective`, and author all scene content in the inferred language.
-8. **REQUIRED for interactive scenes**: Every scene with `type: "interactive"` MUST include both `widgetType` AND `widgetOutline` fields.
+8. **REQUIRED for slide scenes**: Every scene with `type: "slide"` MUST carry `slideType`, and every instructional slide a `contentRole` (plus `contentKind` for `explanation` / `activity` / `practice`), exactly as defined in Slide Classification. Never put these fields on an interactive scene.
+8a. **REQUIRED for interactive scenes**: Every scene with `type: "interactive"` MUST include both `widgetType` AND `widgetOutline` fields.
 9. **Game quality**: Game widgets should be INTERACTIVE and FUN, not boring quizzes.
 10. **Mobile-first**: All widgets should work well on mobile devices.

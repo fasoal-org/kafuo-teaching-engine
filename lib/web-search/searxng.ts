@@ -14,7 +14,8 @@ const log = createLogger('SearXNG');
 
 const SEARXNG_HEADERS: Record<string, string> = {
   Accept: 'application/json',
-  'User-Agent': 'Mozilla/5.0 (compatible; OpenMAIC/1.0; +https://github.com/THU-MAIC/OpenMAIC)',
+  'User-Agent':
+    'Mozilla/5.0 (compatible; OpenMAIC/1.0; +https://github.com/fasoal-org/kafuo-teaching-engine)',
 };
 
 export function buildSearxngSearchUrl(baseUrl: string, query: string): string {

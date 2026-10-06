@@ -276,6 +276,8 @@ describe('generation and deck tools', () => {
       order: 2,
       title: 'Media',
       type: 'slide',
+      slideType: 'content',
+      contentRole: 'example',
       brief: 'Use media',
       media: [{ src: 'image:pending', description: 'Pending image' }],
     } as never);

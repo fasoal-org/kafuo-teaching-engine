@@ -236,7 +236,32 @@
     "doneEditing": "Terminar edición",
     "proModeDisabledHint": "La edición no está disponible en esta página — abre una diapositiva del curso para editar con el modo Pro."
   },
+  "aiVoice": {
+    "notice": "This lesson's voice is AI-generated, not a real teacher.",
+    "label": "AI voice",
+    "dismiss": "Got it"
+  },
   "edit": {
+    "pronunciation": {
+      "title": "Pronunciation",
+      "regenerateAllConfirm": "Regenerate all {{total}} lines? {{current}} are already up to date. Choose Cancel to regenerate only the out-of-date lines.",
+      "original": "Original",
+      "prepared": "Spoken form",
+      "warnings": "Warnings",
+      "noWarnings": "No warnings",
+      "preview": "Preview spoken form",
+      "statusCurrent": "Current",
+      "statusStale": "Stale · {{reason}}",
+      "statusLegacy": "Legacy audio",
+      "statusMissing": "No audio",
+      "generalPath": "General narration (no subject rules)",
+      "policy": "Policy {{version}} ({{status}})",
+      "unavailable": "Pronunciation details are unavailable.",
+      "readingMode": "Narration reading mode",
+      "readingModeNatural": "Natural",
+      "readingModeAccessible": "Accessible (explicit structure)",
+      "unvoicedCount": "{{count}} lines have no audio"
+    },
     "proMode": "Pro",
     "undo": "Deshacer",
     "redo": "Rehacer",
@@ -378,7 +403,18 @@
       "sceneIncomplete": "Esta página tiene contenido incompleto",
       "addPage": "Agregar página",
       "nextPage": "Página siguiente",
-      "prevPage": "Página anterior"
+      "prevPage": "Página anterior",
+      "sceneGenerationIssue": "This slide needs review: generation had a problem",
+      "generationIssue": {
+        "ORIENTATION_VISUAL_MISSING": "The textbook image chosen for this slide is missing.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "This slide could not be generated; a placeholder was kept.",
+        "GOVERNED_ACTION_GENERATION_FAILED": "The narration could not be generated; a default narration was kept.",
+        "SPEECH_REGISTER_NONCOMPLIANT": "The narration does not follow the required spoken style.",
+        "TEACHING_MODEL_REFUSED": "The AI refused to generate part of this slide; defaults were kept.",
+        "ACTION_REFERENCE_INVALID": "Invalid narration or animation steps were removed from this slide.",
+        "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
+        "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide."
+      }
     },
     "zorder": {
       "toFront": "Traer al frente",
@@ -647,6 +683,60 @@
     "dock": {
       "elementRefHint": "Referencias de elementos: elige elementos para enviar con tu próximo mensaje",
       "globalTools": "Herramientas globales"
+    },
+    "slideRegeneration": {
+      "menuItem": "Regenerate slide",
+      "title": "Regenerate this slide",
+      "scope": "Only this slide is regenerated. Its place in the lesson, its learning objectives and its teaching skills stay the same; its content and narration are replaced.",
+      "instructionLabel": "Requirements for the AI",
+      "instructionHelp": "Describe what the new version of this slide must do. This text is sent to the AI.",
+      "instructionPlaceholder": "For example: explain the rule with a simpler everyday example and fix the wrong formula.",
+      "reasonLabel": "Reason for regeneration",
+      "reasonHelp": "Why this slide needs regenerating. It is kept in the review history only and is never sent to the AI.",
+      "reasonPlaceholder": "For example: the formula on this slide is wrong.",
+      "counter": "{{count}}/{{max}}",
+      "errorRequired": "This field is required.",
+      "errorMin": "Write at least {{limit}} characters.",
+      "errorMax": "Use at most {{limit}} characters.",
+      "submit": "Regenerate this slide",
+      "cancel": "Cancel",
+      "running": "Regenerating this slide. This can take a minute; keep this tab open.",
+      "success": "The slide was regenerated.",
+      "changedSince": "The slide was regenerated, but it has changed again since. The current version is shown.",
+      "notDurable": "Your latest changes to this slide could not be saved yet, so nothing was sent. Try again in a moment.",
+      "conflictNotice": "This slide was changed elsewhere; your unsaved changes to it were not saved.",
+      "reloadNotice": "This editor tab was out of date, so its changes were not saved. The slides were reloaded.",
+      "restoreAction": "Restore previous",
+      "restored": "The previous version of the slide was restored.",
+      "restoreFailed": "The previous version could not be restored ({{code}}).",
+      "errors": {
+        "STAGE_LOCKED": "This package can no longer be edited.",
+        "SCENE_REGENERATION_IN_PROGRESS": "This slide is already being regenerated.",
+        "SCENE_CHANGED_DURING_REGENERATION": "The slide was changed while it was being regenerated, so the result was not saved. The current version is shown.",
+        "SOURCE_VISUAL_UNRESOLVED": "This slide's textbook image cannot be identified, so the slide cannot be regenerated.",
+        "ORIENTATION_VISUAL_MISSING": "The new version did not keep the slide's textbook image, so it was not saved. Try again.",
+        "SPEECH_REGISTER_NONCOMPLIANT": "The narration did not follow the required spoken style after several tries. Nothing was saved.",
+        "TEACHING_MODEL_UNAVAILABLE": "The AI service is unavailable right now. Nothing was saved; try again later.",
+        "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
+        "READ_ONLY_GRANT": "This editor session can only view the package.",
+        "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
+      }
+    },
+    "quizRegeneration": {
+      "menuItem": "Regenerate quiz",
+      "title": "Regenerate this quiz",
+      "scope": "Only this quiz is regenerated. Its place in the lesson, its learning objectives and its teaching skills stay the same; its questions and narration are replaced.",
+      "instructionHelp": "Describe what the new questions must do. This text, with the current questions, is sent to the AI.",
+      "instructionPlaceholder": "For example: make the questions check the idea, not memorised numbers, and fix the wrong answer in question 2.",
+      "reasonHelp": "Why this quiz needs regenerating. It is kept in the review history only and is never sent to the AI.",
+      "reasonPlaceholder": "For example: question 2 has two correct answers.",
+      "submit": "Regenerate this quiz",
+      "running": "Regenerating this quiz. This can take a minute; keep this tab open.",
+      "success": "The quiz was regenerated.",
+      "restored": "The previous version of the quiz was restored.",
+      "errors": {
+        "generic": "The quiz could not be regenerated ({{code}}). Nothing was saved."
+      }
     }
   },
   "classroomComplete": {
@@ -1073,6 +1163,17 @@
     "noOutlines": "Aún no hay esquemas de escenas",
     "sceneTitlePlaceholder": "Título de la escena",
     "sceneTypeSlide": "Diapositiva",
+    "slideClassificationChoose": "Classify…",
+    "slideClassificationNone": "None (structural)",
+    "slideClassificationSlideType": "Slide type",
+    "slideClassificationRole": "Teaching role",
+    "slideClassificationKind": "Kind",
+    "slideClassificationHint": "Every teaching slide needs a role. Only a purely structural contents, transition or end slide may have none.",
+    "assistancePlanTitle": "On-demand assistance plan",
+    "assistancePlanNotLearnerVisible": "Not shown on the slide. Learners see it only when they ask for help. Put the solution here, never in the description or key points.",
+    "assistancePlan_hint": "Hint — what a nudge should point toward",
+    "assistancePlan_help": "Help — the approach or a partial structure",
+    "assistancePlan_explanation": "Explanation — the full solution path",
     "sceneTypeQuiz": "Cuestionario",
     "sceneTypeInteractive": "Interactivo",
     "sceneTypePbl": "ABP",
@@ -1866,7 +1967,7 @@
       "download": "Descargar",
       "detailFailed": "No se pudieron cargar los detalles del skill",
       "contentLabel": "Contenido",
-      "builtinDetailNote": "Este skill viene incluido con OpenMAIC. Descárgalo para importarlo a otro espacio de trabajo de agente.",
+      "builtinDetailNote": "Este skill viene incluido con Teaching Engine. Descárgalo para importarlo a otro espacio de trabajo de agente.",
       "upload": "Subir",
       "uploading": "Subiendo…",
       "uploadFailed": "No se pudo subir el skill. Revisa el archivo e inténtalo de nuevo.",

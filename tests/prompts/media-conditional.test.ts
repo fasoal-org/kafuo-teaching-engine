@@ -31,6 +31,8 @@ function buildOutlinePrompt(
     imageEnabled,
     videoEnabled,
     mediaEnabled: imageEnabled || videoEnabled,
+    // Always defined by the real builders (RSS W4 embedded-text policy).
+    imageTextPolicy: 'Prefer text-free images.',
   });
 }
 

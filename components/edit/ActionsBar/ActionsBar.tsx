@@ -63,10 +63,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { Action, DiscussionAction } from '@/lib/types/action';
+import type {
+  Action,
+  DiscussionAction,
+  SpeechAction,
+  SpeechAudioProvenance,
+} from '@/lib/types/action';
+import { isScientificSpeechActive, selectActionsToGenerate } from '@/lib/hooks/use-scene-generator';
 import type { SceneType } from '@/lib/types/stage';
 import { ELEMENT_BOUND, cueLabel, cueMeta, elementLabel } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
+import { useSceneActionFindings } from './action-findings';
 import {
   appendDiscussion,
   clampInsertSlot,
@@ -94,6 +101,7 @@ import {
   resolveSpeechAudioId,
 } from '@/lib/audio/regenerate-speech-tts';
 import { useMayGenerateForStage } from '@/lib/classroom/generation-permission';
+import { PronunciationPanel, SpeechReadingModeSetting } from './PronunciationPanel';
 
 const EMPTY: Action[] = [];
 const EMPTY_ELEMENTS: { id?: string; type: string; content?: string }[] = [];
@@ -300,8 +308,9 @@ export function SpeechTtsBar({
    * audioId so the caller can stamp it on the action: this tree allocates pool
    * identities (the blob is stored under the returned id), so the id cannot be
    * re-derived by the caller like the reference's deterministic key.
+   * `provenance` is present only when the server's scientific mode is not off.
    */
-  onGenerated: (audioId: string) => void;
+  onGenerated: (audioId: string, provenance?: SpeechAudioProvenance) => void;
 }) {
   const { t } = useI18n();
   const [status, setStatus] = useState<TtsStatus>('none');
@@ -437,14 +446,19 @@ export function SpeechTtsBar({
     setStatus('generating');
     try {
       const previousAudioId = audioId;
+      let provenance: SpeechAudioProvenance | undefined;
       const id = await regenerateSpeechAudio(
         sceneOrder,
         { id: actionId, text, audioId: previousAudioId },
         language,
+        undefined,
+        (value) => {
+          provenance = value;
+        },
       );
       if (id) {
         setReadAudioId(id);
-        onGenerated(id);
+        onGenerated(id, provenance);
         setStatus('ready');
       } else {
         setStatus('none');
@@ -554,7 +568,7 @@ function SpeechClip({
   ttsRefresh?: number;
   regenerating?: boolean;
   onCommit: (text: string) => void;
-  onGenerated: (audioId: string) => void;
+  onGenerated: (audioId: string, provenance?: SpeechAudioProvenance) => void;
   onDelete: () => void;
   onMoveLeft: () => void;
   onMoveRight: () => void;
@@ -653,6 +667,7 @@ function SpeechClip({
           onGenerated={onGenerated}
         />
       )}
+      {ttsActive && <PronunciationPanel actionId={actionId} />}
     </div>
   );
 }
@@ -1085,6 +1100,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   // so it reads `collapsed` rather than being hidden by the shell.
   const { collapsed: lineMode, toggleCollapsed } = useEditDock();
   const [tip, setTip] = useState<TooltipState | null>(null);
+  // W5: governance findings for THIS scene, keyed by Action id — the row
+  // marker source. Empty (and fetch-free to render) on non-package stages.
+  const actionFindings = useSceneActionFindings(sceneId);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [regenAll, setRegenAll] = useState(false);
@@ -1113,10 +1131,32 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const regenerateAllAudio = useCallback(async () => {
     if (regenAll) return;
     const latest = () => useStageStore.getState().scenes.find((s) => s.id === sceneId);
-    const speeches = (latest()?.actions ?? []).filter(
+    let speeches = (latest()?.actions ?? []).filter(
       (a) => a.type === 'speech' && ((a as { text?: string }).text ?? '').trim(),
     );
     if (!speeches.length) return;
+    // SATTS "only stale" default (plan §7.4): with the scientific flag on, lines
+    // whose audio is current are skipped unless the reviewer confirms a full
+    // regeneration. With the flag off this is today's "voice all".
+    if (isScientificSpeechActive(useSettingsStore.getState().scientificSpeechMode)) {
+      const stale = await selectActionsToGenerate(
+        speeches as SpeechAction[],
+        useStageStore.getState().stage?.id,
+      );
+      const current = speeches.length - stale.length;
+      if (
+        current > 0 &&
+        !window.confirm(
+          t('edit.pronunciation.regenerateAllConfirm', {
+            total: String(speeches.length),
+            current: String(current),
+          }),
+        )
+      ) {
+        speeches = stale;
+      }
+      if (!speeches.length) return;
+    }
     const order = latest()?.order ?? 0;
     setRegenAll(true);
     // Light up every queued line's status row up front (they're all about to be
@@ -1131,6 +1171,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           );
           if (!liveAction || liveAction.type !== 'speech') continue;
           const previousAudioId = liveAction.audioId;
+          let provenance: SpeechAudioProvenance | undefined;
           const id = await regenerateSpeechAudio(
             latest()?.order ?? order,
             {
@@ -1139,9 +1180,13 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
               audioId: previousAudioId,
             },
             language,
+            undefined,
+            (value) => {
+              provenance = value;
+            },
           );
           if (id) {
-            commit((cur) => setAudioIdById(cur, liveAction.id!, id));
+            commit((cur) => setAudioIdById(cur, liveAction.id!, id, provenance));
             await flushStageSave();
           }
         } catch {
@@ -1156,7 +1201,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       // batchPending flag) instead of getting stuck in the generating state.
       setTtsRefresh((n) => n + 1);
     }
-  }, [regenAll, sceneId, language, commit]);
+  }, [regenAll, sceneId, language, commit, t]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const panViewport = (dir: -1 | 1) =>
@@ -1296,6 +1341,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
       {/* The timeline's own header row: what it is, what it can insert, how much
           it holds, and its fold. Geometry unchanged from the standalone bar. */}
       <div className="flex h-10 shrink-0 items-center gap-2 px-6">{header}</div>
+      <SpeechReadingModeSetting />
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
         <div className="relative h-full min-w-max">
           {/* the timeline axis (top) — nodes hang below it; hidden when empty
@@ -1358,6 +1404,25 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
               );
               return (
                 <div key={key} className="relative flex h-full items-stretch">
+                  {/* W5: the governance finding marker (TAE-RQ-025/027) —
+                      identity + code only, keyed by the row's Action id, so
+                      the reviewer sees WHICH row the inspection flagged; the
+                      Teaching Skills panel carries the codes and messages. */}
+                  {actionFindings.has(key) && (
+                    <span
+                      data-testid="action-finding-marker"
+                      data-action-id={key}
+                      data-finding-codes={[...actionFindings.get(key)!]
+                        .map((finding) => finding.code)
+                        .join(',')}
+                      title={[...actionFindings.get(key)!]
+                        .map((finding) => finding.code)
+                        .join(', ')}
+                      className="absolute left-1/2 top-0 z-10 -translate-x-1/2 rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white shadow-sm"
+                    >
+                      !
+                    </span>
+                  )}
                   <motion.div
                     initial={reduce ? false : { opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -1409,8 +1474,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
                                   audioId: prevAudioId,
                                 }).finally(() => setTtsRefresh((n) => n + 1));
                               }}
-                              onGenerated={(assetId) => {
-                                commit((cur) => setAudioIdById(cur, key, assetId));
+                              onGenerated={(assetId, provenance) => {
+                                commit((cur) => setAudioIdById(cur, key, assetId, provenance));
                                 // Stage persistence is debounced; flush so the
                                 // stamped reference is durable once the row
                                 // settles (pool bytes persist first, stamp last).

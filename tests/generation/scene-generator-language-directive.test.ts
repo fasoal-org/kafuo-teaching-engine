@@ -47,6 +47,8 @@ function baseOutline(overrides: Partial<SceneOutline> = {}): SceneOutline {
   return {
     id: 'scene-1',
     type: 'slide',
+    slideType: 'content',
+    contentRole: 'example',
     title: 'Test Scene',
     description: 'A scene for testing language directive threading.',
     keyPoints: ['point a', 'point b'],

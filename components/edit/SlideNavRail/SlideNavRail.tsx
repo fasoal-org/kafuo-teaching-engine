@@ -6,7 +6,8 @@ import { AnimatePresence, Reorder, motion, useReducedMotion } from 'motion/react
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { useBrand, useIsDesktop } from '@/lib/brand/brand-context';
+import { useIsDesktop } from '@/lib/brand/brand-context';
+import { BrandLockup } from '@/components/brand/brand-lockup';
 import { useStageStore } from '@/lib/store';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -16,6 +17,7 @@ import {
   createBlankEditableScene,
   insertSceneAtIndex,
   type EditableSceneType,
+  teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
 import { SCENE_CREATION_ENABLED } from '@/lib/edit/scene-creation-enabled';
 import { CHROME_DURATION_MS, CHROME_EASE, CHROME_EASE_CSS } from '@/lib/edit/transitions';
@@ -23,6 +25,14 @@ import { useInWorkbenchPanel } from '@/lib/workbench/panel-context';
 import type { Scene } from '@/lib/types/stage';
 import { ThumbItem } from './ThumbItem';
 import { InsertionZone } from './InsertionZone';
+import { RegenerateSlideDialog } from '@/components/edit/RegenerateSlideDialog';
+import {
+  canRegenerateScene,
+  fetchRegenerationGate,
+  type RegenerationGate,
+} from '@/lib/edit/scene-regeneration-client';
+import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
+import { onStageSaveConflict } from '@/lib/store/stage';
 
 // Collapsed, the rail is a slim edge handle — just wide enough to hold the
 // expand chevron — rather than a narrow column of page numbers. The point of
@@ -51,7 +61,6 @@ const RAIL_MAX_PX = 360;
 export function SlideNavRail() {
   const { t } = useI18n();
   const router = useRouter();
-  const brand = useBrand();
   const isDesktop = useIsDesktop();
   const inWorkbenchPanel = useInWorkbenchPanel();
   const scenes = useStageStore.use.scenes();
@@ -61,6 +70,47 @@ export function SlideNavRail() {
   const insertSceneAfter = useStageStore.use.insertSceneAfter();
   const deleteScene = useStageStore.use.deleteScene();
   const stage = useStageStore.use.stage();
+  const stageId = stage?.id;
+  // Single-slide regeneration (single-slide-regeneration-plan §12.1): the
+  // action exists only for an editable package Stage under a write grant.
+  const [gateState, setGateState] = useState<{
+    stageId: string;
+    gate: RegenerationGate | null;
+  } | null>(null);
+  // Keyed by Stage, so a navigation never shows the previous Stage's answer.
+  const regenerationGate = gateState && gateState.stageId === stageId ? gateState.gate : null;
+  const [regenerating, setRegenerating] = useState<{
+    id: string;
+    title: string;
+    type: 'slide' | 'quiz';
+  } | null>(null);
+  useEffect(() => {
+    if (!stageId || !isTeachingPackageGrantSession()) return;
+    let cancelled = false;
+    void fetchRegenerationGate(stageId)
+      .then((gate) => {
+        if (!cancelled) setGateState({ stageId, gate });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [stageId]);
+  // A slide changed elsewhere: the editor now shows the server copy.
+  useEffect(
+    () =>
+      onStageSaveConflict((conflict) => {
+        if (conflict.stageId !== stageId) return;
+        toast.warning(
+          t(
+            conflict.code === 'PRECONDITION_REQUIRED'
+              ? 'edit.slideRegeneration.reloadNotice'
+              : 'edit.slideRegeneration.conflictNotice',
+          ),
+        );
+      }),
+    [stageId, t],
+  );
   const collapsed = useSettingsStore((s) => s.editRailCollapsed);
   const setCollapsed = useSettingsStore((s) => s.setEditRailCollapsed);
   const persistedWidth = useSettingsStore((s) => s.editRailWidth);
@@ -205,7 +255,14 @@ export function SlideNavRail() {
     (insertIndex: number, type: EditableSceneType) => {
       if (!stage) return;
       const title = type === 'slide' ? t('edit.nav.untitledSlide') : t('edit.sceneType.quiz');
-      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1);
+      // A scene inserted into a Kafuo package stage inherits its teaching
+      // stage from the previous scene (the first scene when inserting at 0),
+      // so an editor-created scene stays submit-capable; the identity is
+      // never inferred from titles, types, or order.
+      const inheritedTeachingStage = teachingStageForInsertion(scenes, insertIndex);
+      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
+        ...(inheritedTeachingStage !== undefined && { teachingStage: inheritedTeachingStage }),
+      });
       setScenes(insertSceneAtIndex(scenes, scene, insertIndex));
       setCurrentSceneId(scene.id);
     },
@@ -390,7 +447,7 @@ export function SlideNavRail() {
         </button>
       )}
 
-      {/* Header band — mirrors playback `SceneSidebar`: OpenMAIC logo on
+      {/* Header band — mirrors playback `SceneSidebar`: brand lockup on
           the left (click → home). Height (h-10 + mt-3 + mb-1 = ~56px)
           matches playback so the chrome top edge stays at the same screen
           pixel across the mode swap. Inside the workbench panel the band
@@ -408,7 +465,11 @@ export function SlideNavRail() {
             >
               {/* Desktop client: the Electron title bar already shows the brand icon + name, so the edit rail doesn't repeat it;
                   returning home is handled by the edit bar's CommandBar back arrow. */}
-              <img src={brand.logoSrc} alt={brand.productName} className="h-6 w-auto" />
+              <BrandLockup
+                logoClassName="h-6 w-auto"
+                markClassName="size-6"
+                textClassName="text-sm"
+              />
             </button>
           )}
         </div>
@@ -455,6 +516,16 @@ export function SlideNavRail() {
                       onActivate={() => handleActivate(scene.id)}
                       onDuplicate={() => handleDuplicate(scene.id)}
                       onDelete={() => handleDelete(scene.id)}
+                      onRegenerate={
+                        canRegenerateScene(regenerationGate, scene)
+                          ? () =>
+                              setRegenerating({
+                                id: scene.id,
+                                title: scene.title,
+                                type: scene.type === 'quiz' ? 'quiz' : 'slide',
+                              })
+                          : undefined
+                      }
                     />
                     {SCENE_CREATION_ENABLED && (
                       <InsertionZone
@@ -471,6 +542,18 @@ export function SlideNavRail() {
           </AnimatePresence>
         </div>
       )}
+      {stageId && regenerating ? (
+        <RegenerateSlideDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setRegenerating(null);
+          }}
+          stageId={stageId}
+          sceneId={regenerating.id}
+          sceneTitle={regenerating.title}
+          sceneType={regenerating.type}
+        />
+      ) : null}
     </aside>
   );
 }

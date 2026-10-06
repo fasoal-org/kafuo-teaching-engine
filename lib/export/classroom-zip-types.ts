@@ -24,7 +24,14 @@ export interface ClassroomManifest {
 export interface ManifestStage {
   name: string;
   description?: string;
+  /** Holds `Stage.languageDirective` (free prose), not the BCP-47 tag. */
   language?: string;
+  /** `Stage.language` (BCP-47). Absent in archives written before it existed. */
+  languageTag?: string;
+  textDirection?: 'ltr' | 'rtl';
+  /** Authoritative lesson subject code (`Stage.subjectCode`). */
+  subjectCode?: string;
+  speechReadingMode?: 'natural' | 'accessible';
   style?: string;
   videoManifest?: VideoManifest;
   createdAt: number;

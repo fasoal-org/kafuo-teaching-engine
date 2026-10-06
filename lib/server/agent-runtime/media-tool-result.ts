@@ -18,6 +18,7 @@ export const MEDIA_TOOL_ERROR_REASONS = {
   missingModel: 'missing-model',
   timeout: 'timeout',
   generationFailed: 'provider-or-storage-error',
+  complianceWithheld: 'visual-compliance-withheld',
 } as const;
 
 export type MediaToolErrorReason =

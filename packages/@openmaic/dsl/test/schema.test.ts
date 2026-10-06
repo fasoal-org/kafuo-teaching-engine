@@ -84,6 +84,51 @@ describe('generated JSON Schema — Stage', () => {
   });
 });
 
+describe('generated JSON Schema — speech metadata', () => {
+  const stageDefs = (schemas.Stage as GeneratedSchema).definitions;
+  const actionDefs = (schemas.Action as GeneratedSchema).definitions;
+
+  it('Stage carries the optional subjectCode and speechReadingMode properties', () => {
+    expect(stageDefs.Stage.properties).toHaveProperty('subjectCode');
+    expect(stageDefs.Stage.properties).toHaveProperty('speechReadingMode');
+    const v = validator('Stage');
+    const stage = { id: 's', name: 'n', createdAt: 1, updatedAt: 2 };
+    expect(v({ ...stage, subjectCode: 'MATH', speechReadingMode: 'accessible' })).toBe(true);
+    expect(v({ ...stage, speechReadingMode: 'fast' })).toBe(false);
+  });
+
+  it('SpeechAction carries the optional audioProvenance property', () => {
+    expect(actionDefs.SpeechAction.properties).toHaveProperty('audioProvenance');
+    expect(actionDefs.SpeechAudioProvenance.properties).toHaveProperty('fingerprint');
+    const v = validator('Action');
+    expect(
+      v({
+        id: 'a',
+        type: 'speech',
+        text: 'hi',
+        audioId: 'x',
+        audioProvenance: {
+          fingerprint: 'fp1:abc',
+          policyVersion: null,
+          originalDigest: 'd0',
+          responseFormat: 'mp3',
+          providerId: 'openai-tts',
+          modelId: 'gpt-4o-mini-tts',
+          voice: 'alloy',
+          speed: 1,
+          preparedDigest: 'd1',
+          segments: 1,
+          preparedChars: 2,
+          originalChars: 2,
+          warningCount: 0,
+          generatedAt: '2026-09-28T00:00:00.000Z',
+          reason: 'initial',
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('generated JSON Schema — Action', () => {
   const v = validator('Action');
   it('accepts a spotlight action', () => {
@@ -220,6 +265,54 @@ describe('generated JSON Schema — SerializedScene', () => {
   });
   it('rejects a scene missing required fields', () => {
     expect(v({ id: 'sc' })).toBe(false);
+  });
+  it('accepts the optional sourceContentUnitIds binding on every scene kind and rejects a malformed one', () => {
+    const typed = schemas.SerializedScene as unknown as GeneratedSchema;
+    // Emitted on the contract's scene definitions (SceneCore is inlined per kind).
+    const carrying = Object.entries(typed.definitions).filter(
+      ([, def]) => def.properties && 'sourceContentUnitIds' in def.properties,
+    );
+    expect(carrying.length).toBeGreaterThan(0);
+    for (const [, def] of carrying) {
+      expect(def.properties!.sourceContentUnitIds).toMatchObject({
+        type: 'array',
+        items: { type: 'string' },
+      });
+    }
+    expect(v({ ...slideScene, sourceContentUnitIds: ['2900'] })).toBe(true);
+    expect(v({ ...slideScene, sourceContentUnitIds: [2900] })).toBe(false);
+    expect(v({ ...slideScene, sourceContentUnitIds: '2900' })).toBe(false);
+  });
+  it('accepts slide content with and without the optional pedagogical metadata', () => {
+    const withSemantics = (extra: Record<string, unknown>) => ({
+      ...slideScene,
+      content: { ...slideScene.content, ...extra },
+    });
+    // Legacy documents carry neither field (nor a canvas `type`).
+    expect(v(slideScene)).toBe(true);
+    expect(v(withSemantics({ contentRole: 'orientation' }))).toBe(true);
+    expect(v(withSemantics({ contentRole: 'explanation', contentKind: 'concept' }))).toBe(true);
+    // On-demand assistance is an additive, closed object beside the canvas.
+    const practice = { contentRole: 'practice', contentKind: 'independent' };
+    expect(v(withSemantics({ ...practice, assistance: { hint: 'h', explanation: 'e' } }))).toBe(
+      true,
+    );
+    expect(v(withSemantics({ ...practice, assistance: { answer: 'x' } }))).toBe(false);
+    // The schema checks each field's vocabulary; the role<->kind pairing is a
+    // value-level rule owned by `validateScene`.
+    expect(v(withSemantics({ contentRole: 'learning_objectives' }))).toBe(false);
+    expect(v(withSemantics({ contentRole: 'practice', contentKind: 'bogus' }))).toBe(false);
+  });
+  it('keeps the pedagogical metadata off the canvas and off non-slide content', () => {
+    const typed = schemas.SerializedScene as unknown as GeneratedSchema;
+    expect(Object.keys(typed.definitions.SlideContent.properties ?? {})).toEqual(
+      expect.arrayContaining(['contentRole', 'contentKind']),
+    );
+    for (const name of ['Slide', 'QuizContent']) {
+      const props = Object.keys(typed.definitions[name].properties ?? {});
+      expect(props).not.toContain('contentRole');
+      expect(props).not.toContain('contentKind');
+    }
   });
   it('accepts a realistic legacy PBL scene with opaque v1 projectConfig', () => {
     expect(v(legacyPBLScene), JSON.stringify(v.errors)).toBe(true);

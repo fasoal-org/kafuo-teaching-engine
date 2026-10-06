@@ -220,3 +220,80 @@ describe('planRegenerateApply — edit_interactive_html', () => {
     ).toEqual({ snapshot: null, patch: null });
   });
 });
+
+// ---- Module 3/4 W4 (TAE-RQ-019): the Action-only patch shape, pinned ----
+
+describe('planRegenerateApply — Action-only regeneration (TAE-RQ-019)', () => {
+  it('an actions-only result patches ONLY the actions — no content key, so Scene identity, content, Stage, Skills, objectives and Model lineage are retained', () => {
+    const plan = planRegenerateApply(
+      {
+        sceneId: 's1',
+        actions: [{ id: 'a_new', type: 'speech', text: 'Regenerated.' } as never],
+      },
+      slideScene(),
+      'regenerate_scene_actions',
+    );
+    // The patch is exactly { actions } — a shallow partial whose every other
+    // Scene field, governed carriers included, is untouched by construction.
+    expect(Object.keys(plan.patch!)).toEqual(['actions']);
+    expect(plan.snapshot).toMatchObject({ sceneId: 's1', actionsOnly: true });
+  });
+
+  it('an empty Action result is rejected — the page is unchanged', () => {
+    const plan = planRegenerateApply(
+      { sceneId: 's1', actions: [] },
+      slideScene(),
+      'regenerate_scene_actions',
+    );
+    expect(plan.patch).toBeNull();
+  });
+});
+
+describe('regenerate_scene keeps the slide classification', () => {
+  function classifiedScene(): Pick<Scene, 'content' | 'actions'> {
+    const base = slideScene();
+    const content = base.content as unknown as { canvas: Record<string, unknown> };
+    return {
+      ...base,
+      content: {
+        ...content,
+        canvas: { ...content.canvas, type: 'content' },
+        contentRole: 'practice',
+        contentKind: 'guided',
+        assistance: { hint: '<p>h</p>' },
+      } as unknown as SceneContent,
+    };
+  }
+
+  it('carries Slide.type, contentRole and contentKind across a whole-slide regenerate', () => {
+    const plan = planRegenerateApply(
+      { sceneId: 's1', content: GEN, actions: [] },
+      classifiedScene(),
+      'regenerate_scene',
+    );
+    const next = plan.patch!.content as unknown as {
+      canvas: { type?: string; elements: { id: string }[] };
+      contentRole?: string;
+      contentKind?: string;
+      assistance?: unknown;
+    };
+    expect(next.assistance).toEqual({ hint: '<p>h</p>' });
+    expect(next.canvas).not.toHaveProperty('assistance');
+    expect(next.canvas.elements[0].id).toBe('e_new');
+    expect(next.canvas.type).toBe('content');
+    expect(next.contentRole).toBe('practice');
+    expect(next.contentKind).toBe('guided');
+  });
+
+  it('adds nothing to a legacy slide that carries no classification', () => {
+    const plan = planRegenerateApply(
+      { sceneId: 's1', content: GEN, actions: [] },
+      slideScene(),
+      'regenerate_scene',
+    );
+    const next = plan.patch!.content as unknown as Record<string, unknown>;
+    expect(next).not.toHaveProperty('contentRole');
+    expect(next).not.toHaveProperty('contentKind');
+    expect(next.canvas as Record<string, unknown>).not.toHaveProperty('type');
+  });
+});

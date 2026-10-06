@@ -77,6 +77,7 @@ next-env.d.ts
 # Eval results
 eval/whiteboard-layout/results/
 eval/outline-language/results/
+eval/slide-roles/results/
 eval/orchestration/results/
 eval/orchestration/results-answering/
 eval/orchestration/results-answer-content/
@@ -90,3 +91,6 @@ e2e/screenshots/
 # local e2e screenshots for #619 review
 e2e/__screenshots-619/
 /.playwright-mcp/
+
+# SATTS Wave 0 spike outputs (generated audio + raw results)
+scripts/spikes/satts/out/

@@ -27,6 +27,7 @@ import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-sc
 import { ownerApiError, ownerJson, ownerNotFound } from '@/lib/server/agent-runtime/route-response';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
 import { STAGE_NAME_MAX_LENGTH } from '@/lib/server/agent-runtime/stage-limits';
+import { isTeachingPackageStageLockedError } from '@/lib/server/teaching-package/errors';
 
 export const runtime = 'nodejs';
 
@@ -45,6 +46,11 @@ function isStoreValidationError(error: unknown): error is Error {
 /** Map a store save failure onto the route's error surface. */
 function mapSaveError(error: unknown, headers: Headers) {
   if (error instanceof DocumentNotFoundError) return ownerNotFound(headers);
+  if (isTeachingPackageStageLockedError(error)) {
+    // A Teaching-Package-protected Stage (in-review/approved/superseded/
+    // discarded, or a retained displaced Stage) may not be mutated here.
+    return ownerApiError('STAGE_LOCKED', 423, error.message, headers);
+  }
   if (error instanceof DocumentVersionError) {
     // A document written by a newer client cannot be saved by this one.
     return ownerApiError(
@@ -183,7 +189,14 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   return withRequestOwnerId(req, async (ownerId, responseHeaders) => {
     const { id } = await params;
     const store = await getOwnerScopedDocumentStore(ownerId);
-    await store.deleteDocument(id);
+    try {
+      await store.deleteDocument(id);
+    } catch (error) {
+      if (isTeachingPackageStageLockedError(error)) {
+        return ownerApiError('STAGE_LOCKED', 423, error.message, responseHeaders);
+      }
+      throw error;
+    }
     return ownerJson({ ok: true }, 200, responseHeaders);
   });
 }

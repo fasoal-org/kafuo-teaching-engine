@@ -1,0 +1,309 @@
+{
+  "table": "numbers-structural",
+  "description": "Words for small integers in structural roles only: exponents, root indices, subscript indices, chemical coefficients and counts, charge magnitudes (plan §10.1). O-1: every form is in the «اثنين» register.",
+  "roles": [
+    "number"
+  ],
+  "entries": [
+    {
+      "key": "0",
+      "roles": [
+        "number"
+      ],
+      "natural": "صفر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "1",
+      "roles": [
+        "number"
+      ],
+      "natural": "واحد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "2",
+      "roles": [
+        "number"
+      ],
+      "natural": "اثنين",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "3",
+      "roles": [
+        "number"
+      ],
+      "natural": "ثلاثة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "4",
+      "roles": [
+        "number"
+      ],
+      "natural": "أربعة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "5",
+      "roles": [
+        "number"
+      ],
+      "natural": "خمسة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "6",
+      "roles": [
+        "number"
+      ],
+      "natural": "ستة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "7",
+      "roles": [
+        "number"
+      ],
+      "natural": "سبعة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "8",
+      "roles": [
+        "number"
+      ],
+      "natural": "ثمانية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "9",
+      "roles": [
+        "number"
+      ],
+      "natural": "تسعة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "10",
+      "roles": [
+        "number"
+      ],
+      "natural": "عشرة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "11",
+      "roles": [
+        "number"
+      ],
+      "natural": "أحد عشر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "12",
+      "roles": [
+        "number"
+      ],
+      "natural": "اثني عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "13",
+      "roles": [
+        "number"
+      ],
+      "natural": "ثلاثة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "14",
+      "roles": [
+        "number"
+      ],
+      "natural": "أربعة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "15",
+      "roles": [
+        "number"
+      ],
+      "natural": "خمسة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "16",
+      "roles": [
+        "number"
+      ],
+      "natural": "ستة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "17",
+      "roles": [
+        "number"
+      ],
+      "natural": "سبعة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "18",
+      "roles": [
+        "number"
+      ],
+      "natural": "ثمانية عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "19",
+      "roles": [
+        "number"
+      ],
+      "natural": "تسعة عشر",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "20",
+      "roles": [
+        "number"
+      ],
+      "natural": "عشرين",
+      "status": "proposed",
+      "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
+      "notes": "Structural number (exponent, index, coefficient, count, charge). O-1 folded the nominative and genitive forms: both are «اثنين»-register."
+    },
+    {
+      "key": "2",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "مرتين",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "3",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "ثلاث مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "4",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "أربع مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "5",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "خمس مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "6",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "ست مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "7",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "سبع مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "8",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "ثماني مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "9",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "تسع مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    },
+    {
+      "key": "10",
+      "roles": [
+        "repeat"
+      ],
+      "natural": "عشر مرات",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Repetition count for a chemical group"
+    }
+  ]
+}

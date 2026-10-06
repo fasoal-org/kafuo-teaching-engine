@@ -27,6 +27,8 @@ interface ThumbItemProps {
   readonly onActivate: () => void;
   readonly onDuplicate: () => void;
   readonly onDelete: () => void;
+  /** Present only when this slide may be regenerated (write grant, editable package, slide). */
+  readonly onRegenerate?: () => void;
 }
 
 function ThumbItemComponent({
@@ -37,6 +39,7 @@ function ThumbItemComponent({
   onActivate,
   onDuplicate,
   onDelete,
+  onRegenerate,
 }: ThumbItemProps) {
   const { t } = useI18n();
   const viewportSize = useCanvasStore.use.viewportSize();
@@ -131,12 +134,21 @@ function ThumbItemComponent({
         {/* Page-level "incomplete content" dot — surfaces a scene with any
             content issue (blank narration / no actions / unbound cue …) so the
             user can spot it in the rail without opening every page. */}
-        {sceneHasIssues(scene) && (
+        {(scene.generationIssues?.length ?? 0) > 0 ? (
           <span
-            title={t('edit.nav.sceneIncomplete')}
-            aria-label={t('edit.nav.sceneIncomplete')}
-            className="absolute right-1 top-1 z-10 size-2 rounded-full bg-amber-400 shadow-sm ring-2 ring-white dark:ring-slate-900"
+            title={t('edit.nav.sceneGenerationIssue')}
+            aria-label={t('edit.nav.sceneGenerationIssue')}
+            data-testid="scene-generation-issue-dot"
+            className="absolute right-1 top-1 z-10 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-white dark:ring-slate-900"
           />
+        ) : (
+          sceneHasIssues(scene) && (
+            <span
+              title={t('edit.nav.sceneIncomplete')}
+              aria-label={t('edit.nav.sceneIncomplete')}
+              className="absolute right-1 top-1 z-10 size-2 rounded-full bg-amber-400 shadow-sm ring-2 ring-white dark:ring-slate-900"
+            />
+          )
         )}
         {/* Scene header — index badge + title. Title doubles as the
             inline rename surface when `renaming` is true. */}
@@ -227,6 +239,15 @@ function ThumbItemComponent({
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenuItem onSelect={startRename}>{t('edit.nav.rename')}</DropdownMenuItem>
+                {onRegenerate && (
+                  <DropdownMenuItem onSelect={onRegenerate} data-testid="slide-nav-regenerate">
+                    {t(
+                      scene.type === 'quiz'
+                        ? 'edit.quizRegeneration.menuItem'
+                        : 'edit.slideRegeneration.menuItem',
+                    )}
+                  </DropdownMenuItem>
+                )}
                 {SCENE_CREATION_ENABLED && (
                   <DropdownMenuItem onSelect={onDuplicate}>
                     {t('edit.nav.duplicate')}
@@ -256,6 +277,41 @@ function ThumbItemComponent({
             />
           </div>
         </div>
+
+        {/* Generation problems kept on this slide instead of failing the package
+            (3 Oct 2026): the reason, in plain words, and the regenerate action
+            right here — the reviewer decides; nothing is blocked. */}
+        {(scene.generationIssues?.length ?? 0) > 0 && (
+          <div
+            data-testid="scene-generation-issues"
+            className="rounded border border-red-200 bg-red-50 px-1.5 py-1 text-[10px] leading-snug text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+          >
+            <p className="font-semibold">{t('edit.nav.sceneGenerationIssue')}</p>
+            {scene.generationIssues!.map((issue) => (
+              <p key={issue.code} className="line-clamp-3" title={issue.message}>
+                {t(`edit.nav.generationIssue.${issue.code}`, { defaultValue: issue.message })}
+              </p>
+            ))}
+            {onRegenerate && (
+              <button
+                type="button"
+                data-testid="scene-generation-issue-regenerate"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRegenerate();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="mt-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
+              >
+                {t(
+                  scene.type === 'quiz'
+                    ? 'edit.quizRegeneration.menuItem'
+                    : 'edit.slideRegeneration.menuItem',
+                )}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </Reorder.Item>
   );

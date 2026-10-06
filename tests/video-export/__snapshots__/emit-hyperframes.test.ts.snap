@@ -6,7 +6,7 @@ exports[`emitHyperframes > matches the HTML snapshot 1`] = `
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sample Lesson — OpenMAIC video</title>
+<title>Sample Lesson — Teaching Engine video</title>
 <style>
   @font-face {
   font-family: "Inter";

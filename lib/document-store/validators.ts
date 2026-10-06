@@ -23,13 +23,239 @@ function requiredString(
   }
 }
 
+/**
+ * Validate the app-layer `learningObjectives` annotation for any scene type:
+ * absent → untouched (legacy compatible); present → an array of objective
+ * references with a non-empty `objectiveRef`, a snapshot carrying a non-empty
+ * `statement` (optional string `label`/`context`), and a finite `capturedAt`.
+ */
+function validateLearningObjectives(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.learningObjectives === undefined) return;
+  if (!Array.isArray(value.learningObjectives)) {
+    errors.push({
+      path: '/learningObjectives',
+      message: '`learningObjectives` must be an array when present',
+    });
+    return;
+  }
+  value.learningObjectives.forEach((entry, index) => {
+    const prefix = `/learningObjectives/${index}`;
+    const record = objectValue(entry);
+    if (!record) {
+      errors.push({ path: prefix, message: 'objective reference must be an object' });
+      return;
+    }
+    if (typeof record.objectiveRef !== 'string' || record.objectiveRef === '') {
+      errors.push({
+        path: `${prefix}/objectiveRef`,
+        message: 'expected non-empty string `objectiveRef`',
+      });
+    }
+    const snapshot = objectValue(record.snapshot);
+    if (!snapshot) {
+      errors.push({ path: `${prefix}/snapshot`, message: 'expected object `snapshot`' });
+    } else {
+      if (typeof snapshot.statement !== 'string' || snapshot.statement === '') {
+        errors.push({
+          path: `${prefix}/snapshot/statement`,
+          message: 'expected non-empty string `statement`',
+        });
+      }
+      if (snapshot.label !== undefined && typeof snapshot.label !== 'string') {
+        errors.push({ path: `${prefix}/snapshot/label`, message: '`label` must be a string' });
+      }
+      if (snapshot.context !== undefined && typeof snapshot.context !== 'string') {
+        errors.push({ path: `${prefix}/snapshot/context`, message: '`context` must be a string' });
+      }
+    }
+    if (typeof record.capturedAt !== 'number' || !Number.isFinite(record.capturedAt)) {
+      errors.push({ path: `${prefix}/capturedAt`, message: 'expected finite number `capturedAt`' });
+    }
+  });
+}
+
+/**
+ * Validate the app-layer `teachingStage` annotation: absent → untouched
+ * (legacy compatible); present → an object with a non-empty string `key` and
+ * an integer `flowIndex` >= 0. Semantic consistency with the authoritative
+ * flow (`key === flow[flowIndex].stage`) is the exact-flow validator's job,
+ * not the write boundary's.
+ */
+function validateTeachingStage(value: Record<string, unknown>, errors: ValidationIssue[]): void {
+  if (value.teachingStage === undefined) return;
+  const stage = objectValue(value.teachingStage);
+  if (!stage) {
+    errors.push({
+      path: '/teachingStage',
+      message: '`teachingStage` must be an object when present',
+    });
+    return;
+  }
+  if (typeof stage.key !== 'string' || stage.key === '') {
+    errors.push({ path: '/teachingStage/key', message: 'expected non-empty string `key`' });
+  }
+  if (
+    typeof stage.flowIndex !== 'number' ||
+    !Number.isInteger(stage.flowIndex) ||
+    stage.flowIndex < 0
+  ) {
+    errors.push({
+      path: '/teachingStage/flowIndex',
+      message: 'expected non-negative integer `flowIndex`',
+    });
+  }
+}
+
+/**
+ * Validate the app-layer `generationIssues` marker (3 Oct 2026): absent →
+ * untouched; present → a list of `{ code, message }` non-empty strings. Written
+ * by package generation on a scene it kept instead of failing the package.
+ */
+function validateGenerationIssues(value: Record<string, unknown>, errors: ValidationIssue[]): void {
+  if (value.generationIssues === undefined) return;
+  const issues = value.generationIssues;
+  if (
+    !Array.isArray(issues) ||
+    issues.some((issue) => {
+      const entry = objectValue(issue);
+      return (
+        !entry ||
+        typeof entry.code !== 'string' ||
+        entry.code === '' ||
+        typeof entry.message !== 'string'
+      );
+    })
+  ) {
+    errors.push({
+      path: '/generationIssues',
+      message: '`generationIssues` must be an array of { code, message } when present',
+    });
+  }
+}
+
+/**
+ * Validate the contract's `sourceContentUnitIds` binding (Kafuo R1 plan
+ * §5.1) on the app write boundary for the scene kinds the DSL validator does
+ * not see here (interactive / PBL): absent → untouched (unknown, never
+ * fabricated); present → a list of non-empty strings.
+ */
+function validateSourceContentUnitIds(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.sourceContentUnitIds === undefined) return;
+  const ids = value.sourceContentUnitIds;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || id === '')) {
+    errors.push({
+      path: '/sourceContentUnitIds',
+      message: '`sourceContentUnitIds` must be an array of non-empty strings when present',
+    });
+  }
+}
+
+/**
+ * Validate the app-layer `alignmentBaseline` annotation (Module 2 W15):
+ * absent → untouched (legacy compatible); present → the durable per-Scene
+ * alignment baseline shape — identity and state only. The fingerprint is an
+ * opaque digest string here; whether it MATCHES the scene is the §K
+ * derivation's read-time question, never the write boundary's.
+ */
+function validateAlignmentBaseline(
+  value: Record<string, unknown>,
+  errors: ValidationIssue[],
+): void {
+  if (value.alignmentBaseline === undefined) return;
+  const baseline = objectValue(value.alignmentBaseline);
+  if (!baseline) {
+    errors.push({
+      path: '/alignmentBaseline',
+      message: '`alignmentBaseline` must be an object when present',
+    });
+    return;
+  }
+  const ref = (entry: unknown, where: string) => {
+    const record = objectValue(entry);
+    if (
+      !record ||
+      typeof record.skillId !== 'string' ||
+      record.skillId === '' ||
+      typeof record.version !== 'string' ||
+      record.version === ''
+    ) {
+      errors.push({ path: where, message: `expected exact { skillId, version } at ${where}` });
+    }
+  };
+  if (baseline.primary !== undefined) ref(baseline.primary, '/alignmentBaseline/primary');
+  if (baseline.supporting !== undefined) {
+    if (!Array.isArray(baseline.supporting)) {
+      errors.push({
+        path: '/alignmentBaseline/supporting',
+        message: '`supporting` must be an array when present',
+      });
+    } else {
+      baseline.supporting.forEach((entry, index) =>
+        ref(entry, `/alignmentBaseline/supporting/${index}`),
+      );
+    }
+  }
+  if (
+    baseline.classification !== 'instructional' &&
+    baseline.classification !== 'non-instructional'
+  ) {
+    errors.push({
+      path: '/alignmentBaseline/classification',
+      message: 'expected "instructional" | "non-instructional"',
+    });
+  }
+  if (typeof baseline.fingerprint !== 'string' || baseline.fingerprint === '') {
+    errors.push({
+      path: '/alignmentBaseline/fingerprint',
+      message: 'expected non-empty string `fingerprint`',
+    });
+  }
+  if (
+    baseline.actorRef !== undefined &&
+    (typeof baseline.actorRef !== 'string' || baseline.actorRef === '')
+  ) {
+    errors.push({
+      path: '/alignmentBaseline/actorRef',
+      message: '`actorRef` must be a non-empty string when present',
+    });
+  }
+  if (typeof baseline.establishedAt !== 'number' || !Number.isFinite(baseline.establishedAt)) {
+    errors.push({
+      path: '/alignmentBaseline/establishedAt',
+      message: 'expected finite number `establishedAt`',
+    });
+  }
+  if (baseline.origin !== 'generation' && baseline.origin !== 'reviewer-confirmation') {
+    errors.push({
+      path: '/alignmentBaseline/origin',
+      message: 'expected "generation" | "reviewer-confirmation"',
+    });
+  }
+}
+
 /** Validate the app's four-way scene union at the document write boundary. */
 export const validateAppScene: SceneValidator = (scene) => {
   const value = objectValue(scene);
   if (!value) {
     return { valid: false, errors: [{ path: '/', message: 'scene must be an object' }] };
   }
-  if (value.type === 'slide' || value.type === 'quiz') return validateScene(scene);
+  if (value.type === 'slide' || value.type === 'quiz') {
+    // The DSL result is preserved exactly; the app-layer objective annotation
+    // is validated additionally, for every scene type.
+    const dsl = validateScene(scene);
+    const errors: ValidationIssue[] = dsl.valid ? [] : [...dsl.errors];
+    validateLearningObjectives(value, errors);
+    validateTeachingStage(value, errors);
+    validateAlignmentBaseline(value, errors);
+    validateGenerationIssues(value, errors);
+    return errors.length === 0 ? { valid: true } : { valid: false, errors };
+  }
 
   const errors: ValidationIssue[] = [];
   requiredString(value, 'id', errors);
@@ -154,19 +380,46 @@ export const validateAppScene: SceneValidator = (scene) => {
     }
   }
 
+  validateLearningObjectives(value, errors);
+  validateTeachingStage(value, errors);
+  validateAlignmentBaseline(value, errors);
+  validateSourceContentUnitIds(value, errors);
+  validateGenerationIssues(value, errors);
+
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };
 
 /** Validate canonical app stage metadata and exclude device playback position. */
+/**
+ * App-level shape of `Stage.subjectCode`: an upper-case curriculum code. Any
+ * well-formed code is accepted (a future Kafuo code must never break a save);
+ * only the scientific codes select subject-specific narration.
+ */
+const APP_STAGE_SUBJECT_CODE = /^[A-Z_]{2,32}$/;
+
 export const validateAppStage: StageValidator = (stage) => {
   const base = validateStage(stage);
   const value = objectValue(stage);
-  if (!value || !Object.prototype.hasOwnProperty.call(value, 'currentSceneId')) return base;
-  const issue = {
-    path: '/currentSceneId',
-    message: '`currentSceneId` is device playback state and is not allowed on AppStage',
-  };
+  const issues: ValidationIssue[] = [];
+  if (value && Object.prototype.hasOwnProperty.call(value, 'currentSceneId')) {
+    issues.push({
+      path: '/currentSceneId',
+      message: '`currentSceneId` is device playback state and is not allowed on AppStage',
+    });
+  }
+  if (
+    value &&
+    typeof value.subjectCode === 'string' &&
+    value.subjectCode.trim() &&
+    !APP_STAGE_SUBJECT_CODE.test(value.subjectCode)
+  ) {
+    issues.push({
+      path: '/subjectCode',
+      message: '`subjectCode` must match /^[A-Z_]{2,32}$/',
+    });
+  }
+  if (issues.length === 0) return base;
   return base.valid
-    ? { valid: false, errors: [issue] }
-    : { valid: false, errors: [...base.errors, issue] };
+    ? { valid: false, errors: issues }
+    : { valid: false, errors: [...base.errors, ...issues] };
 };

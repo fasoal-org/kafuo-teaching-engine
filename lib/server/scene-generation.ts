@@ -5,6 +5,7 @@
 import type { LanguageModel } from 'ai';
 import {
   applyOutlineFallbacks,
+  assertGeneratedSlideScene,
   buildCompleteScene,
   buildLanguageText,
   generateSceneActions,
@@ -22,7 +23,7 @@ import type { StageAPI } from '@/lib/api/stage-api';
 import { createLogger } from '@/lib/logger';
 import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
 import type { Action } from '@/lib/types/action';
-import type { Scene, SceneContent } from '@/lib/types/stage';
+import type { Scene, SceneContent, TextDirection } from '@/lib/types/stage';
 
 const log = createLogger('Generation');
 
@@ -35,6 +36,10 @@ export function createSceneWithActions(
 ): string | null {
   const scene = buildCompleteScene(outline, content, actions, '');
   if (!scene) return null;
+  // Fail instead of drop: a newly generated scene with missing or invalid
+  // slide semantics — or independent practice without its separately authored
+  // on-demand assistance — is refused rather than persisted.
+  assertGeneratedSlideScene(scene);
 
   const result = api.scene.create({
     type: scene.type,
@@ -45,6 +50,11 @@ export function createSceneWithActions(
     content: scene.content as SceneContent,
     actions: scene.actions,
     outlineId: scene.outlineId,
+    ...(scene.teachingStage !== undefined && { teachingStage: scene.teachingStage }),
+    ...(scene.teachingSkills !== undefined && { teachingSkills: scene.teachingSkills }),
+    ...(scene.sourceContentUnitIds !== undefined && {
+      sourceContentUnitIds: scene.sourceContentUnitIds,
+    }),
   });
   return result.success ? (result.data ?? null) : null;
 }
@@ -63,6 +73,8 @@ export async function buildSceneFromOutline(
   onPhaseChange?: (phase: 'content' | 'actions') => void,
   userProfile?: string,
   languageDirective?: string,
+  /** The Stage's authoritative base direction; undefined for a legacy Stage. */
+  textDirection?: TextDirection,
 ): Promise<Scene | null> {
   const safeOutline = applyOutlineFallbacks(outline, !!languageModel, { logger: log });
   const langText = buildLanguageText(languageDirective, safeOutline.languageNote);
@@ -75,6 +87,7 @@ export async function buildSceneFromOutline(
     agents,
     languageDirective: langText,
     logger: log,
+    ...(textDirection !== undefined ? { textDirection } : {}),
     ...(languageModel
       ? {
           pblLoopFallback: (input) =>
@@ -93,5 +106,7 @@ export async function buildSceneFromOutline(
     logger: log,
   });
 
-  return buildCompleteScene(safeOutline, content, actions, stageId) as Scene | null;
+  const scene = buildCompleteScene(safeOutline, content, actions, stageId);
+  if (scene) assertGeneratedSlideScene(scene);
+  return scene as Scene | null;
 }

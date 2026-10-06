@@ -198,4 +198,55 @@ describe('setSpeechText / setElementId', () => {
     expect(setSpeechTextClearAudioById(xs, 'missing', 'x')).toBe(xs);
     expect(setSpeechTextClearAudioById(xs, 'b', 'x')).toBe(xs);
   });
+  test('setSpeechTextClearAudioById removes audioProvenance together with the audio', () => {
+    const audioProvenance = {
+      fingerprint: 'fp1:x',
+      policyVersion: null,
+      originalDigest: 'o',
+      responseFormat: 'mp3',
+      providerId: 'openai-tts',
+      modelId: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 1,
+      preparedDigest: 'p',
+      segments: 1,
+      preparedChars: 3,
+      originalChars: 3,
+      warningCount: 0,
+      generatedAt: '2026-09-28T00:00:00.000Z',
+      reason: 'initial' as const,
+    };
+    const xs: Action[] = [
+      { id: 'a', type: 'speech', text: 'old', audioId: 'tts_a', audioProvenance } as Action,
+    ];
+    const out = setSpeechTextClearAudioById(xs, 'a', 'new')[0]!;
+    expect(out).not.toHaveProperty('audioId');
+    expect(out).not.toHaveProperty('audioProvenance');
+  });
+  test('setAudioId never invents provenance; it stamps only what it is given', () => {
+    const audioProvenance = {
+      fingerprint: 'fp1:x',
+      policyVersion: null,
+      originalDigest: 'o',
+      responseFormat: 'mp3',
+      providerId: 'openai-tts',
+      modelId: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 1,
+      preparedDigest: 'p',
+      segments: 1,
+      preparedChars: 3,
+      originalChars: 3,
+      warningCount: 0,
+      generatedAt: '2026-09-28T00:00:00.000Z',
+      reason: 'initial' as const,
+    };
+    const plain = setAudioId([A('a', 'speech')], 0, 'tts_a')[0]!;
+    expect(plain).not.toHaveProperty('audioProvenance');
+    const stamped = setAudioIdById([A('a', 'speech')], 'a', 'tts_a', audioProvenance)[0]!;
+    expect(stamped).toMatchObject({ audioId: 'tts_a', audioProvenance });
+    // Without a new provenance, an existing one is left untouched.
+    const kept = setAudioId([{ ...A('a', 'speech'), audioProvenance } as Action], 0, 'tts_b')[0]!;
+    expect(kept).toMatchObject({ audioId: 'tts_b', audioProvenance });
+  });
 });

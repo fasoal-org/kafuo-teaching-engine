@@ -1,0 +1,132 @@
+/**
+ * GET /api/teaching-packages/editor-handoff?token=… — redeem a handoff token
+ * (browser route; the token IS the credential — no service key). Verifies the
+ * HMAC and expiry, re-checks the version (write grants only for draft|
+ * rejected; `currentStageId` must still equal the token's stage — a
+ * regeneration between mint and redeem invalidates the token), then sets the
+ * HttpOnly Stage-scoped grant cookie plus the readable companion learner-key
+ * cookie and redirects to the classroom.
+ */
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+
+import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
+import {
+  LEARNER_HANDOFF_STATUSES,
+  buildEditorGrantPayload,
+  editorGrantCookieHeaders,
+  grantCookieValueForRedeem,
+  verifyEditorHandoffToken,
+} from '@/lib/server/teaching-package/editor-grant';
+import { getTeachingPackageVersionByToken } from '@/lib/server/teaching-package/resolve';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import { teachingPackageErrorResponse } from '@/lib/server/teaching-package/route-helpers';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
+
+export const runtime = 'nodejs';
+
+export async function GET(req: NextRequest) {
+  if (!isTeachingPackageApiConfigured()) return new Response('Not found', { status: 404 });
+  try {
+    const token = req.nextUrl.searchParams.get('token') ?? '';
+    const payload = verifyEditorHandoffToken(token);
+    if (!payload) {
+      throw new TeachingPackageError('INVALID_REQUEST', 'the handoff token is invalid or expired');
+    }
+
+    // The token carries the canonical tenant; a version under a different
+    // tenant behaves exactly like an absent one (non-enumerating NOT_FOUND).
+    const version = await getTeachingPackageVersionByToken(payload.versionId);
+    if (version.tenantId !== payload.tenantId) {
+      throw new TeachingPackageError(
+        'NOT_FOUND',
+        `teaching package ${payload.versionId} not found`,
+      );
+    }
+    if (
+      payload.capability === 'write' &&
+      version.status !== 'draft' &&
+      version.status !== 'rejected'
+    ) {
+      throw new TeachingPackageError(
+        'INVALID_TRANSITION',
+        `the version is now ${version.status} and can no longer be edited`,
+      );
+    }
+    if (
+      payload.purpose === 'learner' &&
+      (payload.capability !== 'read' ||
+        !(LEARNER_HANDOFF_STATUSES as readonly string[]).includes(version.status))
+    ) {
+      // Re-checked at redeem: a version discarded or otherwise no longer servable
+      // between mint and redeem is refused.
+      throw new TeachingPackageError(
+        'INVALID_TRANSITION',
+        `the version is now ${version.status} and cannot be opened for a learner`,
+      );
+    }
+    if (version.currentStageId !== payload.stageId) {
+      throw new TeachingPackageError(
+        'STALE_STATE',
+        'the version’s stage changed after this handoff was minted',
+      );
+    }
+
+    const { payload: grant, token: grantToken } = buildEditorGrantPayload({
+      tenantId: version.tenantId,
+      versionId: version.id,
+      stageId: version.currentStageId,
+      capability: payload.capability,
+      ...(payload.purpose === 'learner' && payload.learnerRef
+        ? { learnerRef: payload.learnerRef }
+        : {}),
+      ...(payload.purpose ? { purpose: payload.purpose } : {}),
+      // Kafuo R1 (contracts §3.2): the student block rides from handoff to grant.
+      ...(payload.purpose === 'learner' && payload.student ? { student: payload.student } : {}),
+    });
+    const cookieValue = grantCookieValueForRedeem(req.headers, grantToken, grant.stageId);
+    // A native client asks for JSON: the IDENTICAL verification and cookies,
+    // answered as `200 { stageId, capability, documentPath, expiresAt }` rather
+    // than a redirect it would have to refuse to follow. Browser behaviour is
+    // byte-for-byte unchanged.
+    const wantsJson = (req.headers.get('accept') ?? '').includes('application/json');
+    const classroomUrl = new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin);
+    // An Admin "Edit" handoff is an explicit request to edit. Carry that
+    // intent through the redirect so the classroom opens Pro mode directly;
+    // making the reviewer toggle a second, unrelated control left the
+    // Teaching Skills surface hidden and made a successful handoff look like
+    // read-only preview.
+    if (grant.purpose === 'edit' && grant.capability === 'write') {
+      classroomUrl.searchParams.set('mode', 'edit');
+    }
+    const response = wantsJson
+      ? NextResponse.json(
+          {
+            stageId: grant.stageId,
+            capability: grant.capability,
+            documentPath: `/api/persistence/documents/${grant.stageId}`,
+            expiresAt: grant.exp,
+          },
+          {
+            status: 200,
+            headers: { 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' },
+          },
+        )
+      : NextResponse.redirect(classroomUrl, {
+          status: 302,
+          headers: { 'Referrer-Policy': 'no-referrer' },
+        });
+    for (const cookie of editorGrantCookieHeaders(cookieValue, grant.learnerKey)) {
+      response.headers.append('Set-Cookie', cookie);
+    }
+    return response;
+  } catch (error) {
+    const mapped = teachingPackageErrorResponse(error);
+    if (mapped) return mapped;
+    console.error('TeachingPackages internal error', JSON.stringify(describeErrorSafely(error)));
+    return NextResponse.json(
+      { error: { code: 'INTERNAL_ERROR', message: 'failed to redeem editor handoff' } },
+      { status: 500 },
+    );
+  }
+}

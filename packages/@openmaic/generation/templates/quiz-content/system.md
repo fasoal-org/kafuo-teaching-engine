@@ -139,4 +139,15 @@ Output a JSON array of question objects. Every question must have `analysis` and
     "points": 20
   }
 ]
-```
+```{{#if hasSkillContext}}
+
+---
+
+## Teaching Skills — HOW this quiz teaches
+
+This quiz is taught under explicitly selected Teaching Skills. The Skills govern the pedagogical shape of the questions — their framing, what understanding they probe, the tone of `commentPrompt`/`analysis` feedback, and how the quiz connects to what was taught. Difficulty bands, distractor plausibility, the question counts/types configured for this quiz, the language directive, and the JSON output format remain global requirements and never yield to a Skill.
+
+{{skillContextText}}
+
+Write the questions and feedback in the Skills' pedagogical voice.
+{{/if}}

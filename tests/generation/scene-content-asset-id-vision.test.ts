@@ -533,6 +533,8 @@ function slideOutline(suggestedImageIds: string[] = ['img_1']): SceneOutline {
   return {
     id: 'scene-slide',
     type: 'slide',
+    slideType: 'content',
+    contentRole: 'example',
     title: 'Safety Checklist',
     description: 'Inspect the device before calibration.',
     keyPoints: ['Inspect', 'Calibrate'],

@@ -16,7 +16,7 @@ import {
   validateResult,
 } from './issue-triage.mjs';
 
-const repo = { owner: 'THU-MAIC', repo: 'OpenMAIC' };
+const repo = { owner: 'fasoal-org', repo: 'kafuo-teaching-engine' };
 const files = new Set(['lib/hooks/use-discussion-tts.ts']);
 const available = [
   'bug',
@@ -38,7 +38,7 @@ const makeIssue = (number = 1434, extras = {}) => ({
   comments: 0,
   updated_at: '2026-09-09T00:00:00Z',
   user: { login: 'reporter', type: 'User' },
-  url: `https://api.github.com/repos/THU-MAIC/OpenMAIC/issues/${number}`,
+  url: `https://api.github.com/repos/fasoal-org/kafuo-teaching-engine/issues/${number}`,
   ...extras,
 });
 const makeComment = (extras = {}) => ({
@@ -57,7 +57,7 @@ const makeThread = (extras = {}) => ({
   ...extras,
 });
 const makeContext = (thread = makeThread(), extras = {}) => ({
-  repository: 'THU-MAIC/OpenMAIC',
+  repository: 'fasoal-org/kafuo-teaching-engine',
   sha: '29735f10d0081859ac3db1a50a0cc92f46436004',
   fingerprint: fingerprint(thread),
   issue: { ...thread.issue, labels: thread.issue.labels.map((l) => l.name) },

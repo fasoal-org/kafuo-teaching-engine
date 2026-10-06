@@ -83,12 +83,24 @@ export function formatImageDescription(img: PdfImage): string {
   }
   const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
   const desc = img.description ? ` | ${img.description}` : '';
-  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${desc}`;
+  const grounding = [
+    // Content Units only: Blocks are internal provenance and never reach the model.
+    img.sourceContentUnitIds?.length ? `Content Units: ${img.sourceContentUnitIds.join(', ')}` : '',
+    img.sourceRole ? `Role: ${img.sourceRole}` : '',
+    img.caption ? `Caption: ${img.caption}` : '',
+    img.figureLabel ? `Figure: ${img.figureLabel}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+  return `- **${img.id}**:${sourceInfo} page ${img.pageNumber}${dimInfo}${desc}${grounding ? ` | ${grounding}` : ''}`;
 }
 
 /**
  * Format a short image placeholder for vision mode.
- * Only ID + page + dimensions + aspect ratio (no description), since the model can see the actual image.
+ * ID + page + dimensions + aspect ratio (no description — the model can see the
+ * actual image), plus the Content Unit association, which vision cannot supply:
+ * which approved unit a figure belongs to is not visible in the pixels. Block
+ * ids stay internal here as everywhere else.
  */
 export function formatImagePlaceholder(img: PdfImage): string {
   let dimInfo = '';
@@ -97,7 +109,10 @@ export function formatImagePlaceholder(img: PdfImage): string {
     dimInfo = ` | size: ${img.width}×${img.height} (aspect ratio ${ratio})`;
   }
   const sourceInfo = img.sourceDocumentName ? ` from ${img.sourceDocumentName}` : ' from PDF';
-  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo} [see attached]`;
+  const units = img.sourceContentUnitIds?.length
+    ? ` | Content Units: ${img.sourceContentUnitIds.join(', ')}`
+    : '';
+  return `- **${img.id}**: image${sourceInfo} page ${img.pageNumber}${dimInfo}${units} [see attached]`;
 }
 
 /**

@@ -42,6 +42,8 @@ import {
 } from './chat-storage-lock';
 import { DocumentVersionError, type DocumentSummary } from '@openmaic/storage';
 import { isBrowserPersistenceEnabled } from '@/lib/persistence/bootstrap';
+import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
+import { fetchSceneRevisions, manifestSceneRevs } from '@/lib/persistence/scene-revision-registry';
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import {
   MISSING_ASSET_LEASE,
@@ -86,6 +88,52 @@ export interface StageStoreData {
   chatSnapshot?: ChatStorageSnapshot;
   /** The aggregate save contract treats omission as deletion; callers should carry this snapshot. */
   outline?: AppDocumentOutline;
+  /**
+   * Teaching Package grant sessions only: the per-Scene revisions the loaded
+   * content is exactly based on (single-slide-regeneration-plan §11.2). The
+   * store binds them together with the content, under the same load token.
+   */
+  sceneRevs?: Record<string, number>;
+}
+
+/** A write committed between the two revision reads on every attempt. */
+export class StageLoadRaceError extends Error {
+  readonly retryable = true;
+  constructor(stageId: string) {
+    super(`stage ${stageId} kept changing while it was being loaded; try again`);
+    this.name = 'StageLoadRaceError';
+  }
+}
+
+const LOAD_SANDWICH_ATTEMPTS = 3;
+
+/**
+ * The load "sandwich" (§11.2): revisions → document → revisions. The stage
+ * revision is bumped by every Scene and Stage write, so equal reads prove no
+ * write committed in between and the content is exactly the content at those
+ * Scene revisions. Grant sessions on a server-backed store only; elsewhere the
+ * document is read exactly as before and no revisions are bound.
+ */
+async function accessDocumentWithSceneRevs(stageId: string): Promise<{
+  access: Awaited<ReturnType<typeof accessDocument>>;
+  sceneRevs?: Record<string, number>;
+}> {
+  if (!isBrowserPersistenceEnabled() || !isTeachingPackageGrantSession()) {
+    return { access: await accessDocument(stageId) };
+  }
+  for (let attempt = 0; attempt < LOAD_SANDWICH_ATTEMPTS; attempt += 1) {
+    const before = await fetchSceneRevisions(stageId);
+    const access = await accessDocument(stageId);
+    // No grant for this Stage in this tab: nothing to bind (its writes are
+    // not grant-delegated).
+    if (!before) return { access };
+    const after = await fetchSceneRevisions(stageId);
+    if (after && after.rev === before.rev) {
+      return { access, sceneRevs: manifestSceneRevs(after) };
+    }
+    log.info(`Stage ${stageId} changed while loading (attempt ${attempt + 1}); re-reading`);
+  }
+  throw new StageLoadRaceError(stageId);
 }
 
 /**
@@ -140,19 +188,26 @@ function documentSnapshot(
   existingOutline: AppDocumentOutline | undefined,
   now: number,
 ) {
-  const outline = data.outline ??
-    existingOutline ?? {
-      outlines: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+  // The store's save payload rebuilds the outline record from
+  // `{outlines, generationComplete, updatedAt}`; sibling fields the payload
+  // does not carry (producer, producerRef, pptxImports, teachingFlow,
+  // sourceVisuals) belong to the persisted record and must survive the save —
+  // merge payload-over-existing rather than replacing the record wholesale.
+  const outline: AppDocumentOutline = data.outline
+    ? {
+        ...(existingOutline ?? {}),
+        ...data.outline,
+        createdAt: existingOutline?.createdAt ?? data.outline.createdAt,
+      }
+    : (existingOutline ?? {
+        outlines: [],
+        createdAt: now,
+        updatedAt: now,
+      });
   return {
     stage: stampStage(stageId, data.stage, now),
     scenes: data.scenes.map((scene, index) => stampScene(stageId, scene, index, now)),
-    outline: {
-      ...outline,
-      createdAt: existingOutline?.createdAt ?? outline.createdAt,
-    },
+    outline,
   };
 }
 
@@ -459,7 +514,7 @@ export async function saveStageDataIncremental(
  */
 export async function loadStageData(stageId: string): Promise<StageStoreData | null> {
   try {
-    const access = await accessDocument(stageId);
+    const { access, sceneRevs } = await accessDocumentWithSceneRevs(stageId);
     const document = access.document;
     if (!document) {
       log.info(`Stage not found: ${stageId}`);
@@ -500,6 +555,7 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
       chats,
       chatSnapshot,
       outline: document.outline as AppDocumentOutline | undefined,
+      ...(sceneRevs ? { sceneRevs } : {}),
     };
   } catch (error) {
     log.error('Failed to load stage:', error);

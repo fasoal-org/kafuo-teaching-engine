@@ -14,6 +14,7 @@ export type PromptId =
   | 'visualization3d-content'
   | 'procedural-skill-content'
   | 'slide-actions'
+  | 'slide-assistance'
   | 'quiz-actions'
   | 'interactive-actions'
   | 'pbl-actions';
@@ -22,11 +23,13 @@ export type PromptId =
 export type SnippetId =
   | 'json-output-rules'
   | 'image-instructions'
+  | 'slide-classification-contract'
   | 'video-instructions'
   | 'media-safety-guidelines'
   | 'slide-image-instructions'
   | 'slide-generated-image-instructions'
-  | 'slide-video-instructions';
+  | 'slide-video-instructions'
+  | 'spoken-language-policy';
 
 /** Loaded prompt template. */
 export interface LoadedPrompt {

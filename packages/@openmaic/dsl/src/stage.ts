@@ -17,6 +17,30 @@
  */
 import type { Slide } from './slides.js';
 import type { Action } from './action.js';
+import type { SlideAssistance, SlideContentKind, SlideContentRole } from './slide-semantics.js';
+import type { TextDirection } from './language.js';
+
+/** How generated narration audio verbalises scientific notation. */
+export type SpeechReadingMode = 'natural' | 'accessible';
+
+/** The spoken-language register policy a Stage was generated under (`Stage.speechRegister`). */
+export interface StageSpeechRegister {
+  /** The server policy version, e.g. `ar-speech-register-1`. */
+  policyVersion: string;
+  /** `saudi-white-spoken`: Saudi narration over academic slides; `msa`: Arabic-language lessons. */
+  register: 'saudi-white-spoken' | 'msa';
+}
+
+/** Frozen set of every valid {@link SpeechReadingMode}. */
+export const SPEECH_READING_MODES = [
+  'natural',
+  'accessible',
+] as const satisfies readonly SpeechReadingMode[];
+
+/** Narrow an unknown value to a valid {@link SpeechReadingMode}. */
+export function isSpeechReadingMode(value: unknown): value is SpeechReadingMode {
+  return typeof value === 'string' && (SPEECH_READING_MODES as readonly string[]).includes(value);
+}
 
 /** All scene kinds owned by the contract. */
 export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
@@ -146,6 +170,40 @@ export interface Stage {
   updatedAt: number;
   // Stage metadata
   languageDirective?: string;
+  /**
+   * Language of instruction as a BCP-47 tag (see `./language.ts`), copied from
+   * the requester's authoritative lesson/curriculum metadata — never inferred
+   * from generated content. Distinct from the free-form `languageDirective`.
+   * Optional and additive: absent on legacy data and on courses generated
+   * without authoritative language metadata.
+   */
+  language?: string;
+  /**
+   * Base text direction of the course content, resolved ONCE from
+   * {@link language} by `resolveTextDirection` at generation. Renderers read
+   * this instead of inspecting slide text. Absent on legacy data, where it
+   * means "unknown" — readers must not fabricate a direction.
+   */
+  textDirection?: TextDirection;
+  /**
+   * Authoritative lesson subject code copied from the requester's curriculum
+   * metadata (e.g. Kafuo `subjectOffering.code`). Never inferred from content.
+   * Absent on legacy and non-governed Stages. Unknown-but-well-formed codes are
+   * valid and mean "no subject-specific behaviour".
+   */
+  subjectCode?: string;
+  /**
+   * Narration reading mode for generated audio. Absent ⇒ `'natural'`. Set only
+   * by an owner/editor for Stages marked as needing accessible narration.
+   */
+  speechReadingMode?: SpeechReadingMode;
+  /**
+   * The server spoken-language register policy the Stage was generated under
+   * (derived from {@link language} and {@link subjectCode}, never from
+   * content). When present, `languageDirective` is that policy's directive,
+   * not a model's. Absent on legacy Stages and non-Arabic lessons.
+   */
+  speechRegister?: StageSpeechRegister;
   style?: string;
   // Whiteboard data
   whiteboard?: Whiteboard[];
@@ -186,6 +244,27 @@ export interface SlideContent {
   schemaVersion?: number;
   // PPTist slide data structure
   canvas: Slide;
+  /**
+   * Pedagogical purpose of this slide (see `./slide-semantics.ts`). Distinct
+   * from the scene `type` and from the canvas's deck-structural `Slide.type`.
+   * Optional and additive: absent on legacy data, where it means
+   * "unclassified" — readers must not fabricate a role.
+   */
+  contentRole?: SlideContentRole;
+  /**
+   * Specialization of {@link contentRole}. Only valid alongside a
+   * `contentRole` that defines it (`SLIDE_CONTENT_KINDS_BY_ROLE`); the pairing
+   * is enforced by `validateScene`. Absent on legacy data and on roles without
+   * specializations.
+   */
+  contentKind?: SlideContentKind;
+  /**
+   * On-demand learner assistance (hint / help / full explanation) — see
+   * `SlideAssistance`. Held here, never on the canvas, so the displayed task
+   * does not contain its own solution. Only meaningful beside a `contentRole`
+   * of `practice` or `check_understanding`. Absent on legacy data.
+   */
+  assistance?: SlideAssistance;
 }
 
 export interface QuizOption {
@@ -239,6 +318,18 @@ export interface SceneCore<TAction = Action> {
 
   // Multi-agent discussion configuration
   multiAgent?: MultiAgentConfig;
+
+  /**
+   * Identifiers of the source Content Units this scene was generated from
+   * (Kafuo R1, plan §5.1 / §8.3): the outline's citations, copied verbatim
+   * onto the scene by the builder and carried through clones and successors.
+   *
+   * Additive and optional. **Absent means unknown** — a scene persisted
+   * before the binding existed, or generated from an ungrounded source.
+   * Readers must never fabricate, infer, or default this list; an absent
+   * field is reported as "no binding", not as an empty binding.
+   */
+  sourceContentUnitIds?: string[];
 
   // Metadata
   createdAt?: number;

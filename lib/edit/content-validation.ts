@@ -2,6 +2,7 @@ import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
 import type { SceneOutline } from '@/lib/types/generation';
 import { ELEMENT_BOUND } from '@/components/edit/ActionsBar/cue-meta';
+import { validateOutlineSlideSemantics } from '@openmaic/generation';
 
 /**
  * Pure content-validity checks for the editor. These surface *meaningless* edit
@@ -23,7 +24,7 @@ export type ActionIssue =
 export type SceneIssue = { kind: 'emptyActions' } | ActionIssue;
 
 /** A meaningless state found on a single outline. */
-export type OutlineIssue = { kind: 'emptyTitle' };
+export type OutlineIssue = { kind: 'emptyTitle' } | { kind: 'unclassifiedSlide' };
 
 const isBlank = (s: string | undefined): boolean => !s || s.trim() === '';
 
@@ -58,9 +59,20 @@ export function sceneHasIssues(scene: Scene): boolean {
   return validateScene(scene).length > 0;
 }
 
-/** Content-validity issues on an outline (blank title is the only blocking one). */
+/**
+ * Content-validity issues on an outline. Both are blocking: a blank title is
+ * meaningless to generate, and a slide outline that is not validly classified
+ * (slideType, plus contentRole / contentKind on an instructional slide) would
+ * be refused by generation — the author chooses the classification, it is
+ * never defaulted here.
+ */
 export function validateOutline(outline: SceneOutline): OutlineIssue[] {
-  return isBlank(outline.title) ? [{ kind: 'emptyTitle' }] : [];
+  const issues: OutlineIssue[] = [];
+  if (isBlank(outline.title)) issues.push({ kind: 'emptyTitle' });
+  if (outline.type === 'slide' && validateOutlineSlideSemantics([outline]).length > 0) {
+    issues.push({ kind: 'unclassifiedSlide' });
+  }
+  return issues;
 }
 
 /** Whether any outline carries a blocking issue (used to gate generation). */

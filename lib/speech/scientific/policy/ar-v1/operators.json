@@ -1,0 +1,1820 @@
+{
+  "table": "operators",
+  "description": "Operators, relations, structural labels (`label`), deferred-symbol names (`symbol`) and Chemistry labels (domain CHEMISTRY). Role and domain are fields (upgrade plan P2); the resolver picks the entry by role, token and lesson subject.",
+  "roles": [
+    "operator"
+  ],
+  "entries": [
+    {
+      "key": "+",
+      "roles": [
+        "operator"
+      ],
+      "natural": "زائد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "-",
+      "roles": [
+        "operator"
+      ],
+      "natural": "ناقص",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "neg",
+      "roles": [
+        "label"
+      ],
+      "natural": "سالب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "pos",
+      "roles": [
+        "label"
+      ],
+      "natural": "موجب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "*",
+      "roles": [
+        "operator"
+      ],
+      "natural": "في",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "/",
+      "roles": [
+        "operator"
+      ],
+      "natural": "على",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "÷",
+      "roles": [
+        "operator"
+      ],
+      "natural": "مقسومًا على",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "±",
+      "roles": [
+        "operator"
+      ],
+      "natural": "زائد أو ناقص",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∓",
+      "roles": [
+        "operator"
+      ],
+      "natural": "ناقص أو زائد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "=",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يساوي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "≠",
+      "roles": [
+        "operator"
+      ],
+      "natural": "لا يساوي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "<",
+      "roles": [
+        "operator"
+      ],
+      "natural": "أصغر من",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": ">",
+      "roles": [
+        "operator"
+      ],
+      "natural": "أكبر من",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "≤",
+      "roles": [
+        "operator"
+      ],
+      "natural": "أصغر من أو يساوي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "≥",
+      "roles": [
+        "operator"
+      ],
+      "natural": "أكبر من أو يساوي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "≈",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يساوي تقريبًا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "≡",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يطابق",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "%",
+      "roles": [
+        "operator"
+      ],
+      "natural": "بالمئة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "ratio",
+      "roles": [
+        "label"
+      ],
+      "natural": "إلى",
+      "accessible": "النسبة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "decimal",
+      "roles": [
+        "label"
+      ],
+      "natural": "فاصلة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "°",
+      "roles": [
+        "operator"
+      ],
+      "natural": "درجة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "squared",
+      "roles": [
+        "label"
+      ],
+      "natural": "تربيع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Review finding 6 (30 Sep 2026): the accessible reading is composed by the verbaliser (power + number word), not stored here"
+    },
+    {
+      "key": "cubed",
+      "roles": [
+        "label"
+      ],
+      "natural": "تكعيب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Review finding 6 (30 Sep 2026): the accessible reading is composed by the verbaliser (power + number word), not stored here"
+    },
+    {
+      "key": "power",
+      "roles": [
+        "label"
+      ],
+      "natural": "أُس",
+      "accessible": "مرفوعة للقوة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "power-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية الأس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "sqrt",
+      "roles": [
+        "label"
+      ],
+      "natural": "الجذر التربيعي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "cbrt",
+      "roles": [
+        "label"
+      ],
+      "natural": "الجذر التكعيبي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "nroot",
+      "roles": [
+        "label"
+      ],
+      "natural": "الجذر من الدرجة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "root-inside",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "بداخله",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "root-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية الجذر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "of",
+      "roles": [
+        "label"
+      ],
+      "natural": "لـ",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "of-quantity",
+      "roles": [
+        "label"
+      ],
+      "natural": "للمقدار",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "quantity",
+      "roles": [
+        "label"
+      ],
+      "natural": "المقدار",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "sum-of",
+      "roles": [
+        "label"
+      ],
+      "natural": "مجموع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "difference-of",
+      "roles": [
+        "label"
+      ],
+      "natural": "الفرق بين",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "and",
+      "roles": [
+        "label"
+      ],
+      "natural": "و",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "fraction",
+      "roles": [
+        "label"
+      ],
+      "natural": "الكسر",
+      "accessible": "كسر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "numerator",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "بسطه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "denominator",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "ومقامه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "numerator-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية البسط",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "denominator-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية المقام",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "open-paren",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "قوس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "close-paren",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "إغلاق القوس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "abs",
+      "roles": [
+        "label"
+      ],
+      "natural": "القيمة المطلقة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "abs-inside",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "بداخلها",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "abs-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "index",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "الدليل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "log-base",
+      "roles": [
+        "label"
+      ],
+      "natural": "للأساس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "function-of",
+      "roles": [
+        "label"
+      ],
+      "natural": "لـ",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "factorial",
+      "roles": [
+        "label"
+      ],
+      "natural": "مضروب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "prime",
+      "roles": [
+        "label"
+      ],
+      "natural": "شرطة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "infinity",
+      "roles": [
+        "label"
+      ],
+      "natural": "ما لا نهاية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∫",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز التكامل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∑",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز المجموع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∏",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز الضرب المتتالي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∈",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز ينتمي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∉",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز لا ينتمي",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∪",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز الاتحاد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∩",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز التقاطع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∀",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز لكل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∃",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز يوجد",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "⇒",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز يؤدي إلى",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "⇔",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز إذا وفقط إذا",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "∞",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "ما لا نهاية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "!",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز المضروب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "′",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "شرطة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": ",",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "،",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "A comma inside notation is read as a pause, never as the decimal word"
+    },
+    {
+      "key": "→",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": ":",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "نقطتان",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": ".",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "نقطة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": ";",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "فاصلة منقوطة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "^",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "أُس",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Literal fallback reading of a caret"
+    },
+    {
+      "key": "_",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "دليل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Literal fallback reading of an underscore"
+    },
+    {
+      "key": "%",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "بالمئة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "°",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "درجة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "√",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "الجذر",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "per",
+      "roles": [
+        "label"
+      ],
+      "natural": "لكل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "unit-squared",
+      "roles": [
+        "label"
+      ],
+      "natural": "مربع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": "Power 2 of a numerator unit (km² → كيلومتر مربع)"
+    },
+    {
+      "key": "unit-cubed",
+      "roles": [
+        "label"
+      ],
+      "natural": "مكعب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "vector",
+      "roles": [
+        "label"
+      ],
+      "natural": "المتجه",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "vector-arrow",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "بسهم",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "group",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "مجموعة",
+      "accessible": "ومجموعة",
+      "status": "proposed",
+      "source": "Upgrade plan P5 (O-6), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "P5: no leading «و» (was «ومجموعة»)"
+    },
+    {
+      "key": "repeated",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "",
+      "accessible": "مكررة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "hydrate",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "مع",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "charge",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "بشحنة",
+      "accessible": "الشحنة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "positive",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "موجب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "negative",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "سالب",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "positive-one",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "موجبة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "negative-one",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "سالبة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "electron",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "إلكترون",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "formula",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "",
+      "accessible": "صيغة كيميائية",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "count",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "",
+      "accessible": "عدده",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "coefficient",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "",
+      "accessible": "المعامل",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "state",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "",
+      "accessible": "الحالة",
+      "status": "proposed",
+      "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
+      "notes": ""
+    },
+    {
+      "key": "(",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "قوس",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Literal opening bracket"
+    },
+    {
+      "key": ")",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "إغلاق القوس",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Literal closing bracket"
+    },
+    {
+      "key": "[",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "قوس مربع",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Literal opening square bracket"
+    },
+    {
+      "key": "]",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "إغلاق القوس المربع",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Literal closing square bracket"
+    },
+    {
+      "key": "{",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "قوس معقوف",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Written brace `\\{`"
+    },
+    {
+      "key": "}",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "إغلاق القوس المعقوف",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Written brace `\\}`"
+    },
+    {
+      "key": "|",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "خط عمودي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Literal vertical bar"
+    },
+    {
+      "key": "←",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم لليسار",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Arrow glyph"
+    },
+    {
+      "key": "⇌",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهمان متعاكسان",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Equilibrium arrow glyph (neutral name)"
+    },
+    {
+      "key": "↔",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم في الاتجاهين",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Two-way arrow glyph"
+    },
+    {
+      "key": "↑",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم لأعلى",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Up arrow (gas evolved, by its glyph only)"
+    },
+    {
+      "key": "↓",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم لأسفل",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Down arrow (precipitate, by its glyph only)"
+    },
+    {
+      "key": "↦",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "سهم التعيين",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Maps-to arrow"
+    },
+    {
+      "key": "∂",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز التفاضل الجزئي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Partial-derivative symbol"
+    },
+    {
+      "key": "∇",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "نابلا",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Nabla"
+    },
+    {
+      "key": "∠",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "زاوية",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Angle symbol"
+    },
+    {
+      "key": "△",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "مثلث",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Triangle symbol"
+    },
+    {
+      "key": "⊥",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "عمودي على",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Perpendicular symbol"
+    },
+    {
+      "key": "∥",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "يوازي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Parallel symbol"
+    },
+    {
+      "key": "⊂",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "مجموعة جزئية من",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Subset symbol"
+    },
+    {
+      "key": "⊆",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "مجموعة جزئية من أو تساوي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Subset-or-equal symbol"
+    },
+    {
+      "key": "⊃",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "تحوي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Superset symbol"
+    },
+    {
+      "key": "∅",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "المجموعة الخالية",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Empty-set symbol"
+    },
+    {
+      "key": "…",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "نقاط",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Ellipsis"
+    },
+    {
+      "key": "∘",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "تركيب",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Composition symbol"
+    },
+    {
+      "key": "∬",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز التكامل الثنائي",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Double integral"
+    },
+    {
+      "key": "∮",
+      "roles": [
+        "symbol"
+      ],
+      "natural": "رمز التكامل المغلق",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Contour integral"
+    },
+    {
+      "key": "hat",
+      "roles": [
+        "label"
+      ],
+      "natural": "هات",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Accent `\\hat` (read before its argument in the literal fallback)"
+    },
+    {
+      "key": "bar",
+      "roles": [
+        "label"
+      ],
+      "natural": "بار",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Accent `\\bar` / `\\overline`"
+    },
+    {
+      "key": "dot-accent",
+      "roles": [
+        "label"
+      ],
+      "natural": "نقطة",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Accent `\\dot`"
+    },
+    {
+      "key": "double-dot-accent",
+      "roles": [
+        "label"
+      ],
+      "natural": "نقطتان",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Accent `\\ddot`"
+    },
+    {
+      "key": "tilde",
+      "roles": [
+        "label"
+      ],
+      "natural": "تلدا",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "Accent `\\tilde`"
+    },
+    {
+      "key": "binom",
+      "roles": [
+        "label"
+      ],
+      "natural": "توافيق",
+      "status": "proposed",
+      "source": "Upgrade plan P3 (safe literal fallback), 30 Sep 2026: neutral symbol names; pending curriculum reviewer (P8)",
+      "notes": "`\\binom`: the notation's school name, no meaning added"
+    },
+    {
+      "key": "·",
+      "roles": [
+        "operator"
+      ],
+      "natural": "نقطة",
+      "status": "proposed",
+      "source": "Upgrade plan P4, 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "O-8: the dot operator keeps its own reading; never «ضرب قياسي»"
+    },
+    {
+      "key": "given",
+      "roles": [
+        "label"
+      ],
+      "natural": "بشرط",
+      "status": "proposed",
+      "source": "Upgrade plan P4, 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "The bar in `P(A|B)` (P4 item 6): the notation's reading, never «احتمال»"
+    },
+    {
+      "key": "fraction-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية الكسر",
+      "status": "proposed",
+      "source": "Upgrade plan P4, 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "P4 item 9: spoken only when more words follow a fraction"
+    },
+    {
+      "key": "index-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية الدليل",
+      "status": "proposed",
+      "source": "Upgrade plan P4, 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "P4 item 9: spoken only when a letter index is followed by another symbol"
+    },
+    {
+      "key": "subscript",
+      "roles": [
+        "label"
+      ],
+      "natural": "تحت",
+      "status": "proposed",
+      "source": "Natural Teacher Style review, 30 Sep 2026 (DEC-053); pending curriculum reviewer",
+      "notes": "Natural mode, a letter subscript that is part of a Physics / Chemistry symbol: `k_B T` → «كيه تحت بي في تي». Never a name («ثابت بولتزمان»). Accessible mode keeps «الدليل»."
+    },
+    {
+      "key": "whole",
+      "roles": [
+        "label"
+      ],
+      "natural": "الكل",
+      "status": "proposed",
+      "source": "Upgrade plan P5 (O-6), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "O-6: «سين زائد واحد، الكل تربيع» / «…، الكل على …»"
+    },
+    {
+      "key": "group-end",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "نهاية المجموعة",
+      "status": "proposed",
+      "source": "Upgrade plan P5 (O-6), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "P5: the end of a chemical group with no count (natural mode)"
+    },
+    {
+      "key": "-",
+      "roles": [
+        "bond"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "رابطة أحادية",
+      "literal": "شرطة",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "A bond sign the parser placed between atoms. Supersedes O-9. The glyph name «شرطة» stays the literal reading."
+    },
+    {
+      "key": "=",
+      "roles": [
+        "bond"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "رابطة ثنائية",
+      "literal": "شرطتان",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "A bond sign the parser placed between atoms. Supersedes O-9. The glyph name «شرطتان» stays the literal reading."
+    },
+    {
+      "key": "≡",
+      "roles": [
+        "bond"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "رابطة ثلاثية",
+      "literal": "ثلاث شرطات",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "A bond sign the parser placed between atoms. Supersedes O-9. The glyph name «ثلاث شرطات» stays the literal reading."
+    },
+    {
+      "key": "→",
+      "roles": [
+        "reaction"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "ينتج",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "Reaction arrow in a parsed reaction. Outside one, the neutral symbol «سهم» (limits: «تقترب من»)."
+    },
+    {
+      "key": "⇌",
+      "roles": [
+        "reaction"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "في حالة اتزان مع",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "Equilibrium arrow in a parsed reaction. Outside one, «سهمان متعاكسان»."
+    },
+    {
+      "key": "↑",
+      "roles": [
+        "reaction"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "يتصاعد",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "Gas mark after a product in a parsed reaction. Outside one, «سهم لأعلى»."
+    },
+    {
+      "key": "↓",
+      "roles": [
+        "reaction"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "يترسب",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "Precipitate mark after a product in a parsed reaction. Outside one, «سهم لأسفل»."
+    },
+    {
+      "key": "Δ",
+      "roles": [
+        "reaction"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "بالتسخين",
+      "status": "proposed",
+      "source": "Chemistry teacher-style correction, 30 Sep 2026: the conventional reading of the notation in its recognised Chemistry role (DEC-052); pending curriculum reviewer",
+      "notes": "A condition over / under a reaction arrow that is exactly Δ. Elsewhere Δ is «دلتا» (ΔH, ΔT)."
+    },
+    {
+      "key": "∈",
+      "roles": [
+        "operator"
+      ],
+      "natural": "ينتمي إلى",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Set membership"
+    },
+    {
+      "key": "∉",
+      "roles": [
+        "operator"
+      ],
+      "natural": "لا ينتمي إلى",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Non-membership"
+    },
+    {
+      "key": "⊂",
+      "roles": [
+        "operator"
+      ],
+      "natural": "مجموعة جزئية من",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Subset"
+    },
+    {
+      "key": "⊆",
+      "roles": [
+        "operator"
+      ],
+      "natural": "مجموعة جزئية من أو تساوي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Subset or equal"
+    },
+    {
+      "key": "⊃",
+      "roles": [
+        "operator"
+      ],
+      "natural": "تحوي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Superset"
+    },
+    {
+      "key": "⇒",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يؤدي إلى",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Implication"
+    },
+    {
+      "key": "⇔",
+      "roles": [
+        "operator"
+      ],
+      "natural": "إذا وفقط إذا",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Equivalence"
+    },
+    {
+      "key": "∥",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يوازي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Parallel"
+    },
+    {
+      "key": "⊥",
+      "roles": [
+        "operator"
+      ],
+      "natural": "عمودي على",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Perpendicular"
+    },
+    {
+      "key": "∪",
+      "roles": [
+        "operator"
+      ],
+      "natural": "اتحاد",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Union"
+    },
+    {
+      "key": "∩",
+      "roles": [
+        "operator"
+      ],
+      "natural": "تقاطع",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Intersection"
+    },
+    {
+      "key": "∘",
+      "roles": [
+        "operator"
+      ],
+      "natural": "تركيب",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Composition: `(f∘g)(x)`"
+    },
+    {
+      "key": "→",
+      "roles": [
+        "operator"
+      ],
+      "natural": "تقترب من",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "The arrow under a limit: `x \\to 0`"
+    },
+    {
+      "key": "∠",
+      "roles": [
+        "operator"
+      ],
+      "natural": "زاوية",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Angle symbol before its points: `∠ABC`"
+    },
+    {
+      "key": "△",
+      "roles": [
+        "operator"
+      ],
+      "natural": "مثلث",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Triangle symbol before its points"
+    },
+    {
+      "key": "∀",
+      "roles": [
+        "operator"
+      ],
+      "natural": "لكل",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Universal quantifier"
+    },
+    {
+      "key": "∃",
+      "roles": [
+        "operator"
+      ],
+      "natural": "يوجد",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Existential quantifier"
+    },
+    {
+      "key": "lim",
+      "roles": [
+        "label"
+      ],
+      "natural": "نهاية",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\lim`: the notation's reading"
+    },
+    {
+      "key": "when",
+      "roles": [
+        "label"
+      ],
+      "natural": "عندما",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Introduces the limit subscript"
+    },
+    {
+      "key": "integral",
+      "roles": [
+        "label"
+      ],
+      "natural": "تكامل",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\int`"
+    },
+    {
+      "key": "double-integral",
+      "roles": [
+        "label"
+      ],
+      "natural": "تكامل ثنائي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\iint`"
+    },
+    {
+      "key": "contour-integral",
+      "roles": [
+        "label"
+      ],
+      "natural": "تكامل مغلق",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\oint`"
+    },
+    {
+      "key": "sum",
+      "roles": [
+        "label"
+      ],
+      "natural": "مجموع",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\sum`"
+    },
+    {
+      "key": "product",
+      "roles": [
+        "label"
+      ],
+      "natural": "حاصل ضرب",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "`\\prod`"
+    },
+    {
+      "key": "from",
+      "roles": [
+        "label"
+      ],
+      "natural": "من",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Lower limit of a big operator"
+    },
+    {
+      "key": "to",
+      "roles": [
+        "label"
+      ],
+      "natural": "إلى",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "Upper limit of a big operator"
+    },
+    {
+      "key": "bigop-end",
+      "roles": [
+        "label"
+      ],
+      "natural": "",
+      "accessible": "نهاية المجموع",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026: the notation's school reading, no meaning added (R1); pending curriculum reviewer (P8)",
+      "notes": "P9: spoken only when more words follow a sum or an integral (accessible)"
+    },
+    {
+      "key": "over-arrow",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "فوق السهم",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (O-10), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "A condition written over the arrow with no conventional reading (catalyst, temperature …), read by its symbols. `Δ` alone reads «بالتسخين» (reaction role, DEC-052)."
+    },
+    {
+      "key": "under-arrow",
+      "roles": [
+        "label"
+      ],
+      "domains": [
+        "CHEMISTRY"
+      ],
+      "natural": "تحت السهم",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (O-10), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "A condition written under the arrow, read by its symbols"
+    }
+  ]
+}

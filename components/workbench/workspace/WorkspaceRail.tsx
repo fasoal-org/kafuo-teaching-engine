@@ -93,7 +93,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { useBrand } from '@/lib/brand/brand-context';
+import { BrandLockup } from '@/components/brand/brand-lockup';
 import type { HomeDiscoveryState, useHomeDiscovery } from '@/lib/hooks/use-home-discovery';
 import { ProBadge } from '@/components/workbench/ProBadge';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -231,7 +231,6 @@ export function WorkspaceRail({
   readonly resizeHandle: ReactNode;
 }) {
   const { t } = useI18n();
-  const brand = useBrand();
   const foldersAvailable = workspaceFoldersAvailable();
 
   const coursesSection = useListSearch();
@@ -844,12 +843,18 @@ export function WorkspaceRail({
         {/* The wordmark is the way home; the PRO pill beside it is the switch
             that leaves Pro. Two different destinations, so two hit targets —
             never one control wearing both meanings. */}
-        <HomeLink testId="pro-nav-home" onGoHome={onGoHome} className="-ml-1.5 px-1.5 py-1">
-          <img
-            src={brand.logoSrc}
-            alt=""
-            aria-hidden="true"
-            className="h-[21px] w-auto max-w-[110px] shrink-0"
+        <HomeLink
+          testId="pro-nav-home"
+          onGoHome={onGoHome}
+          className="-ml-1.5 min-w-0 shrink px-1.5 py-1"
+        >
+          <BrandLockup
+            decorative
+            useShortName
+            className="min-w-0 shrink gap-1.5"
+            logoClassName="h-[21px] w-auto max-w-[110px] shrink-0"
+            markClassName="size-5"
+            textClassName="truncate text-[14px]"
           />
         </HomeLink>
         <ProBadge active onToggle={onExitPro} />

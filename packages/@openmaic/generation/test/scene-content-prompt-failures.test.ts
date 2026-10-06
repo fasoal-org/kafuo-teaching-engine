@@ -25,7 +25,11 @@ describe('scene content prompt failures', () => {
       } as never);
 
       expect(content).toBeNull();
-      expect(failures).toEqual([{ code: 'prompt-unavailable' }]);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ code: 'prompt-unavailable' });
+      if (_type === 'slide') {
+        expect(failures[0]).toMatchObject({ detail: 'slide content prompt is unavailable' });
+      }
       expect(aiCall).not.toHaveBeenCalled();
     },
   );

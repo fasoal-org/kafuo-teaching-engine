@@ -3,6 +3,10 @@ import type { Stage } from '@openmaic/dsl';
 
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
+import type {
+  SourceVisualManifestEntry,
+  TeachingFlowEntry,
+} from '@/lib/types/teaching-package';
 
 /** App-owned stage shape. Device playback position is not document metadata. */
 export type AppStage = Stage;
@@ -48,6 +52,18 @@ export interface AppDocumentOutline {
    * here so a later retry of that material stays a report.
    */
   pptxImports?: Record<string, { sceneIds: string[]; importedAt: number }>;
+  /**
+   * The authoritative ordered Teaching Model Flow a Kafuo generation ran
+   * under. Present only on package-generated documents; the pre-submit
+   * exact-flow gate reads it, and Editor scene insertion inherits from it.
+   */
+  teachingFlow?: TeachingFlowEntry[];
+  /**
+   * Source-visual provenance manifest for the PDF visuals this document's
+   * generation selected. Lightweight metadata only — never a signed URL or an
+   * image binary. Survives successor clones and Editor saves.
+   */
+  sourceVisuals?: SourceVisualManifestEntry[];
   createdAt: number;
   updatedAt: number;
 }

@@ -1,6 +1,7 @@
 import { DocumentVersionError, type DocumentStore } from '@openmaic/storage';
 
 import type { Scene, Stage } from '@/lib/types/stage';
+import { carryForwardSceneLineage } from '@/lib/persistence/owner-bound-document-store';
 
 /**
  * Incremental scene writes land only in already-current documents (see the
@@ -41,8 +42,13 @@ export async function putSceneBringingCurrent(
     if (!(error instanceof DocumentVersionError) || error.kind !== 'not-current') throw error;
     const doc = await store.loadDocument(stageId);
     if (!doc) throw error;
+    // Module 3/4 W4: this whole-document fallback bypasses putScene, so the
+    // governed-lineage carry-forward is applied here explicitly — identically
+    // to the fast path.
+    const stored = doc.scenes.find((item) => item.id === scene.id) ?? null;
+    const merged = carryForwardSceneLineage<Scene>(stored, scene);
     const scenes = doc.scenes.filter((item) => item.id !== scene.id);
-    scenes.push(scene);
+    scenes.push(merged);
     scenes.sort((a, b) => a.order - b.order);
     await store.saveDocument({ ...doc, scenes });
   }

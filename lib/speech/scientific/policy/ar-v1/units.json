@@ -1,0 +1,219 @@
+{
+  "table": "units",
+  "description": "SI base/derived units, recognised only in unit position (plan §10.2).",
+  "roles": [
+    "unit"
+  ],
+  "entries": [
+    {
+      "key": "m",
+      "natural": "متر",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "s",
+      "natural": "ثانية",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "g",
+      "natural": "جرام",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "A",
+      "natural": "أمبير",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "K",
+      "natural": "كلفن",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": "Kelvin takes no degree word"
+    },
+    {
+      "key": "mol",
+      "natural": "مول",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "cd",
+      "natural": "شمعة",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": "Candela; reviewer to confirm «كانديلا» vs «شمعة»"
+    },
+    {
+      "key": "N",
+      "natural": "نيوتن",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "J",
+      "natural": "جول",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "W",
+      "natural": "واط",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "Pa",
+      "natural": "باسكال",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "Hz",
+      "natural": "هيرتز",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "V",
+      "natural": "فولت",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "Ω",
+      "natural": "أوم",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "C",
+      "natural": "كولوم",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "F",
+      "natural": "فاراد",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "T",
+      "natural": "تسلا",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "Wb",
+      "natural": "ويبر",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "H",
+      "natural": "هنري",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "L",
+      "natural": "لتر",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "eV",
+      "natural": "إلكترون فولت",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "h",
+      "natural": "ساعة",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": "Hour; only in unit position (after a number)"
+    },
+    {
+      "key": "min",
+      "natural": "دقيقة",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": "Minute; only after a number (ambiguity rule 3)"
+    },
+    {
+      "key": "°C",
+      "natural": "درجة سيليزية",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "rad",
+      "natural": "راديان",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "Wh",
+      "natural": "واط ساعة",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "atm",
+      "natural": "ضغط جوي",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Standard atmosphere (the unit's name)"
+    },
+    {
+      "key": "dB",
+      "natural": "ديسيبل",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Decibel"
+    },
+    {
+      "key": "u",
+      "natural": "وحدة كتل ذرية",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Unified atomic mass unit; `us` stays microsecond (prefix alias)"
+    },
+    {
+      "key": "°F",
+      "natural": "درجة فهرنهايت",
+      "status": "proposed",
+      "source": "Upgrade plan P9 (new coverage), 30 Sep 2026; pending curriculum reviewer (P8)",
+      "notes": "Degree Fahrenheit"
+    }
+  ]
+}

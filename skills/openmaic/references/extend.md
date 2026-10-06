@@ -18,7 +18,7 @@ This reference takes priority over the `accessCode` auto-shortcut in Phase 0: if
 
 **在哪里拿代码（按需选，不强制 fork）：**
 
-- **自用 / 不需要远程**：直接 `git clone` 上游 `THU-MAIC/OpenMAIC`，本地改、本地跑。最简单——不 fork、不管 CI。你对上游无写权限，不可能误推；建议本地 `git commit` 到一条分支做版本回滚。
+- **自用 / 不需要远程**：直接 `git clone` 上游 `fasoal-org/kafuo-teaching-engine`，本地改、本地跑。最简单——不 fork、不管 CI。你对上游无写权限，不可能误推；建议本地 `git commit` 到一条分支做版本回滚。
 - **需要远程**（备份 / 多机同步 / 协作 / 从 GitHub 部署 / 回馈上游）：fork → clone 你的 fork → 推到 fork。fork 的唯一意义是"拥有一个能 push 的远程"。
 
 **安装与启动** → 复用现有本地部署 reference，不要重写流程：[clone.md](clone.md)（clone + `pnpm install`，后者会在 postinstall 构建全部 `@openmaic/*` 包并同步 vendor 包）、[startup-modes.md](startup-modes.md)（启动方式）、[provider-keys.md](provider-keys.md)（provider key）。

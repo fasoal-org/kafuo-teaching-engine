@@ -11,7 +11,6 @@ import { createLogger } from '@/lib/logger';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
 import { generateImage } from '@/lib/media/image-providers';
 import { generateVideo, normalizeVideoOptions } from '@/lib/media/video-providers';
-import { generateTTS } from '@/lib/audio/tts-providers';
 import { DEFAULT_TTS_VOICES, DEFAULT_TTS_MODELS, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
 import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
@@ -27,9 +26,23 @@ import {
   resolveVideoModel,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
+  resolveTTSModel,
 } from '@/lib/server/provider-config';
+import { readSpeechConfig } from '@/lib/server/speech/config';
+import {
+  assessNarrationAudio,
+  recordReuse,
+  synthesizeNarration,
+} from '@/lib/server/speech/narration-synthesis';
+import { prepareNarration } from '@/lib/server/speech/prepare';
+import { providerCapability } from '@/lib/server/speech/provider-capabilities';
+import {
+  routedProviderStatus,
+  routedProviderUnavailableMessage,
+  teachingRouteForStage,
+} from '@/lib/server/speech/teaching-route';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { Scene } from '@/lib/types/stage';
+import type { Scene, Stage } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
 import type { ImageProviderId } from '@/lib/media/types';
 import type { VideoProviderId } from '@/lib/media/types';
@@ -37,6 +50,8 @@ import type { TTSProviderId } from '@/lib/audio/types';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { isGeneratedMediaPlaceholder } from '@/lib/media/media-ref';
 import { resolveImageSize } from '@/lib/server/image-sizing';
+import { screenVisualWithDefaults, type ImageTextPolicy } from '@/lib/server/visual-compliance';
+import { applyImagePromptPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 
 const log = createLogger('ClassroomMedia');
@@ -82,11 +97,34 @@ function mediaServingUrl(baseUrl: string, classroomId: string, subPath: string):
 // Image / Video generation
 // ---------------------------------------------------------------------------
 
+/** Regenerations with a reinforced prompt after a non-approved attempt. */
+const MAX_COMPLIANCE_REGENERATIONS = 2;
+
+export interface ClassroomMediaOptions {
+  /** Embedded-text policy resolved from the Stage's authoritative direction. */
+  textPolicy?: ImageTextPolicy;
+  /**
+   * Governed Teaching Packages never use a video that could not be screened
+   * (frame extraction is not available in this runtime → `unresolved`).
+   */
+  withholdUnscreenedVideo?: boolean;
+  /** Test seam; defaults to the deployment's store + vision client. */
+  screen?: typeof screenVisualWithDefaults;
+}
+
+/**
+ * Generate → screen → approve or reject. Only an `approved` visual is written
+ * to stage media and mapped; a rejected / unresolved one is never written, and
+ * its placeholder stays unmapped so assembly drops the element.
+ */
 export async function generateMediaForClassroom(
   outlines: SceneOutline[],
   classroomId: string,
   baseUrl: string,
+  options: ClassroomMediaOptions = {},
 ): Promise<Record<string, string>> {
+  const screen = options.screen ?? screenVisualWithDefaults;
+  const textPolicy = options.textPolicy ?? 'unrestricted';
   const mediaDir = path.join(CLASSROOMS_DIR, classroomId, 'media');
   await ensureDir(mediaDir);
 
@@ -128,30 +166,53 @@ export async function generateMediaForClassroom(
         // failure mode.
         const model = resolveImageModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
-        const result = await generateImage(
-          { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-          resolveImageSize(
-            { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
-            { providerId, modelId: model },
-          ),
-        );
+        let approved: { buf: Buffer; ext: string } | undefined;
+        for (let attempt = 0; attempt <= MAX_COMPLIANCE_REGENERATIONS && !approved; attempt += 1) {
+          const result = await generateImage(
+            { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
+            resolveImageSize(
+              applyImagePromptPolicy(
+                { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
+                textPolicy,
+                attempt > 0,
+              ),
+              { providerId, modelId: model },
+            ),
+          );
 
-        let buf: Buffer;
-        let ext: string;
-        if (result.base64) {
-          buf = Buffer.from(result.base64, 'base64');
-          ext = 'png';
-        } else if (result.url) {
-          buf = await downloadToBuffer(result.url);
-          const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
-          ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
-        } else {
-          log.warn(`Image generation returned no data for ${req.elementId}`);
+          let buf: Buffer;
+          let ext: string;
+          if (result.base64) {
+            buf = Buffer.from(result.base64, 'base64');
+            ext = 'png';
+          } else if (result.url) {
+            buf = await downloadToBuffer(result.url);
+            const urlExt = path.extname(new URL(result.url).pathname).replace('.', '');
+            ext = ['png', 'jpg', 'jpeg', 'webp'].includes(urlExt) ? urlExt : 'png';
+          } else {
+            log.warn(`Image generation returned no data for ${req.elementId}`);
+            break;
+          }
+
+          const verdict = await screen(buf, {
+            origin: 'generated',
+            textPolicy,
+            mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+            metadata: { description: req.prompt },
+          });
+          if (verdict.verdict === 'approved') approved = { buf, ext };
+          else
+            log.warn(
+              `Generated image ${req.elementId} attempt ${attempt + 1} not approved (${verdict.verdict}); bytes discarded`,
+            );
+        }
+        if (!approved) {
+          log.warn(`No approved image for ${req.elementId}; its placeholder stays unmapped`);
           continue;
         }
 
-        const filename = `${req.elementId}.${ext}`;
-        await fs.writeFile(path.join(mediaDir, filename), buf);
+        const filename = `${req.elementId}.${approved.ext}`;
+        await fs.writeFile(path.join(mediaDir, filename), approved.buf);
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated image: ${filename}`);
       } catch (err) {
@@ -188,6 +249,12 @@ export async function generateMediaForClassroom(
           normalized,
         );
 
+        if (options.withholdUnscreenedVideo) {
+          // Frame extraction is unavailable here, so the video cannot be
+          // screened: `unresolved` → withheld from a governed package.
+          log.warn(`Generated video ${req.elementId} withheld: video frames cannot be screened`);
+          continue;
+        }
         const buf = await downloadToBuffer(result.url);
         const filename = `${req.elementId}.mp4`;
         await fs.writeFile(path.join(mediaDir, filename), buf);
@@ -248,45 +315,99 @@ export function replaceMediaPlaceholders(scenes: Scene[], mediaMap: Record<strin
 // TTS generation
 // ---------------------------------------------------------------------------
 
+/** Per-run narration summary (plan §16.1): counts by outcome, subject and warning code. */
+export interface ClassroomTtsSummary {
+  generated: number;
+  reused: number;
+  skipped: number;
+  failed: number;
+  bySubject: Record<string, number>;
+  warningCodes: Record<string, number>;
+}
+
+/** Stage fields the narration context reads (plan §8.1). */
+export type ClassroomTtsStage = Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode'>;
+
 export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
   baseUrl: string,
-): Promise<void> {
+  options: { stage?: ClassroomTtsStage | null } = {},
+): Promise<ClassroomTtsSummary | void> {
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
 
-  // Resolve TTS provider (exclude browser-native-tts and operator force-disabled
-  // providers — server precedence, #665).
-  const ttsProviderIds = Object.entries(getServerTTSProviders())
-    .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
-    .map(([id]) => id);
-  if (ttsProviderIds.length === 0) {
-    log.warn('No server TTS provider configured, skipping TTS generation');
-    return;
-  }
+  // Teaching Engine TTS route (from the Stage's language and subject): when it
+  // matches, its provider/model/voice are authoritative and an unavailable
+  // routed provider skips TTS — never the first configured provider instead.
+  const route = teachingRouteForStage(options.stage);
+  let providerId: TTSProviderId;
+  let modelId: string;
+  let voice: string;
+  let apiKey: string | undefined;
+  let ttsBaseUrl: string | undefined;
+  if (route) {
+    const status = routedProviderStatus(route.providerId);
+    if (status.status !== 'ok') {
+      log.warn(`${routedProviderUnavailableMessage(route, status.status)}; skipping TTS generation`);
+      return;
+    }
+    providerId = route.providerId;
+    modelId = route.modelId;
+    voice = route.voiceId;
+    apiKey = status.apiKey;
+    ttsBaseUrl = status.baseUrl;
+  } else {
+    // Resolve TTS provider (exclude browser-native-tts and operator force-disabled
+    // providers — server precedence, #665).
+    const ttsProviderIds = Object.entries(getServerTTSProviders())
+      .filter(([id, info]) => id !== 'browser-native-tts' && !info.disabled)
+      .map(([id]) => id);
+    if (ttsProviderIds.length === 0) {
+      log.warn('No server TTS provider configured, skipping TTS generation');
+      return;
+    }
 
-  const providerId = ttsProviderIds[0] as TTSProviderId;
-  const apiKey = resolveTTSApiKey(providerId);
-  const ttsProvider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
-  if (ttsProvider?.requiresApiKey && !apiKey) {
-    log.warn(`No API key for TTS provider "${providerId}", skipping TTS generation`);
-    return;
+    providerId = ttsProviderIds[0] as TTSProviderId;
+    apiKey = resolveTTSApiKey(providerId);
+    const ttsProvider = TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS];
+    if (ttsProvider?.requiresApiKey && !apiKey) {
+      log.warn(`No API key for TTS provider "${providerId}", skipping TTS generation`);
+      return;
+    }
+    ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
+    voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
+    if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
+      log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
+      return;
+    }
+    // B-1 (approved): operator model pins apply to the batch path too.
+    modelId =
+      resolveTTSModel(
+        providerId,
+        DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+        voice,
+      ) || '';
   }
-  const ttsBaseUrl = resolveTTSBaseUrl(providerId) || ttsProvider?.defaultBaseUrl;
-  const voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
-  const format = ttsProvider?.supportedFormats?.[0] || 'mp3';
-  if (providerId === VOXCPM_TTS_PROVIDER_ID && voice === VOXCPM_AUTO_VOICE_ID) {
-    log.warn('VoxCPM Auto Voice requires agent context; skipping server-side TTS generation');
-    return;
-  }
+  const speechConfig = readSpeechConfig();
+  const summary: ClassroomTtsSummary = {
+    generated: 0,
+    reused: 0,
+    skipped: 0,
+    failed: 0,
+    bySubject: {},
+    warningCodes: {},
+  };
+  // One asset per Action on the scientific path: no Action splitting there (§13.2).
+  const segmentsInOrchestrator =
+    speechConfig.mode === 'on' && providerCapability(providerId, modelId) !== null;
 
   for (const scene of scenes) {
     if (!scene.actions) continue;
 
     // Split long speech actions into multiple shorter ones before TTS generation,
     // mirroring the client-side approach. Each sub-action gets its own audio file.
-    scene.actions = splitLongSpeechActions(scene.actions, providerId);
+    if (!segmentsInOrchestrator) scene.actions = splitLongSpeechActions(scene.actions, providerId);
 
     // Use scene order to make audio IDs unique across scenes
     const sceneOrder = scene.order;
@@ -297,30 +418,105 @@ export async function generateTTSForClassroom(
       // Server transport emits the derived id plus the serving URL; the
       // client-side converter collapses the pair into one pool asset on
       // first load. Browser generation allocates pool ids directly.
+      // B-4: the derived transport id keeps its shape; the FILE is content-addressed.
       const audioId = `tts_s${sceneOrder}_${action.id}`;
 
       try {
-        const result = await generateTTS(
-          {
+        const { plan, profile } = await prepareNarration({
+          text: speechAction.text,
+          stage: options.stage ?? null,
+          stageId: classroomId,
+          config: speechConfig,
+          fallback: {
             providerId,
-            modelId: DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+            modelId,
             apiKey,
             baseUrl: ttsBaseUrl,
             voice,
-            speed: speechAction.speed,
+            speed: speechAction.speed ?? 1,
+            requestSpeed: speechAction.speed,
           },
-          speechAction.text,
-        );
-
-        const filename = `${audioId}.${result.format || format}`;
-        await fs.writeFile(path.join(audioDir, filename), result.audio);
-
+          actionSpeed: speechAction.speed,
+        });
+        // Skip-if-current (§13.5) only when the scientific flag is not off (DEC-002).
+        if (speechConfig.mode !== 'off') {
+          const assessment = assessNarrationAudio(speechAction, plan, profile, speechConfig.mode);
+          if (assessment.status === 'current' || assessment.status === 'legacy') {
+            recordReuse('batch', speechAction, plan, assessment.status);
+            if (assessment.status === 'current') summary.reused += 1;
+            else summary.skipped += 1;
+            continue;
+          }
+        }
+        const outcome = await synthesizeNarration({
+          action: speechAction,
+          stageId: classroomId,
+          plan,
+          profile,
+          config: speechConfig,
+          reason: speechAction.audioId ? 'stale' : 'initial',
+          entry: 'batch',
+          persist: { kind: 'audio-dir' },
+          // B-3 (approved): the batch path records usage.
+          recordUsage: true,
+          // B-2 (approved): bounded retry for 429/5xx/timeout.
+          transientAttempts: 2,
+          routeId: route?.routeId,
+        });
+        for (const warning of outcome.warnings) {
+          summary.warningCodes[warning.code] = (summary.warningCodes[warning.code] ?? 0) + 1;
+        }
+        if (outcome.outcome === 'failed' || !outcome.audioRef) {
+          summary.failed += 1;
+          log.warn(`TTS generation failed for action ${action.id}: ${outcome.error?.code ?? 'unknown'}`);
+          continue;
+        }
+        summary.generated += 1;
+        const subjectKey = plan.subjectCode ?? 'general';
+        summary.bySubject[subjectKey] = (summary.bySubject[subjectKey] ?? 0) + 1;
+        const subPath = outcome.audioRef.split(`/api/classroom-media/${classroomId}/`)[1]!;
         speechAction.audioId = audioId;
-        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-        log.info(`Generated TTS: ${filename} (${result.audio.length} bytes)`);
+        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, subPath);
+        speechAction.audioProvenance = outcome.provenance;
+        log.info(`Generated TTS: ${subPath} (${outcome.audio?.bytes.length ?? 0} bytes)`);
       } catch (err) {
+        summary.failed += 1;
         log.warn(`TTS generation failed for action ${action.id}:`, err);
       }
     }
   }
+  return summary;
+}
+
+/**
+ * Drop image / video elements whose generated-media placeholder never received
+ * an approved mapping (generation failed, or every attempt was rejected /
+ * unresolved). An unmapped placeholder must never survive into a persisted
+ * Stage — it would render as a permanent skeleton. Returns the removed
+ * placeholder ids per scene id.
+ */
+export function dropUnmappedMediaPlaceholders(scenes: Scene[]): Map<string, string[]> {
+  const removed = new Map<string, string[]>();
+  for (const scene of scenes) {
+    if (scene.type !== 'slide') continue;
+    const canvas = (
+      scene.content as {
+        canvas?: {
+          elements?: Array<{ id: string; src?: string; mediaRef?: string; type?: string }>;
+        };
+      }
+    )?.canvas;
+    if (!canvas?.elements) continue;
+    const dropped: string[] = [];
+    canvas.elements = canvas.elements.filter((el) => {
+      if (el.type !== 'image' && el.type !== 'video') return true;
+      const pending =
+        (typeof el.src === 'string' && isGeneratedMediaPlaceholder(el.src)) ||
+        (el.type === 'video' && !el.src && typeof el.mediaRef === 'string');
+      if (pending) dropped.push(el.src || el.mediaRef || el.id);
+      return !pending;
+    });
+    if (dropped.length > 0) removed.set(scene.id, dropped);
+  }
+  return removed;
 }

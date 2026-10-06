@@ -62,8 +62,15 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Whitelist: access-code endpoints, health check
-  if (pathname.startsWith('/api/access-code/') || pathname === '/api/health') {
+  // Whitelist: access-code endpoints, health check, and the server-to-server
+  // Teaching Package API (its routes enforce their own service-key
+  // authentication; the access cookie is meaningless to a machine caller).
+  if (
+    pathname.startsWith('/api/access-code/') ||
+    pathname === '/api/health' ||
+    pathname === '/api/teaching-packages' ||
+    pathname.startsWith('/api/teaching-packages/')
+  ) {
     return NextResponse.next();
   }
 

@@ -178,6 +178,16 @@ describe('saveStageDataIncremental', () => {
     expect(prepareScenes).toHaveBeenLastCalledWith('stage-1', scenes);
   });
 
+  it('keeps subjectCode and speechReadingMode when stamping a stage-only save', async () => {
+    const stamped: Stage = { ...stage, subjectCode: 'MATH', speechReadingMode: 'accessible' };
+    await saveStageDataIncremental('stage-1', [{ kind: 'stage' }], { ...data, stage: stamped }, 0);
+
+    expect(putStage).toHaveBeenCalledOnce();
+    expect(putStage.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ subjectCode: 'MATH', speechReadingMode: 'accessible' }),
+    );
+  });
+
   it('uses one aggregate write for a mixed scene-and-stage batch', async () => {
     await saveStageDataIncremental(
       'stage-1',

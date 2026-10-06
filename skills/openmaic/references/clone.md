@@ -21,7 +21,7 @@ Establish which OpenMAIC checkout will be used for setup and runtime actions.
 Clone:
 
 ```bash
-git clone https://github.com/THU-MAIC/OpenMAIC.git
+git clone https://github.com/fasoal-org/kafuo-teaching-engine.git
 cd OpenMAIC
 ```
 

@@ -1,0 +1,804 @@
+/**
+ * Teaching Package domain types (Module 1 — Experience / Scene Model).
+ *
+ * A Teaching Package version wraps exactly one PostgreSQL-backed Stage. Stage,
+ * Scene and Action structures are never embedded here (BR-015) and learner
+ * runtime state is never present (BR-022). The logical "Teaching Package" is
+ * identified by the Learning Item key `(type, id)`; versions are rows.
+ */
+import type { OutlineDiagnostic, TeachingScenePolicy } from '@openmaic/generation';
+
+import type {
+  ClassroomGenerationProgress,
+  GenerateClassroomInput,
+} from '@/lib/server/classroom-generation';
+
+export type LearningItemType = 'lesson' | 'section';
+
+export interface LearningItemRef {
+  type: LearningItemType;
+  /** Opaque Kafuo-owned identifier; the Teaching Engine never interprets it. */
+  id: string;
+}
+
+export type TeachingPackageStatus =
+  | 'draft'
+  | 'in_review'
+  | 'rejected'
+  | 'approved'
+  | 'superseded'
+  | 'discarded';
+
+/** Non-terminal statuses — the at-most-one "active" version of a Learning Item. */
+export const TEACHING_PACKAGE_ACTIVE_STATUSES: readonly TeachingPackageStatus[] = [
+  'draft',
+  'in_review',
+  'rejected',
+];
+
+/** Statuses under which the version's current Stage may be edited. */
+export const TEACHING_PACKAGE_EDITABLE_STATUSES: readonly TeachingPackageStatus[] = [
+  'draft',
+  'rejected',
+];
+
+export interface TeachingModelLineage {
+  /** e.g. `g5` — the Teaching Model key Kafuo assigned. */
+  key: string;
+  /** e.g. `g5.v1` — the exact resolved version; historical truth. */
+  version: string;
+}
+
+/**
+ * An exact canonical Skill reference — `(skillId, version)`, never "latest".
+ * Kafuo validates reference shape; TE alone is authoritative for whether the
+ * reference resolves (teaching-skills plan §G).
+ */
+export interface TeachingSkillRef {
+  skillId: string;
+  version: string;
+}
+
+/**
+ * A required Skill rule with an EXPLICIT requirement scope and assignment role
+ * (BR-TS-010 — V1 defines no implicit default scope and no "appears on at least
+ * one Scene" fallback). Closed V1 vocabularies: scope ∈
+ * {'flow_position','every_instructional_scene'}, role ∈ {'primary','supporting'}.
+ */
+export interface TeachingRequiredSkillRule {
+  skill: TeachingSkillRef;
+  scope: string;
+  role: string;
+}
+
+/**
+ * An explicitly prohibited unordered pairing of two exact Skill versions on one
+ * Scene (BR-TS-055 — explicit restrictions only; V1 builds no universal
+ * compatibility engine).
+ */
+export interface TeachingSkillCombinationRestriction {
+  skillA: TeachingSkillRef;
+  skillB: TeachingSkillRef;
+}
+
+/**
+ * The Teaching Model Skill Policy for one resolved flow-position instance
+ * (FRD §10.7). Authored on Kafuo's frozen flow definition item and projected onto
+ * every expanded entry by `expand_teaching_model_flow`; TE receives and validates
+ * it and NEVER re-expands or re-derives it (plan §G).
+ */
+export interface TeachingSkillPolicy {
+  required: TeachingRequiredSkillRule[];
+  preferred: TeachingSkillRef[];
+  allowed: TeachingSkillRef[];
+  combinationRestrictions: TeachingSkillCombinationRestriction[];
+}
+
+/**
+ * The Scene-level Teaching Skills carrier (Module 2 W9, plan §E/§F): Primary and
+ * Supporting assignment plus the instructional classification, on ONE carrier for
+ * every Scene type — no second Scene model.
+ *
+ * Every member is optional and additive: absence on a legacy Scene is the
+ * backward-compatibility mechanism itself (AC-TS-034 — legacy lineage absence is
+ * explicit and never fabricated). Nothing populates the carrier until W10's
+ * generation-time selection; W12's validators consume it.
+ *
+ * The refs keep BOTH the stable canonical id and the exact version so later
+ * validators can key duplicates on the ID while resolution keys on the pair
+ * (plan §K: `primary feynman v1` + `supporting feynman v2` must be detectable as
+ * the same Skill twice).
+ */
+export interface SceneTeachingSkills {
+  /** Exactly one primary on an instructional Scene (BR-TS-021); absent on a genuinely non-instructional one. */
+  primary?: TeachingSkillRef;
+  /** Intentional `0..N` supporting Skills (BR-TS-022 — no arbitrary V1 cap). */
+  supporting?: TeachingSkillRef[];
+  /** The classification emitted at outline time (FR-TS-022); never derived from Skill absence (BR-TS-054). */
+  classification?: 'instructional' | 'non-instructional';
+}
+
+/**
+ * The durable per-Scene ALIGNMENT BASELINE (Module 2 W14/W15 — teaching-skills
+ * plan §K): the last known-aligned state of one Scene, against which the four
+ * functional alignment states are DERIVED at read (§K derivation). Identity
+ * plus state ONLY — no chain-of-thought, no long rationale (BR-TS-032,
+ * FR-TS-037).
+ *
+ * Persistence owner (plan §F/§K, one answer): package Scene/Stage lifecycle
+ * data, NOT generation-attempt state — an app-layer Scene field that travels
+ * with a same-model clone (stage-clone spread), is governed by Stage/package
+ * editability, and freezes with approved content. `sceneRev` is deliberately
+ * NOT part of the binding (it would invalidate on metadata-only edits, which
+ * FR-TS-043 forbids); the write path is still `sceneRev`-guarded via putScene.
+ *
+ * Absent on legacy data and until W15 stamps one — absence IS the derived
+ * `validation-required` state for a governed Scene.
+ */
+export interface SceneAlignmentBaseline {
+  /** The primary the baseline was taken against; absent for a genuinely non-instructional Scene. */
+  primary?: TeachingSkillRef;
+  /** The supporting set the baseline was taken against (ordered, exact versions). */
+  supporting?: TeachingSkillRef[];
+  /** The classification the baseline was taken against. */
+  classification: 'instructional' | 'non-instructional';
+  /** sha256 over the R-6 material projection (content · actions · title · description). */
+  fingerprint: string;
+  /** Who established it — reviewer-confirmed baselines only; generation baselines carry none. */
+  actorRef?: string;
+  /** Epoch milliseconds. */
+  establishedAt: number;
+  /** `'generation'` (stamped post-generation by W15) | `'reviewer-confirmation'` (recorded by W15's route). */
+  origin: 'generation' | 'reviewer-confirmation';
+}
+
+/**
+ * Kafuo Teaching Model Flow entry (FRD §11.1). Array order is authoritative;
+ * TE derives the zero-based `flowIndex` from position. Repeated stage keys are
+ * valid — identity is `(flowIndex, stage)`. Kafuo never sends `flowIndex`.
+ *
+ * `skillPolicy` is the definition item's policy projected onto this resolved
+ * position by Kafuo's expansion; optional because pre-Module-2 requests carry
+ * none (the legacy path parses exactly as before).
+ */
+export interface TeachingFlowEntry {
+  /** Case-sensitive stable machine key, e.g. `lesson_introduction`. */
+  stage: string;
+  /** Non-empty pedagogical instructions for this flow position. */
+  instructions: string;
+  /** Projected Skill Policy; absent on pre-Module-2 (legacy) requests. */
+  skillPolicy?: TeachingSkillPolicy;
+  /**
+   * Projected machine-readable scene policy of this position (g5.v5+): the
+   * allowed scene types, slide types and content roles, the visual requirement
+   * and the cardinality. Absent on earlier Teaching Model versions, whose
+   * positions keep the stage-keyed legacy rules (`scenePolicyFor`).
+   */
+  scenePolicy?: TeachingScenePolicy;
+}
+
+/** Teaching-stage identity carried by every Kafuo-generated outline and Scene. */
+export interface TeachingStageRef {
+  /** Must equal `flow[flowIndex].stage` exactly. */
+  key: string;
+  /** Zero-based authoritative flow position, derived by TE. */
+  flowIndex: number;
+}
+
+/**
+ * The one canonical Teaching Package aggregate scope (plan §4.1.2):
+ * `(tenantId, learningItem.type, learningItem.id)`. `LearningItemRef` stays the
+ * external `{type, id}` shape; every internal read/write takes this key.
+ */
+export interface TeachingPackageAggregateKey {
+  tenantId: string;
+  learningItem: LearningItemRef;
+}
+
+/** Tenant namespace for rows written before the tenant column existed. */
+export const LEGACY_TENANT_ID = '__legacy__';
+
+export interface LearningObjectiveSnapshot {
+  statement: string;
+  label?: string;
+  context?: string;
+}
+
+export interface LearningObjectiveRef {
+  objectiveRef: string;
+  snapshot: LearningObjectiveSnapshot;
+}
+
+/** Kafuo Learning Objective reference retained on a scene (app-layer field). */
+export interface SceneLearningObjectiveRef {
+  objectiveRef: string;
+  snapshot: LearningObjectiveSnapshot;
+  /** When the snapshot was captured; Kafuo changes never rewrite it. */
+  capturedAt: number;
+}
+
+/**
+ * Transient execution payload handed to `generateClassroom`. It is exactly the
+ * existing `GenerateClassroomInput` and may carry secrets (`webSearchApiKey`)
+ * and bulky source content (`pdfContent`). It lives only in the request/runner
+ * process and is NEVER persisted.
+ */
+export type GenerationExecutionInput = GenerateClassroomInput;
+
+/**
+ * Immutable, lightweight, reference-based audit lineage persisted per attempt
+ * (BRD §17). No secrets, no raw source content.
+ */
+export interface GenerationInputSnapshot {
+  learningItem: LearningItemRef;
+  teachingModel: TeachingModelLineage;
+  learningObjectives: LearningObjectiveRef[];
+  contentUnitRefs: string[];
+  sourceRefs: string[];
+  /** Opaque Kafuo-supplied references/context, ≤ 64 KiB, secret-free by key name. */
+  generationContext: Record<string, unknown>;
+  /** Non-secret execution flags, copied from the execution input. */
+  generationOptions: {
+    enableWebSearch?: boolean;
+    webSearchProviderId?: string;
+    webSearchModelId?: string;
+    baiduSubSources?: unknown;
+    enableImageGeneration?: boolean;
+    enableVideoGeneration?: boolean;
+    enableTTS?: boolean;
+    agentMode?: 'default' | 'generate';
+  };
+  /** sha256 hex digest of the full requirement text. */
+  requirementDigest: string;
+  /** First 200 chars (precedent: classroom-job-store buildInputSummary). */
+  requirementPreview: string;
+  pdfContentSummary: {
+    present: boolean;
+    textLength: number;
+    imageCount: number;
+    textDigest?: string;
+  } | null;
+  /**
+   * Model string from resolveModel; patched in by the runner after resolution.
+   * Legacy (non-Kafuo) runs and Kafuo runs with `TEACHING_SUBJECT_ROUTING=off`
+   * only — a subject-routed run records the policy below instead.
+   */
+  resolvedLlmModel?: string;
+  /** ---- Subject routing (Kafuo R1 plan §5.1, §7.4) — patched by the runner ---- */
+  /** The routed subject (`learningItem.subjectOffering.code`) the attempt ran under. */
+  subjectCode?: string;
+  /** The policy version the pair below was taken from. */
+  policyVersion?: string;
+  /** Canonical `provider:model` strings of the subject's Primary and Fallback. */
+  primaryModel?: string;
+  fallbackModel?: string;
+  /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
+  ledgerIncomplete?: boolean;
+  /**
+   * Outline metadata the run repaired (e.g. an incompatible `contentKind`
+   * dropped with the role kept) — written by the runner before binding.
+   */
+  outlineRepairs?: Array<{
+    code: string;
+    outlineId?: string;
+    field?: string;
+    previousValue?: unknown;
+    message: string;
+  }>;
+  requestedAt: number;
+  /** ---- Kafuo integration additions (FRD §9.2/§17.1) ---- */
+  /** Effective Kafuo tenant; `LEGACY_TENANT_ID` for pre-tenant rows. */
+  tenantId?: string;
+  /** The ordered Kafuo Teaching Model Flow when the request carried one. */
+  teachingFlow?: TeachingFlowEntry[];
+  /**
+   * Stable resource identity/integrity lineage. NEVER carries `url` — the
+   * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).
+   */
+  contentResource?: {
+    id: string;
+    fileName?: string;
+    mimeType: string;
+    fileSizeBytes?: number;
+    checksumSha256?: string;
+    /** Filled by the acquisition layer from the downloaded bytes. */
+    measuredBytes?: number;
+    measuredSha256?: string;
+  };
+  /** Stable normalized-package facts only; never the signed URL. */
+  normalizedContentResource?: Omit<KafuoNormalizedContentResource, 'url'> & {
+    measuredBytes?: number;
+    measuredSha256?: string;
+    contentUnitCount?: number;
+    blockCount?: number;
+    visualCount?: number;
+  };
+  /** sha256 of the canonical Kafuo request (excludes the signed URL). */
+  requestDigest?: string;
+  /**
+   * The explicit Teaching Skills governance contract marker Module 2 requests
+   * carry (Module 2 W6, plan §M). Its ABSENCE is the genuine pre-Module-2
+   * legacy path — governance is declared, never inferred from Skill fields,
+   * policy presence, or flow presence. Identifiers only; secrecy-safe.
+   * `null` and absence are both the legacy state (truthiness is the test).
+   */
+  teachingSkillsContract?: string | null;
+  /**
+   * Deterministic digest of the resolved Skill Policy lineage — integrity
+   * evidence only, NOT the mode declaration (the contract marker above is).
+   * Nullable: a policy-free flow carries no lineage evidence.
+   */
+  skillPolicyDigest?: string | null;
+  /** Source-visual counts patched in by the acquisition/generation layers. */
+  sourceVisualSummary?: {
+    available: number;
+    selected: number;
+    materialized: number;
+  };
+}
+
+export interface TeachingPackageVersion {
+  /** `tpv-` + 12 base64url chars. */
+  id: string;
+  /** Owning tenant; immutable once written (`LEGACY_TENANT_ID` for legacy rows). */
+  tenantId: string;
+  learningItem: LearningItemRef;
+  /** 1..n, unique per learning item, never reused. */
+  version: number;
+  status: TeachingPackageStatus;
+  /** Exactly one, always present. */
+  currentStageId: string;
+  /** Attempt that produced currentStageId; null for a cloned successor. */
+  currentAttemptId: string | null;
+  teachingModel: TeachingModelLineage;
+  /** Set on successors. */
+  predecessorVersionId: string | null;
+  supersededByVersionId: string | null;
+  /** `document_stage_revision.rev` captured at submit; re-checked at approve. */
+  submittedStageRev: number | null;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  updatedAt: number;
+  submittedAt: number | null;
+  approvedAt: number | null;
+  supersededAt: number | null;
+  discardedAt: number | null;
+}
+
+export type ReviewEventType =
+  | 'created'
+  | 'submitted_for_review'
+  | 'review_edit_started'
+  | 'rejected'
+  | 'resubmitted'
+  | 'approved'
+  | 'superseded'
+  | 'discarded'
+  | 'successor_created'
+  | 'stage_replaced'
+  // Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §10.3).
+  | 'scene_regeneration_started'
+  | 'scene_regeneration_completed'
+  | 'scene_regeneration_failed'
+  | 'scene_regeneration_refused'
+  | 'scene_regeneration_restored';
+
+export interface ReviewEvent {
+  id: number;
+  versionId: string;
+  eventType: ReviewEventType;
+  fromStatus: TeachingPackageStatus | null;
+  toStatus: TeachingPackageStatus;
+  actorRef: string;
+  reason: string | null;
+  comment: string | null;
+  relatedVersionId: string | null;
+  data: Record<string, unknown> | null;
+  createdAt: number;
+}
+
+export type GenerationAttemptKind = 'initial' | 'regeneration';
+
+/**
+ * `awaiting_admin_correction` is the durable, non-terminal pause of an attempt
+ * whose candidate needs a person (slide-classification-admin-correction-plan
+ * §3): it is in flight, never reclaimed as stale, never a failure, and resumes
+ * the SAME attempt.
+ */
+export type GenerationAttemptStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_admin_correction'
+  | 'succeeded'
+  | 'failed';
+
+/** Where a paused attempt stopped: before any Stage (`outline`) or on a retained Stage (`scenes`). */
+export type GenerationCheckpointPhase = 'outline' | 'scenes';
+
+/** `awaiting` a person, `resumed` (by the revision recorded), or `abandoned`. */
+export type GenerationCheckpointState = 'awaiting' | 'resumed' | 'abandoned';
+
+/** Metadata of one screened-and-approved source visual — never its bytes or URL. */
+export interface CheckpointSourceImage {
+  id: string;
+  sha256: string;
+  pageNumber: number | null;
+  sourceContentUnitIds?: string[];
+  caption?: string;
+  figureLabel?: string;
+  description?: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * The secret-free references a resume needs (plan §3.1). Everything the
+ * candidate was validated against is pinned here, so an edit is revalidated
+ * against exactly the same authority and a resume can prove the re-acquired
+ * source is the one the candidate was planned from.
+ */
+export interface GenerationCheckpointSourceRefs {
+  /** sha256 of the attempt's authoritative `teachingFlow` (snapshot). */
+  flowDigest: string;
+  /** The attempt's canonical request digest; a resume must present the same. */
+  requestDigest: string | null;
+  /** The classroom run the candidate belongs to (ledger attribution on resume). */
+  generationRun: number;
+  sourceKind: 'pdf_fallback' | 'kafuo_normalized';
+  contentResourceId: string;
+  /** Measured sha256 of the acquired source; re-acquisition must match it. */
+  measuredSha256: string;
+  normalizedPackageId?: string;
+  /** The exact Content Unit id set the grounding gate used; null = no gate. */
+  contentUnitIds: string[] | null;
+  /** Content Unit choices for a person (id, order, title, role) — no text. */
+  contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
+  /** Screening verdicts reused on resume instead of screening again. */
+  visualVerdicts: {
+    approved: Array<{ id: string; sha256: string }>;
+    withheld: Array<{ id: string; sha256: string; verdict: string }>;
+  };
+  /** Approved source visuals offered to the planner (metadata only). */
+  sourceImages: CheckpointSourceImage[];
+}
+
+export interface GenerationCheckpointLogEntry {
+  revision: number;
+  event: 'paused' | 'edited' | 'resumed' | 'abandoned';
+  actorRef: string;
+  at: number;
+  phase?: GenerationCheckpointPhase;
+  blockingCount?: number;
+  operations?: unknown[];
+  reason?: string;
+}
+
+export interface GenerationCheckpoint {
+  attemptId: string;
+  tenantId: string;
+  phase: GenerationCheckpointPhase;
+  state: GenerationCheckpointState;
+  /** Optimistic-concurrency token; every edit increments it. */
+  revision: number;
+  outlines: import('@/lib/types/generation').SceneOutline[];
+  courseTitle: string | null;
+  languageDirective: string;
+  /** Open admin-correctable findings. Empty ⇒ the candidate may resume. */
+  diagnostics: OutlineDiagnostic[];
+  /** Machine repairs applied to the candidate (visible, not blocking). */
+  repairs: OutlineDiagnostic[];
+  sourceRefs: GenerationCheckpointSourceRefs;
+  /** `scenes` phase: the retained, unbound Stage. */
+  reservedStageId: string | null;
+  /** `scenes` phase: the outlines whose Scenes a resume regenerates. */
+  pendingOutlineIds: string[] | null;
+  editLog: GenerationCheckpointLogEntry[];
+  resumedRevision: number | null;
+  pauseCount: number;
+  pausedAt: number;
+  updatedAt: number;
+  resumedAt: number | null;
+  abandonedAt: number | null;
+}
+
+export interface GenerationAttempt {
+  /** `tpa-` + 12 base64url chars. */
+  id: string;
+  /** Owning tenant; immutable once written (`LEGACY_TENANT_ID` for legacy rows). */
+  tenantId: string;
+  learningItem: LearningItemRef;
+  /** Null for an initial attempt until its completion transaction. */
+  versionId: string | null;
+  kind: GenerationAttemptKind;
+  status: GenerationAttemptStatus;
+  /** Kafuo idempotency key. */
+  requestId: string | null;
+  /** Semantic digest of the Kafuo request; null for legacy body callers. */
+  requestDigest: string | null;
+  /**
+   * The authoritative Teaching Skills governance discriminator, persisted from
+   * the request marker (Module 2 W6, plan §F/§M). `NULL` ⇒ the attempt was not
+   * governed by Teaching Skills ⇒ legacy. Never inferred from content.
+   */
+  teachingSkillsContract: string | null;
+  /** Skill Policy lineage digest — integrity evidence, not the mode declaration. */
+  skillPolicyDigest: string | null;
+  /** Full-classroom generation runs consumed (Layer B, plan §4.3.8). */
+  generationRuns: number;
+  requestedByActorRef: string;
+  teachingModel: TeachingModelLineage;
+  inputSnapshot: GenerationInputSnapshot;
+  /** Immutable historical identity of the Stage this attempt produced. */
+  producedStageId: string | null;
+  /** Live reference to that Stage while it is retained. */
+  stageId: string | null;
+  /** Set when this attempt's Stage stopped being the version's current Stage. */
+  displacedAt: number | null;
+  /** Set by the future retention policy; guard protection ends here. */
+  stageReleasedAt: number | null;
+  progress: ClassroomGenerationProgress | null;
+  error: string | null;
+  /** Structured failure code (e.g. `ATTEMPT_RECLAIMED_STALE`). */
+  errorCode: string | null;
+  errorRetryable: boolean | null;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Kafuo → Teaching Engine structured generation request (FRD §9.2).
+// ---------------------------------------------------------------------------
+
+/** Kafuo generation capability switches only — never provider IDs or keys. */
+export interface KafuoGenerationSwitches {
+  enableWebSearch?: boolean;
+  enableImageGeneration?: boolean;
+  enableVideoGeneration?: boolean;
+  enableTTS?: boolean;
+  agentMode?: 'default' | 'generate';
+}
+
+/**
+ * `learningItem.subjectOffering` as Kafuo sends it (R1 contracts §6). The
+ * optional keys are present exactly when the wire carried them (null values
+ * included) so the shared canonical digest stays byte-compatible.
+ */
+export interface KafuoSubjectOffering {
+  id: string;
+  name: string;
+  code?: string | null;
+  nameAr?: string | null;
+  nameEn?: string | null;
+  academicLanguage?: string | null;
+}
+
+/** Hierarchy/context block of the Kafuo Learning Item (FRD §9.2). */
+export interface KafuoLearningItemContext {
+  type: 'lesson' | 'section';
+  /** `String(learning_items.id)` — never `lesson_id`/`logical_section_id`. */
+  id: string;
+  title: string;
+  lessonId?: string;
+  logicalSectionId?: string;
+  unit: { id: string; title: string };
+  academicPeriod?: { id: string; name: string };
+  /**
+   * The Kafuo subject offering (R1 contracts §6). `code` is the routing key
+   * (`master_subjects.routing_key`); the Backend sends `code: null` for an
+   * unrouted subject — kept as received here (the digest covers the wire
+   * shape byte-for-byte), normalised separately into
+   * `KafuoGenerationContext.subjectCode`.
+   */
+  subjectOffering?: KafuoSubjectOffering;
+  level?: { id: string; name: string };
+  curriculum: { id: string; name: string };
+  curriculumVersion: { id: string; versionLabel: string };
+  language: string;
+  estimatedMinutes?: number;
+  concepts?: Array<{
+    title: string;
+    description?: string;
+    sortOrder: number;
+  }>;
+}
+
+/** The lesson-scoped PDF resource Kafuo authorizes TE to download once. */
+export interface KafuoContentResource {
+  /** `String(content_sources.id)`. */
+  id: string;
+  /** Transient retrieval credential — never persisted, logged, or echoed. */
+  url: string;
+  fileName?: string;
+  mimeType: 'application/pdf';
+  fileSizeBytes?: number;
+  checksumSha256?: string;
+}
+
+export interface KafuoNormalizedContentResource {
+  id: string;
+  /** Transient retrieval credential — execution memory only. */
+  url: string;
+  mimeType: 'application/zip';
+  schemaVersion: 'kafuo.normalized-content.v1';
+  contentSourceId: string;
+  contentRevisionId: string;
+  parseRunId: string;
+  structureProfile: { id: string; versionId: string };
+  fileSizeBytes: number;
+  checksumSha256: string;
+}
+
+/** The structured Kafuo generation request (FRD §9.2, normative boundary). */
+export interface KafuoGenerationRequest {
+  requestId: string;
+  learningItem: KafuoLearningItemContext;
+  /** Approved active outcomes in approved order. */
+  learningObjectives: LearningObjectiveRef[];
+  teachingModel: TeachingModelLineage & { flow: TeachingFlowEntry[] };
+  contentResource: KafuoContentResource;
+  normalizedContentResource?: KafuoNormalizedContentResource;
+  generation: KafuoGenerationSwitches;
+  /** From `ActorContext.resolve_tenant(...)`, never a browser body value. */
+  tenantContext: { tenantId: string };
+  actorRef: string;
+  /** Present ⇒ regeneration of that TE version. */
+  versionId?: string;
+  /**
+   * The explicit `teachingSkills` governance marker, when the request carried
+   * one (Module 2 W6). Undefined ⇒ legacy — never inferred from `skillPolicy`
+   * presence (plan §M).
+   */
+  teachingSkillsContract?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Teaching Engine → Kafuo webhook contract (FRD §9.8) plus the admin-correction pause.
+// ---------------------------------------------------------------------------
+
+export type TeachingEngineWebhookType =
+  | 'teaching_package.generation_succeeded'
+  | 'teaching_package.generation_failed'
+  | 'teaching_package.status_changed'
+  | 'teaching_package.generation_awaiting_correction';
+
+/**
+ * The attempt paused for an administrator (plan §3.1). Identity-only: no
+ * outline text, no source content, no retrieval URL.
+ */
+export interface GenerationAwaitingCorrectionEventData {
+  requestId: string;
+  attempt: {
+    id: string;
+    kind: GenerationAttemptKind;
+    status: 'awaiting_admin_correction';
+    versionId: string | null;
+    startedAt: number | null;
+    pausedAt: number;
+    generationRuns: number;
+  };
+  correction: {
+    phase: GenerationCheckpointPhase;
+    revision: number;
+    blockingIssueCount: number;
+  };
+}
+
+export interface GenerationSucceededEventData {
+  requestId: string;
+  attempt: {
+    id: string;
+    kind: GenerationAttemptKind;
+    status: 'succeeded';
+    producedStageId: string;
+    startedAt: number;
+    completedAt: number;
+    generationRuns: number;
+  };
+  version: {
+    id: string;
+    version: number;
+    status: TeachingPackageStatus;
+    currentStageId: string;
+    currentAttemptId: string | null;
+    teachingModel: TeachingModelLineage;
+    updatedAt: number;
+  };
+  allowedActions?: string[];
+}
+
+export interface GenerationFailedEventData {
+  requestId: string;
+  attempt: {
+    id: string;
+    kind: GenerationAttemptKind;
+    status: 'failed';
+    versionId: string | null;
+    producedStageId: string | null;
+    startedAt: number | null;
+    completedAt: number;
+    generationRuns: number;
+  };
+  error: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    details?: Record<string, unknown>;
+  };
+  retainedVersion?: {
+    id: string;
+    status: TeachingPackageStatus;
+    currentStageId: string;
+  };
+}
+
+export interface StatusChangedEventData {
+  version: {
+    id: string;
+    version: number;
+    previousStatus: TeachingPackageStatus;
+    status: TeachingPackageStatus;
+    currentStageId: string;
+    teachingModel: TeachingModelLineage;
+    updatedAt: number;
+  };
+  actorRef: string;
+  allowedActions?: string[];
+}
+
+export interface TeachingEngineWebhookEnvelope<T> {
+  /** Globally unique event id. */
+  id: string;
+  type: TeachingEngineWebhookType;
+  /** ISO-8601 UTC domain-event time (never the delivery time). */
+  occurredAt: string;
+  /** Monotonically increasing per tenant/item aggregate. */
+  sequence: number;
+  tenantContext: { tenantId: string };
+  learningItem: { type: 'lesson' | 'section'; id: string };
+  data: T;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate reconciliation read (plan §4.4.4). No Stage/Scene/history payload.
+// ---------------------------------------------------------------------------
+
+export interface AggregateReadResponse {
+  approvedVersion: TeachingPackageVersion | null;
+  workingVersion: TeachingPackageVersion | null;
+  latestAttempt: GenerationAttempt | null;
+  /** Watermark: highest webhook sequence allocated for the aggregate. */
+  latestAggregateSequence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Source-visual provenance manifest (plan §4.3.6). Persisted on the outline
+// record; carries no binary, no signed URL.
+// ---------------------------------------------------------------------------
+
+export interface SourceVisualManifestEntry {
+  /** Stable logical id, e.g. `src-3`. */
+  id: string;
+  /** `String(content_sources.id)` of the PDF the visual came from. */
+  contentResourceId: string;
+  /** The provider's image id (untrusted; never used as a filename). */
+  providerImageId?: string;
+  pageNumber: number | null;
+  width?: number;
+  height?: number;
+  description?: string;
+  mimeType: string;
+  sha256: string;
+  /** Origin-relative serving path under the Stage media dir. */
+  servingPath: string;
+  normalizedPackageId?: string;
+  normalizedContentSourceId?: string;
+  contentRevisionId?: string;
+  parseRunId?: string;
+  structureProfile?: { id: string; versionId: string };
+  sourceContentUnitIds?: string[];
+  sourceBlockIds?: string[];
+  sourceRole?: string;
+  caption?: string;
+  figureLabel?: string;
+}

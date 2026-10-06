@@ -15,7 +15,7 @@ describe('@openmaic/editor publish manifest', () => {
   it('declares provenance repository metadata', () => {
     expect(editorPackage.repository).toEqual({
       type: 'git',
-      url: 'https://github.com/THU-MAIC/OpenMAIC',
+      url: 'https://github.com/fasoal-org/kafuo-teaching-engine',
       directory: 'packages/@openmaic/editor',
     });
   });

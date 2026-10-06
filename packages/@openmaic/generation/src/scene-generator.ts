@@ -13,9 +13,31 @@ import type {
   PPTElement,
   QuizQuestion,
   SlideBackground,
+  TextDirection,
   WidgetType,
 } from '@openmaic/dsl';
-import { isWidgetType, normalizeElement } from '@openmaic/dsl';
+import { isWidgetType, normalizeElement, slideSemanticsRequireAssistance } from '@openmaic/dsl';
+import {
+  toAssistancePlan,
+  toPlannerGuidance,
+  toVisibleSlideInput,
+  type PlannerGuidance,
+  type VisibleSlideInput,
+} from './slide-generation-inputs.js';
+import { buildSlideNarrationRoleContext, buildSlideRoleContext } from './slide-role-guidance.js';
+import { generateSlideAssistance, visibleCanvasText } from './slide-assistance.js';
+import { explanationLeakedOntoCanvas, findInternalLeaks } from './learner-facing.js';
+import {
+  NATIVE_VISUAL_DIRECTIVE,
+  OrientationVisualMissingError,
+  plannedVisualIssue,
+  requiredSourceVisualIssue,
+} from './visual-plan.js';
+import {
+  buildMediaRegistry,
+  unauthorizedConcreteSource,
+  type MediaRegistry,
+} from './media-registry.js';
 import { MAX_VISION_IMAGES } from './constants.js';
 import {
   formatImageDescription,
@@ -31,6 +53,12 @@ import type {
 } from './outline-types.js';
 import { DEFAULT_LANGUAGE_DIRECTIVE } from './outline-generator.js';
 import { postProcessInteractiveHtml } from './interactive-post-processor.js';
+import { inferWidgetType, WidgetTypeProhibitedError } from './widget-type-policy.js';
+import {
+  injectGameDragRuntime,
+  validateGameDragContract,
+  withGameDragCorrection,
+} from './game-drag-runtime.js';
 import { parseActionsFromStructuredOutput } from './action-parser.js';
 import { parseJsonResponse } from './json-repair.js';
 import {
@@ -40,6 +68,11 @@ import {
 } from './prompt-formatters.js';
 import type { PromptId } from './prompts/types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
+import {
+  buildSpokenScriptContext,
+  classifySceneTransition,
+  type SpokenScriptOptions,
+} from './narration-script.js';
 import type {
   GeneratedInteractiveContent,
   GeneratedPBLContent,
@@ -56,6 +89,7 @@ import type {
 import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
+import { generatedSlideLayoutIssue, normalizeGeneratedSlideLayout } from './slide-layout.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
@@ -76,6 +110,21 @@ export type SceneContentFailureCode = 'prompt-unavailable' | 'invalid-model-outp
 
 export interface SceneContentFailure {
   code: SceneContentFailureCode;
+  /** Safe diagnostic detail for orchestration and operator-visible errors. */
+  detail?: string;
+}
+
+/**
+ * Why an Action sequence fell back to the model-free defaults (Module 3/4
+ * W2, TAE-RQ-017): the prompt could not be assembled, or the model's reply
+ * parsed to zero canonical Actions. Reported to an OBSERVING caller only —
+ * `generateSceneActions` still returns the defaults; the governed caller
+ * decides to retry and eventually refuse.
+ */
+export type SceneActionsFallbackCode = 'prompt-unavailable' | 'invalid-model-output';
+
+export interface SceneActionsFallback {
+  code: SceneActionsFallbackCode;
 }
 
 export interface SceneContentOptions {
@@ -93,13 +142,52 @@ export interface SceneContentOptions {
    * runs), the srcs are derived from `imageMapping` exactly as before.
    */
   resolvedVisionImages?: Array<{ id: string; src: string; width?: number; height?: number }>;
+  /**
+   * Pre-resolved canonical Teaching Skill definitions for this run (Module 2
+   * W11), following the `resolvedVisionImages` precedent: the caller resolves
+   * the exact (skillId, version) bodies server-side BEFORE calling the
+   * generator so the bytes are settled before prompt assembly. Skill IDENTITY
+   * rides the outline's `teachingSkills` carrier (already the first parameter)
+   * with zero plumbing; this option supplies the definition TEXT. When the
+   * carrier selects a Skill whose exact version is present here, the content
+   * and action prompts render the Skill authority/context block. Absent — the
+   * Workbench, editor-regeneration, and scene-actions call sites — every
+   * prompt renders byte-identically to the pre-teaching-skills output, even
+   * when an outline happens to carry a `teachingSkills` carrier.
+   */
+  resolvedSkills?: ResolvedSkillDefinition[];
+  /**
+   * Slide only: record a planned-visual problem instead of throwing (3 Oct 2026).
+   * When supplied, a slide whose selected textbook visual or planned visual is
+   * missing is RETURNED as generated and the problem is reported here — package
+   * generation keeps it, marks it, and lets the reviewer regenerate it. Absent →
+   * the typed `OrientationVisualMissingError` is thrown exactly as before (the
+   * reviewer's own single-slide regeneration keeps that contract).
+   */
+  onVisualIssue?: (issue: { code: string; message: string }) => void;
   agents?: AgentInfo[];
   languageDirective?: string;
+  /**
+   * Base text direction of the course (`Stage.textDirection`), resolved by the
+   * caller from the authoritative lesson language — never from generated text.
+   * `'rtl'` adds the right-to-left layout contract to the slide content prompt
+   * (alignment, reading order, text/visual placement, and what must NOT be
+   * mirrored). `'ltr'` or absent → the prompt renders byte-identically to the
+   * direction-unaware prompt. slide-only; ignored by other scene types.
+   */
+  textDirection?: TextDirection;
   /** Authoritative UI locale selected by the user, consumed by the PBL v2 planner. */
   targetLanguage?: string;
   /** Original course request/profile, used by PBL v2 for explicit learner-level signals. */
   userRequirements?: UserRequirements;
   allowProceduralSkill?: boolean;
+  /**
+   * Interactive only: widget types this generation must never build (e.g.
+   * Kafuo Release 1 defers `game`). A scene that would build one — explicitly,
+   * inferred from a legacy `interactiveConfig`, or by fallback — is refused with
+   * `WidgetTypeProhibitedError` before any widget model call. Absent → unchanged.
+   */
+  prohibitedWidgetTypes?: readonly WidgetType[];
   /**
    * Natural-language edit instruction for whole-slide regeneration (MAIC Editor
    * agent `regenerate_scene`). When set, the slide content prompt switches to
@@ -114,6 +202,12 @@ export interface SceneContentOptions {
   baselineContent?: GeneratedSlideContent;
   /** Optional host fallback for the app-only loop planner. */
   pblLoopFallback?: (input: PBLPlannerV2Input) => Promise<PBLProject>;
+  /**
+   * Slide only: a correction appended to the user prompt when the caller
+   * re-asks after an unusable answer (e.g. the previous response was not valid
+   * slide JSON). Absent → the prompt is byte-for-byte unchanged.
+   */
+  correctiveNote?: string;
   onFailure?: (failure: SceneContentFailure) => void;
   logger?: GenerationLogger;
 }
@@ -123,7 +217,202 @@ export interface SceneActionsOptions {
   agents?: AgentInfo[];
   userProfile?: string;
   languageDirective?: string;
+  /**
+   * ONE resolved Teaching Model Flow position (Module 3/4 W1, TAE-RQ-009) —
+   * the WHEN this scene teaches, resolved by orchestration. The generator
+   * CONSUMES it; it never resolves, chooses, or re-derives it, so this is a
+   * single resolved context, never a Flow array or an index. Absent (every
+   * non-governed call site) → action prompts render byte-identically to today.
+   */
+  flowContext?: SceneFlowContext;
+  /**
+   * Pre-resolved canonical Teaching Skill definitions (Module 2 W11) — the
+   * same value the content pass received, so narration, questions, feedback,
+   * pacing, and interaction are governed by the SAME Skills the content was.
+   * Absent → action prompts render byte-identically to today.
+   */
+  resolvedSkills?: ResolvedSkillDefinition[];
+  /**
+   * Observer for fallback-to-defaults (Module 3/4 W2), mirroring
+   * `SceneContentOptions.onFailure`. Invoked at every default-return site
+   * with the reason; the return value is unchanged — the defaults are still
+   * returned, and a caller that refuses them (the governed pipeline) does so
+   * by observing this and failing. Non-governed callers pass nothing and
+   * receive the default array exactly as before.
+   */
+  onFallback?: (info: SceneActionsFallback) => void;
+  /**
+   * The server-owned spoken-language policy (the register every spoken `text`
+   * must use). When present it is rendered as the first, highest-priority
+   * section of every Action system prompt and the templates' own register
+   * wording is withheld, so no instruction contradicts it. Absent → every
+   * Action prompt renders byte-identically to today.
+   */
+  spokenLanguagePolicy?: string;
+  /**
+   * Why the previous answer for this scene was rejected (a bounded re-roll).
+   * Appended to the user prompt; absent → the prompt is unchanged.
+   */
+  correctiveContext?: string;
+  /**
+   * The shared TTS-ready spoken-script and topic-signposting policy (one
+   * source for all four Action prompts), set by the server from the lesson's
+   * authoritative language and register. When present the slide template's
+   * own Arabic formula and register wording is withheld, so the rules are
+   * never duplicated. Absent → every Action prompt renders byte-identically.
+   */
+  spokenScript?: SpokenScriptOptions;
   logger?: GenerationLogger;
+}
+
+/** Template variables for the spoken-language policy; empty when there is none. */
+function spokenLanguagePolicyVars(policy: string | undefined): Record<string, unknown> {
+  if (!policy) return {};
+  return {
+    hasSpokenLanguagePolicy: true,
+    spokenLanguagePolicy: policy,
+    // The in-template register rule is replaced by the policy, never combined.
+    legacyArabicRegisterRule: false,
+  };
+}
+
+/** Template variables for the spoken-script policy; empty when there is none. */
+function spokenScriptVars(
+  options: SceneActionsOptions,
+  outline: SceneOutline,
+): Record<string, unknown> {
+  if (!options.spokenScript) return {};
+  const ctx = options.ctx;
+  return {
+    ...buildSpokenScriptContext(
+      options.spokenScript,
+      classifySceneTransition(outline, ctx),
+      ctx?.previousSpeeches[0],
+    ),
+    // The shared policy replaces the slide template's own Arabic wording and
+    // formula rules, never combined with them.
+    legacyArabicRegisterRule: false,
+    legacySpokenScriptRule: false,
+  };
+}
+
+/** Append a validation rejection to an Action prompt's user message. */
+export function withActionsCorrection(userPrompt: string, correctiveContext: string): string {
+  return `${userPrompt}\n\n---\n\n## Correction Required\n\nYour previous answer was REJECTED by validation:\n\n${correctiveContext}\n\nAnswer again with the complete JSON array, fixing every issue above.`;
+}
+
+/**
+ * ONE resolved Teaching Model Flow position (Module 3/4 W1 — plan §7.1.2). No
+ * array, no index lookup: orchestration resolved WHICH entry this Scene
+ * teaches at; the generator only renders it. The structural twin of the app's
+ * flow-context shape — the package cannot import from `lib/`, exactly as
+ * `TeachingStageRef` / `SceneSkillRef` / `TeachingSkillPolicy` are twinned in
+ * `outline-types.ts`.
+ */
+export interface SceneFlowContext {
+  teachingModelKey: string;
+  teachingModelVersion: string;
+  stageKey: string;
+  flowIndex: number;
+  instructions: string;
+}
+
+/**
+ * One exact canonical Teaching Skill definition, pre-resolved server-side
+ * (Module 2 W11). The ROLE (primary/supporting) is derived from the outline's
+ * `teachingSkills` carrier at pairing time — definitions themselves are
+ * role-free (plan §B.10: identity rides the outline, text rides this option).
+ */
+export interface ResolvedSkillDefinition {
+  skillId: string;
+  version: string;
+  /** The resolved SKILL.md body for this exact immutable version. */
+  definition: string;
+}
+
+export interface SceneSkillPromptContext {
+  hasSkillContext: boolean;
+  skillContextText: string;
+}
+
+const NO_SKILL_CONTEXT: SceneSkillPromptContext = { hasSkillContext: false, skillContextText: '' };
+
+export interface SceneFlowPromptContext {
+  hasFlowContext: boolean;
+  flowContextText: string;
+}
+
+const NO_FLOW_CONTEXT: SceneFlowPromptContext = { hasFlowContext: false, flowContextText: '' };
+
+/**
+ * Render the ONE resolved Teaching Model Flow position (Module 3/4 W1,
+ * TAE-RQ-009/005/012 — plan §7.1.2). Pure: takes the already-resolved context
+ * and NOTHING else — no `SceneOutline`, no `teachingStage` read, no Flow array,
+ * no index lookup. The generator consumes WHEN; it never resolves WHEN, and
+ * this signature makes that architectural invariant structural. Absent
+ * `flowContext` → `NO_FLOW_CONTEXT`, which is what keeps every non-governed
+ * call site byte-identical.
+ */
+export function buildSceneFlowContext(
+  flowContext: SceneFlowContext | undefined,
+): SceneFlowPromptContext {
+  if (!flowContext) return NO_FLOW_CONTEXT;
+  return {
+    hasFlowContext: true,
+    flowContextText: [
+      '## Teaching Model Flow Authority — WHEN this scene teaches (MANDATORY)',
+      `Teaching Model: ${flowContext.teachingModelKey}@${flowContext.teachingModelVersion}`,
+      `Flow position:  ${flowContext.stageKey} (position ${flowContext.flowIndex + 1})`,
+      'Authoritative Flow Instructions for this position:',
+      flowContext.instructions,
+      [
+        'These instructions outrank every pedagogical default in this prompt and every',
+        'Teaching Skill below. Generate Actions ONLY for this flow position. Do not',
+        "teach another position's material, do not choose a different position, do not",
+        'add or reorder positions, and do not emit Actions that navigate, advance,',
+        'skip, re-enter, or select a flow position — the system owns ordering, not the',
+        'Actions. Safety, source grounding, factual integrity, the language directive,',
+        'valid element references, and the JSON output schema remain binding.',
+      ].join('\n'),
+    ].join('\n'),
+  };
+}
+
+/**
+ * Pair the outline's Teaching Skills carrier (identity) with the run's
+ * pre-resolved definitions (text). Every prompt-assembly change downstream is
+ * gated on the result being non-empty, which is what keeps the three non-Kafuo
+ * call sites byte-identical: without `resolvedSkills` no block renders even
+ * when a carrier is present.
+ */
+export function buildSceneSkillContext(
+  outline: Pick<SceneOutline, 'teachingSkills'>,
+  resolvedSkills: ResolvedSkillDefinition[] | undefined,
+): SceneSkillPromptContext {
+  const carrier = outline.teachingSkills;
+  if (!resolvedSkills || resolvedSkills.length === 0) return NO_SKILL_CONTEXT;
+  if (!carrier || (!carrier.primary && !(carrier.supporting && carrier.supporting.length > 0))) {
+    return NO_SKILL_CONTEXT;
+  }
+
+  const find = (ref: { skillId: string; version: string }) =>
+    resolvedSkills.find((skill) => skill.skillId === ref.skillId && skill.version === ref.version);
+
+  const sections: string[] = [];
+  if (carrier.primary) {
+    const definition = find(carrier.primary);
+    sections.push(
+      `PRIMARY SKILL: ${carrier.primary.skillId}@${carrier.primary.version}\n\n${definition?.definition ?? '(definition was not supplied for this exact version)'}`,
+    );
+  }
+  for (const ref of carrier.supporting ?? []) {
+    const definition = find(ref);
+    sections.push(
+      `SUPPORTING SKILL: ${ref.skillId}@${ref.version} — supplements the primary strategy without replacing it\n\n${definition?.definition ?? '(definition was not supplied for this exact version)'}`,
+    );
+  }
+  if (sections.length === 0) return NO_SKILL_CONTEXT;
+  return { hasSkillContext: true, skillContextText: sections.join('\n\n---\n\n') };
 }
 
 // ==================== Backward Compatibility Helpers ====================
@@ -161,37 +450,6 @@ function convertInteractiveConfigToWidget(
     widgetType,
     widgetOutline: buildWidgetOutline(widgetType, config),
   };
-}
-
-/**
- * Infer widget type from concept characteristics
- */
-function inferWidgetType(subject: string, concept: string, designIdea: string): WidgetType {
-  const text = (subject + ' ' + concept + ' ' + designIdea).toLowerCase();
-
-  // Rule-based inference
-  if (
-    /physics|chemistry|力学|化学|运动|反应|force|motion|equilibrium|wave|电路|circuit/.test(text)
-  ) {
-    return 'simulation';
-  }
-  if (/programming|code|algorithm|编程|算法|python|javascript|function|代码/.test(text)) {
-    return 'code';
-  }
-  if (/process|workflow|步骤|流程|逻辑|step|flow|系统|system/.test(text)) {
-    return 'diagram';
-  }
-  if (
-    /biology|anatomy|cell|molecular|生物|细胞|分子|3d|三维|solar|planet|skeleton|organ/.test(text)
-  ) {
-    return 'visualization3d';
-  }
-  if (/game|quiz|practice|练习|游戏|puzzle|match|challenge|挑战/.test(text)) {
-    return 'game';
-  }
-
-  // Default fallback
-  return 'simulation';
 }
 
 /**
@@ -249,6 +507,7 @@ export async function generateSceneContent(
     allowProceduralSkill = false,
     editDirective,
     baselineContent,
+    textDirection,
   } = options;
 
   // Unified path for interactive scenes (both normal and ultra mode)
@@ -271,6 +530,12 @@ export async function generateSceneContent(
       };
     }
 
+    // A caller-prohibited widget is refused here, after the same conversion and
+    // fallback that decide what would be built, and before any widget call.
+    if (options.prohibitedWidgetTypes?.includes(outline.widgetType as WidgetType)) {
+      throw new WidgetTypeProhibitedError(outline.widgetType as WidgetType, outline.title);
+    }
+
     // Route to widget generation (handles all 5 types)
     return generateWidgetContent(outline, aiCall, languageDirective, {
       allowProceduralSkill,
@@ -280,24 +545,161 @@ export async function generateSceneContent(
   }
 
   switch (outline.type) {
-    case 'slide':
-      return generateSlideContent(
+    case 'slide': {
+      // Typed boundary: the canvas generator receives the learner-visible
+      // content and the planner guidance — never the whole outline, so the
+      // hidden `assistancePlan` is structurally absent from its inputs.
+      const guidance = toPlannerGuidance(outline);
+      const generateCanvas = () =>
+        generateSlideContent(
+          toVisibleSlideInput(outline),
+          guidance,
+          aiCall,
+          assignedImages,
+          imageMapping,
+          visionEnabled,
+          generatedMediaMapping,
+          resolvedVisionImages,
+          agents,
+          languageDirective,
+          editDirective,
+          baselineContent,
+          log,
+          options.onFailure,
+          options.resolvedSkills,
+          textDirection,
+          options.correctiveNote,
+        );
+      let slide = await generateCanvas();
+      if (!slide) return null;
+      // When planning selected an authoritative textbook visual, the exact
+      // materialised source must be present after media resolution. Do not
+      // accept a generated/unrelated image and do not spend a second model
+      // call replacing an available book figure with a native approximation.
+      const sourceVisualIssue =
+        guidance.visualPlan?.mode === 'image'
+          ? requiredSourceVisualIssue(assignedImages, imageMapping, slide.elements)
+          : undefined;
+      if (sourceVisualIssue) {
+        const error = new OrientationVisualMissingError(outline.title, sourceVisualIssue);
+        if (!options.onVisualIssue) throw error;
+        // Kept as generated and marked; no native approximation of a book figure.
+        options.onVisualIssue({ code: error.code, message: sourceVisualIssue });
+        log.warn(`${error.message}; keeping the slide and marking it for review`);
+      }
+      // The planned visual is ENFORCED: one regeneration asking for the
+      // native-elements fallback, then the typed quality failure — never a log
+      // line and never a bare opening.
+      // A missing book figure that was just marked is the reviewer's to repair:
+      // it is never replaced by a native approximation behind their back.
+      const visualIssue = sourceVisualIssue
+        ? undefined
+        : plannedVisualIssue(guidance.visualPlan, slide.elements);
+      if (visualIssue) {
+        log.warn(`Slide "${outline.title}": ${visualIssue}; regenerating with native elements`);
+        const native = await generateSlideContent(
+          toVisibleSlideInput(outline),
+          { ...guidance, mediaGenerations: undefined, visualPlan: { mode: 'native' } },
+          aiCall,
+          undefined,
+          undefined,
+          false,
+          undefined,
+          undefined,
+          agents,
+          languageDirective,
+          editDirective
+            ? `${editDirective}\n\n${NATIVE_VISUAL_DIRECTIVE}`
+            : NATIVE_VISUAL_DIRECTIVE,
+          { elements: slide.elements, background: slide.background },
+          log,
+          options.onFailure,
+          options.resolvedSkills,
+          textDirection,
+        );
+        const stillMissing = native
+          ? plannedVisualIssue({ mode: 'native' }, native.elements)
+          : 'regeneration produced no slide';
+        if (!native || stillMissing) {
+          const error = new OrientationVisualMissingError(
+            outline.title,
+            stillMissing ?? visualIssue,
+          );
+          if (!options.onVisualIssue) throw error;
+          // Keep the slide the model authored; the reviewer regenerates it.
+          options.onVisualIssue({ code: error.code, message: stillMissing ?? visualIssue });
+          log.warn(`${error.message}; keeping the slide and marking it for review`);
+        } else {
+          slide = native;
+        }
+      }
+      // Step 2 — assistance authoring. The ONLY call that sees the hidden
+      // plan; it is fed the task as the canvas actually rendered it. A slide
+      // that requires assistance and did not get it fails (retryable) rather
+      // than shipping independent practice without on-demand support.
+      const plan = toAssistancePlan(outline);
+      if (!plan) return slide;
+      const authorAssistance = (canvas: GeneratedSlideContent) =>
+        generateSlideAssistance(
+          plan,
+          { title: outline.title, elements: canvas.elements },
+          guidance,
+          aiCall,
+          { languageDirective, logger: log },
+        );
+      let assistance = await authorAssistance(slide);
+      if (
+        !assistance &&
+        slideSemanticsRequireAssistance(outline.contentRole, outline.contentKind)
+      ) {
+        log.error(`Assistance authoring failed for independent practice: ${outline.title}`);
+        options.onFailure?.({ code: 'invalid-model-output' });
+        return null;
+      }
+      if (assistance) {
+        const leaks = findInternalLeaks(Object.values(assistance));
+        if (leaks.length > 0) {
+          log.error(
+            `Assistance for "${outline.title}" exposes internal text (${leaks.join(', ')})`,
+          );
+          options.onFailure?.({ code: 'invalid-model-output' });
+          return null;
+        }
+      }
+      // Second deterministic check, for the slides whose canvas must not carry
+      // the solution: the full explanation showing up in the visible text means
+      // it leaked onto the slide → one canvas regeneration, then a failure.
+      const solutionHidden =
+        slideSemanticsRequireAssistance(outline.contentRole, outline.contentKind) ||
+        outline.contentRole === 'check_understanding';
+      const explanation = assistance?.explanation;
+      if (solutionHidden && explanation) {
+        const leaked = (canvas: GeneratedSlideContent) =>
+          explanationLeakedOntoCanvas(explanation, visibleCanvasText(canvas.elements));
+        if (leaked(slide)) {
+          log.warn(`Solution text leaked onto the canvas of "${outline.title}"; regenerating once`);
+          const retry = await generateCanvas();
+          if (!retry || leaked(retry)) {
+            options.onFailure?.({ code: 'invalid-model-output' });
+            return null;
+          }
+          slide = retry;
+          // The task text changed: the assistance must refer to what is shown now.
+          assistance = (await authorAssistance(retry)) ?? assistance;
+        }
+      }
+      return assistance ? { ...slide, assistance } : slide;
+    }
+    case 'quiz':
+      return generateQuizContent(
         outline,
         aiCall,
-        assignedImages,
-        imageMapping,
-        visionEnabled,
-        generatedMediaMapping,
-        resolvedVisionImages,
-        agents,
         languageDirective,
-        editDirective,
-        baselineContent,
         log,
         options.onFailure,
+        options.resolvedSkills,
+        editDirective,
       );
-    case 'quiz':
-      return generateQuizContent(outline, aiCall, languageDirective, log, options.onFailure);
     case 'pbl':
       return generatePBLSceneContent(
         outline,
@@ -314,14 +716,29 @@ export async function generateSceneContent(
 }
 
 /**
- * Check if a string looks like an image ID (e.g., "img_1", "img_2")
+ * Check if a string looks like an image ID (e.g., "img_1", "src-11")
  * rather than a base64 data URL or actual URL
  *
  * This function distinguishes between:
- * - Image IDs: "img_1", "img_2", etc. → returns true
+ * - Course-generation image IDs: "img_1", "img_2", etc. → returns true
+ * - Teaching Package source-visual IDs: "src-1", "src-11", etc. → returns true
  * - Base64 data URLs: "data:image/..." → returns false
  * - HTTP URLs: "http://...", "https://..." → returns false
- * - Relative paths: "/images/..." → returns false
+ * - Relative paths ("/api/classroom-media/...") → returns false
+ *
+ * The two id shapes are the SAME resource channel seen from two producers:
+ * course generation mints `img_<n>` and the Teaching Package mints `src-<n>`
+ * (TE-minted in encounter order, see `lib/server/teaching-package/source-images.ts`).
+ * Both arrive as keys of the single `imageMapping` the caller supplies, so
+ * both resolve through the one boundary below — no second mapping, no second
+ * resolution pipeline.
+ *
+ * The `src` arm matches the PREFIX, not just the numeric shape, so a model
+ * that invents a malformed logical reference ("src-abc") is detected here and
+ * dropped by the unmapped branch rather than persisted as a bare token the
+ * browser would request as a relative URL. `ast_*` asset references and
+ * `gen_img_*`/`gen_vid_*` placeholders do not carry this prefix, so they still
+ * fall through to their own handling untouched.
  */
 function isImageIdReference(value: string): boolean {
   if (!value) return false;
@@ -330,7 +747,9 @@ function isImageIdReference(value: string): boolean {
   if (value.startsWith('http://') || value.startsWith('https://')) return false;
   if (value.startsWith('/')) return false; // Relative paths
   // Match image ID format: img_1, img_2, etc.
-  return /^img_\d+$/i.test(value);
+  if (/^img_\d+$/i.test(value)) return true;
+  // Match Teaching Package source-visual ids: src-1, src-11, src-123, …
+  return /^src[-_][\w.-]*$/i.test(value);
 }
 
 /**
@@ -357,9 +776,50 @@ export function resolveImageIds(
   imageMapping?: ImageMapping,
   generatedMediaMapping?: ImageMapping,
   log: GenerationLogger = noopGenerationLogger,
+  /**
+   * The per-run media registry. When supplied, a concrete address the model
+   * authored that it was never handed is REMOVED (hallucinated / unregistered
+   * external) instead of silently kept, and an unknown generated-media
+   * placeholder is removed rather than left as a permanent skeleton.
+   */
+  registry?: MediaRegistry,
 ): GeneratedSlideData['elements'] {
   return elements
     .map((el) => {
+      if (registry && (el.type === 'image' || el.type === 'video')) {
+        const record = el as Record<string, unknown>;
+        const src = record.src;
+        if (
+          typeof src === 'string' &&
+          src !== '' &&
+          !isImageIdReference(src) &&
+          !isGeneratedMediaPlaceholder(src)
+        ) {
+          const reason = unauthorizedConcreteSource(src, registry);
+          if (reason) {
+            // A video that also names a planned generated clip keeps the clip:
+            // only the invented address is dropped.
+            if (el.type === 'video' && typeof record.mediaRef === 'string') {
+              log.warn(`Dropping an unauthorized video src (${reason}); keeping its mediaRef`);
+              const { src: _unauthorized, ...rest } = record;
+              return rest as typeof el;
+            }
+            log.warn(`Removing ${el.type} element with an unauthorized source (${reason})`);
+            return null;
+          }
+        }
+        // An unknown IMAGE placeholder would stay a skeleton forever. (Video
+        // placeholders are reconciled against the plan by the normaliser below.)
+        if (
+          el.type === 'image' &&
+          typeof src === 'string' &&
+          isGeneratedMediaPlaceholder(src) &&
+          !registry.ids.has(src)
+        ) {
+          log.warn(`Removing image element with an unknown media placeholder: ${src}`);
+          return null;
+        }
+      }
       if (el.type === 'image') {
         if (!('src' in el)) {
           log.warn(`Image element missing src, removing element`);
@@ -600,7 +1060,8 @@ function processLatexElements(
  * Generate slide content
  */
 async function generateSlideContent(
-  outline: SceneOutline,
+  visible: VisibleSlideInput,
+  guidance: PlannerGuidance,
   aiCall: AICallFn,
   assignedImages?: PdfImage[],
   imageMapping?: ImageMapping,
@@ -613,6 +1074,9 @@ async function generateSlideContent(
   baselineContent?: GeneratedSlideContent,
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
+  resolvedSkills?: ResolvedSkillDefinition[],
+  textDirection?: TextDirection,
+  correctiveNote?: string,
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -664,8 +1128,10 @@ async function generateSlideContent(
     }
   }
 
-  const generatedImageEntries = outline.mediaGenerations?.filter((mg) => mg.type === 'image') ?? [];
-  const generatedVideoEntries = outline.mediaGenerations?.filter((mg) => mg.type === 'video') ?? [];
+  const generatedImageEntries =
+    guidance.mediaGenerations?.filter((mg) => mg.type === 'image') ?? [];
+  const generatedVideoEntries =
+    guidance.mediaGenerations?.filter((mg) => mg.type === 'video') ?? [];
   const hasAssignedImages = (assignedImages?.length ?? 0) > 0;
   const generatedImageEnabled = generatedImageEntries.length > 0;
   const generatedVideoEnabled = generatedVideoEntries.length > 0;
@@ -673,7 +1139,7 @@ async function generateSlideContent(
   const mediaElementEnabled = imageElementEnabled || generatedVideoEnabled;
 
   // Add generated media placeholders info (images + videos)
-  if (outline.mediaGenerations && outline.mediaGenerations.length > 0) {
+  if (guidance.mediaGenerations && guidance.mediaGenerations.length > 0) {
     const genImgDescs = generatedImageEntries
       .map((mg) => `- ${mg.elementId}: "${mg.prompt}" (aspect ratio: ${mg.aspectRatio || '16:9'})`)
       .join('\n');
@@ -708,9 +1174,9 @@ async function generateSlideContent(
   const teacherContext = formatTeacherPersonaForPrompt(agents);
 
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
-    title: outline.title,
-    description: outline.description,
-    keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
+    title: visible.title,
+    description: guidance.description,
+    keyPoints: visible.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
     elements: '（根据要点自动生成）',
     assignedImages: assignedImagesText,
     canvas_width: canvasWidth,
@@ -721,14 +1187,21 @@ async function generateSlideContent(
     generatedImageEnabled,
     generatedVideoEnabled,
     mediaElementEnabled,
+    // Direction is lesson metadata handed in by the caller; only an explicit
+    // 'rtl' changes the prompt.
+    rtlLayout: textDirection === 'rtl',
+    ...buildSceneSkillContext(guidance, resolvedSkills),
+    // The classification reaches the model only as resolved guidance prose in
+    // the non-display planning channel — never as `key: value` data.
+    ...buildSlideRoleContext(guidance),
   });
 
   if (!prompts) {
-    onFailure?.({ code: 'prompt-unavailable' });
+    onFailure?.({ code: 'prompt-unavailable', detail: 'slide content prompt is unavailable' });
     return null;
   }
 
-  log.debug(`Generating slide content for: ${outline.title}`);
+  log.debug(`Generating slide content for: ${visible.title}`);
   if (assignedImages && assignedImages.length > 0) {
     log.debug(`Assigned images: ${assignedImages.map((img) => img.id).join(', ')}`);
   }
@@ -771,16 +1244,34 @@ async function generateSlideContent(
       `Return the full updated slide content in the same schema.`;
   }
 
+  if (correctiveNote) {
+    userPrompt = `${userPrompt}\n\n---\n\n## Correction Required\n\n${correctiveNote}`;
+  }
+
   const response = await aiCall(prompts.system, userPrompt, visionImages);
   const generatedData = parseJsonResponse<GeneratedSlideData>(response);
 
   if (!generatedData || !generatedData.elements || !Array.isArray(generatedData.elements)) {
-    log.error(`Failed to parse AI response for: ${outline.title}`);
-    onFailure?.({ code: 'invalid-model-output' });
+    // The start of the unusable answer is logged so the cause can be diagnosed
+    // (it is not persisted anywhere else).
+    const raw = typeof response === 'string' ? response : String(response);
+    log.error(
+      `Failed to parse AI response for: ${visible.title} (${raw.length} chars; parsed keys: ${
+        generatedData && typeof generatedData === 'object'
+          ? Object.keys(generatedData as object)
+              .slice(0, 10)
+              .join(', ') || 'none'
+          : 'none'
+      }); response starts: ${JSON.stringify(raw.slice(0, 800))}`,
+    );
+    onFailure?.({
+      code: 'invalid-model-output',
+      detail: 'the model response was not valid slide JSON with an elements array',
+    });
     return null;
   }
 
-  log.debug(`Got ${generatedData.elements.length} elements for: ${outline.title}`);
+  log.debug(`Got ${generatedData.elements.length} elements for: ${visible.title}`);
 
   // Debug: Log image elements before resolution
   const imageElements = generatedData.elements.filter((el) => el.type === 'image');
@@ -801,32 +1292,67 @@ async function generateSlideContent(
   const fixedElements = fixElementDefaults(generatedData.elements, assignedImages, log);
   log.debug(`After element fixing: ${fixedElements.length} elements`);
 
+  // Defence in depth only (the boundary is the two-channel prompt): a canvas
+  // that prints an internal identifier or an unresolved placeholder is a bad
+  // model answer — refused, so the caller's retry applies.
+  const leaks = findInternalLeaks([visibleCanvasText(fixedElements as unknown as PPTElement[])]);
+  if (leaks.length > 0) {
+    log.error(`Slide "${visible.title}" exposes internal text (${leaks.join(', ')}); rejecting`);
+    onFailure?.({
+      code: 'invalid-model-output',
+      detail: `the visible slide exposed internal identifiers: ${leaks.join(', ')}`,
+    });
+    return null;
+  }
+
   // Process LaTeX elements: render latex string → HTML via KaTeX
   const latexProcessedElements = processLatexElements(fixedElements, log);
   log.debug(`After LaTeX processing: ${latexProcessedElements.length} elements`);
 
   // Resolve image_id references to actual URLs
+  // Everything this run legitimately handed the model, plus (edit mode) the
+  // sources already on the baseline slide. Anything else the model invents as
+  // a concrete `src` is removed.
+  const mediaRegistry = buildMediaRegistry({
+    imageMapping,
+    generatedMediaMapping,
+    placeholderIds: (guidance.mediaGenerations ?? []).map((media) => media.elementId),
+    baselineSources: (baselineContent?.elements ?? []).flatMap((element) => {
+      const src = (element as unknown as { src?: unknown }).src;
+      return typeof src === 'string' ? [src] : [];
+    }),
+  });
   const resolvedElements = resolveImageIds(
     latexProcessedElements,
     imageMapping,
     generatedMediaMapping,
     log,
+    mediaRegistry,
   );
   log.debug(`After image resolution: ${resolvedElements.length} elements`);
 
   const videoNormalizedElements = normalizeGeneratedVideoRefs(
     resolvedElements,
-    outline.mediaGenerations,
+    guidance.mediaGenerations,
     log,
   );
   log.debug(`After video reference normalization: ${videoNormalizedElements.length} elements`);
 
   // Process elements, assign unique IDs
-  const processedElements: PPTElement[] = videoNormalizedElements.map((el) => ({
-    ...el,
-    id: `${el.type}_${nanoid(8)}`,
-    rotate: 0,
-  })) as PPTElement[];
+  const processedElements = normalizeGeneratedSlideLayout(
+    videoNormalizedElements.map((el) => ({
+      ...el,
+      id: `${el.type}_${nanoid(8)}`,
+      rotate: 0,
+    })) as PPTElement[],
+  );
+
+  const layoutIssue = generatedSlideLayoutIssue(processedElements);
+  if (layoutIssue) {
+    log.error(`Slide ${JSON.stringify(visible.title)} has unsafe layout: ${layoutIssue}`);
+    onFailure?.({ code: 'invalid-model-output', detail: layoutIssue });
+    return null;
+  }
 
   // Process background
   let background: SlideBackground | undefined;
@@ -844,7 +1370,6 @@ async function generateSlideContent(
   return {
     elements: processedElements,
     background,
-    remark: generatedData.remark || outline.description,
   };
 }
 
@@ -857,6 +1382,12 @@ async function generateQuizContent(
   languageDirective?: string,
   log: GenerationLogger = noopGenerationLogger,
   onFailure?: (failure: SceneContentFailure) => void,
+  resolvedSkills?: ResolvedSkillDefinition[],
+  /**
+   * A reviewer's single-scene regeneration (3 Oct 2026): their requirements,
+   * appended to the user prompt. Absent → the prompt is byte-identical to before.
+   */
+  editDirective?: string,
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig = outline.quizConfig || {
     questionCount: 3,
@@ -872,6 +1403,7 @@ async function generateQuizContent(
     difficulty: quizConfig.difficulty,
     questionTypes: quizConfig.questionTypes.join(', '),
     languageDirective: languageDirective || '',
+    ...buildSceneSkillContext(outline, resolvedSkills),
   });
 
   if (!prompts) {
@@ -880,7 +1412,10 @@ async function generateQuizContent(
   }
 
   log.debug(`Generating quiz content for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
+  const user = editDirective
+    ? `${prompts.user}\n\n## Reviewer requirements for this regeneration\n${editDirective}\n\nAnswer with ONLY the JSON array of questions in the required schema.`
+    : prompts.user;
+  const response = await aiCall(prompts.system, user);
   const generatedQuestions = parseJsonResponse<QuizQuestion[]>(response);
 
   if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
@@ -1142,6 +1677,13 @@ function extractHtml(
 // ==================== Ultra Mode Widget Generation ====================
 
 /**
+ * A game's generation attempts in total under the drag contract: the first
+ * answer plus one corrected re-roll. Kept small because a caller may re-roll
+ * a refused scene again (non-governed content retries).
+ */
+export const GAME_DRAG_MAX_ATTEMPTS = 2;
+
+/**
  * Generate widget content based on widget type (Ultra Mode)
  */
 export async function generateWidgetContent(
@@ -1220,6 +1762,8 @@ export async function generateWidgetContent(
         keyPoints: (outline.keyPoints || []).join('\n'),
         scoring: { correctPoints: 10, speedBonus: 5 },
         languageDirective: languageDirective || '',
+        // The KafuoDrag helper is embedded below; the prompt may rely on it.
+        hasDragRuntime: true,
       };
       break;
 
@@ -1270,12 +1814,38 @@ export async function generateWidgetContent(
 
   log.info(`Generating ${widgetType} widget for: ${outline.title}`);
   const response = await aiCall(prompts.system, prompts.user);
-  const html = extractHtml(response, log);
+  let html = extractHtml(response, log);
 
   if (!html) {
     log.error(`Failed to extract HTML from ${widgetType} response for: ${outline.title}`);
     options.onFailure?.({ code: 'invalid-model-output' });
     return null;
+  }
+
+  if (widgetType === 'game') {
+    // The drag contract: known drag defects re-roll THIS game once with the
+    // issues as a correction; a game that still breaks it is refused, never
+    // shipped unplayable. The helper is embedded only into a compliant game.
+    let issues = validateGameDragContract(html);
+    for (let attempt = 2; issues.length > 0 && attempt <= GAME_DRAG_MAX_ATTEMPTS; attempt += 1) {
+      log.warn(
+        `Game "${outline.title}" breaks the drag contract (${issues.map((issue) => issue.code).join(', ')}); attempt ${attempt}/${GAME_DRAG_MAX_ATTEMPTS}`,
+      );
+      const retried = extractHtml(
+        await aiCall(prompts.system, withGameDragCorrection(prompts.user, issues)),
+        log,
+      );
+      if (!retried) break;
+      html = retried;
+      issues = validateGameDragContract(html);
+    }
+    if (issues.length > 0) {
+      const detail = `game drag contract: ${issues.map((issue) => issue.code).join(', ')}`;
+      log.error(`Game "${outline.title}" refused (${detail})`);
+      options.onFailure?.({ code: 'invalid-model-output', detail });
+      return null;
+    }
+    html = injectGameDragRuntime(html);
   }
 
   // Extract widget config from HTML if present
@@ -1661,29 +2231,54 @@ export async function generateSceneActions(
     // Format element list for AI to select from
     const elementsText = formatElementsForPrompt(content.elements);
 
+    // Typed boundary: narration is built from the visible canvas and the
+    // planner guidance only. Neither the hidden `assistancePlan` nor the
+    // authored `SlideContent.assistance` is an input to this call, so speech
+    // cannot draw on the solution path.
+    const visible = toVisibleSlideInput(outline);
+    const guidance = toPlannerGuidance(outline);
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
-      title: outline.title,
-      keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-      description: outline.description,
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
+      title: visible.title,
+      keyPoints: visible.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      description: guidance.description,
       elements: elementsText,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       userProfile: userProfile || '',
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
+      ...buildSceneSkillContext(guidance, options.resolvedSkills),
+      ...buildSlideNarrationRoleContext(guidance),
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultSlideActions(outline, content.elements);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {
-      // Validate and fill in Action IDs
-      return processActions(actions, content.elements, agents, log);
+      // Defence in depth: speech that reads out an internal identifier is a bad
+      // model answer — the model-free defaults (built from visible text) apply.
+      const speech = actions.map((action) => ('text' in action ? String(action.text ?? '') : ''));
+      const leaks = findInternalLeaks(speech);
+      if (leaks.length === 0) {
+        // Validate and fill in Action IDs
+        return processActions(actions, content.elements, agents, log);
+      }
+      log.error(`Narration for "${outline.title}" exposes internal text (${leaks.join(', ')})`);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultSlideActions(outline, content.elements);
   }
 
@@ -1692,6 +2287,8 @@ export async function generateSceneActions(
     const questionsText = formatQuestionsForPrompt(content.questions);
 
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -1699,19 +2296,28 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultQuizActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultQuizActions(outline);
   }
 
@@ -1725,6 +2331,8 @@ export async function generateSceneActions(
       (content.html ? extractInteractiveElements(content.html) : '') ||
       '(no interactive elements detected)';
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -1736,13 +2344,21 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultInteractiveActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(
       response,
       outline.type,
@@ -1754,6 +2370,7 @@ export async function generateSceneActions(
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultInteractiveActions(outline);
   }
 
@@ -1762,6 +2379,8 @@ export async function generateSceneActions(
     const agentsText = formatAgentsForPrompt(agents);
     const projectV2 = (content as Partial<GeneratedPBLContent>).projectV2;
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
+      ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
+      ...spokenScriptVars(options, outline),
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: outline.description,
@@ -1771,19 +2390,28 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      ...buildSceneFlowContext(options.flowContext),
+      ...buildSceneSkillContext(outline, options.resolvedSkills),
     });
 
     if (!prompts) {
+      options.onFallback?.({ code: 'prompt-unavailable' });
       return generateDefaultPBLActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
+    const response = await aiCall(
+      prompts.system,
+      options.correctiveContext
+        ? withActionsCorrection(prompts.user, options.correctiveContext)
+        : prompts.user,
+    );
     const actions = parseActionsFromStructuredOutput(response, outline.type, undefined, log);
 
     if (actions.length > 0) {
       return processActions(actions, [], agents, log);
     }
 
+    options.onFallback?.({ code: 'invalid-model-output' });
     return generateDefaultPBLActions(outline);
   }
 
@@ -1807,14 +2435,32 @@ function generateDefaultPBLActions(_outline: SceneOutline): Action[] {
 /**
  * Format element list for AI to select elementId
  */
+/**
+ * Per-slide budget for visible text quoted to the narration prompt. Generous on
+ * purpose: narration must stay consistent with what the learner actually sees
+ * (a worked example's steps, a task statement), which a 50-character excerpt
+ * cannot convey. The budget only guards against a runaway canvas.
+ */
+const NARRATION_VISIBLE_TEXT_BUDGET = 6000;
+
 function formatElementsForPrompt(elements: PPTElement[]): string {
+  let remaining = NARRATION_VISIBLE_TEXT_BUDGET;
+  const excerpt = (text: string): string => {
+    const full = text.replace(/\s+/g, ' ').trim();
+    const shown = full.slice(0, Math.max(remaining, 0));
+    remaining -= shown.length;
+    return `"${shown}${shown.length < full.length ? '...' : ''}"`;
+  };
   return elements
     .map((el) => {
       let summary = '';
       if (el.type === 'text' && 'content' in el) {
-        // Extract text content summary (strip HTML tags)
-        const textContent = ((el.content as string) || '').replace(/<[^>]*>/g, '').substring(0, 50);
-        summary = `Content summary: "${textContent}${textContent.length >= 50 ? '...' : ''}"`;
+        // The full visible text (HTML tags stripped), within the slide budget.
+        summary = `Content: ${excerpt(visibleCanvasText([el]))}`;
+      } else if (el.type === 'shape' && visibleCanvasText([el]) !== '') {
+        summary = `Shape text: ${excerpt(visibleCanvasText([el]))}`;
+      } else if (el.type === 'table') {
+        summary = `Table: ${excerpt(visibleCanvasText([el]))}`;
       } else if (el.type === 'chart' && 'chartType' in el) {
         summary = `Chart type: ${el.chartType}`;
       } else if (el.type === 'image') {
@@ -1918,10 +2564,12 @@ function generateDefaultSlideActions(outline: SceneOutline, elements: PPTElement
     });
   }
 
-  // Add opening speech based on key points
-  const speechText = outline.keyPoints?.length
-    ? outline.keyPoints.join('。') + '。'
-    : outline.description || outline.title;
+  // Fallback speech is built from what the learner can SEE — the generated
+  // canvas text, else the learner-visible key points, else the title. The
+  // planner's `description` is never narration: it is planning guidance.
+  const canvasText = visibleCanvasText(elements);
+  const speechText =
+    canvasText || (outline.keyPoints?.length ? outline.keyPoints.join('。') + '。' : outline.title);
   actions.push({
     id: `action_${nanoid(8)}`,
     type: 'speech',

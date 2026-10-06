@@ -7,7 +7,7 @@ OpenMAIC هو تطبيق Next.js قياسي، حيث يمكن تشغيله في 
 
 ## Vercel (بنقرة واحدة)
 
-أسرع مسار. اضغط على زر النشر في [README المستودع](https://github.com/THU-MAIC/OpenMAIC)، قم بعمل fork للمستودع، واملأ مفتاح API لموفر LLM واحد على الأقل حسب التعليمات.
+أسرع مسار. اضغط على زر النشر في [README المستودع](https://github.com/fasoal-org/kafuo-teaching-engine)، قم بعمل fork للمستودع، واملأ مفتاح API لموفر LLM واحد على الأقل حسب التعليمات.
 
 يقوم Vercel بإعادة بناء ونشر تطبيق Next.js مع كل commit. عند النشر، يجب تكوين مزود LLM واحد على الأقل في إعدادات المشروع.
 
@@ -101,7 +101,7 @@ docker compose --profile server-persistence up --build
 docker compose --profile video-export up --build
 ```
 
-يتيح Compose لـ OpenMAIC الاتصال بخدمة التصيير عبر `RENDER_SERVICE_URL`. إذا لم يتم تفعيل هذا الملف التعريفي أو كانت خدمة التصيير غير متاحة، يتحول التصدير إلى تنزيل مشروع ZIP للتصيير المحلي عبر CLI. تستخدم خدمة التصيير شبكة معزولة وتتطلب قدرة `NET_ADMIN` عند التشغيل؛ لمزيد من القيود وطرق النشر المستقلة، راجع [`render-service/README.md`](https://github.com/THU-MAIC/OpenMAIC/blob/main/render-service/README.md).
+يتيح Compose لـ OpenMAIC الاتصال بخدمة التصيير عبر `RENDER_SERVICE_URL`. إذا لم يتم تفعيل هذا الملف التعريفي أو كانت خدمة التصيير غير متاحة، يتحول التصدير إلى تنزيل مشروع ZIP للتصيير المحلي عبر CLI. تستخدم خدمة التصيير شبكة معزولة وتتطلب قدرة `NET_ADMIN` عند التشغيل؛ لمزيد من القيود وطرق النشر المستقلة، راجع [`render-service/README.md`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/render-service/README.md).
 
 ## متغيرات البيئة
 

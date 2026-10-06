@@ -21,14 +21,19 @@ type _SceneContentKeys = Assert<
     | 'visionEnabled'
     | 'generatedMediaMapping'
     | 'resolvedVisionImages'
+    | 'resolvedSkills'
+    | 'onVisualIssue'
     | 'agents'
     | 'languageDirective'
+    | 'textDirection'
     | 'targetLanguage'
     | 'userRequirements'
     | 'allowProceduralSkill'
+    | 'prohibitedWidgetTypes'
     | 'editDirective'
     | 'baselineContent'
     | 'pblLoopFallback'
+    | 'correctiveNote'
     | 'onFailure'
     | 'logger'
   >
@@ -36,7 +41,17 @@ type _SceneContentKeys = Assert<
 type _SceneActionKeys = Assert<
   Equal<
     keyof SceneActionsOptions,
-    'ctx' | 'agents' | 'userProfile' | 'languageDirective' | 'logger'
+    | 'ctx'
+    | 'agents'
+    | 'userProfile'
+    | 'languageDirective'
+    | 'flowContext'
+    | 'resolvedSkills'
+    | 'onFallback'
+    | 'spokenLanguagePolicy'
+    | 'correctiveContext'
+    | 'spokenScript'
+    | 'logger'
   >
 >;
 type _BuildKeys = Assert<Equal<keyof BuildCompleteSceneOptions, 'sceneId'>>;

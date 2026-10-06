@@ -37,6 +37,11 @@ vi.mock('@/lib/audio/asr-providers', async (importOriginal) => {
   return { ...actual, transcribeAudio: mocks.transcribeAudio };
 });
 
+// RSS W4: generated visuals are screened before they are written / returned;
+// these tests exercise the provider path, so the screener approves.
+vi.mock('@/lib/server/visual-compliance', () => ({
+  screenVisualWithDefaults: vi.fn(async () => ({ verdict: 'approved', reasons: [] })),
+}));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),

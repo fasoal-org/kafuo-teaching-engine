@@ -32,6 +32,8 @@ const outline = (over: Partial<SceneOutline>): SceneOutline =>
     id: 'o',
     order: 1,
     type: 'slide',
+    slideType: 'content',
+    contentRole: 'example',
     title: 'X',
     description: '',
     keyPoints: [],
@@ -83,6 +85,16 @@ describe('validateOutline / blocking helpers', () => {
     expect(validateOutline(outline({ title: '' }))).toEqual([{ kind: 'emptyTitle' }]);
     expect(validateOutline(outline({ title: '   ' }))).toEqual([{ kind: 'emptyTitle' }]);
     expect(validateOutline(outline({ title: 'Intro' }))).toEqual([]);
+  });
+
+  test('a slide outline that is not validly classified blocks generation; other types are not judged', () => {
+    expect(validateOutline(outline({ contentRole: undefined }))).toEqual([
+      { kind: 'unclassifiedSlide' },
+    ]);
+    expect(validateOutline(outline({ slideType: 'transition', contentRole: undefined }))).toEqual([]);
+    expect(
+      validateOutline(outline({ type: 'quiz', slideType: undefined, contentRole: undefined })),
+    ).toEqual([]);
   });
 
   test('outlinesHaveBlockingIssues / countBlockingOutlines count blank titles', () => {

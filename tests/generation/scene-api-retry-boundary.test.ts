@@ -46,6 +46,8 @@ vi.mock('@/lib/logger', () => ({
 const outline = {
   id: 'outline-1',
   type: 'slide',
+  slideType: 'content',
+  contentRole: 'example',
   title: 'Retry Boundary',
   description: 'Keep retries controlled by the outer scene retry helper.',
   keyPoints: ['no retry multiplication'],
@@ -242,6 +244,25 @@ describe('scene API retry boundary', () => {
       error: 'Failed to build scene: Community Garden Data Project',
     });
     expect(mocks.generateSceneActions.mock.calls[0][1]).toEqual({ type: 'pbl', projectConfig });
+  });
+
+  it('rejects an unclassified client slide outline with 400, and an undeliverable runtime scene with a typed 409 (RSS W2)', async () => {
+    vi.resetModules();
+    const { slideType: _slideType, contentRole: _contentRole, ...unclassified } = outline;
+    const { POST } = await import('@/app/api/generate/scene-content/route');
+    const invalid = await POST(mockRequest({ outline: unclassified, allOutlines: [unclassified] }));
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ errorCode: 'OUTLINE_SLIDE_SEMANTICS_INVALID' });
+    expect(mocks.generateSceneContent).not.toHaveBeenCalled();
+
+    // The content-time fallback call site no longer converts: it raises the conflict.
+    const { SceneRuntimeUnavailableError } = await import('@openmaic/generation');
+    mocks.applyOutlineFallbacks.mockImplementationOnce(() => {
+      throw new SceneRuntimeUnavailableError(0, 'pbl', 'no language model');
+    });
+    const conflict = await POST(mockRequest());
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ errorCode: 'SCENE_RUNTIME_UNAVAILABLE' });
   });
 
   it('preserves an upstream 401 from the scene-content route', async () => {

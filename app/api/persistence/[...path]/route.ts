@@ -26,6 +26,31 @@ import {
 import { readStageMeta } from '@/lib/persistence/stage-meta';
 import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
+import {
+  assertStageWritable,
+  teachingPackageStageGuardFence,
+} from '@/lib/server/teaching-package/stage-guard';
+import { isTeachingPackageStageLockedError } from '@/lib/server/teaching-package/errors';
+import {
+  deriveDocumentStageId,
+  deriveRuntimeScope,
+  readEditorGrants,
+  type VerifiedEditorGrant,
+} from '@/lib/server/teaching-package/editor-grant';
+import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-quiz-delivery';
+import { getVerdictStore } from '@/lib/server/visual-compliance';
+import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
+import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import {
+  encodeSceneRevs,
+  EXPECTED_SCENE_REVS_HEADER,
+  parseExpectedSceneRevs,
+  revisionPreconditionFence,
+  revisionPreconditionTarget,
+  SCENE_REVS_RESULT_HEADER,
+  type RevisionPreconditionState,
+} from '@/lib/server/teaching-package/revision-precondition-fence';
+import type { Queryable } from '@openmaic/storage/document/pg';
 
 export const runtime = 'nodejs';
 
@@ -79,21 +104,44 @@ function indirectEgressWithinGrace(
   return { mode: 'redirect', collectionGraceMs };
 }
 
+type DocumentMutationFence = (
+  queryable: Queryable,
+  operation: {
+    stageId?: string;
+    mode: 'create' | 'mutate' | 'read' | 'delete' | 'library';
+    scope: 'content' | 'library';
+  },
+  phase: 'before' | 'after',
+) => Promise<void>;
+
 async function createPersistenceHandler(
   connectionString: string,
   ownerId: string,
   access: DocumentAccess,
   poolFactory?: PersistencePoolFactory,
+  grantRuntimeLearnerKey?: string,
+  revisionFence?: DocumentMutationFence,
 ): Promise<RequestListener> {
   const { pool, runtimeStore, assetStore } = await getServerPersistenceProvider(
     connectionString,
     poolFactory,
   );
+  const stageGuard = teachingPackageStageGuardFence();
   const documentStore = createOwnerBoundDocumentStore({
     pool,
     ownerId,
     validateScene: validateAppScene,
     validateStage: validateAppStage,
+    // Teaching package immutability, inside every mutation transaction. A
+    // grant-delegated Scene write composes its revision precondition FIRST
+    // (single-slide-regeneration-plan §11.4): it takes `stage_meta` before the
+    // guard reads the versions.
+    mutationFence: revisionFence
+      ? async (queryable, operation, phase) => {
+          await revisionFence(queryable, operation, phase);
+          await stageGuard(queryable, operation, phase);
+        }
+      : stageGuard,
   });
   // The asset posture, precisely.
   //
@@ -138,6 +186,12 @@ async function createPersistenceHandler(
       if (request.url?.startsWith('/documents')) return { learnerKey: ownerId };
       if (request.url?.startsWith('/assets')) {
         return { key: SHARED_ASSET_PRINCIPAL, learnerKey: ownerId };
+      }
+      // A delegated runtime request under an Editor grant runs as the grant's
+      // own isolated learner identity — never a client-supplied header — so
+      // requireLearner pins every touched session to that sandbox.
+      if (grantRuntimeLearnerKey) {
+        return { key: SHARED_ASSET_PRINCIPAL, learnerKey: grantRuntimeLearnerKey };
       }
       return authenticatePersistenceRequest(request);
     },
@@ -302,6 +356,144 @@ interface PersistenceRequestDeps {
   poolFactory?: PersistencePoolFactory;
 }
 
+/**
+ * Editor-grant delegation (plan §12.3). Delegated path families, and only
+ * these:
+ *
+ *   documents  GET/PUT /documents/<stageId>, PUT …/stage, PUT/DELETE …/scenes/<id>,
+ *              DELETE /documents/<stageId>   — Stage derived from the path;
+ *              read grants forward reads only (mutations answer 403
+ *              GRANT_READ_ONLY before any store exists); write grants forward
+ *              everything onto the stage guard.
+ *   runtime    POST /runtime/sessions (body), session-scoped routes (stored
+ *              session), stage-scoped learner routes (path) — delegated only
+ *              when the derived Stage AND learner equal the grant's
+ *              (tp:<nonce>); anything else answers 403 GRANT_RUNTIME_SCOPE.
+ *   assets     /assets/* — any valid grant skips the dev-token gate; the
+ *              open-read / no-mutation posture is unchanged.
+ *
+ * GET /documents (list), learner merges, and admin deletes are never
+ * delegated. Without a grant, every pre-existing branch behaves identically.
+ */
+type GrantEvaluation =
+  | { covered: false }
+  | {
+      covered: true;
+      refusal?: { status: number; code: string; message: string };
+      mode: 'documents' | 'runtime' | 'assets';
+      grant: VerifiedEditorGrant;
+      /** The runtime learner identity a delegated runtime request runs as. */
+      runtimeLearnerKey?: string;
+    };
+
+async function evaluateEditorGrant(
+  request: Request,
+  path: string,
+  deps: PersistenceRequestDeps,
+  connectionString: string,
+): Promise<GrantEvaluation> {
+  const grants = readEditorGrants(request.headers);
+  if (grants.length === 0) return { covered: false };
+
+  if (path === '/documents' || path.startsWith('/documents/')) {
+    const stageId = deriveDocumentStageId(parseDocumentAction(request.method, path));
+    if (stageId === null) return { covered: false };
+    const grant = grants.find((candidate) => candidate.stageId === stageId);
+    if (!grant) return { covered: false };
+    // The grant must belong to the Stage's tenant (plan §4.4.5): a Stage A
+    // grant never authorizes Stage B documents, and a cross-tenant grant
+    // behaves exactly like an absent one.
+    const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+    const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
+    const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(
+      () => false,
+    );
+    if (!belongs) return { covered: false };
+    const method = request.method.toUpperCase();
+    const mutating = method !== 'GET' && method !== 'HEAD';
+    if (mutating && grant.capability === 'read') {
+      return {
+        covered: true,
+        mode: 'documents',
+        grant,
+        refusal: {
+          status: 403,
+          code: 'GRANT_READ_ONLY',
+          message: 'this editor grant is read-only; the stage cannot be modified',
+        },
+      };
+    }
+    return { covered: true, mode: 'documents', grant };
+  }
+
+  if (path === '/runtime' || path.startsWith('/runtime/')) {
+    let body: unknown = null;
+    if (request.method.toUpperCase() === 'POST') {
+      body = await request
+        .clone()
+        .json()
+        .catch(() => null);
+    }
+    const { runtimeStore } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
+    const scope = await deriveRuntimeScope(request.method, path, body, runtimeStore);
+    if (scope === null) {
+      // Admin/merge routes are never delegated; unknown sessions pass through
+      // under the first grant's principal so the handler answers its own 404.
+      if (
+        (request.method === 'DELETE' &&
+          (path === '/runtime' || /^\/runtime\/stages\/[^/]+$/.test(path))) ||
+        (request.method === 'POST' && path === '/runtime/learners/merge')
+      ) {
+        return { covered: false };
+      }
+      return {
+        covered: true,
+        mode: 'runtime',
+        grant: grants[0]!,
+        runtimeLearnerKey: grants[0]!.learnerKey,
+      };
+    }
+    const grant = grants.find((candidate) => candidate.stageId === scope.stageId);
+    if (grant) {
+      const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
+      const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
+      const belongs = await stageBelongsToTenant(pool, grant.stageId, grant.tenantId).catch(
+        () => false,
+      );
+      if (!belongs) {
+        return {
+          covered: true,
+          mode: 'runtime',
+          grant: grants[0]!,
+          refusal: {
+            status: 403,
+            code: 'GRANT_RUNTIME_SCOPE',
+            message: 'this editor grant does not cover that stage and learner',
+          },
+        };
+      }
+    }
+    if (!grant || grant.learnerKey !== scope.learnerKey) {
+      return {
+        covered: true,
+        mode: 'runtime',
+        grant: grants[0]!,
+        refusal: {
+          status: 403,
+          code: 'GRANT_RUNTIME_SCOPE',
+          message: 'this editor grant does not cover that stage and learner',
+        },
+      };
+    }
+    return { covered: true, mode: 'runtime', grant, runtimeLearnerKey: grant.learnerKey };
+  }
+
+  if (path === '/assets' || path.startsWith('/assets/')) {
+    return { covered: true, mode: 'assets', grant: grants[0]! };
+  }
+  return { covered: false };
+}
+
 export async function handlePersistenceRequest(
   request: Request,
   deps: PersistenceRequestDeps = {},
@@ -310,7 +502,11 @@ export async function handlePersistenceRequest(
   if (!connectionString) {
     return jsonError(404, 'PERSISTENCE_NOT_CONFIGURED', 'server persistence not configured');
   }
-  if (!process.env.PERSISTENCE_DEV_TOKEN) {
+
+  const path = routeRelativePath(request);
+  const grantEvaluation = await evaluateEditorGrant(request, path, deps, connectionString);
+
+  if (!process.env.PERSISTENCE_DEV_TOKEN && !grantEvaluation.covered) {
     return jsonError(
       503,
       'PERSISTENCE_DEV_TOKEN_MISSING',
@@ -320,15 +516,30 @@ export async function handlePersistenceRequest(
 
   return withRequestOwnerId(request, async (ownerId, responseHeaders) => {
     try {
-      const path = routeRelativePath(request);
       const action = parseDocumentAction(request.method, path);
+      // Delegation to the service owner exists only inside this request, and
+      // only when a grant covered it; the service owner is never persisted in
+      // a cookie or response.
+      const delegated =
+        grantEvaluation.covered &&
+        !grantEvaluation.refusal &&
+        (grantEvaluation.mode === 'documents' || grantEvaluation.mode === 'runtime');
+      const effectiveOwnerId = delegated ? TEACHING_PACKAGE_STAGE_OWNER : ownerId;
       let access: DocumentAccess = 'allow';
       if (path === '/documents' || path.startsWith('/documents/')) {
+        if (grantEvaluation.covered && grantEvaluation.refusal) {
+          const refusal = grantEvaluation.refusal;
+          const response = jsonError(refusal.status, refusal.code, refusal.message);
+          for (const [name, value] of responseHeaders.entries()) {
+            response.headers.append(name, value);
+          }
+          return response;
+        }
         const { pool } = await getServerPersistenceProvider(connectionString, deps.poolFactory);
         const queryable = pool;
         access = await decideDocumentAccess(
           action,
-          ownerId,
+          effectiveOwnerId,
           (stageId) => readStageMeta(queryable, stageId),
           (stageId) =>
             pool
@@ -336,17 +547,137 @@ export async function handlePersistenceRequest(
               .then((result) => result.rows.length > 0),
           (stageId) => readStageMeta(queryable, stageId),
         );
+        // Teaching package pre-check (the in-tx fence is authoritative; this
+        // supplies the status code for the common case). Runs after the access
+        // decision, only for mutating document actions it allowed.
+        if (
+          access === 'allow' &&
+          (action.kind === 'create' || action.kind === 'write' || action.kind === 'delete')
+        ) {
+          try {
+            await assertStageWritable(queryable, {
+              stageId: action.stageId,
+              mode: action.kind === 'write' ? 'mutate' : action.kind,
+            });
+          } catch (error) {
+            if (isTeachingPackageStageLockedError(error)) {
+              const response = jsonError(423, 'STAGE_LOCKED', error.message);
+              for (const [name, value] of responseHeaders.entries()) {
+                response.headers.append(name, value);
+              }
+              return response;
+            }
+            throw error;
+          }
+        }
+      } else if (grantEvaluation.covered && grantEvaluation.refusal) {
+        const refusal = grantEvaluation.refusal;
+        const response = jsonError(refusal.status, refusal.code, refusal.message);
+        for (const [name, value] of responseHeaders.entries()) {
+          response.headers.append(name, value);
+        }
+        return response;
+      }
+
+      // Mandatory revision preconditions (single-slide-regeneration-plan §11):
+      // a grant-delegated write that can replace or delete a Scene must say
+      // which revisions it is based on. Without them nothing is written — an
+      // old client never falls back to last-writer-wins. Owner (non-grant)
+      // writes are untouched.
+      const preconditionTarget =
+        delegated && grantEvaluation.covered && grantEvaluation.mode === 'documents'
+          ? revisionPreconditionTarget(request.method, path)
+          : null;
+      const preconditionState: RevisionPreconditionState = {};
+      let revisionFence: DocumentMutationFence | undefined;
+      if (preconditionTarget && access === 'allow') {
+        const expected = parseExpectedSceneRevs(request.headers.get(EXPECTED_SCENE_REVS_HEADER));
+        if (!expected) {
+          const response = jsonError(
+            428,
+            'PRECONDITION_REQUIRED',
+            `this write must carry the ${EXPECTED_SCENE_REVS_HEADER} revisions it is based on; reload the editor`,
+          );
+          for (const [name, value] of responseHeaders.entries()) {
+            response.headers.append(name, value);
+          }
+          return response;
+        }
+        revisionFence = revisionPreconditionFence(preconditionTarget, expected, preconditionState);
       }
 
       const response =
         access === 'not-found'
           ? jsonError(404, 'DOCUMENT_NOT_FOUND', '@openmaic/storage: document not found')
           : await runNodeHandler(
-              await createPersistenceHandler(connectionString, ownerId, access, deps.poolFactory),
+              await createPersistenceHandler(
+                connectionString,
+                effectiveOwnerId,
+                access,
+                deps.poolFactory,
+                grantEvaluation.covered &&
+                  grantEvaluation.mode === 'runtime' &&
+                  !grantEvaluation.refusal
+                  ? grantEvaluation.runtimeLearnerKey
+                  : undefined,
+                revisionFence,
+              ),
               request,
             );
-      for (const [name, value] of responseHeaders.entries()) response.headers.append(name, value);
-      return response;
+      if (preconditionState.refusal) {
+        // The fence recorded its refusal before throwing; the storage handler
+        // answered it as a generic failure. Replace that answer, whatever its
+        // status, with the precondition outcome.
+        const refusal = preconditionState.refusal;
+        const conflict = Response.json(
+          {
+            error: {
+              code: refusal.code,
+              message: refusal.message,
+              details: { scenes: refusal.scenes },
+            },
+          },
+          { status: refusal.status },
+        );
+        for (const [name, value] of responseHeaders.entries()) {
+          conflict.headers.append(name, value);
+        }
+        return conflict;
+      }
+      if (preconditionTarget && response.ok && preconditionState.resultRevs) {
+        // The revisions read inside the write transaction: exactly the bytes
+        // this request wrote.
+        response.headers.set(
+          SCENE_REVS_RESULT_HEADER,
+          encodeSceneRevs(preconditionState.resultRevs),
+        );
+      }
+      // RSS 7.5.8 — the learner delivery boundary. A document READ served under
+      // a `read` grant (learner and preview) passes through the compliance
+      // overlay, which blanks a confirmed MOE-prohibited visual. The stored
+      // document is untouched and `write`-grant editors see the original. It is
+      // the only read-time transformation of the authoritative document.
+      const overlaid =
+        request.method === 'GET' &&
+        grantEvaluation.covered &&
+        !grantEvaluation.refusal &&
+        grantEvaluation.mode === 'documents' &&
+        grantEvaluation.grant.capability === 'read'
+          ? await withLearnerDelivery(response, grantEvaluation.grant.purpose === 'learner')
+          : response;
+      for (const [name, value] of responseHeaders.entries()) overlaid.headers.append(name, value);
+      // A grant-covered document read differs by grant (a learner's has no quiz
+      // keys; a preview or edit grant's does) at the SAME URL. Never let a shared
+      // or browser cache serve one grant's body to another.
+      if (
+        request.method === 'GET' &&
+        grantEvaluation.covered &&
+        !grantEvaluation.refusal &&
+        grantEvaluation.mode === 'documents'
+      ) {
+        overlaid.headers.set('Cache-Control', 'private, no-store');
+      }
+      return overlaid;
     } catch (error) {
       console.error('Embedded persistence route initialization failed', error);
       const response = jsonError(
@@ -358,6 +689,42 @@ export async function handlePersistenceRequest(
       return response;
     }
   });
+}
+
+/**
+ * The two read-time behaviours of a document served under a `read` grant,
+ * applied in a fixed order: (1) omit the planner `outline` for a LEARNER grant —
+ * planner documents (which also hold `assistancePlan` / `visualPlan`) are not
+ * learner delivery; edit and preview grants keep receiving it — (1b) strip
+ * quiz grading secrets for a LEARNER grant (`learner-quiz.ts`) — then (2) the
+ * compliance overlay. `stage` and `scenes` are otherwise returned as stored.
+ */
+async function withLearnerDelivery(response: Response, learner: boolean): Promise<Response> {
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+    return response;
+  }
+  const body: unknown = await response
+    .clone()
+    .json()
+    .catch(() => undefined);
+  if (body === undefined) return response;
+  let delivered = body;
+  if (learner && typeof body === 'object' && body !== null && 'outline' in body) {
+    const { outline: _planner, ...learnerDocument } = body as Record<string, unknown>;
+    delivered = learnerDocument;
+  }
+  // (1b) A LEARNER grant never receives quiz grading secrets: answer keys,
+  // explanations, rubrics. Every quiz payload is rebuilt through an allowlist
+  // (always a new object, so the identity check below cannot short-circuit to
+  // the unsanitized bytes); grading happens server-side via
+  // `POST /api/teaching-packages/{versionId}/quiz-grades`.
+  if (learner) delivered = sanitizeLearnerDelivery(delivered) as typeof delivered;
+  const overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
+  if (overlaid === body) return response;
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  headers.delete('etag');
+  return new Response(JSON.stringify(overlaid), { status: response.status, headers });
 }
 
 export const GET = (request: Request) => handlePersistenceRequest(request);

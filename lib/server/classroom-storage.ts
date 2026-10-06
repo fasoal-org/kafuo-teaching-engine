@@ -153,6 +153,23 @@ export function isValidClassroomId(id: string): boolean {
 }
 
 /**
+ * Remove a never-bound generation run's media directory
+ * (`<CLASSROOMS_DIR>/<stageId>` — media, audio, and anything else the run
+ * wrote) after a compensated/invalid classroom run (plan §4.3.8). The id must
+ * be a valid classroom id and the resolved path must stay inside
+ * CLASSROOMS_DIR; a missing directory is a no-op. Callers use this ONLY for
+ * stages that were never bound to a Teaching Package version — a bound or
+ * displaced Stage's media must survive.
+ */
+export async function removeStageMediaDir(stageId: string): Promise<void> {
+  if (!isValidClassroomId(stageId)) return;
+  const target = path.resolve(CLASSROOMS_DIR, stageId);
+  const root = path.resolve(CLASSROOMS_DIR);
+  if (target === root || !target.startsWith(root + path.sep)) return;
+  await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
+}
+
+/**
  * Resolve the on-disk JSON path for a classroom id, asserting the result stays
  * inside CLASSROOMS_DIR. The route validates ids up front, but storage must
  * not trust callers: an id carrying path separators (e.g. `..`) must never be

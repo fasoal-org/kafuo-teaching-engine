@@ -3,7 +3,7 @@ title: 配置说明
 description: LLM 提供方、媒体生成、文档解析、TTS、ASR、访问控制和功能开关。
 ---
 
-OpenMAIC 在服务器启动时读取环境变量。所有项都是可选的——按需启用。环境变量示例见仓库里的 [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example)。内置模型 ID 请见[支持模型](./supported-models.mdx)。
+OpenMAIC 在服务器启动时读取环境变量。所有项都是可选的——按需启用。环境变量示例见仓库里的 [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example)。内置模型 ID 请见[支持模型](./supported-models.mdx)。
 
 除环境变量外，也可以使用项目根目录下的 `server-providers.yml` 配置代码中已注册的服务端 provider。环境变量会逐字段覆盖 YAML 中的同名配置；自定义 OpenAI 兼容 provider 只能在设置中添加，不能通过任意环境变量前缀或未知 YAML provider ID 注册。
 
@@ -206,7 +206,7 @@ ACCESS_CODE=your-secret-code
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
-可以使用 `MODEL_ROUTES` 为不同生成阶段指定模型；未配置的阶段继续按客户端模型和 `DEFAULT_MODEL` 解析。它是一个 JSON 对象，键为生成阶段，值可以是模型字符串，也可以是包含 `model` 和 `thinking` 的对象。完整的阶段列表和示例见仓库里的 [`.env.example`](https://github.com/THU-MAIC/OpenMAIC/blob/main/.env.example)。
+可以使用 `MODEL_ROUTES` 为不同生成阶段指定模型；未配置的阶段继续按客户端模型和 `DEFAULT_MODEL` 解析。它是一个 JSON 对象，键为生成阶段，值可以是模型字符串，也可以是包含 `model` 和 `thinking` 的对象。完整的阶段列表和示例见仓库里的 [`.env.example`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/.env.example)。
 
 ## 功能开关
 

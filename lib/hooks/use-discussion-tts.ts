@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
+import { useStageStore } from '@/lib/store/stage';
 import { useBrowserTTS } from '@/lib/hooks/use-browser-tts';
 import {
   resolveAgentVoice,
@@ -246,6 +247,13 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           // client's own base URL (custom providers).
           ttsBaseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl,
           ttsProviderOptions: providerOptions,
+          // Dynamic speech of a Stage (SATTS plan §7.6, FR-027; TTS routing):
+          // the server reads the Stage's language and subject under a read grant,
+          // routes the provider from them and persists nothing. Sent in every
+          // scientific mode — routing applies with the flag off too.
+          ...(useStageStore.getState().stage?.id
+            ? { stageId: useStageStore.getState().stage!.id, dynamic: true }
+            : {}),
         }),
         signal: controller.signal,
       });

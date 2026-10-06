@@ -19,6 +19,11 @@ import {
 } from '@/lib/media/asset-pool-config';
 import { assertRuntimeStorageConfigurable, configureRuntimeStorage } from '@/lib/runtime/config';
 import { getLearnerKey } from '@/lib/runtime/learner-key';
+import { readGrantLearnerKeyCookie } from '@/lib/persistence/grant-session';
+import {
+  revisionAwareFetch,
+  withExpectedSceneRevs,
+} from '@/lib/persistence/scene-revision-registry';
 
 let deviceKv: BrowserKVStore | undefined;
 let learnerKeyPromise: Promise<string> | undefined;
@@ -31,6 +36,10 @@ export function getPersistenceLearnerKey(): Promise<string> {
   if (!isBrowserPersistenceEnabled()) {
     return Promise.reject(new Error('Browser persistence is not enabled'));
   }
+  // A grant session runs in its own `tp:<nonce>` sandbox, separate from any
+  // real learner partition and from this device's own partition.
+  const grantLearnerKey = readGrantLearnerKeyCookie();
+  if (grantLearnerKey) return Promise.resolve(grantLearnerKey);
   return (learnerKeyPromise ??= getLearnerKey((deviceKv ??= new BrowserKVStore())).catch(
     (error) => {
       learnerKeyPromise = undefined;
@@ -61,11 +70,18 @@ if (isBrowserPersistenceEnabled()) {
       }),
     learnerKey,
   };
+  // Teaching Package grant writes carry the Scene revisions they are based on
+  // and learn the revisions they produced (single-slide-regeneration-plan
+  // §11.3); a Stage the revision registry never bound adds nothing, so every
+  // other document request is byte-identical to before.
+  const documentHeaders: HttpDocumentHeadersHook = async (context) =>
+    withExpectedSceneRevs(await headers(), context);
   const documentOptions: DocumentStorageOptions = {
     store: ({ validateScene, validateStage }) =>
       new HttpDocumentStore({
         baseUrl: '/api/persistence',
-        headers: headers satisfies HttpDocumentHeadersHook,
+        headers: documentHeaders,
+        fetch: revisionAwareFetch(globalThis.fetch.bind(globalThis)),
         validateScene,
         validateStage,
       }),

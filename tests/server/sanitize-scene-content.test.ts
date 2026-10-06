@@ -551,3 +551,24 @@ describe('sanitizeSceneContent — payload walker', () => {
     expect(twice).toEqual(once);
   });
 });
+
+describe('sanitizeSceneContent — on-demand slide assistance (RSS)', () => {
+  it('applies the prose policy to every assistance tier beside the canvas', () => {
+    const content = {
+      type: 'slide',
+      canvas: { id: 'c', elements: [] },
+      contentRole: 'practice',
+      contentKind: 'independent',
+      assistance: {
+        hint: '<p onclick="steal()">Check the <strong>units</strong></p><script>x()</script>',
+        explanation: '<p>Divide 12 by 1.5</p>',
+      },
+    };
+    const clean = sanitizeSceneContent(content);
+    expect(clean.assistance).toEqual({
+      hint: '<p>Check the <strong>units</strong></p>',
+      explanation: '<p>Divide 12 by 1.5</p>',
+    });
+    expect(sanitizeSceneContent(clean)).toEqual(clean);
+  });
+});

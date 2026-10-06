@@ -31,14 +31,24 @@ export interface OwnerBoundDocumentStoreOptions {
   ownerId: string;
   validateScene: SceneValidator;
   validateStage: StageValidator;
-  /** Runner-only lease fence, evaluated inside every mutation transaction. */
-  mutationFence?: (queryable: Queryable) => Promise<void>;
+  /**
+   * In-transaction mutation hook, evaluated inside every mutation transaction
+   * both before and after the body (`phase`); teaching package immutability and
+   * the runner's lease fence are injected here.
+   */
+  mutationFence?: (
+    queryable: Queryable,
+    operation: PendingOperation,
+    phase: 'before' | 'after',
+  ) => Promise<void>;
 }
 
 type OwnershipMode = 'create' | 'mutate' | 'read' | 'delete' | 'library';
 interface PendingOperation {
   stageId?: string;
   mode: OwnershipMode;
+  /** `library` = folder membership only, never Stage content. */
+  scope: 'content' | 'library';
 }
 
 interface RawOwnershipRow extends Record<string, unknown> {
@@ -53,6 +63,55 @@ function queryableFor(connection: Pick<PoolClientLike, 'query'>): Queryable {
       return { rows: result.rows as TRow[] };
     },
   };
+}
+
+/**
+ * The governed lineage fields carried forward on whole-Scene writes
+ * (Module 3/4 W4, plan §7.4.2). Structural, so the store stays generic over
+ * `TScene`: the carry-forward reads and writes these keys only when the
+ * stored Scene carries them and the incoming one omits them.
+ */
+const SCENE_LINEAGE_FIELDS = [
+  'teachingStage',
+  'teachingSkills',
+  'learningObjectives',
+  'alignmentBaseline',
+  // Kafuo R1 (plan §5.1/§8.3): the Scene → Content Unit binding is lineage
+  // too — a lineage-less whole-Scene write must not erase what the Scene was
+  // generated from, or Help loses its grounding after a review edit.
+  'sourceContentUnitIds',
+] as const;
+
+/**
+ * Carry the stored Scene's governed lineage onto an incoming whole-Scene
+ * write that omits it. Necessary but never sufficient: it protects lineage
+ * against lineage-less writers (grant-delegated PUTs, partial server
+ * patches); it is never accepted as proof of governance — every governed
+ * GENERATION path must additionally run under the resolved governed context.
+ *
+ * Rules: an incoming value always wins; nothing is fabricated for a stored
+ * Scene that carries nothing (absence on legacy data is the
+ * backward-compatibility mechanism itself).
+ */
+export function carryForwardSceneLineage<TScene>(
+  stored: TScene | null | undefined,
+  incoming: TScene,
+): TScene {
+  if (!stored) return incoming;
+  // Copy lazily: when nothing is carried the incoming object is returned BY
+  // REFERENCE, so lineage-less writes are indistinguishable from a store
+  // without the carry-forward (the legacy path stays untouched, identity
+  // included).
+  let merged: Record<string, unknown> | undefined;
+  const source = stored as Record<string, unknown>;
+  const target = incoming as Record<string, unknown>;
+  for (const field of SCENE_LINEAGE_FIELDS) {
+    if (target[field] === undefined && source[field] !== undefined) {
+      if (!merged) merged = { ...incoming } as Record<string, unknown>;
+      merged[field] = source[field];
+    }
+  }
+  return (merged as TScene | undefined) ?? incoming;
 }
 
 class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
@@ -76,25 +135,38 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   saveDocument(doc: MaicDocument<TScene, TStage>): Promise<void> {
-    return this.tagged({ stageId: doc.stage.id, mode: 'create' }, () =>
+    return this.tagged({ stageId: doc.stage.id, mode: 'create', scope: 'content' }, () =>
       this.inner.saveDocument(doc),
     );
   }
 
   putStage(stageId: string, stage: TStage): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate' }, () => this.inner.putStage(stageId, stage));
+    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, () =>
+      this.inner.putStage(stageId, stage),
+    );
   }
 
   putScene(stageId: string, scene: TScene): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate' }, () => this.inner.putScene(stageId, scene));
+    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, async () => {
+      // Module 3/4 W4: the incremental scene write is where every whole-Scene
+      // seam converges (grant-delegated HTTP PUT, agent tools, server
+      // patches), so the stored Scene's governed lineage rides it without
+      // application cooperation — the same structural argument as the
+      // trigger-maintained sceneRev. Whole-document saveDocument is
+      // deliberately excluded: it legitimately replaces the entire scene set.
+      const stored = await this.inner.getScene(stageId, (scene as { id: string }).id);
+      return this.inner.putScene(stageId, carryForwardSceneLineage(stored, scene));
+    });
   }
 
   deleteScene(stageId: string, sceneId: string): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate' }, () => this.inner.deleteScene(stageId, sceneId));
+    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, () =>
+      this.inner.deleteScene(stageId, sceneId),
+    );
   }
 
   async deleteDocument(stageId: string): Promise<void> {
-    await this.tagged({ stageId, mode: 'delete' }, () =>
+    await this.tagged({ stageId, mode: 'delete', scope: 'content' }, () =>
       this.runTransaction(async (queryable) => {
         await tombstoneStageMeta(queryable, stageId);
         await queryable.query('UPDATE document_stages SET folder_id = NULL WHERE id = $1', [
@@ -119,7 +191,7 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
 
   private async readGated<T>(stageId: string, body: () => Promise<T>): Promise<T | null> {
     try {
-      return await this.tagged({ stageId, mode: 'read' }, body);
+      return await this.tagged({ stageId, mode: 'read', scope: 'content' }, body);
     } catch (error) {
       if (error instanceof StageAccessError) return null;
       throw error;
@@ -139,7 +211,9 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   createFolder(folderId: string, name: string, limit?: number) {
-    return this.tagged({ mode: 'library' }, () => this.inner.createFolder(folderId, name, limit));
+    return this.tagged({ mode: 'library', scope: 'library' }, () =>
+      this.inner.createFolder(folderId, name, limit),
+    );
   }
 
   listFolders(): Promise<DocumentFolder[]> {
@@ -147,24 +221,28 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   moveDocumentToFolder(stageId: string, folderId: string): Promise<boolean> {
-    return this.tagged({ stageId, mode: 'mutate' }, () =>
+    return this.tagged({ stageId, mode: 'mutate', scope: 'library' }, () =>
       this.inner.moveDocumentToFolder(stageId, folderId),
     );
   }
 
   renameFolder(id: string, name: string): Promise<DocumentFolder | null> {
-    return this.tagged({ mode: 'library' }, () => this.inner.renameFolder(id, name));
+    return this.tagged({ mode: 'library', scope: 'library' }, () =>
+      this.inner.renameFolder(id, name),
+    );
   }
 
   deleteFolder(
     id: string,
     mode: 'ungroup' | 'remove',
   ): Promise<{ removedStageIds: string[] } | null> {
-    return this.tagged({ mode: 'library' }, () => this.inner.deleteFolder(id, mode));
+    return this.tagged({ mode: 'library', scope: 'library' }, () =>
+      this.inner.deleteFolder(id, mode),
+    );
   }
 
   setStageFolder(stageId: string, folderId: string | null): Promise<boolean> {
-    return this.tagged({ stageId, mode: 'mutate' }, () =>
+    return this.tagged({ stageId, mode: 'mutate', scope: 'library' }, () =>
       this.inner.setStageFolder(stageId, folderId),
     );
   }
@@ -183,7 +261,9 @@ export function createOwnerBoundDocumentStore<
       try {
         const queryable = queryableFor(client);
         const operation = pending.operation;
-        if (operation && operation.mode !== 'read') await options.mutationFence?.(queryable);
+        if (operation && operation.mode !== 'read') {
+          await options.mutationFence?.(queryable, operation, 'before');
+        }
         if (operation?.stageId) {
           const lock = operation.mode === 'read' ? 'FOR SHARE' : 'FOR UPDATE';
           const result = await queryable.query<RawOwnershipRow>(
@@ -215,7 +295,9 @@ export function createOwnerBoundDocumentStore<
         if (operation?.mode === 'create') {
           await claimStageMeta(queryable, operation.stageId!, options.ownerId);
         }
-        if (operation && operation.mode !== 'read') await options.mutationFence?.(queryable);
+        if (operation && operation.mode !== 'read') {
+          await options.mutationFence?.(queryable, operation, 'after');
+        }
         await client.query('COMMIT');
         return result;
       } catch (error) {

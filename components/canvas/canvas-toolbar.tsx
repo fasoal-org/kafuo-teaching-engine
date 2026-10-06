@@ -22,6 +22,7 @@ import { useStageStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSoftCloseCountdown } from '@/components/chat/use-soft-close-countdown';
+import { AiVoiceDisclosure } from '@/components/canvas/ai-voice-disclosure';
 
 export interface CanvasToolbarProps {
   readonly currentSceneIndex: number;
@@ -218,6 +219,7 @@ export function CanvasToolbar({
               >
                 <VolumeIcon muted={!!ttsMuted} volume={ttsVolume} disabled={!ttsEnabled} />
               </button>
+              <AiVoiceDisclosure />
 
               {/* Vertical volume slider (pops up above) */}
               <div

@@ -1,0 +1,76 @@
+{
+  "table": "prefixes",
+  "description": "SI prefixes; the Arabic prefixed unit is written as one word (كيلومتر).",
+  "roles": [
+    "prefix"
+  ],
+  "entries": [
+    {
+      "key": "G",
+      "natural": "جيجا",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "M",
+      "natural": "ميجا",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "k",
+      "natural": "كيلو",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "h",
+      "natural": "هكتو",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "c",
+      "natural": "سنتي",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "m",
+      "natural": "ملي",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "μ",
+      "natural": "ميكرو",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": "",
+      "aliases": [
+        "µ",
+        "u"
+      ]
+    },
+    {
+      "key": "n",
+      "natural": "نانو",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    },
+    {
+      "key": "p",
+      "natural": "بيكو",
+      "status": "proposed",
+      "source": "Draft from the SI unit names used in Saudi school physics (MSA, D-2); pending curriculum reviewer approval",
+      "notes": ""
+    }
+  ]
+}

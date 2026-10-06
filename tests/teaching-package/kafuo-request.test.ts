@@ -1,0 +1,328 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  buildKafuoStartRequest,
+  canonicalRequestDigest,
+  parseKafuoGenerationRequest,
+} from '@/lib/server/teaching-package/kafuo-request';
+
+function body(overrides: Record<string, unknown> = {}) {
+  return {
+    requestId: 'kafuo-req-1',
+    tenantContext: { tenantId: 'tenant-1' },
+    actorRef: 'user-42',
+    learningItem: {
+      type: 'lesson',
+      id: '901',
+      title: 'Photosynthesis',
+      unit: { id: '12', title: 'Unit 3' },
+      curriculum: { id: '5', name: 'Science 5' },
+      curriculumVersion: { id: '8', versionLabel: '2026-A' },
+      language: 'ar',
+    },
+    learningObjectives: [
+      { objectiveRef: '7001', snapshot: { statement: 'Explain photosynthesis.' } },
+    ],
+    teachingModel: {
+      key: 'g5',
+      version: 'g5.v1',
+      flow: [
+        { stage: 'lesson_introduction', instructions: 'Introduce the item once.' },
+        { stage: 'outcome_teaching_cards', instructions: 'Cards for O1.' },
+        { stage: 'outcome_worked_examples', instructions: 'Examples for O1.' },
+      ],
+    },
+    contentResource: {
+      id: 'cs-77',
+      url: 'https://r2.example.test/lesson.pdf?X-Amz-Signature=abc',
+      mimeType: 'application/pdf',
+    },
+    generation: { enableTTS: true },
+    ...overrides,
+  };
+}
+
+function normalized(url = 'https://r2.example.test/n.zip?X-Amz-Signature=abc') {
+  return {
+    id: 'ncr-1',
+    url,
+    mimeType: 'application/zip',
+    schemaVersion: 'kafuo.normalized-content.v1',
+    contentSourceId: 'cs-77',
+    contentRevisionId: 'rev-1',
+    parseRunId: 'run-1',
+    structureProfile: { id: 'p-1', versionId: 'pv-1' },
+    fileSizeBytes: 123,
+    checksumSha256: 'a'.repeat(64),
+  };
+}
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('parseKafuoGenerationRequest', () => {
+  it('parses a valid request and derives the aggregate scope', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(body());
+    expect(aggregate).toEqual({
+      tenantId: 'tenant-1',
+      learningItem: { type: 'lesson', id: '901' },
+    });
+    expect(request.teachingModel.flow).toHaveLength(3);
+  });
+
+  it('requires tenantContext (TENANT_REQUIRED)', () => {
+    const { tenantContext: _drop, ...withoutTenant } = body();
+    expect(() => parseKafuoGenerationRequest(withoutTenant)).toThrowError(
+      expect.objectContaining({ code: 'TENANT_REQUIRED', status: 400 }),
+    );
+  });
+
+  it('rejects tenantId smuggled inside learningItem', () => {
+    const smuggled = body({
+      learningItem: { ...body().learningItem, tenantId: 'tenant-evil' },
+    });
+    expect(() => parseKafuoGenerationRequest(smuggled)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_REQUEST' }),
+    );
+  });
+
+  it('requires a non-empty flow (FLOW_REQUIRED / FLOW_INVALID)', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(body({ teachingModel: { key: 'g5', version: 'g5.v1' } })),
+    ).toThrowError(expect.objectContaining({ code: 'FLOW_REQUIRED' }));
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ teachingModel: { key: 'g5', version: 'g5.v1', flow: [] } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'FLOW_REQUIRED' }));
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({
+          teachingModel: {
+            key: 'g5',
+            version: 'g5.v1',
+            flow: [{ stage: 'lesson_introduction', instructions: '  ' }],
+          },
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'FLOW_INVALID' }));
+  });
+
+  it('allows repeated stage keys — identity is (flowIndex, stage)', () => {
+    const request = body({
+      teachingModel: {
+        key: 'g5',
+        version: 'g5.v1',
+        flow: [
+          { stage: 'lesson_introduction', instructions: 'i' },
+          { stage: 'outcome_teaching_cards', instructions: 'a' },
+          { stage: 'outcome_teaching_cards', instructions: 'b' },
+        ],
+      },
+    });
+    expect(() => parseKafuoGenerationRequest(request)).not.toThrow();
+  });
+
+  it('requires the content resource (CONTENT_RESOURCE_REQUIRED)', () => {
+    expect(() => parseKafuoGenerationRequest(body({ contentResource: undefined }))).toThrowError(
+      expect.objectContaining({ code: 'CONTENT_RESOURCE_REQUIRED' }),
+    );
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ contentResource: { id: 'cs', url: 'https://x/y', mimeType: 'text/html' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'CONTENT_RESOURCE_REQUIRED' }));
+  });
+
+  it('requires https resource URLs in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ contentResource: { id: 'cs', url: 'http://r2.example.test/lesson.pdf' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'CONTENT_RESOURCE_REQUIRED' }));
+  });
+
+  it('refuses provider routing fields inside generation', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ generation: { ...body().generation, webSearchProviderId: 'tavily' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ generation: { ...body().generation, webSearchApiKey: 'sk-x' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+  });
+
+  it('requires approved objectives in order', () => {
+    expect(() => parseKafuoGenerationRequest(body({ learningObjectives: [] }))).toThrowError(
+      expect.objectContaining({ code: 'INVALID_REQUEST' }),
+    );
+  });
+
+  it('validates the normalized resource contract and content-source equality', () => {
+    expect(
+      parseKafuoGenerationRequest(body({ normalizedContentResource: normalized() })).request
+        .normalizedContentResource?.schemaVersion,
+    ).toBe('kafuo.normalized-content.v1');
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ normalizedContentResource: { ...normalized(), contentSourceId: 'other' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+    expect(() =>
+      parseKafuoGenerationRequest(
+        body({ normalizedContentResource: { ...normalized(), schemaVersion: 'v2' } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'NORMALIZED_CONTENT_SCHEMA_UNSUPPORTED' }));
+  });
+});
+
+describe('canonicalRequestDigest', () => {
+  const vectors = JSON.parse(
+    readFileSync(path.join(__dirname, '..', 'fixtures', 'kafuo-digest-vectors.json'), 'utf8'),
+  ) as { vectors: Array<{ request: Record<string, unknown>; digest: string }> };
+
+  it('matches the shared pinned vectors', () => {
+    for (const vector of vectors.vectors) {
+      const { request } = parseKafuoGenerationRequest(vector.request);
+      expect(canonicalRequestDigest(request)).toBe(vector.digest);
+    }
+  });
+
+  it('is independent of the signed retrieval URL', () => {
+    const first = parseKafuoGenerationRequest(body()).request;
+    const second = parseKafuoGenerationRequest(
+      body({
+        contentResource: {
+          ...body().contentResource,
+          url: 'https://r2.example.test/lesson.pdf?X-Amz-Signature=DIFFERENT',
+        },
+      }),
+    ).request;
+    expect(canonicalRequestDigest(first)).toBe(canonicalRequestDigest(second));
+  });
+
+  it('changes when a semantic input changes', () => {
+    const first = parseKafuoGenerationRequest(body()).request;
+    const second = parseKafuoGenerationRequest(
+      body({
+        learningObjectives: [
+          { objectiveRef: '7001', snapshot: { statement: 'Explain respiration.' } },
+        ],
+      }),
+    ).request;
+    expect(canonicalRequestDigest(first)).not.toBe(canonicalRequestDigest(second));
+  });
+
+  it('changes when the regeneration versionId is added', () => {
+    const first = parseKafuoGenerationRequest(body()).request;
+    const second = parseKafuoGenerationRequest(body({ versionId: 'tpv-1' })).request;
+    expect(canonicalRequestDigest(first)).not.toBe(canonicalRequestDigest(second));
+  });
+
+  it('includes stable normalized facts but excludes its refreshed signed URL', () => {
+    const first = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: normalized() }),
+    ).request;
+    const refreshed = parseKafuoGenerationRequest(
+      body({
+        normalizedContentResource: normalized('https://r2.example.test/n.zip?X-Amz-Signature=NEW'),
+      }),
+    ).request;
+    const changed = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: { ...normalized(), parseRunId: 'run-2' } }),
+    ).request;
+    expect(canonicalRequestDigest(first)).toBe(canonicalRequestDigest(refreshed));
+    expect(canonicalRequestDigest(first)).not.toBe(canonicalRequestDigest(changed));
+  });
+});
+
+describe('buildKafuoStartRequest', () => {
+  it('builds a digest-bearing start request whose snapshot carries no URL', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(body());
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(start.tenantId).toBe('tenant-1');
+    expect(start.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(start.contentResource)).not.toContain('X-Amz-Signature');
+    expect(JSON.stringify(start.contentResource)).not.toContain('https://');
+    expect(start.generation.teachingFlow).toHaveLength(3);
+    expect(start.generation.requirement).toContain('lesson_introduction');
+    // The authoritative lesson language travels as structured data — not only
+    // as prose inside the requirement — so generation can stamp the Stage.
+    expect(start.generation.language).toBe('ar');
+    expect(kafuo.language).toBe('ar');
+    // The signed URL lives ONLY in the in-memory Kafuo context — and appears
+    // nowhere in the persisted start request.
+    expect(kafuo.contentResource.url).toContain('X-Amz-Signature');
+    expect(JSON.stringify(start)).not.toContain('https://');
+    expect(JSON.stringify(start)).not.toContain('X-Amz-Signature');
+  });
+
+  it('keeps the normalized signed URL only in execution memory', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(
+      body({ normalizedContentResource: normalized() }),
+    );
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(JSON.stringify(start.normalizedContentResource)).not.toContain('https://');
+    expect(JSON.stringify(start)).not.toContain('X-Amz-Signature');
+    expect(kafuo.normalizedContentResource?.url).toContain('X-Amz-Signature');
+  });
+});
+
+describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {
+  const POLICY = {
+    sceneTypes: ['slide'],
+    contentRoles: ['explanation', 'procedure', 'worked_example', 'example', 'activity'],
+    visual: 'source_grounded',
+    cardinality: 'one_or_more',
+  };
+  const withPolicy = (scenePolicy: unknown) =>
+    body({
+      teachingModel: {
+        key: 'g5',
+        version: 'g5.v5',
+        flow: [
+          { stage: 'outcome_visual_explanations', instructions: 'Teach O1.', scenePolicy },
+        ],
+      },
+    });
+
+  it('parses the policy exactly as received and carries it into the run context', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(withPolicy(POLICY));
+    expect(request.teachingModel.flow[0]?.scenePolicy).toEqual(POLICY);
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(kafuo.teachingFlow[0]?.scenePolicy).toEqual(POLICY);
+    expect(start.teachingFlow?.[0]?.scenePolicy).toEqual(POLICY);
+  });
+
+  it('refuses a malformed policy at the parse seam (FLOW_INVALID)', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(withPolicy({ ...POLICY, contentRoles: ['lecture'] })),
+    ).toThrowError(expect.objectContaining({ code: 'FLOW_INVALID' }));
+  });
+
+  it('participates in the digest only when present', () => {
+    const plain = parseKafuoGenerationRequest(
+      body({
+        teachingModel: {
+          key: 'g5',
+          version: 'g5.v5',
+          flow: [{ stage: 'outcome_visual_explanations', instructions: 'Teach O1.' }],
+        },
+      }),
+    ).request;
+    const governed = parseKafuoGenerationRequest(withPolicy(POLICY)).request;
+    const widened = parseKafuoGenerationRequest(
+      withPolicy({ ...POLICY, contentRoles: [...POLICY.contentRoles, 'summary'] }),
+    ).request;
+    expect(canonicalRequestDigest(plain)).not.toBe(canonicalRequestDigest(governed));
+    expect(canonicalRequestDigest(governed)).not.toBe(canonicalRequestDigest(widened));
+  });
+});

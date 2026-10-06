@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { loadSnippet } from '@openmaic/generation';
+import { SLIDE_ROLE_VARIANTS, SPOKEN_SCRIPT_ASSETS, loadSnippet } from '@openmaic/generation';
 import type { SnippetId } from '@openmaic/generation';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -23,6 +23,7 @@ const PROMPT_IDS = [
   'visualization3d-content',
   'procedural-skill-content',
   'slide-actions',
+  'slide-assistance',
   'quiz-actions',
   'interactive-actions',
   'pbl-actions',
@@ -36,6 +37,8 @@ const SNIPPET_IDS = [
   'slide-image-instructions',
   'slide-generated-image-instructions',
   'slide-video-instructions',
+  'slide-classification-contract',
+  'spoken-language-policy',
 ] as const satisfies readonly SnippetId[];
 
 const GRANDFATHERED_NON_CAMEL_CASE_PLACEHOLDERS = [
@@ -64,7 +67,19 @@ describe('packaged prompt assets', () => {
     `templates/${promptId}/user.md`,
   ]).sort();
   const expectedSnippetFiles = SNIPPET_IDS.map((snippetId) => `snippets/${snippetId}.md`).sort();
-  const expectedFiles = [...expectedTemplateFiles, ...expectedSnippetFiles].sort();
+  // Per-role guidance is resolved in TypeScript (`slide-role-guidance.ts`), not
+  // via `{{snippet:…}}`: one file per approved variant (20) plus `structural`.
+  const expectedRoleFiles = [...SLIDE_ROLE_VARIANTS, 'structural'].map(
+    (variant) => `snippets/slide-roles/${variant}.md`,
+  );
+  // The spoken-script and signposting policy is likewise resolved in TypeScript
+  // (`narration-script.ts`).
+  const expectedFiles = [
+    ...expectedTemplateFiles,
+    ...expectedSnippetFiles,
+    ...expectedRoleFiles,
+    ...SPOKEN_SCRIPT_ASSETS,
+  ].sort();
 
   test('contains exactly the generation-owned templates and referenced snippets', () => {
     const actualFiles = [

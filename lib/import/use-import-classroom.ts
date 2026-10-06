@@ -13,7 +13,10 @@ import {
   type ManifestScene,
   type MediaIndexEntry,
 } from '@/lib/export/classroom-zip-types';
-import { rewriteAudioRefsToIds } from '@/lib/export/classroom-zip-utils';
+import {
+  rewriteAudioRefsToIds,
+  stageSpeechMetadataFromManifest,
+} from '@/lib/export/classroom-zip-utils';
 import { createLogger } from '@/lib/logger';
 import { canonicalizeLegacyScene, mutateDocument, type AppDocument } from '@/lib/document-store';
 import { isConcreteMediaAddress } from '@/lib/media/resolve-media-ref';
@@ -447,6 +450,7 @@ export function useImportClassroom(onSuccess?: (importedStageId: string) => void
             name: manifest.stage.name || 'Imported Classroom',
             description: manifest.stage.description,
             languageDirective: manifest.stage.language,
+            ...stageSpeechMetadataFromManifest(manifest.stage),
             style: manifest.stage.style,
             createdAt: manifest.stage.createdAt || now,
             updatedAt: now,

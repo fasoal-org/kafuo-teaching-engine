@@ -13,6 +13,11 @@ import type { LoadedPrompt, PromptId, PromptVariableDefaults, SnippetId } from '
 const DEFAULT_PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const PROMPT_VARIABLE_DEFAULTS = {
+  // The in-template Arabic register rule renders unless a server spoken-language
+  // policy replaces it (`spokenLanguagePolicyVars`).
+  // Likewise its Arabic spoken-formula rules, unless the shared spoken-script
+  // policy replaces them (`spokenScriptVars`).
+  'slide-actions': { legacyArabicRegisterRule: true, legacySpokenScriptRule: true },
   'pbl-actions': {
     projectSummary:
       '(No generated milestones are available; introduce the project topic without inventing any.)',
@@ -21,6 +26,18 @@ const PROMPT_VARIABLE_DEFAULTS = {
 
 function isMissingFileError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
+/**
+ * Load a packaged prompt asset that is resolved in TypeScript rather than via
+ * `{{snippet:…}}` (e.g. the per-role guidance under `snippets/slide-roles/`).
+ * `relativePath` is relative to the package's prompt root.
+ */
+export function loadPromptAsset(
+  relativePath: string,
+  promptsDir: string = DEFAULT_PROMPTS_DIR,
+): string {
+  return readFileSync(join(promptsDir, relativePath), 'utf-8').trim();
 }
 
 /** Load a snippet by ID. */

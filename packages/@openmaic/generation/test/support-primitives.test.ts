@@ -22,6 +22,30 @@ describe('action parser', () => {
       ),
     ).toEqual([]);
   });
+
+  // An action item with no `name`/`tool_name` used to become `{ type: undefined }`
+  // and survive every later filter, so the document store refused the whole Scene
+  // and the package generation failed outright. One bad item may cost itself and
+  // nothing more — the well-formed actions around it must still come through.
+  it('drops action items whose type is missing or unknown, keeping the rest', () => {
+    expect(
+      parseActionsFromStructuredOutput(
+        '[{"type":"action","params":{"elementId":"x"}},' +
+          '{"type":"action","name":"not_a_real_action","params":{}},' +
+          '{"type":"action","name":"spotlight","params":{"elementId":"x"}}]',
+        'slide',
+      ),
+    ).toEqual([expect.objectContaining({ type: 'spotlight', elementId: 'x' })]);
+  });
+
+  it('never lets `params` override the validated type or the minted id', () => {
+    const [action] = parseActionsFromStructuredOutput(
+      '[{"type":"action","name":"spotlight","action_id":"a1",' +
+        '"params":{"elementId":"x","type":"bogus","id":"spoofed"}}]',
+      'slide',
+    );
+    expect(action).toMatchObject({ id: 'a1', type: 'spotlight', elementId: 'x' });
+  });
 });
 
 describe('interactive HTML post-processing', () => {

@@ -221,6 +221,11 @@ export interface SettingsState {
   // 0 = off (serial generation); populated by fetchServerProviders.
   parallelSceneConcurrency: number;
 
+  // Server-reported SCIENTIFIC_TTS_MODE (SATTS). 'off' until the server says
+  // otherwise; the browser's narration assess/stamp steps and the reviewer
+  // Pronunciation surfaces are inert while it is 'off'.
+  scientificSpeechMode: 'off' | 'shadow' | 'on';
+
   // Auto-config lifecycle flag (persisted)
   autoConfigApplied: boolean;
 
@@ -516,6 +521,7 @@ const getDefaultAudioConfig = () => ({
     },
     'doubao-tts': { apiKey: '', baseUrl: '', enabled: true },
     'elevenlabs-tts': { apiKey: '', baseUrl: '', enabled: true },
+    'cartesia-tts': { apiKey: '', baseUrl: '', modelId: 'sonic-3.6', enabled: true },
     'minimax-tts': { apiKey: '', baseUrl: '', modelId: 'speech-2.8-hd', enabled: true },
     'lemonade-tts': {
       apiKey: '',
@@ -959,6 +965,8 @@ export const useSettingsStore = create<SettingsState>()(
 
         // Off until the server reports a concurrency via fetchServerProviders.
         parallelSceneConcurrency: 0,
+
+        scientificSpeechMode: 'off',
 
         autoConfigApplied: false,
 
@@ -1475,6 +1483,7 @@ export const useSettingsStore = create<SettingsState>()(
               video: Record<string, { models?: string[]; disabled?: boolean }>;
               webSearch: Record<string, { disabled?: boolean }>;
               generation?: { parallelSceneConcurrency?: number };
+              speech?: { scientificMode?: string };
             };
 
             set((state) => {
@@ -1914,6 +1923,10 @@ export const useSettingsStore = create<SettingsState>()(
                   0,
                   Math.floor(data.generation?.parallelSceneConcurrency ?? 0),
                 ),
+                scientificSpeechMode:
+                  data.speech?.scientificMode === 'on' || data.speech?.scientificMode === 'shadow'
+                    ? data.speech.scientificMode
+                    : 'off',
                 autoConfigApplied: true,
                 // Validated selections
                 ...(validLLMProvider !== state.providerId && {

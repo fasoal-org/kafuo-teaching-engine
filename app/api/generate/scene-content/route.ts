@@ -23,6 +23,8 @@ import type {
 } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { rejectInvalidSlideOutline, sceneConflictResponse } from '@/lib/server/generation-contract';
+import { isTextDirection, resolveTextDirection } from '@openmaic/dsl';
 import { llmApiError } from '@/lib/server/llm-error-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { resolveVocationalActive } from '@/lib/config/feature-flags';
@@ -66,7 +68,7 @@ export async function POST(req: NextRequest) {
       allOutlines,
       pdfImages,
       imageMapping,
-      stageInfo: _stageInfo,
+      stageInfo,
       stageId,
       agents,
       languageDirective,
@@ -80,6 +82,8 @@ export async function POST(req: NextRequest) {
         name: string;
         description?: string;
         style?: string;
+        language?: string;
+        textDirection?: string;
       };
       stageId: string;
       agents?: AgentInfo[];
@@ -103,6 +107,11 @@ export async function POST(req: NextRequest) {
     }
 
     const outline: SceneOutline = { ...rawOutline };
+    const sceneTextDirection = isTextDirection(stageInfo?.textDirection)
+      ? stageInfo.textDirection
+      : resolveTextDirection(stageInfo?.language);
+    const invalidOutline = rejectInvalidSlideOutline(outline);
+    if (invalidOutline) return invalidOutline;
 
     // ── Model resolution from request headers/body ──
     // Route per scene-content type (e.g. `scene-content:quiz`); getStageModel
@@ -175,6 +184,9 @@ export async function POST(req: NextRequest) {
     };
 
     // ── Apply fallbacks ──
+    // Defensive assertion only: a runtime scene that cannot be delivered here
+    // raises its typed conflict (caught below) — it is never returned as a
+    // converted slide outline.
     const vocationalActive = resolveVocationalActive(requirements);
     const effectiveOutline = applyOutlineFallbacks(outline, !!languageModel, {
       allowProceduralSkill: vocationalActive,
@@ -332,6 +344,10 @@ export async function POST(req: NextRequest) {
       targetLanguage: userLocale || undefined,
       userRequirements: requirements,
       allowProceduralSkill: vocationalActive,
+      // Base direction from the Stage's AUTHORITATIVE metadata: an explicit
+      // `textDirection`, else resolved from its BCP-47 `language`. Never from
+      // text; a Stage with neither leaves the option undefined (legacy).
+      ...(sceneTextDirection !== undefined ? { textDirection: sceneTextDirection } : {}),
       ...(effectiveOutline.type === 'pbl'
         ? {
             pblLoopFallback: (input) =>
@@ -354,6 +370,8 @@ export async function POST(req: NextRequest) {
 
     return apiSuccess({ content, effectiveOutline });
   } catch (error) {
+    const conflict = sceneConflictResponse(error);
+    if (conflict) return conflict;
     log.error(
       `Scene content generation failed [scene="${outlineTitle ?? 'unknown'}", model=${resolvedModelString ?? 'unknown'}]:`,
       error,

@@ -47,6 +47,13 @@ describe('normalizeUsage', () => {
       cacheReadTokens: 20,
       cacheCreationTokens: 10,
       reasoningTokens: 5,
+      reported: {
+        inputTokens: true,
+        outputTokens: true,
+        cacheReadTokens: true,
+        cacheCreationTokens: true,
+        reasoningTokens: true,
+      },
     });
   });
 
@@ -58,6 +65,13 @@ describe('normalizeUsage', () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       reasoningTokens: 0,
+      reported: {
+        inputTokens: true,
+        outputTokens: false,
+        cacheReadTokens: false,
+        cacheCreationTokens: false,
+        reasoningTokens: false,
+      },
     });
   });
 
@@ -69,6 +83,13 @@ describe('normalizeUsage', () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       reasoningTokens: 0,
+      reported: {
+        inputTokens: false,
+        outputTokens: false,
+        cacheReadTokens: false,
+        cacheCreationTokens: false,
+        reasoningTokens: false,
+      },
     });
   });
 
@@ -99,6 +120,13 @@ describe('normalizeUsage', () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       reasoningTokens: 0,
+      reported: {
+        inputTokens: false,
+        outputTokens: false,
+        cacheReadTokens: false,
+        cacheCreationTokens: false,
+        reasoningTokens: false,
+      },
     });
   });
 });
@@ -126,5 +154,77 @@ describe('hasBillableTokens', () => {
         reasoningTokens: 0,
       }),
     ).toBe(true);
+  });
+});
+
+/**
+ * Kafuo R1 plan §7.6: the numeric fields collapse "not reported" and
+ * "reported 0" to 0 (right for the JSONL log); `reported` keeps them apart
+ * for the ledger, where an absent cache field must be stored as NULL.
+ */
+describe('normalizeUsage — reported flags (reported-zero vs absent, per field)', () => {
+  it('a field carried with value 0 is reported; an absent field is not', () => {
+    const result = normalizeUsage(
+      makeUsage({ inputTokens: 40, outputTokens: 0, cacheReadTokens: 0 }),
+    );
+    expect(result.cacheReadTokens).toBe(0);
+    expect(result.reported).toEqual({
+      inputTokens: true,
+      outputTokens: true,
+      cacheReadTokens: true,
+      cacheCreationTokens: false,
+      reasoningTokens: false,
+    });
+  });
+
+  it('a DashScope-style usage without cached_tokens reports cache read absent', () => {
+    const result = normalizeUsage(makeUsage({ inputTokens: 1200, outputTokens: 300 }));
+    expect(result.cacheReadTokens).toBe(0);
+    expect(result.reported.cacheReadTokens).toBe(false);
+    expect(result.reported.cacheCreationTokens).toBe(false);
+  });
+
+  it('a DashScope-style usage with cache_write_tokens reports the write', () => {
+    const result = normalizeUsage(
+      makeUsage({
+        inputTokens: 1200,
+        outputTokens: 300,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 900,
+      }),
+    );
+    expect(result.cacheCreationTokens).toBe(900);
+    expect(result.reported.cacheCreationTokens).toBe(true);
+    expect(result.reported.cacheReadTokens).toBe(true);
+  });
+
+  it('the deprecated flat fields count as reported', () => {
+    const usage = {
+      inputTokens: 30,
+      outputTokens: 12,
+      totalTokens: 42,
+      cachedInputTokens: 0,
+      reasoningTokens: 3,
+    } as LanguageModelUsage;
+    const result = normalizeUsage(usage);
+    expect(result.reported.cacheReadTokens).toBe(true);
+    expect(result.reported.reasoningTokens).toBe(true);
+    expect(result.reported.cacheCreationTokens).toBe(false);
+  });
+
+  it('reasoning reported as 0 stays distinguishable from reasoning absent', () => {
+    const zero = normalizeUsage(makeUsage({ inputTokens: 1, outputTokens: 1, reasoningTokens: 0 }));
+    const absent = normalizeUsage(makeUsage({ inputTokens: 1, outputTokens: 1 }));
+    expect(zero.reasoningTokens).toBe(absent.reasoningTokens);
+    expect(zero.reported.reasoningTokens).toBe(true);
+    expect(absent.reported.reasoningTokens).toBe(false);
+  });
+
+  it('hasBillableTokens ignores the flags entirely (unchanged behaviour)', () => {
+    const absent = normalizeUsage(makeUsage({}));
+    expect(hasBillableTokens(absent)).toBe(false);
+    const reportedZero = normalizeUsage(makeUsage({ inputTokens: 0, outputTokens: 0 }));
+    expect(hasBillableTokens(reportedZero)).toBe(false);
+    expect(hasBillableTokens(normalizeUsage(makeUsage({ outputTokens: 1 })))).toBe(true);
   });
 });

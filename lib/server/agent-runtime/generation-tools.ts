@@ -1,9 +1,20 @@
 import { createHash } from 'node:crypto';
 import { Type } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { isActionType } from '@openmaic/dsl';
 import {
+  SLIDE_CONTENT_KINDS,
+  SLIDE_CONTENT_KINDS_BY_ROLE,
+  SLIDE_CONTENT_ROLES,
+  SLIDE_TYPES,
+  isActionType,
+  isSlideContentKindForRole,
+  isSlideContentRole,
+  isSlideType,
+} from '@openmaic/dsl';
+import {
+  assertGeneratedSlideScene,
   buildCompleteScene,
+  validateOutlineSlideSemantics,
   generateSceneActions,
   generateSceneContent,
   PBLGenerationError,
@@ -20,6 +31,8 @@ import type { AppDocumentOutline } from '@/lib/document-store/persistence-types'
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
+import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
+import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import { COURSE_STAGE_ID_DESCRIPTION } from './course-stage';
 import type { CourseToolDeps } from './course-tools';
 import { runStageMutation } from './mutation-fence';
@@ -30,10 +43,19 @@ import { toGenerationContent } from './generation-content';
 import { checkScenesAgainstSkill } from './skills';
 import { isMediaPlaceholder } from '@/lib/store/media-generation';
 import { createLogger } from '@/lib/logger';
+import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 
 const MAX_GENERATE_SCENE_MEDIA = 8;
 const SUPPORTED_SCENE_TYPES = new Set(['slide', 'quiz', 'interactive', 'pbl']);
 const log = createLogger('AgentGenerationTools');
+
+/**
+ * The slide-classification contract, as the authoring agent sees it on the
+ * tool itself — the same rules the `slide-classification-contract` prompt
+ * snippet gives every outline planner.
+ */
+const SLIDE_CLASSIFICATION_TOOL_CONTRACT =
+  'SLIDE CLASSIFICATION (a new slide page is refused without it): first decide the page type by the learner experience — answers captured/graded/retried = quiz; manipulate, simulate, drag/drop, keep state, or play a game = interactive; multi-step project or roleplay = pbl; otherwise slide. Never restate a quiz / interactive / pbl experience as a slide. For a slide set slideType (content is the default; at most one cover and one end per lesson) and, for every instructional slide, contentRole chosen by WHY the slide exists — orientation (the single opening: hook, context, objectives, big idea — never a separate learning-objectives page), explanation, example, worked_example, procedure, activity, practice, check_understanding, summary — never from the title or layout. explanation / activity / practice also need their contentKind; every other role omits it. A purely structural contents / transition / end page omits contentRole rather than inventing one. Replacing an existing slide keeps its classification unless you pass new values.';
 
 const SceneParams = Type.Object({
   stageId: Type.String({ description: COURSE_STAGE_ID_DESCRIPTION }),
@@ -65,6 +87,47 @@ const SceneParams = Type.Object({
       description:
         'Interactive pages only: widget configuration object matching widgetType (e.g. { concept, keyVariables } for simulation, { diagramType, nodes } for diagram, { language } for code, { gameType, challenge } for game, { visualizationType, objects } for visualization3d). Must be a plain object. Defaults to { concept: title } when widgetType is set; when only widgetOutline is set, widgetType defaults to simulation.',
     }),
+  ),
+  slideType: Type.Optional(
+    Type.Union(
+      SLIDE_TYPES.map((value) => Type.Literal(value)),
+      {
+        description:
+          'Slide pages only — REQUIRED for a new slide page: the structural place in the deck. content = the default for nearly every teaching slide; cover = the single lesson opening; end = the single genuine closing; contents / transition = only when genuinely needed.',
+      },
+    ),
+  ),
+  contentRole: Type.Optional(
+    Type.Union(
+      SLIDE_CONTENT_ROLES.map((value) => Type.Literal(value)),
+      {
+        description:
+          'Slide pages only — REQUIRED for a new instructional slide (cover / content): WHY the slide exists, chosen by pedagogical intent, never from the title or layout. A purely structural contents / transition / end slide omits it. If the learner must submit answers, manipulate something, or be graded, the page is not a slide — use quiz / interactive / pbl.',
+      },
+    ),
+  ),
+  contentKind: Type.Optional(
+    Type.Union(
+      SLIDE_CONTENT_KINDS.map((value) => Type.Literal(value)),
+      {
+        description:
+          'Slide pages only — REQUIRED with contentRole explanation (concept | definition | rule | observation), activity (investigation | source_analysis | reflection | production) or practice (guided | independent | higher_order); must be omitted for every other role.',
+      },
+    ),
+  ),
+  assistancePlan: Type.Optional(
+    Type.Object(
+      {
+        hint: Type.Optional(Type.String({ minLength: 1 })),
+        help: Type.Optional(Type.String({ minLength: 1 })),
+        explanation: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      {
+        additionalProperties: false,
+        description:
+          'Slide pages only, and only with contentRole practice or check_understanding — REQUIRED (hint + explanation) for practice/independent. The HIDDEN plan for on-demand learner support: hint = what a nudge should point toward, help = the approach, explanation = the full solution path. It is never shown on the slide: put the solution path ONLY here, never in brief or materialFacts (those describe the task alone).',
+      },
+    ),
   ),
   brief: Type.String({ minLength: 1 }),
   instruction: Type.Optional(Type.String()),
@@ -104,6 +167,24 @@ type ActionGenerator = typeof generateSceneActions;
 export interface GenerationToolDeps extends CourseToolDeps {
   aiCall?: AICallFn;
   generateActions?: ActionGenerator;
+  /**
+   * Module 3/4 W4: resolves the governed regeneration context for a Stage's
+   * version (durable marker only). Absent → the lazy default, which reads
+   * package lineage when a DATABASE_URL is configured and answers undefined
+   * for non-package Stages; injected explicitly by tests and any runtime with
+   * its own pool.
+   */
+  resolveGovernedContext?: (
+    stageId: string,
+    scene: Pick<Scene, 'teachingStage'>,
+  ) => Promise<GovernedRegenerationContext | undefined>;
+  /**
+   * Kafuo Release 1 defers generated games: answers whether a Stage belongs to a
+   * Kafuo Teaching Package, where `generate_scene` refuses a game widget.
+   * Absent → the lazy default (package lineage read when a DATABASE_URL is
+   * configured; `false` otherwise).
+   */
+  isKafuoPackageStage?: (stageId: string) => Promise<boolean>;
 }
 
 function sceneIdFor(scenes: readonly Scene[], order: number) {
@@ -127,7 +208,37 @@ function result(text: string, details: Record<string, unknown>, isError = false)
   return { content: [{ type: 'text' as const, text }], details, ...(isError ? { isError } : {}) };
 }
 
-function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
+/** The slide classification a persisted slide Scene carries, verbatim; never inferred. */
+function slideSemanticsOf(
+  scene: Scene | undefined,
+): Pick<SceneOutline, 'slideType' | 'contentRole' | 'contentKind'> {
+  if (!scene || scene.type !== 'slide' || scene.content.type !== 'slide') return {};
+  const { canvas, contentRole, contentKind } = scene.content;
+  return {
+    ...(canvas?.type !== undefined && { slideType: canvas.type }),
+    ...(contentRole !== undefined && { contentRole }),
+    ...(contentKind !== undefined && { contentKind }),
+  };
+}
+
+/**
+ * A slide replaced in place keeps the on-demand assistance it already carries
+ * unless the new content brings its own. Carried verbatim, never derived; the
+ * scene builder still drops it if the slide's role does not allow assistance.
+ */
+export function withCarriedAssistance<T extends object>(
+  content: T,
+  existing: Scene | undefined,
+): T {
+  if (!existing || existing.type !== 'slide' || existing.content.type !== 'slide') return content;
+  const { assistance } = existing.content;
+  if (assistance === undefined || !('elements' in content) || 'assistance' in content) {
+    return content;
+  }
+  return { ...content, assistance };
+}
+
+export function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
   const planned = (snapshot as AppDocumentOutline | undefined)?.outlines?.find(
     (entry) => entry.id === scene.outlineId || entry.order === scene.order,
   );
@@ -139,6 +250,28 @@ function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
     type: scene.type as SceneOutline['type'],
     description: planned?.description ?? scene.title,
     keyPoints: planned?.keyPoints ?? [],
+    // The persisted Scene is the fallback source of the classification when
+    // the outline snapshot predates it (or is missing): read verbatim, never
+    // inferred. A legacy slide that carries none yields none.
+    ...(scene.type === 'slide' ? persistedSlideSemantics(scene, planned) : {}),
+  };
+}
+
+/** Per field: the planned value when valid, else the persisted Scene's. */
+function persistedSlideSemantics(
+  scene: Scene,
+  planned: Partial<SceneOutline> | undefined,
+): Pick<SceneOutline, 'slideType' | 'contentRole' | 'contentKind'> {
+  const stored = slideSemanticsOf(scene);
+  const slideType = isSlideType(planned?.slideType) ? planned.slideType : stored.slideType;
+  const fromPlan = isSlideContentRole(planned?.contentRole);
+  const contentRole = fromPlan ? planned!.contentRole : stored.contentRole;
+  const contentKind = fromPlan ? planned!.contentKind : stored.contentKind;
+  return {
+    ...(slideType !== undefined && { slideType }),
+    ...(contentRole !== undefined && { contentRole }),
+    ...(contentRole !== undefined &&
+      isSlideContentKindForRole(contentRole, contentKind) && { contentKind }),
   };
 }
 
@@ -200,7 +333,7 @@ export function collectUnresolvedMediaPlaceholders(scene: Scene): UnresolvedMedi
   return placeholders;
 }
 
-function actionContext(scenes: readonly Scene[], current: Scene): SceneGenerationContext {
+export function actionContext(scenes: readonly Scene[], current: Scene): SceneGenerationContext {
   const ordered = [...scenes].sort((a, b) => a.order - b.order);
   const index = ordered.findIndex((scene) => scene.id === current.id);
   const previous = index > 0 ? ordered[index - 1] : undefined;
@@ -225,12 +358,63 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
   const routed = createGenerationAiCallFactory({ abortSignal: deps.abortSignal });
   const aiCallFor = (stage: Parameters<typeof routed>[0]) => deps.aiCall ?? routed(stage);
   const actionGenerator = deps.generateActions ?? generateSceneActions;
+  // W4: the governed-context resolver. Default = lazy module read, so the
+  // non-DB runtimes (and the unit harnesses) never touch package lineage
+  // unless a DATABASE_URL exists.
+  const resolveGoverned =
+    deps.resolveGovernedContext ??
+    (async (stageId: string, scene: Pick<Scene, 'teachingStage'>) => {
+      const { resolveGovernedRegenerationContextForStage } =
+        await import('@/lib/server/teaching-package/governed-regeneration');
+      return resolveGovernedRegenerationContextForStage(stageId, scene);
+    });
+
+  const isKafuoStage =
+    deps.isKafuoPackageStage ??
+    (async (stageId: string) => {
+      const { isKafuoPackageStage } =
+        await import('@/lib/server/teaching-package/kafuo-game-deferral');
+      return isKafuoPackageStage(stageId);
+    });
+
+  /** Resolve the governed context for a Scene, or map the refusal to a tool error result. */
+  const governedContextFor = async (
+    stageId: string,
+    scene: Pick<Scene, 'teachingStage'>,
+    label: string,
+  ): Promise<{ context?: GovernedRegenerationContext; refusal?: ReturnType<typeof result> }> => {
+    try {
+      return { context: await resolveGoverned(stageId, scene) };
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? 'GOVERNED_FLOW_CONTEXT_UNRESOLVED';
+      return {
+        refusal: result(
+          `${label} refused on a governed Stage: the authoritative governed context could not be resolved (${(error as Error).message}). Nothing was written.`,
+          {
+            error: code,
+            stageId,
+            ...(scene.teachingStage ? { stageKey: scene.teachingStage.key } : {}),
+          },
+          true,
+        ),
+      };
+    }
+  };
+
+  /** W4.4: stamp a fresh generation-origin baseline on a governed regeneration. */
+  const stampGenerationBaseline = (scene: Scene): Scene => {
+    const baseline = buildSceneAlignmentBaseline(scene, { origin: 'generation', now: Date.now() });
+    // An unclassified Scene gets NO baseline (the W15-FIX null return): it
+    // derives validation-required, never a fabricated stale.
+    return baseline ? { ...scene, alignmentBaseline: baseline } : scene;
+  };
 
   const generateScene: AgentTool<typeof SceneParams> = {
     name: 'generate_scene',
     label: 'Generate page',
     description:
-      'Generate and durably persist one page from an explicit title, type, and brief. Reusing an order replaces that page. Interactive pages accept widgetType (simulation/diagram/code/game/visualization3d) plus a matching widgetOutline object; both are rejected for other page types.',
+      'Generate and durably persist one page from an explicit title, type, and brief. Reusing an order replaces that page. Interactive pages accept widgetType (simulation/diagram/code/game/visualization3d) plus a matching widgetOutline object; both are rejected for other page types. ' +
+      SLIDE_CLASSIFICATION_TOOL_CONTRACT,
     parameters: SceneParams,
     async execute(_callId, params, signal) {
       if (!Number.isInteger(params.order) || params.order < 1) {
@@ -299,6 +483,18 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           true,
         );
       }
+      if (
+        params.type === 'interactive' &&
+        params.widgetType !== undefined &&
+        KAFUO_DEFERRED_WIDGET_TYPES.includes(params.widgetType) &&
+        (await isKafuoStage(params.stageId))
+      ) {
+        return result(
+          `generate_scene cannot create a "${params.widgetType}" page in a Kafuo Teaching Package: Kafuo Release 1 does not generate learning games. Nothing was written; plan the page its flow position requires instead.`,
+          { error: 'GAME_GENERATION_DEFERRED', stageId: params.stageId },
+          true,
+        );
+      }
       const requestedMedia = params.media ?? [];
       if (requestedMedia.length > MAX_GENERATE_SCENE_MEDIA) {
         return result(
@@ -314,6 +510,31 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         type: params.type,
         description: brief,
         keyPoints: params.materialFacts ?? [],
+        // Module 3/4 W4 (TAE-RQ-020): seed the governed lineage from the
+        // Scene being replaced, so the replacement is BUILT governed — the
+        // same flow position and Skill assignment, no reselection — rather
+        // than repaired afterwards by carry-forward.
+        ...(existing?.teachingStage ? { teachingStage: existing.teachingStage } : {}),
+        ...(existing?.teachingSkills ? { teachingSkills: existing.teachingSkills } : {}),
+        // Slide semantics ride the same seam: a slide regenerated in place
+        // keeps the classification its original outline established, carried
+        // verbatim from the Scene being replaced (canvas `type` + content
+        // role/kind) so the replacement is BUILT classified. Nothing is
+        // derived from the new brief or content; a legacy slide that carries
+        // none seeds none, and a page changing scene type drops them.
+        // The agent may reclassify by supplying new values; each supplied
+        // field replaces the inherited one, nothing is defaulted.
+        ...(params.type === 'slide' ? slideSemanticsOf(existing) : {}),
+        ...(params.type === 'slide' && params.slideType ? { slideType: params.slideType } : {}),
+        ...(params.type === 'slide' && params.assistancePlan
+          ? { assistancePlan: params.assistancePlan }
+          : {}),
+        ...(params.type === 'slide' && params.contentRole
+          ? {
+              contentRole: params.contentRole,
+              ...(params.contentKind ? { contentKind: params.contentKind } : {}),
+            }
+          : {}),
         ...(params.type === 'interactive' &&
         (params.widgetType !== undefined || params.widgetOutline !== undefined)
           ? {
@@ -336,6 +557,43 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
             }
           : {}),
       };
+      // A NEW slide page (or one the agent reclassifies) must be validly
+      // classified — the same strict rule every other generation mode obeys.
+      // A violation is an actionable tool error; nothing is defaulted. Only a
+      // legacy slide regenerated in place with no new values stays
+      // unclassified, exactly as it was.
+      const legacyInPlace =
+        params.type === 'slide' &&
+        existing?.type === 'slide' &&
+        outline.slideType === undefined &&
+        outline.contentRole === undefined &&
+        outline.contentKind === undefined;
+      if (params.type === 'slide' && !legacyInPlace) {
+        // A slide replaced in place keeps its existing on-demand assistance
+        // (carried over below), so a fresh plan is only required when there is
+        // none to carry.
+        const carriesAssistance =
+          params.assistancePlan === undefined &&
+          existing?.type === 'slide' &&
+          existing.content.type === 'slide' &&
+          existing.content.assistance !== undefined;
+        const issues = validateOutlineSlideSemantics([outline]).filter(
+          (issue) => !(carriesAssistance && issue.field === 'assistancePlan'),
+        );
+        if (issues.length > 0) {
+          return result(
+            `This slide page is not validly classified: ${issues.map((issue) => issue.message).join('; ')}. ` +
+              `Set slideType (${SLIDE_TYPES.join(' | ')}) and, for an instructional slide, contentRole (${SLIDE_CONTENT_ROLES.join(' | ')}); ` +
+              `contentKind is required for ${Object.entries(SLIDE_CONTENT_KINDS_BY_ROLE)
+                .filter(([, kinds]) => kinds.length > 0)
+                .map(([role, kinds]) => `${role} (${kinds.join(' | ')})`)
+                .join(', ')} and must be omitted otherwise. ` +
+              `practice/independent also requires assistancePlan { hint, explanation }; assistancePlan is allowed only with practice or check_understanding. Nothing was written.`,
+            { error: 'OUTLINE_SLIDE_SEMANTICS_INVALID', issues, order: params.order },
+            true,
+          );
+        }
+      }
       const baseline =
         params.instruction && existing?.type === 'slide'
           ? {
@@ -381,16 +639,32 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         imageMapping[id] = src;
       }
       const agents = doc.stage.generatedAgentConfigs;
+      // Module 3/4 W4 (TAE-RQ-018): on a governed Stage, the regeneration
+      // happens under the authoritative context or refuses — never generic
+      // generation with carriers copied back. A governed Stage REPLACING a
+      // Scene with no teachingStage (or a NEW page, which has no position)
+      // cannot resolve a context and refuses for that reason.
+      const { context: governed, refusal: governedRefusal } = await governedContextFor(
+        params.stageId,
+        existing ?? { teachingStage: undefined },
+        'generate_scene',
+      );
+      if (governedRefusal) return governedRefusal;
       let content: Awaited<ReturnType<typeof generateSceneContent>>;
       let contentFailure: SceneContentFailureCode | undefined;
       try {
         content = await generateSceneContent(outline, aiCallFor(sceneContentStage(params.type)), {
           agents,
           languageDirective: doc.stage.languageDirective ?? '',
+          // The Stage's recorded base direction (authoritative lesson
+          // metadata) governs a regenerated slide exactly as it governed the
+          // original; a legacy Stage records none and the prompt is unchanged.
+          ...(doc.stage.textDirection ? { textDirection: doc.stage.textDirection } : {}),
           allowProceduralSkill: true,
           ...(assignedImages.length ? { assignedImages, imageMapping } : {}),
           ...(params.instruction ? { editDirective: params.instruction } : {}),
           ...(baseline ? { baselineContent: baseline } : {}),
+          ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
           onFailure: (failure) => {
             contentFailure = failure.code;
           },
@@ -443,15 +717,34 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
       }
       const actions = filterKnownActions(
         await actionGenerator(outline, content, aiCallFor('scene-actions'), {
+          // Page position, so first/last-page cues exist on the agent path too.
+          ctx: actionContext(
+            [
+              ...doc.scenes.filter((item) => item.order !== params.order),
+              { id: '\u0000new', order: params.order, title, actions: [] } as unknown as Scene,
+            ],
+            { id: '\u0000new' } as Scene,
+          ),
           agents,
           languageDirective: doc.stage.languageDirective ?? '',
+          // W4: the ONE resolved Flow position plus the resolved Skill
+          // definitions — the same governed context the content pass used.
+          ...(governed ? { flowContext: governed.flowContext } : {}),
+          ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
         }),
       );
-      const built = buildCompleteScene(outline, content, actions, params.stageId, {
-        sceneId: existing?.id ?? sceneIdFor(doc.scenes, params.order),
-      });
+      const built = buildCompleteScene(
+        outline,
+        withCarriedAssistance(content, existing),
+        actions,
+        params.stageId,
+        {
+          sceneId: existing?.id ?? sceneIdFor(doc.scenes, params.order),
+        },
+      );
       if (!built) return result('Page assembly failed; nothing was written.', {}, true);
-      const scene = built as Scene;
+      if (!legacyInPlace) assertGeneratedSlideScene(built);
+      const scene = (governed ? stampGenerationBaseline(built as Scene) : built) as Scene;
       await runStageMutation(signal, () =>
         putSceneBringingCurrent(deps.store, params.stageId, scene),
       );
@@ -521,6 +814,16 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
         ? doc?.scenes.find((item) => item.id === params.sceneId)
         : doc?.scenes.find((item) => item.order === params.order);
       if (!doc || !scene) return result('Page not found. Call list_scenes.', {}, true);
+      // Module 3/4 W4 (TAE-RQ-018/019): on a governed Stage the regenerated
+      // Actions are produced under the authoritative context or the tool
+      // refuses — never generic generation with the old carriers merely
+      // preserved (the false-governance pattern W4 exists to close).
+      const { context: governed, refusal: governedRefusal } = await governedContextFor(
+        params.stageId,
+        scene,
+        'generate_actions',
+      );
+      if (governedRefusal) return governedRefusal;
       const outline = outlineFromScene(scene, doc.outline);
       const actions = filterKnownActions(
         await actionGenerator(
@@ -532,12 +835,20 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
             agents: doc.stage.generatedAgentConfigs,
             languageDirective: doc.stage.languageDirective ?? '',
             userProfile: params.styleDirective,
+            ...(governed ? { flowContext: governed.flowContext } : {}),
+            ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
           },
         ),
       );
       if (!actions.length)
         return result('No known actions were generated; the page was unchanged.', {}, true);
-      const next = { ...scene, actions } as Scene;
+      // W4.4: a regeneration IS successful generation — a fresh
+      // generation-origin baseline is stamped after the final Actions exist
+      // (governed runs only; buildSceneAlignmentBaseline returns null for an
+      // unclassified Scene, which then derives validation-required).
+      const next = (
+        governed ? stampGenerationBaseline({ ...scene, actions } as Scene) : { ...scene, actions }
+      ) as Scene;
       await runStageMutation(signal, () =>
         putSceneBringingCurrent(deps.store, params.stageId, next),
       );
@@ -554,6 +865,7 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           scene: next,
           force: false,
           roster: doc.stage.generatedAgentConfigs,
+          stage: doc.stage,
           signal,
         });
         if (audio.changed) {

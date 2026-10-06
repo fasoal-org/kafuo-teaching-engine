@@ -7,7 +7,7 @@ OpenMAIC is a standard Next.js application. It runs anywhere Next.js runs.
 
 ## Vercel (one click)
 
-The fastest path is the Deploy button in the [repository README](https://github.com/THU-MAIC/OpenMAIC). Fork the repository and enter an API key for at least one LLM when prompted.
+The fastest path is the Deploy button in the [repository README](https://github.com/fasoal-org/kafuo-teaching-engine). Fork the repository and enter an API key for at least one LLM when prompted.
 
 Vercel rebuilds and deploys the Next.js application after every commit. Configure at least one LLM provider in the project settings for deployment.
 
@@ -101,7 +101,7 @@ Enable the `video-export` profile:
 docker compose --profile video-export up --build
 ```
 
-Compose connects OpenMAIC to the rendering service through `RENDER_SERVICE_URL`. If the profile is disabled or the rendering service is unavailable, export falls back to downloading the project ZIP for rendering with the local CLI. The rendering service uses an isolated network and requires the `NET_ADMIN` capability at startup. See [`render-service/README.md`](https://github.com/THU-MAIC/OpenMAIC/blob/main/render-service/README.md) for more limitations and standalone deployment instructions.
+Compose connects OpenMAIC to the rendering service through `RENDER_SERVICE_URL`. If the profile is disabled or the rendering service is unavailable, export falls back to downloading the project ZIP for rendering with the local CLI. The rendering service uses an isolated network and requires the `NET_ADMIN` capability at startup. See [`render-service/README.md`](https://github.com/fasoal-org/kafuo-teaching-engine/blob/main/render-service/README.md) for more limitations and standalone deployment instructions.
 
 ## Environment variables
 

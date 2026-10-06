@@ -92,6 +92,7 @@ const TTS_ENV_MAP: Record<string, string> = {
   TTS_VOXCPM: 'voxcpm-tts',
   TTS_DOUBAO: 'doubao-tts',
   TTS_ELEVENLABS: 'elevenlabs-tts',
+  TTS_CARTESIA: 'cartesia-tts',
   TTS_MINIMAX: 'minimax-tts',
   TTS_LEMONADE: 'lemonade-tts',
 };
@@ -204,16 +205,16 @@ type YamlData = Partial<{
   'web-search': Record<string, Partial<ServerProviderEntry>>;
 }>;
 
-function loadYamlFile(filename: string): YamlData {
+function loadYamlFile(): YamlData {
   try {
-    const filePath = path.join(process.cwd(), filename);
+    const filePath = path.join(process.cwd(), 'server-providers.yml');
     if (!fs.existsSync(filePath)) return {};
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = yaml.load(raw) as Record<string, unknown> | null;
     if (!parsed || typeof parsed !== 'object') return {};
     return parsed as YamlData;
   } catch (e) {
-    log.warn(`[ServerProviderConfig] Failed to load ${filename}:`, e);
+    log.warn(`[ServerProviderConfig] Failed to load ${DEFAULT_FILENAME}:`, e);
     return {};
   }
 }
@@ -555,7 +556,7 @@ function getConfig(): ServerConfig {
   const cached = _configs.get('');
   if (cached) return cached;
 
-  const yamlData = loadYamlFile(DEFAULT_FILENAME);
+  const yamlData = loadYamlFile();
   const config = buildConfig(yamlData);
   logConfig(config, DEFAULT_FILENAME);
   _configs.set('', config);

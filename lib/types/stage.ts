@@ -19,6 +19,12 @@ import type { Action } from '@/lib/types/action';
 import type { WidgetConfig } from '@/lib/types/widgets';
 import type { PBLProjectConfig } from '@/lib/pbl/legacy/read';
 import type { PBLProjectV2 } from '@/lib/pbl/v2/types';
+import type {
+  SceneAlignmentBaseline,
+  SceneLearningObjectiveRef,
+  SceneTeachingSkills,
+  TeachingStageRef,
+} from '@/lib/types/teaching-package';
 
 export type {
   SceneType,
@@ -34,6 +40,55 @@ export type {
   QuizQuestion,
   QuizContent,
 } from '@openmaic/dsl';
+
+// Pedagogical metadata carried by slide content (`SlideContent.contentRole` /
+// `contentKind`). The vocabulary, the role -> kinds table and the pairing rule
+// are owned by `@openmaic/dsl`; they are re-exported here so Teaching Package
+// and app code share that single definition rather than restating the unions.
+// Not to be confused with `SceneType` (scene kind), the canvas's `Slide.type`
+// (deck-structural page kind), or the app-layer `teachingStage` annotation
+// (per-teaching-model flow position).
+export type {
+  SlideContentRole,
+  SlideContentKind,
+  SlideContentKindOf,
+  SlideContentKindByRole,
+  SlideContentSemantics,
+  ExplanationContentKind,
+  ActivityContentKind,
+  PracticeContentKind,
+  SlideAssistance,
+} from '@openmaic/dsl';
+export {
+  SLIDE_TYPES,
+  isSlideType,
+  SLIDE_ASSISTANCE_TIERS,
+  SLIDE_ASSISTANCE_ROLES,
+  slideRoleAllowsAssistance,
+  slideSemanticsRequireAssistance,
+  validateGeneratedSlideSemantics,
+  SLIDE_CONTENT_ROLES,
+  SLIDE_CONTENT_KINDS,
+  SLIDE_CONTENT_KINDS_BY_ROLE,
+  isSlideContentRole,
+  isSlideContentKind,
+  isSlideContentKindForRole,
+  validateSlideContentSemantics,
+} from '@openmaic/dsl';
+
+// Stage-level content language + base text direction (`Stage.language` /
+// `Stage.textDirection`). Owned by `@openmaic/dsl`: the language tag comes from
+// the requester's authoritative lesson metadata and the direction is resolved
+// from it once, at generation — never from generated text.
+export type { TextDirection } from '@openmaic/dsl';
+export { TEXT_DIRECTIONS, isTextDirection, resolveTextDirection } from '@openmaic/dsl';
+
+// Stage-level narration reading mode (`Stage.speechReadingMode`). Absent means
+// 'natural'. Owned by `@openmaic/dsl`.
+export type { SpeechReadingMode } from '@openmaic/dsl';
+// The spoken-language register policy a Stage was generated under (`Stage.speechRegister`).
+export type { StageSpeechRegister } from '@openmaic/dsl';
+export { SPEECH_READING_MODES, isSpeechReadingMode } from '@openmaic/dsl';
 
 // The two discriminant guards are runtime functions, so they must be value
 // re-exported — a bare `export type {}` erases them and leaves the import as
@@ -107,8 +162,57 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * scene-derived outline.
    */
   outlineId?: string;
+  /**
+   * Kafuo Learning Objectives this scene serves. App-layer, optional, additive:
+   * absent on legacy data (BR-019), never part of the `@openmaic/dsl` Scene
+   * contract, and never rewritten when Kafuo later changes the objective.
+   */
+  learningObjectives?: SceneLearningObjectiveRef[];
+  /**
+   * Teaching-stage identity for Kafuo-generated packages. App-layer,
+   * optional, additive: absent on legacy and non-Kafuo stages; present on
+   * every Kafuo-generated scene and copied exactly from its outline.
+   */
+  teachingStage?: TeachingStageRef;
+  /**
+   * Teaching Skills assignment + instructional classification (Module 2 W9).
+   * App-layer, optional, additive: absent on legacy data — and that absence IS
+   * the backward-compatibility mechanism (AC-TS-034: legacy lineage absence is
+   * explicit, never fabricated). Present on every Module-2-governed
+   * instructional scene once W10 performs generation-time selection; copied
+   * exactly from its outline by `buildCompleteScene`'s four branches, the same
+   * seam as `teachingStage`. Never part of the `@openmaic/dsl` Scene contract.
+   */
+  teachingSkills?: SceneTeachingSkills;
+  /**
+   * The durable alignment baseline (Module 2 W14/W15, plan §K). App-layer,
+   * optional, additive — package Scene/Stage lifecycle data, not
+   * generation-attempt state: it travels with a same-model clone, is governed
+   * by Stage editability, and freezes with approved content. Alignment STATE
+   * is never stored here or anywhere — it is derived at read by comparing the
+   * Scene (material fingerprint + assignment + classification) against this
+   * baseline. `sceneRev` is not part of the binding.
+   */
+  alignmentBaseline?: SceneAlignmentBaseline;
+  /**
+   * Problems package generation recorded on this scene instead of failing the
+   * whole package (3 Oct 2026): the scene was kept as generated (or as a
+   * placeholder when nothing usable came back) and the reviewer decides —
+   * regenerate it, edit it, or publish it. App-layer, optional, additive;
+   * never read at runtime and never shown to learners. A successful
+   * single-slide regeneration builds a fresh scene without it.
+   */
+  generationIssues?: SceneGenerationIssue[];
 };
 export type Scene = AppScene;
+
+/** One problem package generation recorded on a scene it kept. */
+export interface SceneGenerationIssue {
+  /** The typed failure code that used to fail the package (e.g. ORIENTATION_VISUAL_MISSING). */
+  code: string;
+  /** The human-readable reason, shown to the reviewer. */
+  message: string;
+}
 
 /**
  * A partial update for {@link AppScene} — the patch shape used by `updateScene` /

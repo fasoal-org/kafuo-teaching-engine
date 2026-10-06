@@ -82,6 +82,22 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     icon: '/logos/openai.svg',
     models: [
       {
+        id: 'gpt-6-luna',
+        name: 'GPT-6 Luna',
+        contextWindow: 1050000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
+      {
         id: 'gpt-5.6',
         name: 'GPT-5.6 Sol',
         contextWindow: 1050000,
@@ -209,6 +225,25 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
           },
         },
       },
+      {
+        // Kafuo R1 subject-routing fallback model (contracts §1). Registered so
+        // the policy resolves without an operator pin; its `minimal` reasoning
+        // effort is what the benchmark runs used (run_gpt5nano.py).
+        id: 'gpt-5-nano',
+        name: 'GPT-5 Nano',
+        contextWindow: 400000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
     ],
   },
 
@@ -237,7 +272,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Qwen3.5 Flash',
         contextWindow: 1000000,
         outputWindow: 67072,
-        capabilities: { streaming: true, tools: false, vision: false },
+        capabilities: { streaming: true, tools: false, vision: true },
       },
       {
         id: 'deepseek-ai/deepseek-v4-pro',
@@ -249,7 +284,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: true,
@@ -786,11 +821,32 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: true,
             defaultEnabled: true,
+          },
+        },
+      },
+      {
+        // Kafuo R1 subject-routing primary model (contracts §1). Thinking is
+        // toggleable and OFF by default: the policy sends `enable_thinking:
+        // false` (the benchmark's "nothink" configuration). `vision: false`
+        // per AMB-08 — a lesson with source visuals falls back deterministically
+        // to the subject's vision-capable target before any call is made.
+        id: 'qwen3.7-flash',
+        name: 'Qwen3.7 Flash',
+        contextWindow: 1000000,
+        outputWindow: 64000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: false,
           },
         },
       },
@@ -1873,6 +1929,7 @@ function shouldUseOpenAIResponsesApi(providerId: ProviderId, modelId: string): b
   if (providerId !== 'openai') return false;
 
   return (
+    /^gpt-6(?:-|$)/.test(modelId) ||
     /^gpt-5\.\d+-pro(?:-|$)/.test(modelId) ||
     /^gpt-5\.6(?:-|$)/.test(modelId) ||
     /^gpt-5\.5(?:-|$)/.test(modelId) ||
@@ -2337,7 +2394,34 @@ export function getModel(config: ModelConfig): ModelWithInfo {
       } else {
         // Native OpenAI / Responses transport: route requests through the
         // shared transport so they carry the extended-timeout dispatcher too.
-        openaiOptions.fetch = transportFetch;
+        openaiOptions.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+          // The installed AI SDK predates GPT-6 and currently strips its
+          // reasoning provider option. Inject the normalized effort into the
+          // native Responses body at the final request boundary. This can be
+          // removed once the SDK recognizes the GPT-6 family itself.
+          if (/^gpt-6(?:-|$)/.test(config.modelId) && init?.body && typeof init.body === 'string') {
+            const thinkingCtx = (globalThis as Record<string, unknown>).__thinkingContext as
+              | { getStore?: () => unknown }
+              | undefined;
+            const thinking = thinkingCtx?.getStore?.() as ThinkingConfig | undefined;
+            const capability = getCatalogThinkingCapability(config.providerId, config.modelId);
+            const effort = capability && thinking ? pickThinkingEffort(capability, thinking) : null;
+            if (effort) {
+              try {
+                const body = JSON.parse(init.body) as Record<string, unknown>;
+                const existing =
+                  body.reasoning && typeof body.reasoning === 'object'
+                    ? (body.reasoning as Record<string, unknown>)
+                    : {};
+                body.reasoning = { ...existing, effort };
+                init = { ...init, body: JSON.stringify(body) };
+              } catch {
+                /* leave body as-is */
+              }
+            }
+          }
+          return transportFetch(url, init);
+        }) as typeof globalThis.fetch;
       }
 
       const openai = createOpenAI(openaiOptions);

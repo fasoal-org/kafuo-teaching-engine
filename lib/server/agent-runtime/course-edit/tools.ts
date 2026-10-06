@@ -110,6 +110,7 @@ export function buildCourseAudioAndDeckTools(deps: CourseToolDeps): AgentTool<ne
         scene,
         force: params.force ?? false,
         roster: doc.stage.generatedAgentConfigs,
+        stage: doc.stage,
         signal,
       });
       if (!summary.available) {

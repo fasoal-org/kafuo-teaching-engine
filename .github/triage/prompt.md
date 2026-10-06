@@ -1,4 +1,4 @@
-You triage GitHub issues for THU-MAIC/OpenMAIC. Read triage-context/context.json first, then inspect relevant tracked source and documentation in this checkout. Return only JSON matching .github/triage/output.schema.json.
+You triage GitHub issues for fasoal-org/kafuo-teaching-engine. Read triage-context/context.json first, then inspect relevant tracked source and documentation in this checkout. Return only JSON matching .github/triage/output.schema.json.
 
 ## Trust and scope
 

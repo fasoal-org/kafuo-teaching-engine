@@ -1,0 +1,254 @@
+{
+  "table": "greek",
+  "description": "Greek letter names, keyed by LaTeX name; Unicode glyphs map to these keys.",
+  "roles": [
+    "greek"
+  ],
+  "entries": [
+    {
+      "key": "alpha",
+      "natural": "ألفا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "beta",
+      "natural": "بيتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "gamma",
+      "natural": "جاما",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "delta",
+      "natural": "دلتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "epsilon",
+      "natural": "إبسلون",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "zeta",
+      "natural": "زيتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "eta",
+      "natural": "إيتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "theta",
+      "natural": "ثيتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "iota",
+      "natural": "يوتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "kappa",
+      "natural": "كابا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "lambda",
+      "natural": "لامدا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "mu",
+      "natural": "ميو",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "nu",
+      "natural": "نيو",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "xi",
+      "natural": "زاي",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "omicron",
+      "natural": "أوميكرون",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "pi",
+      "natural": "باي",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "rho",
+      "natural": "رو",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "sigma",
+      "natural": "سيجما",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "tau",
+      "natural": "تاو",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "upsilon",
+      "natural": "أبسلون",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "phi",
+      "natural": "فاي",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "chi",
+      "natural": "كاي",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "psi",
+      "natural": "بساي",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "omega",
+      "natural": "أوميجا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Gamma",
+      "natural": "جاما الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Delta",
+      "natural": "دلتا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": "Upper-case delta (Δx) is read as plain «دلتا» in physics; case is not audible"
+    },
+    {
+      "key": "Theta",
+      "natural": "ثيتا الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Lambda",
+      "natural": "لامدا الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Xi",
+      "natural": "زاي الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Pi",
+      "natural": "باي الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Sigma",
+      "natural": "سيجما الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Upsilon",
+      "natural": "أبسلون الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Phi",
+      "natural": "فاي الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Psi",
+      "natural": "بساي الكبيرة",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": ""
+    },
+    {
+      "key": "Omega",
+      "natural": "أوميجا",
+      "status": "proposed",
+      "source": "Common Arabic reading of Greek letters in Saudi school mathematics and physics",
+      "notes": "Upper-case omega; the ohm unit Ω after a number is read from units.json"
+    }
+  ]
+}

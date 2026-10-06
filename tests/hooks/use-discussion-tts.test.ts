@@ -463,3 +463,33 @@ describe('discussion TTS synthesis lookahead', () => {
     expect(hook.shouldHold()).toEqual({ holding: true, segmentDone: 1 });
   });
 });
+
+describe('SATTS dynamic web speech (plan §7.6, FR-027)', () => {
+  afterEach(() => {
+    (mocks.settings as Record<string, unknown>).scientificSpeechMode = undefined;
+  });
+
+  it('with the scientific mode on, sends the Stage id and dynamic: true', async () => {
+    const { useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 } } as never);
+    (mocks.settings as Record<string, unknown>).scientificSpeechMode = 'on';
+    act(() => root.render(createElement(Probe)));
+    await seal('A');
+    expect(requests[0]!.body).toMatchObject({ stageId: 'stage-9', dynamic: true });
+  });
+
+  it('with the mode off (default), a Stage still sends its id and dynamic: true (TTS routing)', async () => {
+    const { useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 } } as never);
+    await seal('A');
+    expect(requests[0]!.body).toMatchObject({ stageId: 'stage-9', dynamic: true });
+  });
+
+  it('without a Stage the request carries no Stage context (unrouted)', async () => {
+    const { useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: null } as never);
+    await seal('A');
+    expect(requests[0]!.body).not.toHaveProperty('stageId');
+    expect(requests[0]!.body).not.toHaveProperty('dynamic');
+  });
+});

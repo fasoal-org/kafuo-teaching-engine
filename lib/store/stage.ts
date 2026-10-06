@@ -26,6 +26,15 @@ import type { PendingChange, StaleDroppedSave } from '@/lib/utils/stage-storage'
 import { collectStageAssetRefs } from '@/lib/media/collect-stage-asset-refs';
 import { reconcileSceneMediaAllocations } from '@/lib/media/reconcile-scene-media';
 import {
+  isGrantReadOnlyRefusal,
+  isTeachingPackageGrantSession,
+} from '@/lib/persistence/grant-session';
+import {
+  bindStageSceneRevs,
+  clearStageSceneRevs,
+  setSceneRev,
+} from '@/lib/persistence/scene-revision-registry';
+import {
   isStageDeleted,
   isStageDeletionInFlight,
   isStageWriteStale,
@@ -54,7 +63,207 @@ type FlushRound = {
   promise: Promise<Set<string>>;
 };
 let flushInFlight: FlushRound | null = null;
+
+/**
+ * Single-slide regeneration (single-slide-regeneration-plan §12.3). While a
+ * regeneration of a Scene runs, its Stage's autosave is held (the barrier) so
+ * this tab's own whole-document save cannot bump the Scene's revision and
+ * waste the paid run; the Scene itself is locked (the dialog is modal, and a
+ * programmatic mark of a locked Scene is logged).
+ */
+const regenerationBarriers = new Map<string, number>();
+const regenerationLocks = new Set<string>();
+
+function regenerationLockKey(stageId: string, sceneId: string): string {
+  return `${stageId}\u0000${sceneId}`;
+}
+
+/** A save outcome the server refused on its revision precondition (§11.5). */
+type RevisionConflictSave = {
+  kind: 'revision-conflict';
+  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  sceneIds: string[];
+};
+
+export interface StageSaveConflict {
+  stageId: string;
+  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  sceneIds: string[];
+}
+
+const saveConflictListeners = new Set<(conflict: StageSaveConflict) => void>();
+
+/** Subscribe to "a slide changed elsewhere; the local copy was replaced" notices. */
+export function onStageSaveConflict(listener: (conflict: StageSaveConflict) => void): () => void {
+  saveConflictListeners.add(listener);
+  return () => saveConflictListeners.delete(listener);
+}
+
+function revisionConflictOf(error: unknown): RevisionConflictSave | null {
+  for (let current: unknown = error, depth = 0; current && depth < 5; depth += 1) {
+    if (typeof current !== 'object') return null;
+    const candidate = current as {
+      status?: unknown;
+      code?: unknown;
+      details?: unknown;
+      cause?: unknown;
+    };
+    if (candidate.status === 409 && candidate.code === 'SCENE_REVISION_CONFLICT') {
+      const scenes = (candidate.details as { scenes?: Array<{ id?: unknown }> } | undefined)
+        ?.scenes;
+      return {
+        kind: 'revision-conflict',
+        code: 'SCENE_REVISION_CONFLICT',
+        sceneIds: (scenes ?? []).flatMap((scene) =>
+          typeof scene.id === 'string' ? [scene.id] : [],
+        ),
+      };
+    }
+    if (candidate.status === 428 && candidate.code === 'PRECONDITION_REQUIRED') {
+      return { kind: 'revision-conflict', code: 'PRECONDITION_REQUIRED', sceneIds: [] };
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
 let stageStorageModulePromise: Promise<typeof import('@/lib/utils/stage-storage')> | null = null;
+
+/**
+ * ## Document-write access — the classroom's fail-closed persistence gate
+ *
+ * A Teaching Package Preview (and a learner handoff) opens the classroom under
+ * a READ editor grant. The server already refuses every document mutation made
+ * under one with `403 GRANT_READ_ONLY`; this gate is the client half, so those
+ * requests are never issued in the first place.
+ *
+ * It is a TRI-state, not a boolean, because of a genuine ordering problem. The
+ * only grant fact a page script can observe synchronously is "this tab is in a
+ * grant session" (the readable `tp:<nonce>` companion cookie — see
+ * `lib/persistence/grant-session.ts`); the grant's CAPABILITY is a server fact
+ * that arrives later, on the stage-meta sidecar round trip. The classroom
+ * meanwhile performs load-time self-healing that marks the document dirty — the
+ * lazy generated-agent roster migration is the confirmed one — inside exactly
+ * that window.
+ *
+ * So:
+ *
+ * - `'writable'`  — the default OUTSIDE a grant session, which is every
+ *   ordinary locally owned classroom. Nothing about their autosave changes.
+ * - `'unresolved'` — the default INSIDE a grant session, until the sidecar
+ *   answers. Mutations are still RECORDED (a write grant's edits must survive
+ *   the window) but nothing is scheduled or flushed, so no request is issued.
+ * - `'read-only'` — the sidecar said this viewer may not write, or a write came
+ *   back `GRANT_READ_ONLY`. Parked dirt for the stage is discarded and further
+ *   marks are refused outright.
+ *
+ * Scoped per stage id: resolving one classroom read-only says nothing about the
+ * next one, which re-enters `'unresolved'` and earns its own answer.
+ *
+ * This gate covers the DOCUMENT seam only. Runtime/learner session writes go
+ * through `HttpRuntimeStore` under their own `GRANT_RUNTIME_SCOPE`
+ * authorization and are deliberately untouched — read-only playback still
+ * records the runtime state its grant permits.
+ */
+export type StageDocumentWriteAccess = 'writable' | 'unresolved' | 'read-only';
+
+let documentAccessStageId: string | null = null;
+let documentAccessState: StageDocumentWriteAccess = 'writable';
+/** Memoized per page load: the cookie can only appear via a redeem navigation. */
+let grantSessionProbe: boolean | null = null;
+
+function defaultDocumentWriteAccess(): StageDocumentWriteAccess {
+  grantSessionProbe ??= isTeachingPackageGrantSession();
+  return grantSessionProbe ? 'unresolved' : 'writable';
+}
+
+/** This viewer's document-write standing for `stageId`. */
+export function stageDocumentWriteAccess(
+  stageId: string | null | undefined,
+): StageDocumentWriteAccess {
+  if (!stageId) return defaultDocumentWriteAccess();
+  return documentAccessStageId === stageId ? documentAccessState : defaultDocumentWriteAccess();
+}
+
+function mayWriteStageDocument(stageId: string | null | undefined): boolean {
+  return stageDocumentWriteAccess(stageId) === 'writable';
+}
+
+/**
+ * A Teaching Package grant can expire while an editor tab is still open. In
+ * that case the persistence route no longer sees a grant and the document
+ * store returns its ordinary 403 `FORBIDDEN_DOCUMENTS` response instead of
+ * `GRANT_READ_ONLY`. For a page that started as a grant session this is just as
+ * terminal as a read-only grant: retrying cannot renew the capability.
+ *
+ * Keep this scoped to a known grant session. The same response in an ordinary
+ * local classroom is a real authorization error and must remain visible and
+ * retryable rather than being silently converted to read-only.
+ */
+function isTerminalGrantDocumentRefusal(error: unknown): boolean {
+  if (isGrantReadOnlyRefusal(error)) return true;
+  grantSessionProbe ??= isTeachingPackageGrantSession();
+  if (!grantSessionProbe) return false;
+
+  for (let current: unknown = error, depth = 0; current && depth < 5; depth += 1) {
+    if (typeof current !== 'object') return false;
+    const candidate = current as { status?: unknown; code?: unknown; cause?: unknown };
+    if (candidate.status === 403 && candidate.code === 'FORBIDDEN_DOCUMENTS') return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+/**
+ * Resolve a stage's document-write standing.
+ *
+ * `'read-only'` DISCARDS whatever was parked for the stage rather than parking
+ * it further: the write can never be accepted, and leaving it in the pending
+ * map would let the departing-stage flush in `setStage` carry it into a later
+ * navigation. `'writable'` releases the window — anything recorded while the
+ * answer was outstanding is scheduled now, which is what keeps an editable
+ * handoff's load-time work durable.
+ */
+export function applyStageDocumentWriteAccess(
+  stageId: string,
+  access: 'writable' | 'read-only',
+): void {
+  documentAccessStageId = stageId;
+  documentAccessState = access;
+  if (access === 'read-only') {
+    if (pendingStageId === stageId) resetPendingChanges(stageId);
+    return;
+  }
+  if (pendingStageId === stageId && pendingChanges.size > 0) schedulePendingSave();
+}
+
+/**
+ * A write this client had already queued was refused because its grant is
+ * read-only or has expired.
+ *
+ * Terminal by construction — a grant's capability is fixed for the session — so
+ * this neither retries nor reports success: it logs ONCE, converts the session
+ * to read-only (which drops the pending dirt and disarms the backoff timer), and
+ * mirrors the fact into the viewer-access fields the UI reads. The first refusal
+ * is what makes a session that reached this state self-correcting, instead of
+ * re-issuing the same refused write on an ever-growing backoff.
+ */
+function noteGrantReadOnlyRefusal(stageId: string): void {
+  if (stageDocumentWriteAccess(stageId) === 'read-only') return;
+  log.warn(
+    `Stage ${stageId} refused a document write because its editor grant is read-only or expired; this classroom is now read-only and its autosave is disabled.`,
+  );
+  applyStageDocumentWriteAccess(stageId, 'read-only');
+  if (useStageStore.getState().stage?.id === stageId) {
+    useStageStore.setState({ isOwner: false, readOnly: true });
+  }
+}
+
+/** Test hook: forget the resolved standing and re-probe the grant cookie. */
+export function resetStageDocumentWriteAccess(): void {
+  documentAccessStageId = null;
+  documentAccessState = 'writable';
+  grantSessionProbe = null;
+}
 
 const DEPARTING_STAGE_RETRY_DELAY_MS = 100;
 
@@ -88,6 +297,10 @@ function resetPendingChanges(stageId: string | null = null): void {
 }
 
 function schedulePendingSave(): void {
+  // Fail closed until this viewer is known to be allowed to write the document.
+  // An unresolved grant session keeps its dirt recorded but arms no timer, so a
+  // read-only Preview issues no request at all during the ownership window.
+  if (!mayWriteStageDocument(pendingStageId)) return;
   // Once a write has failed, keep the already-armed backoff timer. Streaming
   // chat mutations are already represented by the dirty descriptor; rearming
   // per delta would collapse the backoff to the base cadence or starve it.
@@ -103,8 +316,21 @@ function schedulePendingSave(): void {
 
 function markPendingChanges(stageId: string | undefined, ...changes: PendingChange[]): void {
   if (!stageId || isStageDeleted(stageId)) return;
+  // A resolved read-only classroom records nothing: the mark would only ever
+  // become a refused request. An UNRESOLVED grant session still records (the
+  // window must not cost an editable handoff its load-time work) — what it does
+  // not do is schedule, which `schedulePendingSave` enforces below.
+  if (stageDocumentWriteAccess(stageId) === 'read-only') return;
   if (pendingStageId !== stageId) resetPendingChanges(stageId);
   for (const change of changes) {
+    if (
+      change.kind === 'scene' &&
+      regenerationLocks.has(regenerationLockKey(stageId, change.sceneId))
+    ) {
+      log.warn(
+        `Scene ${change.sceneId} changed while it is being regenerated; the regenerated slide replaces it`,
+      );
+    }
     pendingRevision += 1;
     pendingChanges.set(pendingChangeKey(change), { change, revision: pendingRevision });
   }
@@ -353,6 +579,12 @@ interface StageState {
   setMode: (mode: StageMode) => void;
   setToolbarState: (state: ToolbarState) => void;
   setStageAgents: (configs: GeneratedAgentConfig[]) => void;
+  /**
+   * SATTS D-4b: the Stage-level narration reading mode (owners/editors). Only
+   * the Stage document changes; audio becomes stale (reason `mode`) and is
+   * regenerated by the next explicit pass, never at playback.
+   */
+  setSpeechReadingMode: (mode: 'natural' | 'accessible') => void;
   setGeneratingOutlines: (outlines: SceneOutline[]) => void;
   setOutlines: (outlines: SceneOutline[]) => void;
   setGenerationComplete: (complete: boolean) => void;
@@ -363,7 +595,7 @@ interface StageState {
    * reference's classroom rule: a visitor who is not the owner gets a
    * read-only classroom.
    */
-  setViewerAccess: (access: { isOwner: boolean }) => void;
+  setViewerAccess: (access: { isOwner: boolean; stageId?: string }) => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
   bumpGenerationEpoch: () => void;
@@ -415,12 +647,20 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * A write the route refused as read-only. Propagated as an OUTCOME rather than
+ * thrown, for the same reason `'stale-dropped'` is: callers must be able to
+ * tell "refused, permanently" from both a verified write and a retryable
+ * failure. It is neither — nothing landed, and nothing may be retried.
+ */
+type ReadOnlyRefusedSave = 'read-only-refused';
+
 async function persistDirtySnapshot(
   stageId: string,
   dirtySnapshot: ReadonlyMap<string, PendingEntry>,
   snapshot: StagePersistenceSnapshot,
   capturedEpoch: number,
-): Promise<Set<string> | StaleDroppedSave> {
+): Promise<Set<string> | StaleDroppedSave | ReadOnlyRefusedSave | RevisionConflictSave> {
   if (!snapshot.stage) return new Set();
   // A stale capture is dropped, not retried: this covers snapshots that
   // escaped `discardPendingStageChanges` because they already left the
@@ -431,6 +671,9 @@ async function persistDirtySnapshot(
   if (isStageWriteStale(stageId, capturedEpoch)) return 'stale-dropped';
   stageStorageModulePromise ??= import('@/lib/utils/stage-storage');
   const { saveStageDataIncremental } = await stageStorageModulePromise;
+  // Only terminal grant refusals are absorbed into an outcome here; every
+  // other failure keeps throwing, so a genuinely transient error still
+  // reaches the retry path untouched.
   const result = await saveStageDataIncremental(
     stageId,
     [...dirtySnapshot.values()].map(({ change }) => change),
@@ -448,7 +691,12 @@ async function persistDirtySnapshot(
       },
     },
     capturedEpoch,
-  );
+  ).catch((error: unknown) => {
+    if (isTerminalGrantDocumentRefusal(error)) return 'read-only-refused' as const;
+    const conflict = revisionConflictOf(error);
+    if (conflict) return conflict;
+    throw error;
+  });
   // A stale drop persisted nothing, and also leaves nothing to retry: the
   // fence is permanent for this capture (the deletion epoch outlives any
   // restore). What a failed delete restores is scoped to what the deletion
@@ -463,7 +711,13 @@ async function persistDirtySnapshot(
   // the revision guards keep any restored (re-queued) descriptors, since
   // restores mint fresh revisions.
   if (result === 'stale-dropped') return 'stale-dropped';
-  return new Set((result?.failedChanges ?? []).map(pendingChangeKey));
+  if (result === 'read-only-refused') return 'read-only-refused';
+  if (result && typeof result === 'object' && 'kind' in result) return result;
+  return new Set(
+    ((result as { failedChanges?: PendingChange[] } | undefined)?.failedChanges ?? []).map(
+      pendingChangeKey,
+    ),
+  );
 }
 
 const useStageStoreBase = create<StageState>()((set, get) => ({
@@ -495,7 +749,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     if (
       departingState.stage?.id &&
       pendingStageId === departingState.stage.id &&
-      pendingChanges.size > 0
+      pendingChanges.size > 0 &&
+      // Navigating away from a classroom this viewer may not write must not
+      // turn parked dirt into the one request that escapes the gate.
+      mayWriteStageDocument(departingState.stage.id)
     ) {
       const departingStageId = departingState.stage.id;
       const departingDirty = new Map(pendingChanges);
@@ -529,6 +786,18 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
             // accepted consequence of navigation not being a durability
             // barrier.
             if (result === 'stale-dropped') return;
+            if (result === 'read-only-refused') {
+              noteGrantReadOnlyRefusal(departingStageId);
+              return;
+            }
+            if ('kind' in result) {
+              // The departing Stage is no longer in the store: its conflicted
+              // Scenes are simply not written (the server copy stands).
+              log.warn(
+                `Departing stage ${departingStageId}: ${result.code}; its unsaved slide changes were not written`,
+              );
+              return;
+            }
             lastFailedKeys = result;
             if (lastFailedKeys.size === 0) return;
           } catch (error) {
@@ -718,6 +987,16 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   setToolbarState: (toolbarState) => set({ toolbarState }),
 
+  setSpeechReadingMode: (mode) => {
+    const stage = get().stage;
+    if (!stage) return;
+    const next = { ...stage };
+    if (mode === 'accessible') next.speechReadingMode = 'accessible';
+    else delete next.speechReadingMode;
+    set({ stage: next });
+    markPendingChanges(stage.id, { kind: 'stage' });
+  },
+
   setStageAgents: (configs) => {
     const stage = get().stage;
     if (!stage) return;
@@ -787,8 +1066,18 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     if (isDeckComplete({ outlines, scenes, failedOutlines })) get().setGenerationComplete(true);
   },
 
-  setViewerAccess: ({ isOwner }) => {
-    set({ isOwner, readOnly: !isOwner });
+  setViewerAccess: ({ isOwner, stageId }) => {
+    const currentStageId = get().stage?.id;
+    // The probe may answer before the document has landed in the store; the
+    // viewer-facing fields still belong to the stage it was asked about.
+    if (!stageId || !currentStageId || stageId === currentStageId) {
+      set({ isOwner, readOnly: !isOwner });
+    }
+    const target = stageId ?? currentStageId;
+    // The same answer that decides the read-only UI decides whether the
+    // document may be written — this is where a grant session's persistence
+    // window closes, one way or the other.
+    if (target) applyStageDocumentWriteAccess(target, isOwner ? 'writable' : 'read-only');
   },
 
   setGenerationStatus: (generationStatus) => set({ generationStatus }),
@@ -834,6 +1123,15 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
+      return false;
+    }
+    // The aggregate save bypasses the pending map entirely, so the scheduler
+    // gate above cannot see it. Both of its load-time callers — the
+    // generation-complete self-heal in `loadFromStorage` and the server-restore
+    // apply in `applyClassroomStageAndScenes` — fire during a read-only
+    // Preview's load, and each would otherwise be a refused document write.
+    if (!mayWriteStageDocument(stage.id)) {
+      log.info(`Skipping save for ${stage.id}: this classroom is not writable by this viewer`);
       return false;
     }
 
@@ -904,6 +1202,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
       return true;
     } catch (error) {
+      if (isTerminalGrantDocumentRefusal(error)) {
+        noteGrantReadOnlyRefusal(stage.id);
+        return false;
+      }
       log.error('Failed to save to storage:', error);
       return false;
     }
@@ -1079,6 +1381,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           // this normalises the SPA path to match.
           mode: 'playback',
         });
+        // Bound in the same synchronous step as the content, under the same
+        // load token: the revisions describe exactly what was just applied.
+        if (data.sceneRevs) bindStageSceneRevs(stageId, data.sceneRevs);
+        else clearStageSceneRevs(stageId);
         resetPendingChanges(stageId);
         if (generationComplete && !persistedComplete) void get().saveToStorage();
         log.info('Loaded from storage:', stageId);
@@ -1110,6 +1416,12 @@ function startFlushRound(): FlushRound | null {
   if (!pendingStageId || pendingChanges.size === 0) return null;
 
   const stageId = pendingStageId;
+  // The single choke point every flush path funnels through — the debounce
+  // timer, an explicit drain, and the visibilitychange/beforeunload kick alike.
+  if (!mayWriteStageDocument(stageId)) return null;
+  // A slide regeneration holds this Stage's writes until it settles; its
+  // release schedules what was held.
+  if (regenerationBarriers.has(stageId)) return null;
   const dirtySnapshot = new Map(pendingChanges);
   const state = useStageStore.getState();
   if (state.stage?.id !== stageId) {
@@ -1124,6 +1436,25 @@ function startFlushRound(): FlushRound | null {
   const run = (async () => {
     try {
       const result = await persistDirtySnapshot(stageId, dirtySnapshot, snapshot, capturedEpoch);
+      // Terminal: nothing landed and nothing may be retried. Reported as an
+      // empty failure set so the drain stops cleanly, but taken through the
+      // refusal handler (which discards the dirt and disarms the timer) and
+      // deliberately NOT through the success bookkeeping below — a chatSnapshot
+      // rebind here would mark chats durable that the route refused.
+      if (result === 'read-only-refused') {
+        noteGrantReadOnlyRefusal(stageId);
+        recordFlushOutcome(false);
+        return new Set<string>();
+      }
+      // The server refused on its revision precondition: those Scenes were
+      // changed elsewhere (409) or this tab has no revisions for the Stage
+      // (428). Terminal for them — never retried as-is: the server copy
+      // replaces the local one, their pending entries are dropped, and the
+      // rest of the queue is retried by the finally below.
+      if (typeof result === 'object' && 'kind' in result) {
+        recordFlushOutcome(false);
+        return reconcileRevisionConflict(stageId, result, dirtySnapshot);
+      }
       // A fenced drop persisted nothing. For the pending map that is
       // equivalent to "no failures" (nothing to retry; the deletion path owns
       // the discard/restore, and restored descriptors survive the clearing
@@ -1222,6 +1553,175 @@ export async function flushStageSave(): Promise<void> {
     }
   }
   throw new Error(`Stage persistence did not quiesce after ${MAX_FLUSH_DRAIN_ROUNDS} flush rounds`);
+}
+
+// ==================== Revision preconditions & slide regeneration ====================
+
+function sortedByOrder(scenes: Scene[]): Scene[] {
+  return [...scenes].sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Replace Scenes with the server's copy WITHOUT marking them dirty, and bind
+ * their revisions (single-slide-regeneration-plan §11.5). `'all'` re-reads
+ * the whole Stage (a 428: this tab holds no revisions for it). Reads go
+ * through the same load sandwich as a cold load, so content and revisions
+ * always belong together. No-op when the store has moved to another Stage.
+ */
+export async function resyncStageScenesFromServer(
+  stageId: string,
+  sceneIds: readonly string[] | 'all',
+): Promise<void> {
+  stageStorageModulePromise ??= import('@/lib/utils/stage-storage');
+  const { loadStageData } = await stageStorageModulePromise;
+  const data = await loadStageData(stageId);
+  const state = useStageStore.getState();
+  if (!data || state.stage?.id !== stageId) return;
+  const serverScenes = data.scenes.map(migrateScene);
+  let scenes: Scene[];
+  if (sceneIds === 'all') {
+    scenes = serverScenes;
+    // Bind only what the sandwich proved; an unknown binding stays unbound
+    // (an empty map would make every later whole save conflict).
+    if (data.sceneRevs) bindStageSceneRevs(stageId, data.sceneRevs);
+    else clearStageSceneRevs(stageId);
+  } else {
+    scenes = [...state.scenes];
+    for (const sceneId of sceneIds) {
+      const server = serverScenes.find((scene) => scene.id === sceneId);
+      const index = scenes.findIndex((scene) => scene.id === sceneId);
+      if (server && index >= 0) scenes[index] = server;
+      else if (server) scenes.push(server);
+      else if (index >= 0) scenes.splice(index, 1);
+      setSceneRev(stageId, sceneId, data.sceneRevs?.[sceneId] ?? null);
+    }
+    scenes = sortedByOrder(scenes);
+  }
+  const currentSceneId = scenes.some((scene) => scene.id === state.currentSceneId)
+    ? state.currentSceneId
+    : (scenes[0]?.id ?? null);
+  useStageStore.setState({ scenes, currentSceneId });
+}
+
+async function reconcileRevisionConflict(
+  stageId: string,
+  conflict: RevisionConflictSave,
+  dirtySnapshot: ReadonlyMap<string, PendingEntry>,
+): Promise<Set<string>> {
+  const all = conflict.code === 'PRECONDITION_REQUIRED' || conflict.sceneIds.length === 0;
+  const dropped = new Set<string>();
+  for (const [key, entry] of dirtySnapshot) {
+    const isScene = entry.change.kind === 'scene';
+    const conflicted = all
+      ? isScene || entry.change.kind === 'structure' || entry.change.kind === 'outline'
+      : isScene && conflict.sceneIds.includes((entry.change as { sceneId: string }).sceneId);
+    if (!conflicted) continue;
+    if (pendingStageId === stageId && pendingChanges.get(key)?.revision === entry.revision) {
+      pendingChanges.delete(key);
+    }
+    dropped.add(key);
+  }
+  log.warn(
+    `Stage ${stageId}: ${conflict.code} for ${all ? 'the whole stage' : conflict.sceneIds.join(', ')}; replacing the local copy with the server's`,
+  );
+  try {
+    await resyncStageScenesFromServer(stageId, all ? 'all' : conflict.sceneIds);
+  } catch (error) {
+    log.error(`Stage ${stageId}: re-sync after a revision conflict failed`, error);
+  }
+  for (const listener of saveConflictListeners) {
+    listener({ stageId, code: conflict.code, sceneIds: all ? [] : [...conflict.sceneIds] });
+  }
+  // Reported as the dropped keys: nothing of them landed, and none may be
+  // retried as-is.
+  return dropped;
+}
+
+/**
+ * True when nothing of `sceneId` is waiting to be written: no pending entry
+ * for it, no in-flight round for its Stage, and no structure/outline dirt
+ * (both of which save the whole document, the Scene included).
+ */
+export function isSceneDurable(stageId: string, sceneId: string): boolean {
+  if (flushInFlight?.stageId === stageId) return false;
+  if (pendingStageId !== stageId) return true;
+  return (
+    !pendingChanges.has(`scene:${sceneId}`) &&
+    !pendingChanges.has('structure') &&
+    !pendingChanges.has('outline')
+  );
+}
+
+/**
+ * Apply the server's copy of one Scene without marking it dirty (it IS what
+ * the database holds), drop any pending write of it, keep the selection, and
+ * record its revision.
+ */
+export function replaceSceneFromServer(stageId: string, scene: Scene, rev: number): Scene | null {
+  const state = useStageStore.getState();
+  if (state.stage?.id !== stageId) return null;
+  const migrated = migrateScene(scene);
+  const index = state.scenes.findIndex((candidate) => candidate.id === scene.id);
+  const scenes =
+    index >= 0
+      ? state.scenes.map((candidate) => (candidate.id === scene.id ? migrated : candidate))
+      : sortedByOrder([...state.scenes, migrated]);
+  if (pendingStageId === stageId) pendingChanges.delete(`scene:${scene.id}`);
+  setSceneRev(stageId, scene.id, rev);
+  useStageStore.setState({ scenes });
+  return migrated;
+}
+
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+export interface SceneRegenerationHandle {
+  /** Hold the Stage's autosave (call AFTER the pre-submit drain proved the Scene durable). */
+  holdWrites(): void;
+  /** Lift the lock and the hold, then explicitly schedule whatever was held. */
+  release(): void;
+}
+
+/**
+ * Lock one Scene for a regeneration (single-slide-regeneration-plan §12.3).
+ * The lock is taken at once; the Stage's autosave is held only from
+ * `holdWrites()` on, so the pre-submit drain can still flush. `release`
+ * explicitly schedules what was held — a held edit with no later mutation
+ * would otherwise wait for one forever.
+ */
+export function beginSceneRegeneration(stageId: string, sceneId: string): SceneRegenerationHandle {
+  const key = regenerationLockKey(stageId, sceneId);
+  regenerationLocks.add(key);
+  let holding = false;
+  let released = false;
+  return {
+    holdWrites() {
+      if (holding || released) return;
+      holding = true;
+      regenerationBarriers.set(stageId, (regenerationBarriers.get(stageId) ?? 0) + 1);
+      if (typeof window !== 'undefined') window.addEventListener('beforeunload', warnBeforeUnload);
+    },
+    release() {
+      if (released) return;
+      released = true;
+      regenerationLocks.delete(key);
+      if (holding) {
+        const remaining = (regenerationBarriers.get(stageId) ?? 1) - 1;
+        if (remaining > 0) regenerationBarriers.set(stageId, remaining);
+        else regenerationBarriers.delete(stageId);
+        if (typeof window !== 'undefined' && regenerationBarriers.size === 0) {
+          window.removeEventListener('beforeunload', warnBeforeUnload);
+        }
+      }
+      if (pendingStageId && pendingChanges.size > 0) schedulePendingSave();
+    },
+  };
+}
+
+export function isSceneRegenerationLocked(stageId: string, sceneId: string): boolean {
+  return regenerationLocks.has(regenerationLockKey(stageId, sceneId));
 }
 
 if (typeof window !== 'undefined') {
