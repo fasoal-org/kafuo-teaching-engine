@@ -39,6 +39,12 @@ export interface CreateSceneParams {
    * outlines; that absence is the backward-compatibility mechanism (AC-TS-034).
    */
   teachingSkills?: SceneTeachingSkills;
+  /**
+   * Content Units the scene was generated from, copied exactly from the
+   * outline (see the `@openmaic/dsl` Scene field). Stage Help grounds its
+   * answers on these; absent — not empty — when the outline cites none.
+   */
+  sourceContentUnitIds?: string[];
 }
 
 /**

@@ -1,14 +1,18 @@
 /**
- * The scene outline of an APPROVED Teaching Package version, for Kafuo's guided
- * teaching runner.
+ * The scene outline of an APPROVED (or pinned, now SUPERSEDED) Teaching Package
+ * version, for Kafuo's guided teaching runner.
  *
  * Kafuo teaches a lesson one scene at a time inside its own runner (resume, checks,
  * remediation, completion stay Kafuo-owned). To do that it must know which scenes
  * exist, in what order, and which flow position each one fills. This module answers
  * exactly that and nothing else:
  *
- * - **Approved only**, tenant- and item-scoped, no "latest" fallback -- the caller
- *   names the exact version its readiness verdict pinned.
+ * - **Approved or superseded only**, tenant- and item-scoped, no "latest" fallback --
+ *   the caller names the exact version its readiness verdict or a published item pinned.
+ *   A superseded version is answered because Kafuo keeps serving a published item the
+ *   version it was published with after a newer one is approved (the same statuses a
+ *   learner handoff opens, `LEARNER_HANDOFF_STATUSES`). Draft, in-review, rejected and
+ *   discarded versions never answer.
  * - **Structure, not content.** Ids, order, type, flow position, content role, title
  *   and whether narration exists. The learner renders the scene itself from the Stage
  *   document it receives through the learner handoff, where quiz answer keys are
@@ -23,6 +27,7 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { readRetainedVersionContext, readVersion } from '@/lib/persistence/teaching-package';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
+import { LEARNER_HANDOFF_STATUSES } from '@/lib/server/teaching-package/editor-grant';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import type { AppScene } from '@/lib/types/stage';
@@ -87,7 +92,7 @@ export function projectOutlineScenes(scenes: AppScene[]): OutlineScene[] {
     });
 }
 
-/** Read the approved version's outline. Tenant- and item-scoped; approved only. */
+/** Read the version's outline. Tenant- and item-scoped; approved or superseded only. */
 export async function readApprovedOutline(
   pool: Queryable,
   request: ApprovedOutlineRequest,
@@ -103,10 +108,10 @@ export async function readApprovedOutline(
       `teaching package ${request.versionId} not found for this learning item`,
     );
   }
-  if (version.status !== 'approved') {
+  if (!(LEARNER_HANDOFF_STATUSES as readonly string[]).includes(version.status)) {
     throw new TeachingPackageError(
       'TEACHING_PACKAGE_NOT_APPROVED',
-      `the scene outline is read only from an approved teaching package, not ${version.status}`,
+      `the scene outline is read only from an approved or superseded teaching package, not ${version.status}`,
     );
   }
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);

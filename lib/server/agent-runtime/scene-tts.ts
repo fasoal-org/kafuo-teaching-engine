@@ -15,6 +15,8 @@ import {
   assessNarrationAudio,
   recordReuse,
   synthesizeNarration,
+  type NarrationEntry,
+  type NarrationPersistTarget,
 } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
 import { governedSubjectFromStore } from '@/lib/server/speech/speech-context';
@@ -42,6 +44,14 @@ export interface SceneTtsInput {
   signal?: AbortSignal;
   /** The document Stage: subject, language and reading mode for narration (SATTS §7.3). */
   stage?: Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode'> | null;
+  /**
+   * A reviewer's audio repair on a Teaching Package (4 Oct 2026) stores the
+   * audio the package build's way. Absent → the agent runtime's defaults.
+   */
+  persist?: NarrationPersistTarget;
+  /** Total attempts for transient provider errors (429/5xx/timeout). Absent → 1. */
+  transientAttempts?: number;
+  entry?: NarrationEntry;
 }
 
 function enabledProviderIds(): TTSProviderId[] {
@@ -154,10 +164,13 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
         profile,
         config: speechConfig,
         reason: input.force ? 'manual' : speech.audioId ? 'stale' : 'initial',
-        entry: 'agent',
-        persist: { kind: 'media' },
+        entry: input.entry ?? 'agent',
+        persist: input.persist ?? { kind: 'media' },
         // Usage on the agent path is not an approved off-mode change (DEC-003).
         recordUsage: speechConfig.mode !== 'off',
+        ...(input.transientAttempts !== undefined
+          ? { transientAttempts: input.transientAttempts }
+          : {}),
         signal: input.signal,
         routeId: route?.routeId,
       });

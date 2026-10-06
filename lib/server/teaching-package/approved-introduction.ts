@@ -1,15 +1,19 @@
 /**
- * The student lesson-entry introduction of an APPROVED Teaching Package version.
+ * The student lesson-entry introduction of an APPROVED (or pinned, now SUPERSEDED)
+ * Teaching Package version.
  *
  * Kafuo's lesson-details screen shows three short texts before a student starts:
  * `context`, `whyThisLesson` and `overview`. A legacy Kafuo package stored them as
  * fields; a Teaching Engine version does not -- its introduction is the learner copy
  * of the Stage's orientation scenes. This module projects that copy, read-only:
  *
- * - **Approved only.** The version must be `approved` in the caller's tenant and
- *   belong to the named Learning Item. Draft, in-review, rejected, superseded and
- *   discarded versions never answer, and there is no "latest" fallback: the caller
- *   names the exact version its readiness verdict evaluated.
+ * - **Approved or superseded only.** The version must be `approved` or `superseded` in
+ *   the caller's tenant and belong to the named Learning Item. Superseded answers
+ *   because Kafuo keeps serving a published item the version it was published with
+ *   after a newer one is approved (the statuses a learner handoff opens,
+ *   `LEARNER_HANDOFF_STATUSES`). Draft, in-review, rejected and discarded versions never
+ *   answer, and there is no "latest" fallback: the caller names the exact version its
+ *   readiness verdict evaluated or its publication pinned.
  * - **Keyed on the Teaching Model.** Which scenes hold the introduction is a property
  *   of the flow the version was generated under. A flow with no projection below
  *   fails closed (`INTRODUCTION_FLOW_UNSUPPORTED`) instead of guessing.
@@ -31,11 +35,25 @@
  * element after the list's lead-in (`…:`, `…`). A generator may lay the list out any of
  * these ways, and a one-objective item has a one-paragraph list either way. The lead-in
  * itself belongs to neither field.
+ *
+ * Three fallbacks apply only when a field would otherwise be blank, so every layout the
+ * rules above already read projects unchanged:
+ * - `context`: when every opener element pairs a heading with its sentence
+ *   (`سؤال تمهيدي` / `ما …؟`), the opener is read per line — headings dropped,
+ *   sentences kept;
+ * - `whyThisLesson`: when nothing precedes the list found above, the list starts
+ *   instead at the first element holding a numbered or bulleted *line*, since the
+ *   list's heading or lead-in may share that element with its items (`أهدافنا` /
+ *   `• …`, `في نهاية الدرس، سنتمكن من:` / `١. …`);
+ * - `overview`: when no line from the list onward is a sentence, because the objectives
+ *   carry no sentence punctuation (`1  Study the model`, `• ask and answer questions with
+ *   a partner`), the overview keeps the list's numbered and bulleted lines instead.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { readVersion } from '@/lib/persistence/teaching-package';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
+import { LEARNER_HANDOFF_STATUSES } from '@/lib/server/teaching-package/editor-grant';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import type { AppScene } from '@/lib/types/stage';
@@ -124,6 +142,18 @@ function listStart(map: TextBlock[]): number {
   return map.findIndex(startsTheList);
 }
 
+/** A bulleted objective line: `• …`, `- …`, `– …`. */
+const BULLET_ITEM = /^[•\-–]\s+\S/u;
+
+/** Whether any line of the block is a numbered or bulleted item — unlike `listStart`,
+ *  which reads only the start of each element. */
+function holdsListLine(block: TextBlock): boolean {
+  return block.text
+    .split('\n')
+    .map((line) => line.trim())
+    .some((line) => LIST_ITEM.test(line) || BULLET_ITEM.test(line));
+}
+
 function isSentence(block: TextBlock): boolean {
   return block.text
     .split('\n')
@@ -158,19 +188,46 @@ function sentenceLines(blocks: TextBlock[]): string {
 
 type Projector = (scenes: AppScene[]) => ApprovedIntroduction;
 
+/** The numbered or bulleted lines of these blocks, in order: the objectives of a list
+ *  whose items carry no sentence punctuation (`1  Study the model`, `• ask and answer …`).
+ *  A lead-in sharing an element with its items (`By the end, you can:`) is dropped. */
+function listLines(blocks: TextBlock[]): string {
+  return blocks
+    .flatMap((block) => block.text.split('\n'))
+    .map((line) => line.trim())
+    .filter((line) => LIST_ITEM.test(line) || BULLET_ITEM.test(line))
+    .join('\n')
+    .trim();
+}
+
+/** The learning map split at its objectives list: the sentences before it, then the list
+ *  and the sentences after it. */
+function splitLearningMap(
+  map: TextBlock[],
+  listIndex: number,
+): Pick<ApprovedIntroduction, 'whyThisLesson' | 'overview'> {
+  const beforeList = listIndex === -1 ? map : map.slice(0, listIndex);
+  const fromList = listIndex === -1 ? [] : map.slice(listIndex);
+  return {
+    whyThisLesson: sentenceLines(beforeList.filter((block) => !isLeadIn(block))),
+    overview: sentenceLines(fromList) || listLines(fromList),
+  };
+}
+
 function projectG5V3(scenes: AppScene[]): ApprovedIntroduction {
   const opener = scenesFor(scenes, 'lesson_opener').flatMap(textBlocks);
   const map = scenesFor(scenes, 'lesson_learning_map').flatMap(textBlocks);
 
-  const context = joinBlocks(opener.filter(isSentence));
+  const context = joinBlocks(opener.filter(isSentence)) || sentenceLines(opener);
 
-  const listIndex = listStart(map);
-  const beforeList = listIndex === -1 ? map : map.slice(0, listIndex);
-  const fromList = listIndex === -1 ? [] : map.slice(listIndex);
-  const whyThisLesson = sentenceLines(beforeList.filter((block) => !isLeadIn(block)));
-  const overview = sentenceLines(fromList);
+  let learningMap = splitLearningMap(map, listStart(map));
+  if (learningMap.whyThisLesson === '') {
+    const lineListIndex = map.findIndex(holdsListLine);
+    const byLine = lineListIndex > 0 ? splitLearningMap(map, lineListIndex) : undefined;
+    if (byLine && byLine.whyThisLesson !== '') learningMap = byLine;
+  }
 
-  return { context, whyThisLesson, overview };
+  return { context, ...learningMap };
 }
 
 /** `${key}@${version}` → projector. Absent means unsupported, never a default. */
@@ -214,7 +271,7 @@ export function projectApprovedIntroduction(
   return introduction;
 }
 
-/** Read the approved version's introduction. Tenant- and item-scoped; approved only. */
+/** Read the version's introduction. Tenant- and item-scoped; approved or superseded only. */
 export async function readApprovedIntroduction(
   pool: Queryable,
   request: ApprovedIntroductionRequest,
@@ -230,10 +287,10 @@ export async function readApprovedIntroduction(
       `teaching package ${request.versionId} not found for this learning item`,
     );
   }
-  if (version.status !== 'approved') {
+  if (!(LEARNER_HANDOFF_STATUSES as readonly string[]).includes(version.status)) {
     throw new TeachingPackageError(
       'TEACHING_PACKAGE_NOT_APPROVED',
-      `the lesson introduction is read only from an approved teaching package, not ${version.status}`,
+      `the lesson introduction is read only from an approved or superseded teaching package, not ${version.status}`,
     );
   }
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { lazyBoundedMap, mapWithConcurrency } from '@/lib/utils/concurrency';
+import { createStartSpacer, lazyBoundedMap, mapWithConcurrency } from '@/lib/utils/concurrency';
 
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -118,5 +118,41 @@ describe('lazyBoundedMap', () => {
     );
     expect(ran).toEqual([1, 2]); // fn ran only twice
     expect(out).toEqual([1, 2, undefined, undefined, undefined]); // skipped → undefined
+  });
+});
+
+describe('createStartSpacer', () => {
+  it('never waits when the gap is 0', async () => {
+    const waits: number[] = [];
+    const spacer = createStartSpacer(0, async (ms) => void waits.push(ms));
+    await Promise.all([spacer.wait(), spacer.wait(), spacer.wait()]);
+    expect(waits).toEqual([]);
+  });
+
+  it('starts each caller gapMs after the previous one actually started', async () => {
+    const waits: number[] = [];
+    const spacer = createStartSpacer(1000, async (ms) => void waits.push(ms));
+    await Promise.all([spacer.wait(), spacer.wait(), spacer.wait()]);
+    // The first starts now; each later one waits a full gap from the one before.
+    expect(waits).toHaveLength(2);
+    for (const ms of waits) {
+      expect(ms).toBeGreaterThan(990);
+      expect(ms).toBeLessThanOrEqual(1000);
+    }
+  });
+
+  it('measures from a late start, never from a fixed schedule', async () => {
+    let clock = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const waits: number[] = [];
+    // The first sleep overruns by 300 ms (a busy event loop).
+    const spacer = createStartSpacer(1000, async (ms) => {
+      waits.push(ms);
+      clock += waits.length === 1 ? ms + 300 : ms;
+    });
+    await Promise.all([spacer.wait(), spacer.wait(), spacer.wait()]);
+    nowSpy.mockRestore();
+    // Second caller started at 1300, so the third still waits a full 1000.
+    expect(waits).toEqual([1000, 1000]);
   });
 });

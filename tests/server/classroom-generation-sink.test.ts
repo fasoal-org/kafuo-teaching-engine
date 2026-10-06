@@ -280,4 +280,58 @@ describe('generateClassroom persistence sink', () => {
     );
     expect(persist).not.toHaveBeenCalled();
   });
+
+  describe('narration audio gaps are marked for review (NARRATION_AUDIO_FAILED)', () => {
+    const speech = () => [
+      { id: 'a1', type: 'speech', text: 'first line' },
+      { id: 'a2', type: 'speech', text: 'second line' },
+    ];
+
+    beforeEach(() => {
+      mocks.generateSceneActions.mockResolvedValue(speech());
+    });
+
+    async function persistedScene(input: Partial<GenerateClassroomInput>) {
+      const { sink } = makeRecordingSink();
+      const persist = vi.fn(sink.persist);
+      await generateWith({ persistence: { ...sink, persist }, input });
+      expect(persist).toHaveBeenCalledTimes(1);
+      return persist.mock.calls[0]![0].scenes[0] as {
+        actions?: Array<{ id: string; type: string; text?: string; audioId?: string }>;
+        generationIssues?: Array<{ code: string; message: string }>;
+      };
+    }
+
+    it('marks the scene with the count when a line failed, and the package still completes', async () => {
+      mocks.generateTTSForClassroom.mockImplementation(async (scenes) => {
+        const first = scenes[0].actions.find((action: { type: string }) => action.type === 'speech');
+        first.audioId = 'tts_s1_a1';
+      });
+      const scene = await persistedScene({ enableTTS: true });
+      expect(scene.generationIssues).toEqual([
+        expect.objectContaining({ code: 'NARRATION_AUDIO_FAILED', message: expect.stringContaining('1 of 2') }),
+      ]);
+    });
+
+    it('marks every spoken line when the whole TTS phase throws (or is skipped)', async () => {
+      mocks.generateTTSForClassroom.mockRejectedValue(new Error('provider down'));
+      const scene = await persistedScene({ enableTTS: true });
+      expect(scene.generationIssues?.[0]).toMatchObject({ code: 'NARRATION_AUDIO_FAILED' });
+      expect(scene.generationIssues?.[0]?.message).toContain('2 of 2');
+    });
+
+    it('adds no mark when every spoken line has audio', async () => {
+      mocks.generateTTSForClassroom.mockImplementation(async (scenes) => {
+        for (const action of scenes[0].actions) if (action.type === 'speech') action.audioId = `tts_s1_${action.id}`;
+      });
+      const scene = await persistedScene({ enableTTS: true });
+      expect(scene.generationIssues ?? []).toEqual([]);
+    });
+
+    it('adds no mark when TTS was not requested', async () => {
+      const scene = await persistedScene({ enableTTS: false });
+      expect(mocks.generateTTSForClassroom).not.toHaveBeenCalled();
+      expect(scene.generationIssues ?? []).toEqual([]);
+    });
+  });
 });

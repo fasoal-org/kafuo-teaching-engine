@@ -1,6 +1,7 @@
 /**
- * The scene outline of an APPROVED Teaching Package version, read by Kafuo's runner:
- * approved-only, tenant/item scoped, structure only, scenes in order.
+ * The scene outline of an APPROVED (or pinned, now superseded) Teaching Package version,
+ * read by Kafuo's runner: approved/superseded only, tenant/item scoped, structure only,
+ * scenes in order.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -126,7 +127,18 @@ describe('readApprovedOutline', () => {
     expect(result.scenes).toHaveLength(4);
   });
 
-  it.each(['draft', 'in_review', 'rejected', 'superseded', 'discarded'] as const)(
+  it('answers for a superseded version, so a published item keeps its pinned outline', async () => {
+    mocks.readVersion.mockResolvedValue(
+      version({ status: 'superseded', supersededByVersionId: 'tpv-approved0002', supersededAt: 1 }),
+    );
+    const result = await readApprovedOutline({} as never, REQUEST);
+    expect(result.versionId).toBe('tpv-approved0001');
+    expect(result.stageId).toBe('stage-1');
+    expect(result.objectiveRefs).toEqual(['67', '68']);
+    expect(mocks.loadDocument).toHaveBeenCalledWith('stage-1');
+  });
+
+  it.each(['draft', 'in_review', 'rejected', 'discarded'] as const)(
     'refuses a %s version and never reads its stage',
     async (status) => {
       mocks.readVersion.mockResolvedValue(version({ status }));

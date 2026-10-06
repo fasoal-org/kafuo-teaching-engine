@@ -31,6 +31,7 @@ import {
 import { readSpeechConfig } from '@/lib/server/speech/config';
 import {
   assessNarrationAudio,
+  loggableErrorMessage,
   recordReuse,
   synthesizeNarration,
 } from '@/lib/server/speech/narration-synthesis';
@@ -53,6 +54,11 @@ import { resolveImageSize } from '@/lib/server/image-sizing';
 import { screenVisualWithDefaults, type ImageTextPolicy } from '@/lib/server/visual-compliance';
 import { applyImagePromptPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
+import {
+  createConcurrencyLimiter,
+  createStartSpacer,
+  mapWithConcurrency,
+} from '@/lib/utils/concurrency';
 
 const log = createLogger('ClassroomMedia');
 
@@ -402,6 +408,9 @@ export async function generateTTSForClassroom(
   const segmentsInOrchestrator =
     speechConfig.mode === 'on' && providerCapability(providerId, modelId) !== null;
 
+  // Every scene is split first, so the pool below sees every speech Action of
+  // the package at once; a per-scene pool would still wait at each scene.
+  const jobs: Array<{ speechAction: ServerTransportSpeechAction; audioId: string }> = [];
   for (const scene of scenes) {
     if (!scene.actions) continue;
 
@@ -414,41 +423,65 @@ export async function generateTTSForClassroom(
 
     for (const action of scene.actions) {
       if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
-      const speechAction = action as ServerTransportSpeechAction;
       // Server transport emits the derived id plus the serving URL; the
       // client-side converter collapses the pair into one pool asset on
       // first load. Browser generation allocates pool ids directly.
       // B-4: the derived transport id keeps its shape; the FILE is content-addressed.
-      const audioId = `tts_s${sceneOrder}_${action.id}`;
+      jobs.push({
+        speechAction: action as ServerTransportSpeechAction,
+        audioId: `tts_s${sceneOrder}_${action.id}`,
+      });
+    }
+  }
 
-      try {
-        const { plan, profile } = await prepareNarration({
-          text: speechAction.text,
-          stage: options.stage ?? null,
-          stageId: classroomId,
-          config: speechConfig,
-          fallback: {
-            providerId,
-            modelId,
-            apiKey,
-            baseUrl: ttsBaseUrl,
-            voice,
-            speed: speechAction.speed ?? 1,
-            requestSpeed: speechAction.speed,
-          },
-          actionSpeed: speechAction.speed,
-        });
-        // Skip-if-current (§13.5) only when the scientific flag is not off (DEC-002).
-        if (speechConfig.mode !== 'off') {
-          const assessment = assessNarrationAudio(speechAction, plan, profile, speechConfig.mode);
-          if (assessment.status === 'current' || assessment.status === 'legacy') {
-            recordReuse('batch', speechAction, plan, assessment.status);
-            if (assessment.status === 'current') summary.reused += 1;
-            else summary.skipped += 1;
-            continue;
-          }
+  // At most TTS_AR_CONCURRENCY (default 6) Actions synthesise at once (SATTS
+  // plan §13.2), and two syntheses start at least TTS_BATCH_START_GAP_MS
+  // (default 1 s) apart. Each Action keeps its own try/catch, so one failure
+  // never sinks the batch; audio files are per-Action and written temp-then-rename.
+  const spacer = createStartSpacer(speechConfig.batchStartGapMs);
+  // A provider with a plan concurrency limit (Cartesia Free: 2) gets its own tighter
+  // cap, keyed by the provider each Action actually synthesises with.
+  const providerLimiters = new Map<string, ReturnType<typeof createConcurrencyLimiter>>();
+  const providerLimiter = (id: string) => {
+    const cap = speechConfig.providerBatchConcurrency[id];
+    if (!cap) return null;
+    let limiter = providerLimiters.get(id);
+    if (!limiter) providerLimiters.set(id, (limiter = createConcurrencyLimiter(cap)));
+    return limiter;
+  };
+  await mapWithConcurrency(jobs, speechConfig.arConcurrency, async ({ speechAction, audioId }) => {
+    try {
+      const { plan, profile } = await prepareNarration({
+        text: speechAction.text,
+        stage: options.stage ?? null,
+        stageId: classroomId,
+        config: speechConfig,
+        fallback: {
+          providerId,
+          modelId,
+          apiKey,
+          baseUrl: ttsBaseUrl,
+          voice,
+          speed: speechAction.speed ?? 1,
+          requestSpeed: speechAction.speed,
+        },
+        actionSpeed: speechAction.speed,
+      });
+      // Skip-if-current (§13.5) only when the scientific flag is not off (DEC-002).
+      if (speechConfig.mode !== 'off') {
+        const assessment = assessNarrationAudio(speechAction, plan, profile, speechConfig.mode);
+        if (assessment.status === 'current' || assessment.status === 'legacy') {
+          recordReuse('batch', speechAction, plan, assessment.status);
+          if (assessment.status === 'current') summary.reused += 1;
+          else summary.skipped += 1;
+          return;
         }
-        const outcome = await synthesizeNarration({
+      }
+      // Only real syntheses take a start slot; reused audio never waits. The start
+      // gap is taken inside the provider cap, right before the request goes out.
+      const synthesize = async () => {
+        await spacer.wait();
+        return synthesizeNarration({
           action: speechAction,
           stageId: classroomId,
           plan,
@@ -463,28 +496,34 @@ export async function generateTTSForClassroom(
           transientAttempts: 2,
           routeId: route?.routeId,
         });
-        for (const warning of outcome.warnings) {
-          summary.warningCodes[warning.code] = (summary.warningCodes[warning.code] ?? 0) + 1;
-        }
-        if (outcome.outcome === 'failed' || !outcome.audioRef) {
-          summary.failed += 1;
-          log.warn(`TTS generation failed for action ${action.id}: ${outcome.error?.code ?? 'unknown'}`);
-          continue;
-        }
-        summary.generated += 1;
-        const subjectKey = plan.subjectCode ?? 'general';
-        summary.bySubject[subjectKey] = (summary.bySubject[subjectKey] ?? 0) + 1;
-        const subPath = outcome.audioRef.split(`/api/classroom-media/${classroomId}/`)[1]!;
-        speechAction.audioId = audioId;
-        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, subPath);
-        speechAction.audioProvenance = outcome.provenance;
-        log.info(`Generated TTS: ${subPath} (${outcome.audio?.bytes.length ?? 0} bytes)`);
-      } catch (err) {
-        summary.failed += 1;
-        log.warn(`TTS generation failed for action ${action.id}:`, err);
+      };
+      const limiter = providerLimiter(profile.providerId);
+      const outcome = await (limiter ? limiter.run(synthesize) : synthesize());
+      for (const warning of outcome.warnings) {
+        summary.warningCodes[warning.code] = (summary.warningCodes[warning.code] ?? 0) + 1;
       }
+      if (outcome.outcome === 'failed' || !outcome.audioRef) {
+        summary.failed += 1;
+        log.warn(
+          `TTS generation failed for action ${speechAction.id}: ${outcome.error?.code ?? 'unknown'}${
+            outcome.error ? ` (${loggableErrorMessage(outcome.error.message)})` : ''
+          }`,
+        );
+        return;
+      }
+      summary.generated += 1;
+      const subjectKey = plan.subjectCode ?? 'general';
+      summary.bySubject[subjectKey] = (summary.bySubject[subjectKey] ?? 0) + 1;
+      const subPath = outcome.audioRef.split(`/api/classroom-media/${classroomId}/`)[1]!;
+      speechAction.audioId = audioId;
+      speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, subPath);
+      speechAction.audioProvenance = outcome.provenance;
+      log.info(`Generated TTS: ${subPath} (${outcome.audio?.bytes.length ?? 0} bytes)`);
+    } catch (err) {
+      summary.failed += 1;
+      log.warn(`TTS generation failed for action ${speechAction.id}:`, err);
     }
-  }
+  });
   return summary;
 }
 

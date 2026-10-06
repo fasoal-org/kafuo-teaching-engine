@@ -1251,7 +1251,8 @@ async function generateCartesiaTTS(
   if (!response.ok) {
     throwIfTtsRateLimited('Cartesia', response.status);
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Cartesia TTS API error: ${errorText.slice(0, 300)}`);
+    // The status is in the message (as Doubao's is) so a 5xx counts as transient.
+    throw new Error(`Cartesia TTS API error (${response.status}): ${errorText.slice(0, 300)}`);
   }
 
   return await validateTTSAudioResponse(response, 'Cartesia', format);

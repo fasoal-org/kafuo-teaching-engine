@@ -330,6 +330,151 @@ describe('regenerateOneScene — quiz', () => {
   });
 });
 
+// 4 Oct 2026: package Scenes are stored without `sourceContentUnitIds` while
+// their stored plan carries them. The plan's values must never reach the
+// candidate (the invariant check refused every such regeneration).
+describe('regenerateOneScene — the pre-image owns the kept fields', () => {
+  function withoutKeptFields(scene: AppScene): AppScene {
+    const {
+      sourceContentUnitIds: _units,
+      teachingStage: _stage,
+      teachingSkills: _skills,
+      ...rest
+    } = scene as AppScene & Record<string, unknown>;
+    return rest as AppScene;
+  }
+  const planned = {
+    sourceContentUnitIds: ['3669', '3672'],
+    teachingStage: { key: 'outcome_check_understanding', flowIndex: 7 },
+    teachingSkills: {
+      primary: { skillId: 'feynman-learning', version: 'v1' },
+      classification: 'instructional',
+    },
+  };
+  const QUESTIONS = JSON.stringify([
+    {
+      type: 'single',
+      question: 'ما الحد التالي؟ 2، 4، 6، ...',
+      options: ['7', '8', '9', '10'],
+      answer: ['B'],
+    },
+  ]);
+
+  it('a slide regenerates when only its plan carries source units, stage and skills', async () => {
+    const pre = withoutKeptFields(preImage());
+    const { result } = await run(content([image('src-3', 'x')]), {
+      pre,
+      outline: snapshot(planned),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.sourceContentUnitIds).toBeUndefined();
+    expect(result.scene.teachingStage).toBeUndefined();
+    expect(result.scene.teachingSkills).toBeUndefined();
+  });
+
+  it('a quiz regenerates when only its plan carries source units', async () => {
+    const pre = {
+      ...withoutKeptFields(preImage()),
+      type: 'quiz',
+      content: { type: 'quiz', questions: [{ id: 'q1', type: 'short_answer', question: 'س' }] },
+    } as unknown as AppScene;
+    const { result } = await run(QUESTIONS, {
+      pre,
+      outline: snapshot({
+        ...planned,
+        type: 'quiz',
+        quizConfig: { questionCount: 1, difficulty: 'medium', questionTypes: ['single'] },
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+        slideType: undefined,
+        contentRole: undefined,
+      }),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.scene.sourceContentUnitIds).toBeUndefined();
+  });
+
+  // A regeneration never synthesizes audio: on a package that uses TTS its new
+  // narration is marked, so the reviewer is offered "Regenerate audio".
+  const voicedNeighbour = {
+    ...preImage(),
+    id: 'scene-2',
+    order: 2,
+    actions: [
+      {
+        id: 'v1',
+        type: 'speech',
+        text: SAUDI,
+        audioId: `/api/classroom-media/${STAGE_ID}/audio/tts-v1-abc.mp3`,
+      },
+    ],
+  } as unknown as AppScene;
+
+  it('on a voiced package, a regenerated slide carries the audio mark', async () => {
+    const pre = preImage();
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre, voicedNeighbour],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      aiCallFor: model(content([image('src-3', 'x')])).aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.generationIssues).toEqual([
+      {
+        code: 'NARRATION_AUDIO_FAILED',
+        message:
+          'narration audio could not be generated for 1 of 1 spoken line(s); students will not hear the teacher voice there',
+      },
+    ]);
+  });
+
+  it('on a voiced package, a regenerated quiz replaces its old marks with the audio mark', async () => {
+    const pre = {
+      ...preImage(),
+      type: 'quiz',
+      content: { type: 'quiz', questions: [{ id: 'q1', type: 'short_answer', question: 'س' }] },
+      generationIssues: [{ code: 'NARRATION_AUDIO_FAILED', message: 'old' }],
+    } as unknown as AppScene;
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre, voicedNeighbour],
+      stage,
+      outlineSnapshot: snapshot({
+        type: 'quiz',
+        quizConfig: { questionCount: 1, difficulty: 'medium', questionTypes: ['single'] },
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+        slideType: undefined,
+        contentRole: undefined,
+      }),
+      instruction: INSTRUCTION,
+      aiCallFor: model(QUESTIONS).aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.generationIssues).toHaveLength(1);
+    expect(result.scene.generationIssues![0]).toMatchObject({ code: 'NARRATION_AUDIO_FAILED' });
+    expect(result.scene.generationIssues![0]!.message).toContain('1 of 1 spoken line(s)');
+  });
+
+  it('a legacy Scene without outlineId keeps none', async () => {
+    const { outlineId: _id, ...legacy } = preImage() as AppScene & { outlineId?: string };
+    const { result } = await run(content([image('src-3', 'x')]), {
+      pre: legacy as AppScene,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.scene.outlineId).toBeUndefined();
+  });
+});
+
 describe('regenerateOneScene — AT-I book images', () => {
   it('src-3 round-trips to exactly its serving path', async () => {
     const { result } = await run(content([image('src-3', 'x')]));

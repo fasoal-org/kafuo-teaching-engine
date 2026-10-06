@@ -1,5 +1,5 @@
 /** A FIFO counting semaphore: at most `size` `run()` callbacks execute at once. */
-function createSemaphore(size: number) {
+export function createConcurrencyLimiter(size: number) {
   const max = Math.max(1, Math.floor(size));
   let active = 0;
   const queue: Array<() => void> = [];
@@ -51,7 +51,7 @@ export function lazyBoundedMap<T, R>(
   options?: { shouldContinue?: () => boolean },
 ): Array<Promise<R | undefined>> {
   const shouldContinue = options?.shouldContinue ?? (() => true);
-  const semaphore = createSemaphore(Math.min(Math.floor(limit), items.length || 1));
+  const semaphore = createConcurrencyLimiter(Math.min(Math.floor(limit), items.length || 1));
   return items.map((item, index) =>
     semaphore.run(async () => (shouldContinue() ? fn(item, index) : undefined)),
   );
@@ -72,4 +72,31 @@ export async function mapWithConcurrency<T, R>(
   options?: { shouldContinue?: () => boolean },
 ): Promise<Array<R | undefined>> {
   return Promise.all(lazyBoundedMap(items, limit, fn, options));
+}
+
+/**
+ * Paces call starts: each `wait()` resolves at least `gapMs` after the previous
+ * `wait()` ACTUALLY resolved, in call order, so a pool never bursts several
+ * provider requests into the same second — even when one timer fires late, the
+ * next start is measured from it rather than from a fixed schedule.
+ * `gapMs <= 0` never waits.
+ */
+export function createStartSpacer(
+  gapMs: number,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): { wait(): Promise<void> } {
+  // Resolves to the time the previous caller actually started.
+  let previousStart: Promise<number> = Promise.resolve(Number.NEGATIVE_INFINITY);
+  return {
+    wait() {
+      if (!(gapMs > 0)) return Promise.resolve();
+      const start = previousStart.then(async (previous) => {
+        const delay = previous + gapMs - Date.now();
+        if (delay > 0) await sleep(delay);
+        return Date.now();
+      });
+      previousStart = start;
+      return start.then(() => undefined);
+    },
+  };
 }

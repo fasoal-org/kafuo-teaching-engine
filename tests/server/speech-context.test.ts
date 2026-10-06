@@ -64,8 +64,21 @@ describe('resolveSpeechContext', () => {
 describe('readSpeechConfig', () => {
   it('defaults to off, MATH, scientific-subjects scope, Cartesia Sonic with Reem (D-4 revised)', () => {
     const config = readSpeechConfig({});
-    expect(config).toMatchObject({ mode: 'off', profileScope: 'scientific-subjects', arProvider: 'cartesia-tts', arModel: 'sonic-3.6', arVoice: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72', arConcurrency: 2 });
+    expect(config).toMatchObject({ mode: 'off', profileScope: 'scientific-subjects', arProvider: 'cartesia-tts', arModel: 'sonic-3.6', arVoice: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72', arConcurrency: 6, batchStartGapMs: 1000, providerBatchConcurrency: { 'cartesia-tts': 2 } });
     expect([...config.subjects]).toEqual(['MATH']);
     expect(readSpeechConfig({ SCIENTIFIC_TTS_MODE: 'bogus' }).mode).toBe('off');
+  });
+
+  it('batch pacing: TTS_BATCH_START_GAP_MS accepts 0 (no pacing); empty or invalid keeps 1000', () => {
+    expect(readSpeechConfig({ TTS_BATCH_START_GAP_MS: '0' }).batchStartGapMs).toBe(0);
+    expect(readSpeechConfig({ TTS_BATCH_START_GAP_MS: '2000' }).batchStartGapMs).toBe(2000);
+    expect(readSpeechConfig({ TTS_BATCH_START_GAP_MS: '' }).batchStartGapMs).toBe(1000);
+    expect(readSpeechConfig({ TTS_BATCH_START_GAP_MS: '-5' }).batchStartGapMs).toBe(1000);
+    expect(readSpeechConfig({ TTS_BATCH_START_GAP_MS: 'fast' }).batchStartGapMs).toBe(1000);
+  });
+
+  it('Cartesia batch cap: 2 by default (Free plan), TTS_CARTESIA_BATCH_CONCURRENCY overrides', () => {
+    expect(readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '3' }).providerBatchConcurrency).toEqual({ 'cartesia-tts': 3 });
+    expect(readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '0' }).providerBatchConcurrency).toEqual({ 'cartesia-tts': 2 });
   });
 });

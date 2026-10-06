@@ -20,7 +20,20 @@ export interface SpeechConfig {
   /** D-4 (revised 2026-09-29): Cartesia "Reem" unless overridden. */
   arVoice: string;
   arLocale: string;
+  /** Batch TTS: at most this many Actions synthesise at once (`TTS_AR_CONCURRENCY`, default 6). */
   arConcurrency: number;
+  /**
+   * Batch TTS: minimum gap between two Action starts (`TTS_BATCH_START_GAP_MS`,
+   * default 1000; 0 = no pacing). Keeps a package build near 1 request/second,
+   * a third of the Qwen 3 RPS account limit, with no start-up burst.
+   */
+  batchStartGapMs: number;
+  /**
+   * Batch TTS: a tighter in-flight cap for a provider whose plan limits concurrent
+   * requests. Cartesia defaults to 2 (`TTS_CARTESIA_BATCH_CONCURRENCY`; the Free plan's
+   * limit — Pro is 3), so a build never holds a third request it would refuse.
+   */
+  providerBatchConcurrency: Readonly<Record<string, number>>;
   /**
    * O-4 (upgrade plan P3): while the policy manifest is not approved, the
    * governed path sends the narration as authored. `SATTS_ALLOW_EXPERIMENTAL=true`
@@ -48,6 +61,8 @@ export function readSpeechConfig(
     }
   }
   const concurrency = Number(env.TTS_AR_CONCURRENCY);
+  const startGap = Number(env.TTS_BATCH_START_GAP_MS?.trim() || NaN);
+  const cartesiaCap = Number(env.TTS_CARTESIA_BATCH_CONCURRENCY);
   return {
     mode,
     subjects,
@@ -56,7 +71,11 @@ export function readSpeechConfig(
     arModel: env.TTS_AR_MODEL?.trim() || DEFAULT_AR_MODEL,
     arVoice: env.TTS_AR_VOICE?.trim() || DEFAULT_AR_VOICE,
     arLocale: env.TTS_AR_LOCALE?.trim() || 'ar-SA',
-    arConcurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 2,
+    arConcurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 6,
+    batchStartGapMs: Number.isInteger(startGap) && startGap >= 0 ? startGap : 1000,
+    providerBatchConcurrency: {
+      'cartesia-tts': Number.isInteger(cartesiaCap) && cartesiaCap > 0 ? cartesiaCap : 2,
+    },
     allowExperimental: env.SATTS_ALLOW_EXPERIMENTAL?.trim().toLowerCase() === 'true',
   };
 }

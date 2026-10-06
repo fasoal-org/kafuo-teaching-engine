@@ -191,6 +191,44 @@ export async function getHelpSession(
 }
 
 // ---------------------------------------------------------------------------
+// The Scene's cited Content Units
+// ---------------------------------------------------------------------------
+
+/**
+ * The Content Units a Scene cites, in cited order.
+ *
+ * The Scene's own `sourceContentUnitIds` when it carries the field. A Scene the
+ * generation path persisted without it (CLS-C27: `api.scene.create` dropped the
+ * field) still has its outline, by `outlineId`, and the builder copies exactly
+ * that outline's citations onto the Scene — so the outline's list is the same
+ * binding read from its source, not an inferred one. Matched by id only, never
+ * by `order` (a reorder would attach another Scene's outline). No outline, or an
+ * outline without ids, stays unbound.
+ */
+function citedContentUnitIds({ scene, document }: LearnerScene): string[] {
+  if (Array.isArray(scene.sourceContentUnitIds)) {
+    return scene.sourceContentUnitIds.filter(
+      (id): id is string => typeof id === 'string' && id !== '',
+    );
+  }
+  const outlineId = scene.outlineId;
+  if (typeof outlineId !== 'string' || outlineId === '') return [];
+  const outlines = (document.outline as { outlines?: unknown } | undefined)?.outlines;
+  if (!Array.isArray(outlines)) return [];
+  const outline = outlines.find(
+    (entry): entry is { id: string; sourceContentUnitIds?: unknown } =>
+      typeof entry === 'object' && entry !== null && (entry as { id?: unknown }).id === outlineId,
+  );
+  const ids = outline?.sourceContentUnitIds;
+  if (!Array.isArray(ids)) return [];
+  // The outline gate accepts a model's numeric ids as faithful citations and
+  // stores them as strings (`outline-grounding.ts`); read them the same way.
+  return ids
+    .map((id) => (typeof id === 'number' && Number.isFinite(id) ? String(id) : id))
+    .filter((id): id is string => typeof id === 'string' && id !== '');
+}
+
+// ---------------------------------------------------------------------------
 // The Help turn (POST /api/tutor/help/turns)
 // ---------------------------------------------------------------------------
 
@@ -275,9 +313,7 @@ export async function runHelpTurn(deps: TutorRuntimeDeps, input: HelpTurnInput):
   const policy = await resolveSubjectModelPolicy(subjectCode);
 
   // --- Scene → Content Units through the pinned version's lineage (§8.3) -----------
-  const citedIds = Array.isArray(scene.sourceContentUnitIds)
-    ? scene.sourceContentUnitIds.filter((id): id is string => typeof id === 'string' && id !== '')
-    : [];
+  const citedIds = citedContentUnitIds(anchor);
   if (citedIds.length === 0) {
     throw new TeachingPackageError(
       'HELP_GROUNDING_UNAVAILABLE',
