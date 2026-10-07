@@ -11,7 +11,7 @@ import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { signWebhookDelivery } from '@/lib/server/teaching-package/webhook-delivery';
 import { KafuoIntegrationClient } from '@/lib/server/tutor/kafuo-integration-client';
 import { resetTurnRateLimitForTests } from '@/lib/server/tutor/rate-limit';
-import { SAFETY_BOUNDARY_MESSAGE } from '@/lib/server/tutor/experiment-guard';
+import { SAFETY_BOUNDARY_MESSAGE_AR } from '@/lib/server/tutor/experiment-guard';
 import { setTutorRuntimeDepsForTests } from '@/lib/server/tutor/runtime-deps';
 
 import {
@@ -390,9 +390,11 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
         textStream('الخطوة 1: اخلط الكلور مع الأمونيا في وعاء.\nالخطوة 2: سخن الخليط على النار.'),
       );
       const frames = await turn(conversationId, 'cm-1', 'ممكن أخلط الكلور مع الأمونيا في البيت؟ اشرح التفاعل الكيميائي');
-      expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'restart', 'text_delta', 'done', 'title']);
+      // TE-2: a safety-flagged turn never names the conversation.
+      expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'restart', 'text_delta', 'done']);
       expect(frames[1]!.data).toEqual({ mode: 'retrieved', lessonTitle: 'الأمان في المختبر', itemType: 'LESSON' });
-      expect(frames[4]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE });
+      expect(frames[3]!.data).toEqual({ servedBy: 'fallback', reason: 'safety_boundary' });
+      expect(frames[4]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE_AR });
       expect(frames[5]!.data).toMatchObject({ safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY' } });
       const sent = mocks.streamLLM.mock.calls[0]![0].messages as Array<{ content: string }>;
       expect(sent[sent.length - 2]!.content).toContain('SAFETY DIRECTIVE');
@@ -407,6 +409,8 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       const boundary = await turn(conversationId, 'cm-2', 'اشرحلي المثال المضاد');
       expect(boundary.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
       expect(boundary[1]!.data).toEqual({ mode: 'none' });
+      // FC-D13: the guard-error boundary is in the student's language too.
+      expect(boundary[2]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE_AR });
       expect(grounding.mocks.probeItems).not.toHaveBeenCalled();
       expect(grounding.mocks.resolveItems).not.toHaveBeenCalled();
       expect(calls('/meters/reserve')).toHaveLength(reserves);

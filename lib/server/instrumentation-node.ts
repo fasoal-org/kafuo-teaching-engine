@@ -149,6 +149,17 @@ export async function registerNodeInstrumentation(): Promise<void> {
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
+      // TE-1 / D5: FIRST, while every pool is open — this worker's in-flight
+      // tutor turns become failed / TURN_STALE so a retry on another instance
+      // starts at once instead of waiting out the 120 s window. Bounded by its
+      // own timeout and never throws; a no-op (no pool touched) when no turn
+      // is running here.
+      try {
+        const { markInFlightTurnsStale } = await import('@/lib/server/tutor/turn-progress');
+        await markInFlightTurnsStale();
+      } catch (error) {
+        console.error('[instrumentation] Marking in-flight tutor turns stale failed', error);
+      }
       // Park sessions before any pool they use is closed. This preserves the
       // last durable entry-tree checkpoint for immediate takeover.
       try {

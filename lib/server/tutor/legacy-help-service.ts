@@ -41,10 +41,10 @@ import { registerRetentionSweep } from '@/lib/server/teaching-model/sweep-regist
 import { detectScript } from '@/lib/server/tutor/arabic-text';
 import { computeHelpTurnDigest } from '@/lib/server/tutor/canonical-json';
 import {
+  boundaryMessage,
   guardOrBoundary,
   postCheck,
   preCheck,
-  SAFETY_BOUNDARY_MESSAGE,
   safetyRecord,
   type SafetyRecord,
 } from '@/lib/server/tutor/experiment-guard';
@@ -373,7 +373,13 @@ export async function runLegacyHelpTurn(
   };
 
   // --- guard pre-check ----------------------------------------------------------
-  const pre = guardOrBoundary(() => preCheck(request.message));
+  // The boundary in the student's language (FC-D13): script → locale hint → academic language.
+  const boundary = boundaryMessage(
+    detectScript(request.message),
+    request.localeHint,
+    request.subject.academicLanguage,
+  );
+  const pre = guardOrBoundary(() => preCheck(request.message), boundary);
   if (!pre.ok) {
     const safety = safetyRecord({ triggered: true, categories: [], directive: null }, { applied: true, reason: 'guard_error' });
     const stored = await completeLegacyHelpTurn(queryable, request.turnId, {
@@ -504,9 +510,9 @@ export async function runLegacyHelpTurn(
   // --- post-check → boundary ------------------------------------------------------
   let text = result.text;
   let safety = safetyRecord(safetyPre, { applied: false });
-  const post = guardOrBoundary(() => postCheck(text));
+  const post = guardOrBoundary(() => postCheck(text, { preTriggered: safetyPre.triggered }), boundary);
   if (!post.ok || post.value.violation) {
-    text = SAFETY_BOUNDARY_MESSAGE;
+    text = boundary;
     safety = safetyRecord(safetyPre, {
       applied: true,
       reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',

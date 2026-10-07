@@ -6,7 +6,7 @@ import { beginLegacyHelpTurn, readLegacyHelpTurn } from '@/lib/persistence/legac
 import { readAttempt, type TeachingModelAttemptRow } from '@/lib/persistence/teaching-model-attempts';
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { computeHelpTurnDigest } from '@/lib/server/tutor/canonical-json';
-import { SAFETY_BOUNDARY_MESSAGE } from '@/lib/server/tutor/experiment-guard';
+import { SAFETY_BOUNDARY_MESSAGE_AR } from '@/lib/server/tutor/experiment-guard';
 import { countTokens, effectiveCap } from '@/lib/server/tutor/token-budget';
 
 import { createTutorPool, ok, RecordingPool, STUDENT_REF, T0_MS } from './tutor-test-harness';
@@ -269,7 +269,7 @@ describe('POST /api/teaching-model/help-turns', () => {
     expect(response.status).toBe(200);
     const json = await response.json();
     expect(json).toMatchObject({
-      text: SAFETY_BOUNDARY_MESSAGE,
+      text: SAFETY_BOUNDARY_MESSAGE_AR,
       servedBy: 'fallback',
       safety: { triggered: true, category: 'fire_heating', boundary: true, code: 'SAFETY_BOUNDARY', reason: 'operational_sequence' },
     });
@@ -279,6 +279,16 @@ describe('POST /api/teaching-model/help-turns', () => {
     }
     // The ledger keeps the model's own outcome.
     expect((await rowsFor('kafuo:conv:123:cm-abc'))[1]!.outcome).toBe('succeeded');
+  });
+
+  it('guard (D1 option a): a pre-flagged request keeps the broad rule — intro hazard + pronoun steps get the boundary', async () => {
+    mocks.callLLM.mockResolvedValueOnce(ok('سنستخدم البنزين.\n1. اسكبه في الطبق.\n2. اخلطه مع الزيت ببطء.'));
+    const response = await post(body({ message: { text: 'ممكن أشعل البنزين في البيت عشان أشوف الاحتراق؟' } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      text: SAFETY_BOUNDARY_MESSAGE_AR,
+      safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'operational_sequence' },
+    });
   });
 
   it('empty grounding.units → groundingMode insufficient; help_card → stage help-card', async () => {

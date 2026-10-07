@@ -47,7 +47,9 @@ export const HAZARD_CATEGORIES: readonly HazardCategory[] = [
   'supervision',
 ];
 
-type Matcher = RegExp | ((normalized: string) => boolean);
+/** A `both(a, b)` matcher keeps its two patterns so the post-check can re-test them with word edges. */
+type PairMatcher = ((normalized: string) => boolean) & { readonly parts: readonly [RegExp, RegExp] };
+type Matcher = RegExp | PairMatcher;
 
 /** Unicode-aware word edges: `\b` is ASCII-only and useless for Arabic. */
 const EDGE_L = '(?<![\\p{L}\\p{N}])';
@@ -58,7 +60,7 @@ function words(alternatives: string): RegExp {
 
 /** Both patterns must appear somewhere in the (whitespace-collapsed) message. */
 function both(a: RegExp, b: RegExp): Matcher {
-  return (text) => a.test(text) && b.test(text);
+  return Object.assign((text: string) => a.test(text) && b.test(text), { parts: [a, b] as const });
 }
 
 /** Hands-on verbs: a reagent or tool NAMED in a theory question is not a hazard; one ACTED on is. */
@@ -166,14 +168,109 @@ const HAZARDOUS_REAGENT = new RegExp(
   'iu',
 );
 
-/** Numbered / bulleted / ordinal step markers at line starts (line structure preserved). */
-const STEP_MARKER =
+/** A line that starts with a numbered / bulleted / ordinal step marker. */
+const STEP_LINE =
+  /^[ \t]*(\d+[.):\-]|[-*•]|(step|الخطوه|الخطوة)[ \t]*\d+[ \t]*[:.)\-]?|(اولا|ثانيا|ثالثا|رابعا|first|second|third)[:،,.]?)[ \t]/iu;
+
+/**
+ * Strong operational verbs (FC-D12): one on any step line makes the list
+ * operational. English keeps today's qualified forms; Arabic forms are
+ * matched with word edges (`stepTest`).
+ */
+const STRONG_VERB_EN = words(
+  'ignite|light (it|the|a)|set (it )?on fire|burn|heat (it|the|until|over|on|them)|boil|mix (it|them|the|with|in)|pour (it|the|in|into|them)|combine|plug (it |the )?in|connect (the )?(wires?|battery)|strip the wire|touch the (wire|terminal)',
+);
+const STRONG_VERB_AR =
+  /(اشعل|اشعلي|اشعلوا|احرق|احرقي|احرقوا|سخن|سخني|سخنوا|اغلي|اخلط|اخلطي|اخلطوا|امزج|امزجي|امزجوا|اسكب|اسكبي|اسكبوا|صب|صبي|صبوا|وصل (السلك|الاسلاك|البطاريه)|اقشر السلك|المس (السلك|الطرف))/u;
+/** Weak verbs count only with a quantity or a container on the same step line. */
+const WEAK_VERB_EN = words('add|adding|stir|stirring');
+const WEAK_VERB_AR = /(اضف|اضيفي|اضيفوا|قلب|قلبي|قلبوا)/u;
+const CONTAINER_EN = words(
+  'cups?|glass(es)?|jars?|bottles?|beakers?|flasks?|test tubes?|tubes?|containers?|bowls?|pots?|pans?|buckets?|basins?|dish(es)?',
+);
+const CONTAINER_AR =
+  /(كوب|اكواب|كاس|كاسه|وعاء|اوعيه|اناء|زجاجه|برطمان|دورق|بيكر|انبوب|انبوبه|انبوب اختبار|انبوبه اختبار|قدر|طنجره|حله|سطل|جردل|طبق|صحن)/u;
+
+/**
+ * Named compounds that are not hazards although they contain a hazard word
+ * (DNA, amino / fatty acids). Blanked before the step-line hazard test only.
+ */
+const SAFE_COMPOUNDS = /(حمض|احماض) (ال)?(نووي|نوويه|اميني|امينيه|دهني|دهنيه)|(deoxyribonucleic|ribonucleic|nucleic|amino|fatty) acids?/giu;
+
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+/** Arabic clitics allowed around a word: و/ف, then ال / بال / لل / ب / ل / ك before; ه / ها / هم / هما after. */
+const ALLOWED_PREFIX = /^[وف]?(ال|بال|لل|كال|ب|ل|ك)?$/u;
+const ALLOWED_SUFFIX = /^(ه|ها|هم|هما)?$/u;
+
+/**
+ * `pattern` matches `text` as whole words (FC-D12): the matched span may be
+ * preceded only by the Arabic prefixes above and followed only by a pronoun
+ * suffix, so «يصبح» is not «صب», «كلوريد» is not «كلور», «انجاز» is not «جاز».
+ */
+function stepTest(pattern: RegExp, text: string): boolean {
+  const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  for (let match = re.exec(text); match !== null; match = re.exec(text)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (end > start) {
+      let left = start;
+      while (left > 0 && WORD_CHAR.test(text[left - 1]!)) left -= 1;
+      let right = end;
+      while (right < text.length && WORD_CHAR.test(text[right]!)) right += 1;
+      if (ALLOWED_PREFIX.test(text.slice(left, start)) && ALLOWED_SUFFIX.test(text.slice(end, right))) {
+        return true;
+      }
+    }
+    re.lastIndex = start + 1;
+  }
+  return false;
+}
+
+/** Today's hazard terms (reagents + every lexicon category), tested with word edges on one step line. */
+function stepHasHazard(line: string): boolean {
+  const text = line.replace(SAFE_COMPOUNDS, ' ');
+  if (stepTest(HAZARDOUS_REAGENT, text)) return true;
+  return HAZARD_CATEGORIES.some((category) =>
+    LEXICON[category].some((matcher) =>
+      typeof matcher === 'function'
+        ? matcher.parts.every((part) => stepTest(part, text))
+        : stepTest(matcher, text),
+    ),
+  );
+}
+
+function stepHasOperationalVerb(line: string): boolean {
+  if (stepTest(STRONG_VERB_EN, line) || stepTest(STRONG_VERB_AR, line)) return true;
+  const weak = stepTest(WEAK_VERB_EN, line) || stepTest(WEAK_VERB_AR, line);
+  return (
+    weak &&
+    (QUANTITY.test(line) || stepTest(CONTAINER_EN, line) || stepTest(CONTAINER_AR, line))
+  );
+}
+
+/**
+ * Today's broad rule (before FC-D12), kept for pre-flagged requests (D1
+ * option a): ≥ 2 step markers anywhere, an operational verb anywhere and a
+ * hazard term anywhere in the reply.
+ */
+const BROAD_STEP_MARKER =
   /(^|\n)[ \t]*(\d+[.):\-]|[-*•]|(step|الخطوه|الخطوة)[ \t]*\d+[ \t]*[:.)\-]?|(اولا|ثانيا|ثالثا|رابعا|first|second|third)[:،,.]?)[ \t]/giu;
 
-const OPERATIONAL_VERB = new RegExp(
+const BROAD_OPERATIONAL_VERB = new RegExp(
   `${EDGE_L}(ignite|light (it|the|a)|set (it )?on fire|burn|heat (it|the|until|over|on|them)|boil|mix (it|them|the|with|in)|pour (it|the|in|into|them)|add (the|a|\\d)|combine|stir (in|the)|plug (it |the )?in|connect (the )?(wires?|battery)|strip the wire|touch the (wire|terminal))${EDGE_R}|(اشعل|اشعلي|اشعلوا|احرق|سخن|سخني|سخنوا|اغلي|اخلط|اخلطي|اخلطوا|امزج|امزجي|اسكب|اسكبي|صب|صبي|اضف|اضيفي|اضيفوا|قلب|قلبي|وصل (السلك|الاسلاك|البطاريه)|اقشر السلك|المس (السلك|الطرف))`,
   'iu',
 );
+
+function broadOperationalSequence(lined: string, normalized: string): boolean {
+  const stepMarkers = (lined.match(BROAD_STEP_MARKER) ?? []).length;
+  if (stepMarkers < 2 || !BROAD_OPERATIONAL_VERB.test(normalized)) return false;
+  return (
+    HAZARDOUS_REAGENT.test(normalized) ||
+    HAZARD_CATEGORIES.some((category) =>
+      LEXICON[category].some((matcher) => matches(matcher, normalized)),
+    )
+  );
+}
 
 export interface GuardPostCheck {
   violation: boolean;
@@ -181,30 +278,37 @@ export interface GuardPostCheck {
   rule: 'quantity_reagent' | 'operational_sequence' | null;
 }
 
+export interface PostCheckOptions {
+  /** The pre-check flagged the student's request: today's broad rule also applies (D1 option a). */
+  preTriggered?: boolean;
+}
+
 /**
  * Post-check of the completed reply. A violation is (a) a quantity within
  * the same sentence as a hazardous reagent, or (b) a step sequence (≥ 2
- * markers) carrying an ignition/mixing/heating/wiring verb together with a
- * hazard term.
+ * step lines) where one step line names a hazard and a step line carries
+ * an operational verb (FC-D12: prose around the list is not read; Arabic
+ * terms are matched as whole words). When the request was pre-flagged,
+ * today's broad rule applies as well (D1 option a), so a hazard named only in
+ * the prose with pronoun steps («اسكبه», "pour it") still blocks.
  */
-export function postCheck(output: string): GuardPostCheck {
-  // Line structure is kept for the step markers; everything else is matched
-  // on the whitespace-collapsed normalised form like the pre-check.
+export function postCheck(output: string, options: PostCheckOptions = {}): GuardPostCheck {
+  // Line structure is kept for the step lines.
   const lined = normalizeArabic(output).toLowerCase();
-  const normalized = normalizeText(output);
   for (const sentence of lined.split(/[.!?؟\n]+/)) {
     if (QUANTITY.test(sentence) && HAZARDOUS_REAGENT.test(sentence)) {
       return { violation: true, rule: 'quantity_reagent' };
     }
   }
-  const stepMarkers = (lined.match(STEP_MARKER) ?? []).length;
-  if (stepMarkers >= 2 && OPERATIONAL_VERB.test(normalized)) {
-    const hazard =
-      HAZARDOUS_REAGENT.test(normalized) ||
-      HAZARD_CATEGORIES.some((category) =>
-        LEXICON[category].some((matcher) => matches(matcher, normalized)),
-      );
-    if (hazard) return { violation: true, rule: 'operational_sequence' };
+  const steps = lined
+    .split('\n')
+    .filter((line) => STEP_LINE.test(line))
+    .map((line) => line.replace(/\s+/g, ' ').trim());
+  if (steps.length >= 2 && steps.some(stepHasOperationalVerb) && steps.some(stepHasHazard)) {
+    return { violation: true, rule: 'operational_sequence' };
+  }
+  if (options.preTriggered && broadOperationalSequence(lined, normalizeText(output))) {
+    return { violation: true, rule: 'operational_sequence' };
   }
   return { violation: false, rule: null };
 }
@@ -213,26 +317,51 @@ export function postCheck(output: string): GuardPostCheck {
 // Boundary
 // ---------------------------------------------------------------------------
 
-/** Fixed, supportive, bilingual boundary reply (SAFE-02). */
-export const SAFETY_BOUNDARY_MESSAGE = `I can't help with the steps for that method because it could hurt you. The idea you want to understand is a good one, and I'm happy to explain it and to suggest a safe way to explore it — for example a supervised school-lab version, a simulation, or a worked example. What is the concept you want to learn?
+/** Fixed, supportive boundary reply (SAFE-02), English. */
+export const SAFETY_BOUNDARY_MESSAGE_EN = `I can't help with the steps for that method because it could hurt you. The idea you want to understand is a good one, and I'm happy to explain it and to suggest a safe way to explore it — for example a supervised school-lab version, a simulation, or a worked example. What is the concept you want to learn?`;
 
-لا أستطيع المساعدة في خطوات هذه الطريقة لأنها قد تؤذيك. الفكرة التي تريد فهمها جيدة، ويسعدني أن أشرحها وأقترح طريقة آمنة لاستكشافها — مثل نسخة تحت إشراف في مختبر المدرسة، أو محاكاة، أو مثال محلول. ما المفهوم الذي تريد تعلمه؟`;
+/** Fixed, supportive boundary reply (SAFE-02), Arabic. */
+export const SAFETY_BOUNDARY_MESSAGE_AR = `لا أستطيع المساعدة في خطوات هذه الطريقة لأنها قد تؤذيك. الفكرة التي تريد فهمها جيدة، ويسعدني أن أشرحها وأقترح طريقة آمنة لاستكشافها — مثل نسخة تحت إشراف في مختبر المدرسة، أو محاكاة، أو مثال محلول. ما المفهوم الذي تريد تعلمه؟`;
+
+function languageOf(tag: string | null | undefined): 'ar' | 'en' | null {
+  const primary = tag?.trim().toLowerCase().split(/[-_]/)[0];
+  return primary === 'ar' || primary === 'en' ? primary : null;
+}
+
+/**
+ * The boundary in ONE language (FC-D13): the student's script first, then
+ * the locale hint, then the subject's academic language; Arabic when none
+ * of them is Arabic or English.
+ */
+export function boundaryMessage(
+  script: string | null | undefined,
+  localeHint: string | null | undefined,
+  academicLanguage: string | null | undefined,
+): string {
+  const language =
+    (script === 'ar' || script === 'en' ? script : null) ??
+    languageOf(localeHint) ??
+    languageOf(academicLanguage) ??
+    'ar';
+  return language === 'en' ? SAFETY_BOUNDARY_MESSAGE_EN : SAFETY_BOUNDARY_MESSAGE_AR;
+}
 
 export const SAFETY_BOUNDARY_CODE = 'SAFETY_BOUNDARY' as const;
 
 export type GuardResult<T> = { ok: true; value: T } | { ok: false; boundary: string; error: string };
 
 /**
- * Run a guard step; any exception becomes the boundary (SAFE-02). The error
- * name (never the text) is returned for the log line.
+ * Run a guard step; any exception becomes the boundary (SAFE-02), given in
+ * the student's language by the caller (`boundaryMessage`). The error name
+ * (never the text) is returned for the log line.
  */
-export function guardOrBoundary<T>(run: () => T): GuardResult<T> {
+export function guardOrBoundary<T>(run: () => T, boundary: string): GuardResult<T> {
   try {
     return { ok: true, value: run() };
   } catch (error) {
     return {
       ok: false,
-      boundary: SAFETY_BOUNDARY_MESSAGE,
+      boundary,
       error: error instanceof Error ? error.name : 'Error',
     };
   }

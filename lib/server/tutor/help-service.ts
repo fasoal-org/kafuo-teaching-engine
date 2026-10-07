@@ -379,6 +379,7 @@ export async function runHelpTurn(deps: TutorRuntimeDeps, input: HelpTurnInput):
       clientMessageId: input.clientMessageId,
       text,
       localeHint: grant.student.localeHint ?? null,
+      academicLanguage: academic.academicLanguage,
       stepRef,
       intentHint,
       meterScope: { helpSessionId: session.id, lessonId: version.learningItem.id },
