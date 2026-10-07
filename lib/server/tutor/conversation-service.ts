@@ -108,7 +108,7 @@ import type {
 import { toGroundingUnitInput } from '@/lib/server/tutor/prompt-assembly';
 import type { TutorRuntimeDeps } from '@/lib/server/tutor/runtime-deps';
 import type { StudentGrantPayload } from '@/lib/server/tutor/student-grant';
-import { ensureConversationTitle } from '@/lib/server/tutor/title';
+import { ensureConversationTitle, isSafetyFlaggedTurn } from '@/lib/server/tutor/title';
 import { UNIT_CHAR_CAP, resolveProxyRatio } from '@/lib/server/tutor/token-budget';
 import {
   CONVERSATION_TURN_STORE,
@@ -417,6 +417,7 @@ export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInpu
       clientMessageId: input.clientMessageId,
       text,
       localeHint,
+      academicLanguage: academic.academicLanguage,
       meterScope: { conversationId: conversation.id },
       requestSignal: input.requestSignal,
       prepare: (ctx) => prepareFreeChatTurn(deps, conversation, academic, ctx),
@@ -1147,23 +1148,32 @@ async function afterFreeChatTurn(
   // (non-blocking: it only wakes the background job).
   signalShadowTurnCommitted(info.turnId, info.turnAttempt);
   if (!info.succeeded || !info.tutorMessage) return;
-  // The title is derived from the FIRST completed turn; on a later turn (a
-  // pending retry, or a lesson match arriving late) it is read back.
-  const isFirstTurn = info.studentMessage.seq === 1;
-  const outcome = await ensureConversationTitle({
-    pool: deps.pool,
-    conversation,
-    policy,
-    turnId: info.turnId,
-    firstTurn: isFirstTurn
-      ? { student: info.studentMessage.text, tutor: info.tutorMessage.text }
-      : await firstTurnOf(deps, conversation.id),
-    academic,
-    proxyRatio,
-    executor: executorOptions,
-    now: deps.now() / 1000,
-  });
-  if (outcome.changed && outcome.title && !info.sse.closed) info.sse.title(outcome.title);
+  // TE-2: a safety-flagged turn never names the conversation (no topic call,
+  // no keyword fallback, no lesson title); the title waits for a normal turn.
+  if (!isSafetyFlaggedTurn(info.tutorMessage.safety)) {
+    // The title is derived from the FIRST completed turn; on a later turn (a
+    // pending retry, or a lesson match arriving late) it is read back. When
+    // that first turn was safety-flagged, this (normal) turn is used instead.
+    const isFirstTurn = info.studentMessage.seq === 1;
+    const current = { student: info.studentMessage.text, tutor: info.tutorMessage.text };
+    const first = isFirstTurn ? null : await firstTurnOf(deps, conversation.id);
+    const outcome = await ensureConversationTitle({
+      pool: deps.pool,
+      conversation,
+      policy,
+      turnId: info.turnId,
+      firstTurn: isFirstTurn
+        ? current
+        : first && first.safetyFlagged
+          ? current
+          : first && { student: first.student, tutor: first.tutor },
+      academic,
+      proxyRatio,
+      executor: executorOptions,
+      now: deps.now() / 1000,
+    });
+    if (outcome.changed && outcome.title && !info.sse.closed) info.sse.title(outcome.title);
+  }
 
   if (isCompactionEnabled()) {
     launchBackground(
@@ -1184,10 +1194,12 @@ async function afterFreeChatTurn(
 async function firstTurnOf(
   deps: TutorRuntimeDeps,
   conversationId: string,
-): Promise<{ student: string; tutor: string } | null> {
+): Promise<{ student: string; tutor: string; safetyFlagged: boolean } | null> {
   const { messages } = await readMessagesBySeq(deps.pool, { parentId: conversationId, beforeSeq: 4, limit: 3 });
   const student = messages.find((m) => m.role === 'student' && m.status === 'completed');
   if (!student) return null;
   const tutor = messages.find((m) => m.role === 'tutor' && m.turnId === student.turnId);
-  return tutor ? { student: student.text, tutor: tutor.text } : null;
+  return tutor
+    ? { student: student.text, tutor: tutor.text, safetyFlagged: isSafetyFlaggedTurn(tutor.safety) }
+    : null;
 }

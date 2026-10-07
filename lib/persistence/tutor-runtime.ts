@@ -168,6 +168,20 @@ CREATE INDEX IF NOT EXISTS ttg_help_session_idx
 `;
 
 /**
+ * TE-1 / D5 (free-chat-ios-run-fix-plan §5): additive only. `progress_at` is
+ * the epoch-seconds liveness mark of the current `generating` attempt: set
+ * when the turn's stream opens and bumped every ~10 s while it runs
+ * (`lib/server/tutor/turn-progress.ts`); `markGenerating` clears it for a new
+ * attempt. At admission a `generating` row with no progress for 30 s is stale.
+ * NULL (rows from before the column, or a turn still before its stream)
+ * keeps the 120 s `generating_at` rule. A re-run is a no-op.
+ */
+const TURN_PROGRESS_EVOLUTION = `
+ALTER TABLE tutor_messages ADD COLUMN IF NOT EXISTS progress_at DOUBLE PRECISION;
+ALTER TABLE tutor_help_messages ADD COLUMN IF NOT EXISTS progress_at DOUBLE PRECISION;
+`;
+
+/**
  * Discovery-first Free Chat (discovery-first plan P7): additive only. The
  * `grounding_mode` CHECKs on `tutor_messages` and `tutor_turn_groundings`
  * gain `clarification` (drop and re-add, guarded — precedent
@@ -220,7 +234,7 @@ BEGIN
   END IF;
 END;
 $$;
-`;
+${TURN_PROGRESS_EVOLUTION}`;
 
 export const TUTOR_RUNTIME_SCHEMA = `${TUTOR_RUNTIME_TABLES}
 ${TUTOR_RUNTIME_INDEXES}
@@ -639,6 +653,12 @@ export interface TutorMessage {
   meterFinalized: boolean;
   /** Epoch seconds the current `generating` attempt began (null until the first). */
   generatingAt: number | null;
+  /**
+   * Epoch seconds of the current attempt's last liveness mark (TE-1): set when
+   * its stream opens, bumped while it runs. Null before the stream opens and
+   * on rows from before the column.
+   */
+  progressAt: number | null;
   createdAt: number;
   completedAt: number | null;
 }
@@ -807,6 +827,7 @@ interface MessageRow extends Record<string, unknown> {
   meter_reservation_id: string | null;
   meter_finalized: boolean;
   generating_at: number | null;
+  progress_at: number | null;
   created_at: number;
   completed_at: number | null;
 }
@@ -831,6 +852,7 @@ function mapMessage(row: MessageRow): TutorMessage {
     meterReservationId: row.meter_reservation_id,
     meterFinalized: Boolean(row.meter_finalized),
     generatingAt: numOrNull(row.generating_at),
+    progressAt: numOrNull(row.progress_at),
     createdAt: num(row.created_at),
     completedAt: numOrNull(row.completed_at),
   };
@@ -1291,7 +1313,7 @@ function messageColumns(t: MessageTable): string {
   return `id, ${t.parentColumn} AS parent_id, seq, role, client_message_id, turn_id, turn_attempt,
   ${t.hasStepRef ? 'step_ref' : 'NULL::text AS step_ref'}, text, status, served_by, grounding_mode,
   safety, error_code, accounting_complete, meter_reservation_id, meter_finalized, generating_at,
-  created_at, completed_at`;
+  progress_at, created_at, completed_at`;
 }
 
 /**
@@ -1404,6 +1426,8 @@ async function readById(
  * (a retry of a `failed` turn re-opens the meter under `turn_attempt + 1`,
  * §8.6). Returns the row, or `null` when the guard did not match (already
  * generating / completed — the caller answers `TURN_IN_PROGRESS` / replay).
+ * `progress_at` is cleared: a new attempt has no liveness mark until its
+ * stream opens (a dead attempt's last mark must not age the new one).
  */
 async function markGenerating(
   queryable: Queryable,
@@ -1418,7 +1442,8 @@ async function markGenerating(
             meter_reservation_id = COALESCE($3, meter_reservation_id),
             meter_finalized = FALSE,
             error_code = NULL,
-            generating_at = COALESCE($4, generating_at, created_at)
+            generating_at = COALESCE($4, generating_at, created_at),
+            progress_at = NULL
       WHERE id = $1 AND status IN ('accepted', 'failed')
       RETURNING ${messageColumns(t)}`,
     [id, options.turnAttempt, options.meterReservationId ?? null, options.now ?? null],
@@ -1481,6 +1506,61 @@ async function markFailed(
     ],
   );
   return result.rows[0] ? mapMessage(result.rows[0]) : null;
+}
+
+/**
+ * TE-1 liveness mark: `progress_at = now` for the given attempt while it is
+ * still `generating`. A row taken over (new `turn_attempt`) or finished is
+ * left alone. Returns whether a row was updated.
+ */
+async function markProgress(
+  queryable: Queryable,
+  t: MessageTable,
+  id: string,
+  options: { turnAttempt: number; now: number },
+): Promise<boolean> {
+  const result = await queryable.query<{ id: string }>(
+    `UPDATE ${t.table}
+        SET progress_at = $3
+      WHERE id = $1 AND status = 'generating' AND turn_attempt = $2
+      RETURNING id`,
+    [id, options.turnAttempt, options.now],
+  );
+  return result.rows.length > 0;
+}
+
+/** One in-flight attempt: the row id and the `turn_attempt` this process runs. */
+export interface InFlightAttempt {
+  id: string;
+  turnAttempt: number;
+}
+
+/**
+ * TE-1 shutdown: the given attempts, if their row is still `generating` under
+ * that same `turn_attempt`, become `failed` / `TURN_STALE` (the write the
+ * admission path makes for a stale turn), so a retry starts
+ * `turn_attempt + 1` at once. An attempt another instance already took over
+ * is left alone. Returns the ids marked.
+ */
+async function markStale(
+  queryable: Queryable,
+  t: MessageTable,
+  attempts: readonly InFlightAttempt[],
+  options: { now: number },
+): Promise<string[]> {
+  if (attempts.length === 0) return [];
+  const result = await queryable.query<{ id: string }>(
+    `UPDATE ${t.table} AS m
+        SET status = 'failed',
+            completed_at = $3,
+            error_code = 'TURN_STALE',
+            accounting_complete = FALSE
+       FROM unnest($1::text[], $2::int[]) AS a(id, turn_attempt)
+      WHERE m.id = a.id AND m.turn_attempt = a.turn_attempt AND m.status = 'generating'
+      RETURNING m.id`,
+    [attempts.map((a) => a.id), attempts.map((a) => a.turnAttempt), options.now],
+  );
+  return result.rows.map((row) => row.id);
 }
 
 export interface InsertTutorMessageInput {
@@ -1639,6 +1719,22 @@ export function markMessageFailed(
   return markFailed(queryable, CHAT_MESSAGES, id, options);
 }
 
+export function markMessageProgress(
+  queryable: Queryable,
+  id: string,
+  options: { turnAttempt: number; now: number },
+): Promise<boolean> {
+  return markProgress(queryable, CHAT_MESSAGES, id, options);
+}
+
+export function markMessagesStale(
+  queryable: Queryable,
+  attempts: readonly InFlightAttempt[],
+  options: { now: number },
+): Promise<string[]> {
+  return markStale(queryable, CHAT_MESSAGES, attempts, options);
+}
+
 export function insertTutorMessage(
   queryable: Queryable,
   input: InsertTutorMessageInput,
@@ -1708,6 +1804,22 @@ export function markHelpMessageFailed(
   options: MessageFailureInput,
 ): Promise<TutorMessage | null> {
   return markFailed(queryable, HELP_MESSAGES, id, options);
+}
+
+export function markHelpMessageProgress(
+  queryable: Queryable,
+  id: string,
+  options: { turnAttempt: number; now: number },
+): Promise<boolean> {
+  return markProgress(queryable, HELP_MESSAGES, id, options);
+}
+
+export function markHelpMessagesStale(
+  queryable: Queryable,
+  attempts: readonly InFlightAttempt[],
+  options: { now: number },
+): Promise<string[]> {
+  return markStale(queryable, HELP_MESSAGES, attempts, options);
 }
 
 export function insertHelpTutorMessage(

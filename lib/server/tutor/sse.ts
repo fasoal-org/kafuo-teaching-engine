@@ -8,7 +8,7 @@
  * and Help later emit exactly one shape:
  *
  *   turn_start {turnId, turnAttempt} → grounding {mode, lessonTitle?, itemType?, reason?, candidates?}
- *   → text_delta {delta}… → (restart {servedBy:'fallback'} → text_delta…)
+ *   → text_delta {delta}… → (restart {servedBy:'fallback', reason?:'safety_boundary'} → text_delta…)
  *   → done {messageId, servedBy, safety?, accountingComplete: true}
  *   | error {code, retryable, window?, resetAt?}
  *   → title {title}? (may follow done)
@@ -86,7 +86,11 @@ export interface TutorSseWriter {
   turnStart(data: TurnStartEvent): void;
   grounding(data: GroundingEvent): void;
   textDelta(delta: string): void;
-  restart(servedBy?: 'fallback'): void;
+  /**
+   * Discard the streamed text. `reason: 'safety_boundary'` (additive, FC-D13)
+   * marks the post-check replacing the reply; a model fallback sends no reason.
+   */
+  restart(servedBy?: 'fallback', reason?: 'safety_boundary'): void;
   done(data: DoneEvent): void;
   error(data: ErrorEvent): void;
   title(title: string): void;
@@ -186,7 +190,8 @@ export function createTutorSseWriter(options: TutorSseOptions = {}): TutorSseWri
     textDelta: (delta) => {
       if (delta.length > 0) event('text_delta', { delta });
     },
-    restart: (servedBy = 'fallback') => event('restart', { servedBy }),
+    restart: (servedBy = 'fallback', reason) =>
+      event('restart', reason ? { servedBy, reason } : { servedBy }),
     done: (data) => event('done', data),
     error: (data) => event('error', data),
     title: (title) => event('title', { title }),

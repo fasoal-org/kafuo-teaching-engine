@@ -27,7 +27,7 @@ import { resetLedgerRetryQueueForTests } from '@/lib/server/teaching-model/ledge
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { buildEditorGrantPayload } from '@/lib/server/teaching-package/editor-grant';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
-import { SAFETY_BOUNDARY_MESSAGE } from '@/lib/server/tutor/experiment-guard';
+import { SAFETY_BOUNDARY_MESSAGE_AR } from '@/lib/server/tutor/experiment-guard';
 import { resetTurnRateLimitForTests } from '@/lib/server/tutor/rate-limit';
 import { setTutorRuntimeDepsForTests } from '@/lib/server/tutor/runtime-deps';
 import type { LearnerStudentContext } from '@/lib/server/tutor/student-context';
@@ -1261,7 +1261,9 @@ describe('Stage Help routes', () => {
         'text_delta',
         'done',
       ]);
-      expect(frames[4]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE });
+      // FC-D13: the Arabic student gets the Arabic boundary only; the restart says why.
+      expect(frames[3]!.data).toEqual({ servedBy: 'fallback', reason: 'safety_boundary' });
+      expect(frames[4]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE_AR });
       expect(frames[5]!.data).toMatchObject({
         servedBy: 'fallback',
         safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY' },
@@ -1284,7 +1286,7 @@ describe('Stage Help routes', () => {
         limit: 10,
       });
       expect(messages[1]).toMatchObject({
-        text: SAFETY_BOUNDARY_MESSAGE,
+        text: SAFETY_BOUNDARY_MESSAGE_AR,
         servedBy: 'fallback',
         safety: { boundary: true },
       });

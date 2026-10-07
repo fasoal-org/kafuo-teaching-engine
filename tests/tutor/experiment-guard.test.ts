@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  boundaryMessage,
   guardOrBoundary,
   HAZARD_CATEGORIES,
   postCheck,
   preCheck,
-  SAFETY_BOUNDARY_MESSAGE,
+  SAFETY_BOUNDARY_MESSAGE_AR,
+  SAFETY_BOUNDARY_MESSAGE_EN,
   safetyRecord,
   type HazardCategory,
 } from '@/lib/server/tutor/experiment-guard';
@@ -118,20 +120,138 @@ Step 2: light it with a match and step back.`;
   });
 });
 
+/** FC-D12 (iOS run 6 Oct 2026): the answer text from FC-D12-guard-probe.ts. */
+const FC_D12_COVALENT = `### تعريف
+**الرابطة التساهمية** رابطة تنشأ عندما تتشارك ذرتان زوجًا من الإلكترونات.
+
+### مثال
+- جزيء الكلور \\(Cl_2\\): تتشارك ذرتا الكلور بزوج من الإلكترونات.
+- جزيء الأمونيا \\(NH_3\\): ترتبط ذرة النيتروجين بثلاث ذرات هيدروجين.
+- جزيء الماء \\(H_2O\\).
+
+### القاعدة
+لكي تكتب تركيب لويس: اضف الإلكترونات حول كل ذرة حتى تكمل ثمانية.`;
+
+describe('postCheck step-line rule (FC-D12)', () => {
+  const PASS = { violation: false, rule: null };
+  const SEQUENCE = { violation: true, rule: 'operational_sequence' };
+
+  it('passes the FC-D12 covalent-bond answer (verb in prose, bare chemical names in bullets)', () => {
+    expect(postCheck(FC_D12_COVALENT)).toEqual(PASS);
+    // The probe's two smaller samples stay passing.
+    expect(postCheck('- جزيء الكلور \\(Cl_2\\).\n- جزيء الأمونيا \\(NH_3\\).')).toEqual(PASS);
+    expect(postCheck('1. اكتب كتلة المتفاعلات.\n2. اضف الكتل المعروفة.')).toEqual(PASS);
+  });
+
+  it('a weak verb (أضف) without a quantity or a container is not an operational step', () => {
+    expect(postCheck('- أضف إلكترونات الكلور السبعة حول رمزه.\n- أضف إلكترون الهيدروجين فتتكون رابطة تساهمية.')).toEqual(PASS);
+  });
+
+  it('word edges: «يصبح» is not «صب», «كلوريد» is not «كلور»', () => {
+    expect(postCheck('- كلوريد الصوديوم: ملح الطعام.\n- يصبح محلوله موصلاً للكهرباء.')).toEqual(PASS);
+    expect(postCheck('1. سخّن الماء في الكأس على الموقد الكهربائي.\n2. أذب فيه كلوريد البوتاسيوم ولاحظ ذوبانه.')).toEqual(PASS);
+  });
+
+  it('word edges: «قلب» (heart) is not the verb, «إنجاز» is not «جاز», «الحمض النووي» is not an acid', () => {
+    expect(postCheck('1. ينقل الدم الأمونيا إلى الكبد.\n2. قلب الإنسان يضخ الدم إلى الجسم.')).toEqual(PASS);
+    expect(postCheck('1. اكتب إنجازات العالم لافوازييه.\n2. امزج بين الملاحظة والتجربة في تقريرك.')).toEqual(PASS);
+    expect(
+      postCheck('1. اهرس الفراولة داخل كيس.\n2. امزج الماء والملح وسائل الصابون ثم صبّه على الفراولة.\n3. يظهر الحمض النووي كخيوط بيضاء.'),
+    ).toEqual(PASS);
+  });
+
+  it('blocks pronoun steps: «ضع الكحول في الكوب» then «أشعله بعود كبريت»', () => {
+    expect(postCheck('1. ضع الكحول في الكوب\n2. أشعله بعود كبريت')).toEqual(SEQUENCE);
+    expect(postCheck('1. ضع الكحول في الكوب.\n2. وأشعلها بعود كبريت.')).toEqual(SEQUENCE);
+    expect(postCheck('1. Pour the alcohol into a dish.\n2. Light it with a match.')).toEqual(SEQUENCE);
+  });
+
+  it('blocks a weak verb with a quantity or a container on the same step line', () => {
+    expect(postCheck('1. أضف 20 مل من الحمض إلى الكوب').violation).toBe(true);
+    expect(postCheck('1. ضع الكحول في الطبق.\n2. أضف الماء إلى الكوب وقلّبه.')).toEqual(SEQUENCE);
+    expect(postCheck('1. ضع الكحول في الطبق.\n2. أضف 3 قطرات من الماء.')).toEqual(SEQUENCE);
+    expect(postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.')).toEqual(SEQUENCE);
+  });
+
+  it('blocks with the hazard on one step line and the strong verb on another', () => {
+    expect(postCheck('- خذ قليلاً من البنزين.\n- اسكبه على الورق.')).toEqual(SEQUENCE);
+    expect(postCheck('- Take the ammonia from the cupboard.\n- Mix the liquids together.')).toEqual(SEQUENCE);
+  });
+
+  // D1 option (a): the step-line rule alone lets a hazard named only in the
+  // intro + pronoun pour/mix steps through; a pre-flagged request keeps
+  // today's broad rule, which blocks it.
+  const INTRO_HAZARD_PRONOUN_EN = "We'll use concentrated sulfuric acid.\n1. Pour it into the beaker.\n2. Mix it with water slowly.";
+  const INTRO_HAZARD_PRONOUN_AR = 'سنستخدم حمض الكبريتيك المركز.\n1. اسكبه في الكأس.\n2. اخلطه مع الماء ببطء.';
+
+  it('a pre-flagged request keeps today\'s broad rule: intro hazard + pronoun pour/mix steps block (D1 option a)', () => {
+    expect(postCheck(INTRO_HAZARD_PRONOUN_EN, { preTriggered: true })).toEqual(SEQUENCE);
+    expect(postCheck(INTRO_HAZARD_PRONOUN_AR, { preTriggered: true })).toEqual(SEQUENCE);
+  });
+
+  it('a pre-flagged request still gets every step-line block', () => {
+    expect(postCheck('1. ضع الكحول في الكوب\n2. أشعله بعود كبريت', { preTriggered: true })).toEqual(SEQUENCE);
+    expect(postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.', { preTriggered: true })).toEqual(SEQUENCE);
+  });
+
+  it('known residual (D1 option a): without a pre-flag, intro hazard + pronoun steps pass', () => {
+    // Documents the accepted gap of option (a): only an unflagged request reaches the step-line rule alone.
+    expect(postCheck(INTRO_HAZARD_PRONOUN_EN)).toEqual(PASS);
+    expect(postCheck(INTRO_HAZARD_PRONOUN_AR, { preTriggered: false })).toEqual(PASS);
+  });
+
+  it('the FC-D12 answer passes when the request was not flagged (the FC-D12 question «اشرحلي الرابطة التساهمية…» is not)', () => {
+    expect(preCheck('اشرحلي الرابطة التساهمية بالتفصيل مع أمثلة كثيرة ومعادلات').triggered).toBe(false);
+    expect(postCheck(FC_D12_COVALENT, { preTriggered: false })).toEqual(PASS);
+  });
+
+  it('known residual (D-D1): quantity_reagent still fires on stoichiometry («20 جم من هيدروكسيد الصوديوم»)', () => {
+    // Unchanged on purpose — this documents today's behaviour, it is not the desired end state.
+    expect(postCheck('احسب عدد مولات 20 جم من هيدروكسيد الصوديوم.')).toEqual({ violation: true, rule: 'quantity_reagent' });
+  });
+});
+
 describe('boundary and SAFE-02', () => {
-  it('guardOrBoundary returns the fixed boundary on any guard exception', () => {
-    const ok = guardOrBoundary(() => preCheck('ما هو التسارع؟'));
+  it('guardOrBoundary returns the given boundary on any guard exception', () => {
+    const ok = guardOrBoundary(() => preCheck('ما هو التسارع؟'), SAFETY_BOUNDARY_MESSAGE_AR);
     expect(ok.ok).toBe(true);
     const failed = guardOrBoundary<never>(() => {
       throw new TypeError('lexicon exploded');
-    });
-    expect(failed).toEqual({ ok: false, boundary: SAFETY_BOUNDARY_MESSAGE, error: 'TypeError' });
+    }, SAFETY_BOUNDARY_MESSAGE_EN);
+    expect(failed).toEqual({ ok: false, boundary: SAFETY_BOUNDARY_MESSAGE_EN, error: 'TypeError' });
   });
 
-  it('the boundary message is bilingual, supportive and gives no method', () => {
-    expect(SAFETY_BOUNDARY_MESSAGE).toMatch(/لا أستطيع/);
-    expect(SAFETY_BOUNDARY_MESSAGE).toMatch(/I can't help with the steps/);
-    expect(postCheck(SAFETY_BOUNDARY_MESSAGE).violation).toBe(false);
+  it('each boundary message is one language, supportive and gives no method (FC-D13)', () => {
+    expect(SAFETY_BOUNDARY_MESSAGE_AR).toMatch(/لا أستطيع/);
+    expect(SAFETY_BOUNDARY_MESSAGE_AR).not.toMatch(/[A-Za-z]/);
+    expect(SAFETY_BOUNDARY_MESSAGE_EN).toMatch(/I can't help with the steps/);
+    expect(SAFETY_BOUNDARY_MESSAGE_EN).not.toMatch(/[\u0600-\u06FF]/);
+    expect(postCheck(SAFETY_BOUNDARY_MESSAGE_AR).violation).toBe(false);
+    expect(postCheck(SAFETY_BOUNDARY_MESSAGE_EN).violation).toBe(false);
+    // The two paragraphs are today's bilingual reply split, byte for byte.
+    expect(`${SAFETY_BOUNDARY_MESSAGE_EN}\n\n${SAFETY_BOUNDARY_MESSAGE_AR}`).toBe(
+      `I can't help with the steps for that method because it could hurt you. The idea you want to understand is a good one, and I'm happy to explain it and to suggest a safe way to explore it — for example a supervised school-lab version, a simulation, or a worked example. What is the concept you want to learn?
+
+لا أستطيع المساعدة في خطوات هذه الطريقة لأنها قد تؤذيك. الفكرة التي تريد فهمها جيدة، ويسعدني أن أشرحها وأقترح طريقة آمنة لاستكشافها — مثل نسخة تحت إشراف في مختبر المدرسة، أو محاكاة، أو مثال محلول. ما المفهوم الذي تريد تعلمه؟`,
+    );
+  });
+
+  it('boundaryMessage picks one language: student script → locale hint → academic language (FC-D13)', () => {
+    const AR = SAFETY_BOUNDARY_MESSAGE_AR;
+    const EN = SAFETY_BOUNDARY_MESSAGE_EN;
+    // The student's script wins over everything else.
+    expect(boundaryMessage('ar', 'en-US', 'en')).toBe(AR);
+    expect(boundaryMessage('en', 'ar-SA', 'ar')).toBe(EN);
+    // Mixed / unknown script → the locale hint.
+    expect(boundaryMessage('mixed', 'en-GB', 'ar')).toBe(EN);
+    expect(boundaryMessage('unknown', 'ar', 'en')).toBe(AR);
+    // No usable hint → the academic language.
+    expect(boundaryMessage('mixed', null, 'en')).toBe(EN);
+    expect(boundaryMessage('unknown', 'fr', 'ar')).toBe(AR);
+    expect(boundaryMessage('mixed', undefined, 'EN')).toBe(EN);
+    // Nothing usable → Arabic (the app's primary language), never both.
+    expect(boundaryMessage('unknown', null, null)).toBe(AR);
+    expect(boundaryMessage('mixed', 'fr', 'fr')).toBe(AR);
   });
 
   it('safetyRecord carries triggered/category/boundary/code as the wire expects', () => {

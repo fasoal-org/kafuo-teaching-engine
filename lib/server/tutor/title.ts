@@ -72,6 +72,16 @@ export function sanitizeTitle(raw: string): string | null {
   return title.length > TITLE_MAX_CHARS ? `${title.slice(0, TITLE_MAX_CHARS - 1).trimEnd()}…` : title;
 }
 
+/**
+ * TE-2: a turn whose stored `safety` record is triggered (pre-check) or is
+ * the boundary never names the conversation — neither the topic call nor
+ * the keyword fallback may read it. The title stays as it is (`pending`)
+ * until a normal turn.
+ */
+export function isSafetyFlaggedTurn(safety: Record<string, unknown> | null | undefined): boolean {
+  return safety?.triggered === true || safety?.boundary === true;
+}
+
 /** `title_source='fallback'` text: the first content words of the student's message, as written. */
 export function keywordTitle(studentText: string, maxWords = 4): string | null {
   const words = contentSurfaceWords(studentText, maxWords);

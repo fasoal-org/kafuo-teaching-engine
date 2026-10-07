@@ -5,8 +5,10 @@
  * Fixed block order, each block its own system message so the stable head
  * can hit provider prefix caches:
  *
- *   1. rules            `tutor-rules@r2` (byte-stable across turns)
- *   2. academic         subject names, curriculum, grade, academic language
+ *   1. rules            `tutor-rules@r4` (byte-stable across turns)
+ *   2. academic         subject names, curriculum, grade, academic language;
+ *                       Free Chat adds its scope line (other subject → that
+ *                       subject's chat; never «this lesson») — TE-3
  *   3. grounding        item header («Lesson / الدرس» or «Section / القسم» by
  *                       item type) + Content Units (stable order, no ids;
  *                       grouped under each item's title when 2–3 items);
@@ -53,6 +55,8 @@ import {
   UNIT_CHAR_CAP,
 } from '@/lib/server/tutor/token-budget';
 import {
+  FREE_CHAT_INSUFFICIENT_GROUNDING_TEXT,
+  FREE_CHAT_SCOPE_TEXT,
   GENERAL_ANSWER_NOTE_TEXT,
   HELP_SCOPE_TEXT,
   INSUFFICIENT_GROUNDING_TEXT,
@@ -306,11 +310,15 @@ export function renderGroundingBlock(
   helpMode: boolean,
 ): string | null {
   if (grounding.mode === 'none') return null;
+  // Help keeps the lesson wording; Free Chat speaks of "the curriculum" (TE-3).
+  const insufficientNote = helpMode
+    ? INSUFFICIENT_GROUNDING_TEXT
+    : FREE_CHAT_INSUFFICIENT_GROUNDING_TEXT;
   if (grounding.mode === 'insufficient') {
     const general =
       grounding.reason === 'no_match' || grounding.reason === 'index_not_ready'
-        ? `${INSUFFICIENT_GROUNDING_TEXT}\n${GENERAL_ANSWER_NOTE_TEXT}`
-        : INSUFFICIENT_GROUNDING_TEXT;
+        ? `${insufficientNote}\n${GENERAL_ANSWER_NOTE_TEXT}`
+        : insufficientNote;
     return helpMode ? `${HELP_SCOPE_TEXT}\n\n${general}` : general;
   }
   const lines: string[] = [];
@@ -325,7 +333,7 @@ export function renderGroundingBlock(
   } else if (grounding.lessonTitle && !groups) {
     lines.push(`${itemHeaderLabel(grounding.itemType)}: ${grounding.lessonTitle}`);
   }
-  if (units.length === 0 && grounding.mode !== 'scene') return INSUFFICIENT_GROUNDING_TEXT;
+  if (units.length === 0 && grounding.mode !== 'scene') return insufficientNote;
   lines.push(
     'The following approved curriculum units are the only source of lesson facts for this turn.',
   );
@@ -498,6 +506,8 @@ function unitsOf(grounding: GroundingInput): GroundingUnitInput[] {
 export function assembleTutorPrompt(input: AssembleTutorPromptInput): AssembledTutorPrompt {
   const rules = input.rules ?? TUTOR_RULES_TEXT;
   const helpMode = input.helpMode === true;
+  // Free Chat = the tutor rules outside Help (titles / compaction pass their own rules).
+  const freeChat = !helpMode && rules === TUTOR_RULES_TEXT;
   const budgetOf = createPairCounter(input.policy, input.counters, input.capTokens);
   const reductions: ReductionStep[] = [];
   const record = (step: ReductionStep) => {
@@ -514,7 +524,13 @@ export function assembleTutorPrompt(input: AssembleTutorPromptInput): AssembledT
   let summary = input.history.summary?.trim() ? input.history.summary.trim() : null;
   const totalTurns = turns.length;
 
-  const academicBlock = input.academic ? renderAcademicBlock(input.academic) : null;
+  const renderedAcademic = input.academic ? renderAcademicBlock(input.academic) : null;
+  // TE-3: the Free Chat scope line sits under the subject it names (stable per conversation).
+  const academicBlock = !freeChat
+    ? renderedAcademic
+    : renderedAcademic
+      ? `${renderedAcademic}\n\n${FREE_CHAT_SCOPE_TEXT}`
+      : FREE_CHAT_SCOPE_TEXT;
   const turnNote = renderTurnNote(input.directives);
 
   const build = (): ModelMessage[] => {

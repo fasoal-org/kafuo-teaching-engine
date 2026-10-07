@@ -1,0 +1,161 @@
+{
+  "scene_complete": {
+    "groundingMode": "scene",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding / نصوص المنهج\nScene / المشهد: قانون نيوتن الثاني\n### Visible scene text / نص المشهد\nالقوة تساوي الكتلة في التسارع.\nThe following approved curriculum units are the only source of lesson facts for this turn.\n\n### القوة\nالقوة مؤثر يغير حالة الجسم.\n\n### التسارع\nالتسارع معدل تغير السرعة."
+      },
+      {
+        "role": "user",
+        "content": "ما القوة؟"
+      },
+      {
+        "role": "assistant",
+        "content": "القوة مؤثر."
+      },
+      {
+        "role": "system",
+        "content": "The student is writing in Arabic: reply in Arabic.\n\nQuick action (soft hint, the message itself decides): the student asked to EXPLAIN."
+      },
+      {
+        "role": "user",
+        "content": "اشرح التسارع"
+      }
+    ]
+  },
+  "scene_partial_safety": {
+    "groundingMode": "scene",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding / نصوص المنهج\nScene / المشهد: قانون نيوتن الثاني\nThe following approved curriculum units are the only source of lesson facts for this turn.\nOnly part of this Scene's curriculum units is included here (an excerpt of the Scene, not all of it). Do not claim complete Scene evidence; if the answer needs a part you cannot see, say so.\nالنصوص التالية جزء من نصوص هذا المشهد وليست كلها. لا تدّعِ أن لديك نص المشهد كاملًا؛ وإن احتاجت الإجابة جزءًا لا تراه فقل ذلك.\n\n### القوة\nالقوة مؤثر يغير حالة الجسم.\n\n### التسارع\nالتسارع معدل تغير السرعة."
+      },
+      {
+        "role": "system",
+        "content": "The student is writing in English: reply in English.\n\nQuick action (soft hint, the message itself decides): the student asked for a HINT ONLY — do not reveal the full solution.\n\nSAFETY DIRECTIVE for this reply: the student's message involves a hazardous experiment or method. Preserve the learning goal (explain the concept), REFUSE every operational step, quantity or sequence for the dangerous method, and offer a safer alternative (supervised school lab, simulation, safe household demonstration or a worked example). Be supportive, not alarmist.\nتوجيه سلامة لهذا الرد: رسالة الطالب تتضمن تجربة أو طريقة خطرة. حافظ على الهدف التعليمي (اشرح المفهوم)، وارفض أي خطوة تشغيلية أو كمية أو تسلسل للطريقة الخطرة، واقترح بديلًا أكثر أمانًا (مختبر مدرسي تحت إشراف، محاكاة، عرض منزلي آمن، أو مثال محلول). كن داعمًا لا مُخيفًا."
+      },
+      {
+        "role": "user",
+        "content": "give me a hint"
+      }
+    ]
+  },
+  "scene_without_units": {
+    "groundingMode": "scene",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding / نصوص المنهج\nThe following approved curriculum units are the only source of lesson facts for this turn."
+      },
+      {
+        "role": "system",
+        "content": "The student's message has no clear script: reply in the academic language."
+      },
+      {
+        "role": "user",
+        "content": "سؤال"
+      }
+    ]
+  },
+  "help_insufficient": {
+    "groundingMode": "insufficient",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding\nNo curriculum text is available for this turn. Do not claim what the lesson states; say that you cannot confirm the lesson's wording, ask a short clarifying question if needed, or answer from general subject knowledge while saying so.\n## نصوص المنهج\nلا تتوفر نصوص من المنهج لهذا الدور. لا تدّعِ ما يذكره الدرس؛ قل إنك لا تستطيع تأكيد صياغة الدرس، واطرح سؤال توضيح قصيرًا إن لزم، أو أجب من المعرفة العامة مع التصريح بذلك."
+      },
+      {
+        "role": "user",
+        "content": "سؤال سابق"
+      },
+      {
+        "role": "system",
+        "content": "The student mixes Arabic and English: reply in the dominant language of the message and keep official terms in the academic language.\n\nQuick action (soft hint, the message itself decides): the student asked to CHECK THEIR ANSWER — evaluate it honestly; never \"correct\" a correct answer."
+      },
+      {
+        "role": "user",
+        "content": "ما الطاقة الحركية؟"
+      }
+    ]
+  },
+  "help_insufficient_no_match": {
+    "groundingMode": "insufficient",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding\nNo curriculum text is available for this turn. Do not claim what the lesson states; say that you cannot confirm the lesson's wording, ask a short clarifying question if needed, or answer from general subject knowledge while saying so.\n## نصوص المنهج\nلا تتوفر نصوص من المنهج لهذا الدور. لا تدّعِ ما يذكره الدرس؛ قل إنك لا تستطيع تأكيد صياغة الدرس، واطرح سؤال توضيح قصيرًا إن لزم، أو أجب من المعرفة العامة مع التصريح بذلك.\nNo approved curriculum unit matches this question: give a general explanation and say clearly that it is general subject knowledge, not the curriculum wording.\nلا توجد نصوص معتمدة من المنهج تطابق هذا السؤال: قدّم شرحًا عامًا وصرّح بوضوح أنه معرفة عامة بالمادة وليس صياغة المنهج."
+      },
+      {
+        "role": "system",
+        "content": "The student's message has no clear script: reply in English (the app locale), unless the conversation shows otherwise.\n\nQuick action (soft hint, the message itself decides): the student asked for a SIMPLER explanation — simpler wording, same academic facts."
+      },
+      {
+        "role": "user",
+        "content": "..."
+      }
+    ]
+  },
+  "help_reuse_without_units": {
+    "groundingMode": "reuse",
+    "messages": [
+      {
+        "role": "system",
+        "content": "## Academic context / السياق الأكاديمي\nSubject / المادة: الفيزياء — Physics\nCurriculum / المنهج: المنهج الوطني (2026)\nGrade / الصف: الصف الأول الثانوي\nAcademic language / اللغة الأكاديمية: Arabic (العربية)\nLanguage policy: official terminology and curriculum facts follow the academic language; reply in the language the student writes in unless asked otherwise."
+      },
+      {
+        "role": "system",
+        "content": "## Curriculum grounding\nNo curriculum text is available for this turn. Do not claim what the lesson states; say that you cannot confirm the lesson's wording, ask a short clarifying question if needed, or answer from general subject knowledge while saying so.\n## نصوص المنهج\nلا تتوفر نصوص من المنهج لهذا الدور. لا تدّعِ ما يذكره الدرس؛ قل إنك لا تستطيع تأكيد صياغة الدرس، واطرح سؤال توضيح قصيرًا إن لزم، أو أجب من المعرفة العامة مع التصريح بذلك."
+      },
+      {
+        "role": "system",
+        "content": "The student's message has no clear script: reply in the academic language."
+      },
+      {
+        "role": "user",
+        "content": "سؤال"
+      }
+    ]
+  },
+  "help_without_academic": {
+    "groundingMode": "insufficient",
+    "messages": [
+      {
+        "role": "system",
+        "content": "This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.\nهذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.\n\n## Curriculum grounding\nNo curriculum text is available for this turn. Do not claim what the lesson states; say that you cannot confirm the lesson's wording, ask a short clarifying question if needed, or answer from general subject knowledge while saying so.\n## نصوص المنهج\nلا تتوفر نصوص من المنهج لهذا الدور. لا تدّعِ ما يذكره الدرس؛ قل إنك لا تستطيع تأكيد صياغة الدرس، واطرح سؤال توضيح قصيرًا إن لزم، أو أجب من المعرفة العامة مع التصريح بذلك."
+      },
+      {
+        "role": "system",
+        "content": "## Earlier in this conversation / ما سبق في المحادثة\nملخص سابق."
+      },
+      {
+        "role": "system",
+        "content": "The student is writing in Arabic: reply in Arabic."
+      },
+      {
+        "role": "user",
+        "content": "سؤال"
+      }
+    ]
+  }
+}

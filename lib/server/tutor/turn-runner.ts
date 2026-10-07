@@ -102,10 +102,10 @@ import type { ResolvedSubjectPolicy } from '@/lib/server/teaching-model/resolve-
 import { currentWorkerId } from '@/lib/server/teaching-model/worker-id';
 import { detectScript } from '@/lib/server/tutor/arabic-text';
 import {
+  boundaryMessage,
   guardOrBoundary,
   postCheck,
   preCheck,
-  SAFETY_BOUNDARY_MESSAGE,
   safetyRecord,
   type GuardPreCheck,
   type SafetyRecord,
@@ -126,10 +126,16 @@ import {
 } from '@/lib/server/tutor/prompt-assembly';
 import { createTutorSseWriter, type TutorSseWriter } from '@/lib/server/tutor/sse';
 import { resolveProxyRatio } from '@/lib/server/tutor/token-budget';
+import { startTurnProgress, TURN_PROGRESS_STALE_S } from '@/lib/server/tutor/turn-progress';
 
 const log = createLogger('TutorTurnRunner');
 
-/** Route `maxDuration` (contracts §5): a `generating` row younger than this is in progress. */
+/**
+ * Route `maxDuration` (contracts §5): a `generating` row younger than this is
+ * in progress — the upper bound. Within it, a row whose `progress_at` is set
+ * but older than `TURN_PROGRESS_STALE_S` is stale (TE-1: its instance died);
+ * a row without `progress_at` keeps this rule alone.
+ */
 export const TURN_IN_PROGRESS_WINDOW_S = 120;
 /** Newest messages read for history before the assembler reduces them. */
 export const HISTORY_WINDOW_MESSAGES = 200;
@@ -288,6 +294,8 @@ export interface TurnPlan {
   clientMessageId: string;
   text: string;
   localeHint?: string | null;
+  /** The subject's academic language (`ar`, `en`, …): the boundary's last language cue (FC-D13). */
+  academicLanguage?: string | null;
   /** Help: the visible step the student was on (stored on both message rows). */
   stepRef?: string | null;
   /** Help: quick-action hint, rendered as a soft turn directive only. */
@@ -314,6 +322,10 @@ export interface TurnRunnerDeps {
     'rateCard' | 'proxyRatioReader' | 'completionRetryDelaysMs' | 'timeoutMs' | 'idFactory'
   >;
   inProgressWindowS?: number;
+  /** TE-1: `progress_at` refresh interval while the stream runs (tests shorten it). */
+  progressIntervalMs?: number;
+  /** TE-1: no progress for this long → stale at admission. */
+  progressStaleS?: number;
   heartbeatMs?: number;
   completionTxRetryDelaysMs?: readonly number[];
 }
@@ -368,6 +380,8 @@ export function pairHistoryTurns(messages: readonly TutorMessage[]): HistoryTurn
   return turns;
 }
 
+// Retry-After stays the 120 s window (unchanged). The app caps each wait at
+// 30 s, so a dead turn (TE-1) is replayed after ≥ 30 s of silence and taken over.
 function retryAfterS(nowS: number, generatingAt: number, windowS: number): number {
   return Math.max(1, Math.ceil(windowS - (nowS - generatingAt)));
 }
@@ -392,6 +406,7 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
   const workerId = deps.workerId ?? currentWorkerId();
   const withTransaction = nodePostgresTransaction(deps.pool);
   const windowS = deps.inProgressWindowS ?? TURN_IN_PROGRESS_WINDOW_S;
+  const progressStaleS = deps.progressStaleS ?? TURN_PROGRESS_STALE_S;
   const { store, parent, policy } = plan;
 
   // --- 1. idempotent turn insert ---------------------------------------------
@@ -430,9 +445,14 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
     let attempt = existing.turnAttempt;
     if (existing.status === 'generating') {
       const since = existing.generatingAt ?? existing.createdAt;
-      if (nowS() - since < windowS) {
+      const progressAt = existing.progressAt;
+      const at = nowS();
+      // TE-1: a liveness mark older than `progressStaleS` means the instance
+      // died mid-stream; no mark (before the stream / older rows) → 120 s only.
+      const silent = progressAt !== null && at - progressAt >= progressStaleS;
+      if (at - since < windowS && !silent) {
         throw new TeachingPackageError('TURN_IN_PROGRESS', 'this turn is still generating', {
-          retryAfterS: retryAfterS(nowS(), since, windowS),
+          retryAfterS: retryAfterS(at, since, windowS),
         });
       }
       // Stale: the instance that was generating is gone. Treat as failed.
@@ -463,7 +483,7 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
   };
 
   // --- 2. guard pre-check ----------------------------------------------------
-  const pre = guardOrBoundary(() => preCheck(plan.text));
+  const pre = guardOrBoundary(() => preCheck(plan.text), studentBoundary(plan));
   if (!pre.ok) {
     log.warn(
       JSON.stringify({
@@ -594,6 +614,18 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
     requestSignal: plan.requestSignal,
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
   });
+  // TE-1: `progress_at` from the moment the stream opens, refreshed until the
+  // turn settles; this worker's registry entry is what SIGTERM marks stale.
+  const progress = startTurnProgress({
+    pool: deps.pool,
+    kind: store.kind,
+    messageId: studentMessage.id,
+    turnAttempt,
+    workerId,
+    now,
+    ...(deps.progressIntervalMs !== undefined ? { intervalMs: deps.progressIntervalMs } : {}),
+  });
+  await progress.ready;
   void streamTurn({
     plan,
     deps,
@@ -609,13 +641,15 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
     newId,
     now,
     withTransaction,
-  }).catch((error) => {
-    log.error(
-      JSON.stringify({ event: 'tutor.turn_crashed', turnId, error: describeErrorSafely(error) }),
-    );
-    sse.error({ code: 'INTERNAL_ERROR', retryable: true });
-    void sse.close();
-  });
+  })
+    .catch((error) => {
+      log.error(
+        JSON.stringify({ event: 'tutor.turn_crashed', turnId, error: describeErrorSafely(error) }),
+      );
+      sse.error({ code: 'INTERNAL_ERROR', retryable: true });
+      void sse.close();
+    })
+    .finally(() => progress.stop());
   return sse.response;
 }
 
@@ -655,6 +689,18 @@ async function replayTurn(
   }
   await sse.close();
   return sse.response;
+}
+
+/**
+ * The boundary in the student's language (FC-D13): their script, then the
+ * locale hint, then the subject's academic language.
+ */
+function studentBoundary(plan: TurnPlan, academicLanguage?: string | null): string {
+  return boundaryMessage(
+    detectScript(plan.text),
+    plan.localeHint,
+    plan.academicLanguage ?? academicLanguage ?? null,
+  );
 }
 
 /** SAFE-02: the guard itself failed before any model call — the boundary is the reply. */
@@ -947,10 +993,14 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
   let safety: SafetyRecord = safetyRecord(args.safety, { applied: false });
   let finalizeReason: FinalizeReason | null = failure?.reason ?? null;
   if (result) {
-    const post = guardOrBoundary(() => postCheck(text));
+    const boundary = studentBoundary(plan, prepared.academic?.academicLanguage);
+    const post = guardOrBoundary(
+      () => postCheck(text, { preTriggered: args.safety.triggered }),
+      boundary,
+    );
     const violated = !post.ok || post.value.violation;
     if (violated) {
-      text = SAFETY_BOUNDARY_MESSAGE;
+      text = boundary;
       safety = safetyRecord(args.safety, {
         applied: true,
         reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',
@@ -966,7 +1016,7 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         }),
       );
       // The client discards the partial model text and shows the boundary.
-      sse.restart('fallback');
+      sse.restart('fallback', 'safety_boundary');
       sse.textDelta(text);
     }
   }
