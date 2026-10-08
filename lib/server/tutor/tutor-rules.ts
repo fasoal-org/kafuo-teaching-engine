@@ -135,9 +135,13 @@ This is the subject's Free Chat, not a lesson. If the question belongs to anothe
 export const GENERAL_ANSWER_NOTE_TEXT = `No approved curriculum unit matches this question: give a general explanation and say clearly that it is general subject knowledge, not the curriculum wording.
 لا توجد نصوص معتمدة من المنهج تطابق هذا السؤال: قدّم شرحًا عامًا وصرّح بوضوح أنه معرفة عامة بالمادة وليس صياغة المنهج.`;
 
-/** Help-mode addition: the tutor stays inside the current Scene (HLP-04). */
-export const HELP_SCOPE_TEXT = `This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest the subject's Free Chat instead of retrieving or inventing other lesson content.
-هذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح الدردشة الحرة للمادة بدلًا من استرجاع أو اختراع محتوى درس آخر.`;
+/**
+ * Help-mode addition: the tutor stays inside the current Scene (HLP-04).
+ * FC-A05 (D-2): it suggests Free Chat without naming a subject — Help knows
+ * only the lesson's subject, not the student's Free Chat subjects.
+ */
+export const HELP_SCOPE_TEXT = `This is Lesson Help anchored to the current Scene. Answer from the Scene and the Scene's curriculum units below. If the question is outside the current Scene, say so briefly and suggest asking it in Free Chat instead of retrieving or inventing other lesson content; do not name a subject when you suggest Free Chat.
+هذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي. أجب من المشهد ونصوص المنهج الخاصة به أدناه. وإن كان السؤال خارج المشهد الحالي فقل ذلك باختصار واقترح طرحه في الدردشة الحرة بدلًا من استرجاع أو اختراع محتوى درس آخر، ولا تذكر اسم أي مادة عند اقتراح الدردشة الحرة.`;
 
 /** Help grounding note when not every Scene unit was sent (HLP-02/04): never claim complete Scene evidence. */
 export const PARTIAL_SCENE_COVERAGE_TEXT = `Only part of this Scene's curriculum units is included here (an excerpt of the Scene, not all of it). Do not claim complete Scene evidence; if the answer needs a part you cannot see, say so.

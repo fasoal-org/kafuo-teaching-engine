@@ -461,6 +461,9 @@ export async function prepareHelpTurn(
     history: { turns: ctx.history },
     helpMode: true,
     lessonTitle: anchor.document.stage.name ?? null,
+    // FC-A05 (D-2 a): additive SSE-only reason so the app can show the scope notice and the
+    // Free Chat button. `grounding` above stays reason-less: the prompt does not change.
+    ...(outside ? { groundingEvent: { reason: 'outside_scene' } } : {}),
     audit: {
       assessment: {
         decision: outside ? 'outside_scene' : 'scene',
