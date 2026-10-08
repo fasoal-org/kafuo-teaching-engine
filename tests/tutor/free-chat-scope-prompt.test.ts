@@ -8,6 +8,10 @@
  * Lesson / Scene Help must not move: every block after the rules block is
  * compared with the prompt the pre-r3 code (HEAD before this change)
  * assembled for the same input (`fixtures/help-prompts-before-r3.json`).
+ * One intentional exception (FC-A05, decision D-2, 7 Oct 2026): the Help
+ * scope sentence now suggests asking in Free Chat and names no subject (it
+ * said "the subject's Free Chat" and the model invented «العلوم»). The
+ * fixture was regenerated for that sentence only; nothing else moved.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -20,6 +24,7 @@ import {
 import {
   COMPACTION_PROMPT_TEXT,
   COMPACTION_REQUEST_TEXT,
+  HELP_SCOPE_TEXT,
   TITLE_PROMPT_TEXT,
   TITLE_REQUEST_TEXT,
   TUTOR_RULES_TEXT,
@@ -199,7 +204,7 @@ describe('Free Chat insufficient-grounding note says "the curriculum" (TE-3)', (
   });
 });
 
-describe('Lesson / Scene Help prompts are unchanged (only the rules block moves to r3, then r4)', () => {
+describe('Lesson / Scene Help prompts are unchanged (only the rules block moves to r3, then r4; FC-A05 rewords the scope sentence)', () => {
   const HELP_POLICY = POLICY;
   const PHYSICS = {
     subjectNameAr: 'الفيزياء',
@@ -292,11 +297,61 @@ describe('Lesson / Scene Help prompts are unchanged (only the rules block moves 
   for (const [name, input] of Object.entries(CASES) as Array<
     [keyof typeof CASES, AssembleTutorPromptInput]
   >) {
-    it(`${name}: every block after the rules equals the pre-r3 prompt`, () => {
+    it(`${name}: every block after the rules equals the pre-r3 prompt (FC-A05 scope sentence aside)`, () => {
       const result = assembleTutorPrompt(input);
       expect(result.messages[0]!.content).toBe(TUTOR_RULES_TEXT);
       expect(result.groundingMode).toBe(HELP_PROMPTS_BEFORE_R3[name].groundingMode);
       expect(result.messages.slice(1)).toEqual(HELP_PROMPTS_BEFORE_R3[name].messages);
     });
   }
+});
+
+describe('Help scope sentence suggests Free Chat and names no subject (FC-A05, D-2)', () => {
+  // Help knows only the lesson's own subject, never the student's Free Chat subjects:
+  // "the subject's Free Chat" made the model pick one from the question (staging: «العلوم»).
+  const SUBJECT_NAMES = [
+    'العلوم',
+    'Science',
+    'الفيزياء',
+    'Physics',
+    'الكيمياء',
+    'Chemistry',
+    'الأحياء',
+    'Biology',
+    'الرياضيات',
+    'Mathematics',
+    'Math',
+    'اللغة العربية',
+    'Arabic',
+    'English',
+  ];
+
+  it('keeps the Scene anchor, suggests asking in Free Chat and says not to name a subject, in both languages', () => {
+    expect(HELP_SCOPE_TEXT).toContain('This is Lesson Help anchored to the current Scene.');
+    expect(HELP_SCOPE_TEXT).toContain('هذه مساعدة داخل الدرس مرتبطة بالمشهد الحالي.');
+    expect(HELP_SCOPE_TEXT).toContain('suggest asking it in Free Chat');
+    expect(HELP_SCOPE_TEXT).toContain('do not name a subject');
+    expect(HELP_SCOPE_TEXT).toContain('اقترح طرحه في الدردشة الحرة');
+    expect(HELP_SCOPE_TEXT).toContain('لا تذكر اسم أي مادة');
+    // The anti-retrieval / anti-invention guard stays.
+    expect(HELP_SCOPE_TEXT).toContain('instead of retrieving or inventing other lesson content');
+    expect(HELP_SCOPE_TEXT).toContain('بدلًا من استرجاع أو اختراع محتوى درس آخر');
+  });
+
+  it('never points to "the subject\'s Free Chat" and contains no subject name', () => {
+    expect(HELP_SCOPE_TEXT).not.toContain("subject's Free Chat");
+    expect(HELP_SCOPE_TEXT).not.toContain('الدردشة الحرة للمادة');
+    for (const name of SUBJECT_NAMES) expect(HELP_SCOPE_TEXT).not.toContain(name);
+  });
+
+  it('the regenerated fixture carries the new sentence verbatim wherever Help renders it', () => {
+    const rendered = Object.values(HELP_PROMPTS_BEFORE_R3).flatMap((entry) =>
+      entry.messages.map((message) => message.content),
+    );
+    expect(rendered.filter((content) => content.includes(HELP_SCOPE_TEXT))).toHaveLength(6);
+    for (const content of rendered) {
+      expect(content).not.toContain("subject's Free Chat");
+      expect(content).not.toContain('الدردشة الحرة للمادة');
+    }
+  });
 });

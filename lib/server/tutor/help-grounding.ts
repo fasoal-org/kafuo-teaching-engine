@@ -26,8 +26,12 @@
  *
  * Pure functions: no I/O, no model, nothing logged.
  */
-import { extractKeywords } from '@/lib/server/tutor/arabic-text';
-import { detectFollowUpCue, type FollowUpCue } from '@/lib/server/tutor/context-assessment';
+import { extractKeywords, normalizeText } from '@/lib/server/tutor/arabic-text';
+import {
+  contentKeywords,
+  detectFollowUpCue,
+  type FollowUpCue,
+} from '@/lib/server/tutor/context-assessment';
 import { headCutUnit } from '@/lib/server/tutor/prompt-assembly';
 import { UNIT_CHAR_CAP } from '@/lib/server/tutor/token-budget';
 
@@ -184,17 +188,87 @@ export interface AssessSceneScopeInput {
 }
 
 /**
+ * Help-only (FC-A05 follow-up): words that ask ABOUT what is on screen and
+ * never name a topic outside it («أهم فكرة», «المقصود», «الكلام», «الخطوة»).
+ * They do not count as content keywords for the scope rule. Free Chat's
+ * assessment does not use this list.
+ */
+const SCENE_GENERIC_WORDS = [
+  'اهم',
+  'الاهم',
+  'فكره',
+  'الفكره',
+  'المقصود',
+  'مقصود',
+  'كلام',
+  'الكلام',
+  'معني',
+  'المعني',
+  'فايده',
+  'الفايده',
+  'فائده',
+  'الفائده',
+  'خطوه',
+  'الخطوه',
+  'شريحه',
+  'الشريحه',
+  'مشهد',
+  'المشهد',
+  'main',
+  'idea',
+  'point',
+  'meaning',
+  'step',
+  'slide',
+  'scene',
+];
+
+const SCENE_GENERIC_KEYWORDS: ReadonlySet<string> = new Set(
+  SCENE_GENERIC_WORDS.flatMap((word) => [normalizeText(word), ...extractKeywords(word)]),
+);
+
+const SCENE_NOUNS =
+  'خطوه|شريحه|مشهد|صفحه|فكره|جزء|نقطه|كلام|مثال|رسمه|رسم|صوره|جدول|معادله|فقره|جمله|مساله|سوال|تمرين';
+
+/**
+ * The student points at what is on screen («الخطوة دي», «هذه الخطوة»,
+ * «الكلام ده», "this step"): the question is about the current Scene.
+ * Matched on the normalised question.
+ */
+const SCENE_POINTER = [
+  new RegExp(
+    `(?:^|[^\\p{L}])[وفبلك]?ال(?:${SCENE_NOUNS})\\s+(?:دي|ده|دا|هذه|هذا|الحاليه|الحالي)(?!\\p{L})`,
+    'u',
+  ),
+  new RegExp(`(?:^|[^\\p{L}])(?:هذه|هذا|هاي)\\s+ال(?:${SCENE_NOUNS})(?!\\p{L})`, 'u'),
+  /\b(this|current) (step|slide|scene|part|page|idea|example|equation|diagram|graph|table|sentence|paragraph|problem|question|exercise)\b/,
+];
+
+function pointsAtScene(question: string): boolean {
+  const normalized = normalizeText(question);
+  return SCENE_POINTER.some((pattern) => pattern.test(normalized));
+}
+
+/**
  * Outside the Scene = a real content question (no follow-up cue) with ZERO
  * keyword overlap with the Scene title, its visible text and every cited
  * unit. Anything shorter, cued ("explain again", "a hint", "is my answer
- * right") or with any overlap stays in scope (the tutor answers from the
- * Scene, and says so when the Scene does not cover it — the rules already
- * ask for that).
+ * right"), pointing at the current step («الخطوة دي», "this step") or with
+ * any overlap stays in scope (the tutor answers from the Scene, and says so
+ * when the Scene does not cover it — the rules already ask for that).
+ *
+ * Question keywords are content keywords (intent words such as «اشرحلي» and
+ * follow-up modifiers removed, as in Free Chat), minus the Help-only generic
+ * words above.
  */
 export function assessSceneScope(input: AssessSceneScopeInput): SceneScopeAssessment {
-  const questionKeywords = extractKeywords(input.question);
+  const questionKeywords = contentKeywords(input.question).filter(
+    (keyword) => !SCENE_GENERIC_KEYWORDS.has(keyword),
+  );
   const keywordCount = questionKeywords.length;
-  const cue = detectFollowUpCue(input.question);
+  // A pointer at the current step anchors the turn like a continuation cue does.
+  const cue =
+    detectFollowUpCue(input.question) ?? (pointsAtScene(input.question) ? 'continuation' : null);
   if (keywordCount === 0) return { decision: 'in_scope', overlap: 0, keywordCount, cue };
   const reference = new Set(
     extractKeywords(

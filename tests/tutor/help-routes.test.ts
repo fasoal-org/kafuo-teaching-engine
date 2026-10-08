@@ -32,7 +32,11 @@ import { resetTurnRateLimitForTests } from '@/lib/server/tutor/rate-limit';
 import { setTutorRuntimeDepsForTests } from '@/lib/server/tutor/runtime-deps';
 import type { LearnerStudentContext } from '@/lib/server/tutor/student-context';
 import { countTokens, effectiveCap, UNIT_CHAR_CAP } from '@/lib/server/tutor/token-budget';
-import { HELP_SCOPE_TEXT, PARTIAL_SCENE_COVERAGE_TEXT } from '@/lib/server/tutor/tutor-rules';
+import {
+  GENERAL_ANSWER_NOTE_TEXT,
+  HELP_SCOPE_TEXT,
+  PARTIAL_SCENE_COVERAGE_TEXT,
+} from '@/lib/server/tutor/tutor-rules';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene, Stage, StageMode } from '@/lib/types/stage';
 import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
@@ -746,6 +750,8 @@ describe('Stage Help routes', () => {
       const frames = await readSse(response);
       expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
       expect(frames[1]!.data).toEqual({ mode: 'scene', lessonTitle: 'قانون حفظ الكتلة' });
+      // FC-A05: only an outside-Scene turn carries a grounding reason.
+      expect(frames[1]!.data).not.toHaveProperty('reason');
       expect(frames[3]!.data).toMatchObject({
         servedBy: 'primary',
         accountingComplete: true,
@@ -1204,7 +1210,12 @@ describe('Stage Help routes', () => {
         ),
       );
       expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
-      expect(frames[1]!.data).toEqual({ mode: 'insufficient', lessonTitle: 'قانون حفظ الكتلة' });
+      // FC-A05 (D-2 a): the additive reason lets the app show the scope notice and «افتح الدردشة الحرة».
+      expect(frames[1]!.data).toEqual({
+        mode: 'insufficient',
+        lessonTitle: 'قانون حفظ الكتلة',
+        reason: 'outside_scene',
+      });
       const helpSessionId = (await pool.query<{ id: string }>('SELECT id FROM tutor_help_sessions'))
         .rows[0]!.id;
       const { messages } = await readHelpMessagesBySeq(pool, {
@@ -1228,6 +1239,8 @@ describe('Stage Help routes', () => {
       const text = sentText();
       expect(text).toContain(HELP_SCOPE_TEXT);
       expect(text).toContain('No curriculum text is available for this turn');
+      // The event reason is SSE-only: the prompt's insufficient note stays reason-less.
+      expect(text).not.toContain(GENERAL_ANSWER_NOTE_TEXT);
       expect(text).not.toContain(UNIT_TEXT['cu-1']);
       // Still metered and finalized as a delivered Help turn.
       expect(kafuo.reserve.mock.calls[0]![0]).toMatchObject({ capability: 'help' });

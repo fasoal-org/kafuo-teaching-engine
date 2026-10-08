@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { extractKeywords } from '@/lib/server/tutor/arabic-text';
 import {
   assessSceneScope,
+  SCOPE_MIN_KEYWORDS,
   selectHelpUnits,
   type HelpUnitCandidate,
 } from '@/lib/server/tutor/help-grounding';
@@ -194,6 +196,55 @@ describe('assessSceneScope (HLP-04)', () => {
     expect(result.keywordCount).toBeGreaterThanOrEqual(3);
   });
 
+  it('FC-A05: «ما هو قانون أوم في الكهرباء؟» on the inductive-reasoning opening Scene is outside it (exactly 3 keywords, no overlap)', () => {
+    // Android staging run 2026-10-07, FCE-006: Mathematics lesson «التبرير الاستقرائي
+    // والتخمين», Scene 1 (FCE-006-lesson-runner.png: slide text + opening narration).
+    const sceneTitle = 'التبرير الاستقرائي والتخمين';
+    const visibleStepText = [
+      'التبرير الاستقرائي والتخمين',
+      'سؤال تمهيدي: ماذا يمكن أن نعرف من تكرار نمط في بيانات العملاء؟',
+      'لماذا يهمنا ذلك؟ تحليل البيانات يساعد على الوصول إلى نتائج وتوقعات. نستخدم الأنماط لفهم ما قد يحدث لاحقًا.',
+      'الفكرة التي سنبنيها: نبدأ من أمثلة وبيانات محددة. نصل منها إلى نتيجة عامة أو تخمين.',
+      'رسالتنا: النمط المتكرر في البيانات قد يقودنا إلى توقع معقول، لكنه يحتاج إلى فحص ودليل.',
+      'عدد الزبائن في الأيام الثلاثة الأخيرة من كل أسبوع. رسم بياني يوضح نمط عدد الزبائن خلال الأشهر.',
+      'السلام عليكم يا شباب، حياكم الله. درسنا اليوم عن التبرير الاستقرائي والتخمين، ونبدأ بسؤال بسيط: إذا تكرر نمط معيّن في بيانات العملاء، وش ممكن نعرف منه؟',
+    ].join('\n');
+    const sceneUnits = [
+      unit(
+        'cu-why',
+        'لاحظ صاحب صالون حلاقة أن عدد الزبائن في أيام الخميس والجمعة والسبت يزداد خلال الأشهر الستة الأخيرة، فتوقع أنه سيحتاج إلى حلاقين إضافيين في هذه الأيام. يستعمل المحللون في أبحاث التسويق البيانات المتكررة لوضع تخمينات حول سلوك العملاء.',
+        'لماذا؟',
+      ),
+      unit(
+        'cu-def',
+        'التبرير الاستقرائي: تبرير يستعمل عددًا من الأمثلة والملاحظات المحددة للوصول إلى نتيجة عامة. التخمين: عبارة غير مثبتة يُعتقد أنها صحيحة، تُبنى على الملاحظة. مثال: اكتب وصفًا للنمط ثم أوجد العدد التالي في المتتابعة 2، 4، 12، 48، 240. كل عدد يساوي العدد السابق مضروبًا في 2 ثم 3 ثم 4 ثم 5، فالعدد التالي 1440.',
+        'التبرير الاستقرائي والتخمين',
+      ),
+      unit(
+        'cu-counter',
+        'لإثبات أن التخمين خاطئ يكفي إيجاد مثال واحد يكون فيه الفرض صحيحًا والنتيجة غير صحيحة، ويسمى مثالًا مضادًا. مثال: التخمين «مجموع أي عددين أوليين عدد زوجي» خاطئ؛ لأن 2 + 3 = 5.',
+        'المثال المضاد',
+      ),
+    ];
+    const question = 'ما هو قانون أوم في الكهرباء؟';
+    // The keywords the rule sees: exactly SCOPE_MIN_KEYWORDS (3), none of them in the Scene.
+    expect(extractKeywords(question)).toEqual(['قانون', 'اوم', 'كهرباء']);
+    expect(SCOPE_MIN_KEYWORDS).toBe(3);
+    const reference = new Set(
+      extractKeywords(
+        [sceneTitle, visibleStepText, ...sceneUnits.map((u) => `${u.title} ${u.text}`)].join(' '),
+      ),
+    );
+    expect(extractKeywords(question).filter((keyword) => reference.has(keyword))).toEqual([]);
+
+    expect(assessSceneScope({ question, sceneTitle, visibleStepText, units: sceneUnits })).toEqual({
+      decision: 'outside_scene',
+      overlap: 0,
+      keywordCount: 3,
+      cue: null,
+    });
+  });
+
   it('counts the Scene title and visible step text as Scene evidence', () => {
     const result = assessSceneScope({
       question: 'explain the shaded parts numerator denominator',
@@ -202,5 +253,49 @@ describe('assessSceneScope (HLP-04)', () => {
     });
     expect(result.decision).toBe('in_scope');
     expect(result.overlap).toBeGreaterThan(0);
+  });
+});
+
+describe('assessSceneScope: questions about the current step stay in the Scene (FC-A05 follow-up)', () => {
+  // The same inductive-reasoning opening Scene as the Ohm's-law case above, kept short: none of
+  // the generic words below («أهم», «فكرة», «المقصود», «كلام», «الخطوة») appear in it.
+  const sceneTitle = 'التبرير الاستقرائي والتخمين';
+  const visibleStepText =
+    'نبدأ من أمثلة وبيانات محددة. نصل منها إلى نتيجة عامة أو تخمين. النمط المتكرر في البيانات قد يقودنا إلى توقع معقول، لكنه يحتاج إلى فحص ودليل.';
+  const units = [
+    unit(
+      'cu-def',
+      'التبرير الاستقرائي: تبرير يستعمل عددًا من الأمثلة والملاحظات المحددة للوصول إلى نتيجة عامة. التخمين: عبارة غير مثبتة يُعتقد أنها صحيحة.',
+      'التبرير الاستقرائي',
+    ),
+  ];
+  const scope = (question: string) =>
+    assessSceneScope({ question, sceneTitle, visibleStepText, units });
+
+  it.each([
+    // cls_int_test.dart:95, the integration journey's in-scene Help question.
+    'إيه أهم فكرة في الخطوة دي؟',
+    'ما أهم فكرة في هذه الخطوة؟',
+    'إيه المقصود بالكلام ده في الخطوة دي؟',
+    'وضحلي الفكرة دي بالمثال اللي في الشريحة دي',
+    'What is the main idea of this step?',
+  ])('«%s» is about the Scene', (question) => {
+    expect(scope(question).decision).toBe('in_scope');
+  });
+
+  it('generic words alone never make a question "outside" (no pointer, no Scene keyword)', () => {
+    expect(scope('إيه أهم فكرة والمقصود بالكلام؟')).toMatchObject({
+      decision: 'in_scope',
+      keywordCount: 0,
+    });
+  });
+
+  it('a real off-Scene topic is still outside, even with generic words around it', () => {
+    expect(scope('ما أهم استخدامات قانون أوم في الكهرباء؟')).toMatchObject({
+      decision: 'outside_scene',
+      overlap: 0,
+      cue: null,
+    });
+    expect(scope('ما هو قانون أوم في الكهرباء؟').decision).toBe('outside_scene');
   });
 });
