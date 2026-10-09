@@ -71,7 +71,6 @@ export async function registerNodeInstrumentation(): Promise<void> {
       databaseUrl: process.env.DATABASE_URL?.trim() ?? '',
       webhookUrl: process.env.TEACHING_ENGINE_WEBHOOK_URL?.trim() ?? '',
       webhookSecret: process.env.TEACHING_ENGINE_WEBHOOK_SECRET?.trim() ?? '',
-      accessCode: process.env.ACCESS_CODE?.trim() ?? '',
     });
   }
 
