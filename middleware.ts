@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { isOpenApiRequest } from '@/lib/config/access-code-allowlist';
 import { isAgentRuntimeConfigured, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
 
 /** Convert string to Uint8Array */
@@ -62,15 +63,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Whitelist: access-code endpoints, health check, and the server-to-server
-  // Teaching Package API (its routes enforce their own service-key
-  // authentication; the access cookie is meaningless to a machine caller).
-  if (
-    pathname.startsWith('/api/access-code/') ||
-    pathname === '/api/health' ||
-    pathname === '/api/teaching-packages' ||
-    pathname.startsWith('/api/teaching-packages/')
-  ) {
+  // Allow-list: the access-code endpoints, health, and the routes the Backend
+  // (server to server) and the mobile app call. Each enforces its own
+  // authentication; the access cookie is meaningless to those callers.
+  if (isOpenApiRequest(request)) {
     return NextResponse.next();
   }
 
