@@ -34,10 +34,9 @@ The two `/srv/kafuo` entry points are root-owned. Their reference copies are in 
   - `DATABASE_URL`, for role and database `kafuo_te` in the backend's Postgres;
   - the service key and the webhook secret, which must equal the backend's `TEACHING_ENGINE_SERVICE_KEY` and `TEACHING_ENGINE_WEBHOOK_SECRET`;
   - the webhook and integration URLs;
-  - the provider keys.
-- **Must stay unset:**
-  - `PERSISTENCE_DEV_TOKEN`, `NEXT_PUBLIC_PERSISTENCE_TOKEN` and `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK`, which are dev only;
-  - `ACCESS_CODE`, because boot fails if it is set together with the service key.
+  - the provider keys;
+  - `ACCESS_CODE` (the browser gate; admins type it once). With it set, only the Backend's and the mobile app's routes pass without the access cookie (`lib/config/access-code-allowlist.ts`); every other `/api` request is a 401.
+- **Must stay unset:** `PERSISTENCE_DEV_TOKEN`, `NEXT_PUBLIC_PERSISTENCE_TOKEN` and `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK`, which are dev only. `PERSISTENCE_DEV_TOKEN` matters twice: with it set, the learner document route would also answer requests no grant covers.
 - **Backups:**
   - every deploy dumps `kafuo_te` into `/srv/kafuo/backups/` and keeps the last 10;
   - the nightly `backup.sh` covers every `kafuo_*` database;

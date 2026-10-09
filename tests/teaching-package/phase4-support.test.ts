@@ -177,7 +177,6 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
     databaseUrl: 'postgres://configured',
     webhookUrl: 'https://kafuo.test/hook',
     webhookSecret: 'whsec-distinct',
-    accessCode: '',
   };
 
   it('accepts a fully configured production deployment', () => {
@@ -201,7 +200,7 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
     ).toThrow(/must be an https URL/);
   });
 
-  it('refuses the missing webhook URL, missing secret, shared secret, and ACCESS_CODE combinations', () => {
+  it('refuses the missing webhook URL, missing secret and shared secret combinations', () => {
     expect(() =>
       validateTeachingEngineIntegrationConfig({ ...base, webhookUrl: '' }),
     ).toThrow(/TEACHING_ENGINE_WEBHOOK_URL/);
@@ -212,17 +211,7 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
       validateTeachingEngineIntegrationConfig({ ...base, webhookSecret: base.serviceKey }),
     ).toThrow(/must differ/);
     expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, accessCode: 'shared-gate' }),
-    ).toThrow(/ACCESS_CODE/);
-    expect(() =>
       validateTeachingEngineIntegrationConfig({ ...base, databaseUrl: '' }),
     ).toThrow(/DATABASE_URL/);
-    // Outside production, and with no service key, the gate is inert.
-    expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, isProduction: false, accessCode: 'x' }),
-    ).not.toThrow();
-    expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, serviceKey: '', accessCode: 'x' }),
-    ).not.toThrow();
   });
 });

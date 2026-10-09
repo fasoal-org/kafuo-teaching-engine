@@ -370,7 +370,6 @@ describe('teaching engine integration configuration validation', () => {
     databaseUrl: 'postgres://localhost/te',
     webhookUrl: 'http://localhost:8000/api/v2/integrations/teaching-engine/webhooks',
     webhookSecret: 'whsec-distinct',
-    accessCode: '',
   };
   const validate = async (overrides: Partial<typeof base>) => {
     const { validateTeachingEngineIntegrationConfig } = await import(
@@ -430,7 +429,6 @@ describe('teaching engine integration configuration validation', () => {
       { webhookSecret: '' },
       { webhookSecret: 'svc-key' },
       { isProduction: true, webhookUrl: 'http://elsewhere.test/hook' },
-      { isProduction: true, accessCode: 'ac' },
     ]) {
       const run = await validate(overrides);
       let message = '';

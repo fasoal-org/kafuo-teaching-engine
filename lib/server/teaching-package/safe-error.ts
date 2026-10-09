@@ -42,14 +42,16 @@ export function describeErrorSafely(error: unknown): SafeErrorDescriptor {
  * 401 for the wrong secret. Those are precisely the historical failures this
  * check exists to turn into a boot error instead of a per-delivery one.
  *
- * Only two rules stay production-specific:
+ * Only the scheme stays production-specific: production demands `https://` by
+ * default. Development may name an explicit `http://localhost` (or
+ * `http://127.0.0.1`) receiver, and a local standalone production build may do
+ * the same only through the explicit `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK`
+ * opt-in.
  *
- * * the scheme — production demands `https://` by default. Development may name
- *   an explicit `http://localhost` (or `http://127.0.0.1`) receiver, and a local
- *   standalone production build may do the same only through the explicit
- *   `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK` opt-in;
- * * the `ACCESS_CODE` incompatibility, unchanged, so a local operator poking at
- *   a gated dev instance is not newly refused a boot.
+ * `ACCESS_CODE` is no longer refused alongside the service key: the gate's
+ * allow-list (`lib/config/access-code-allowlist.ts`) lets the Backend's and the
+ * mobile app's routes through on their own credentials, so the handoff cannot
+ * be silently broken by it (tests/middleware/access-code-gate.test.ts).
  *
  * No message contains a secret VALUE — only the env var name that is wrong.
  * A value would leak into logs, CI output and crash reporters.
@@ -61,7 +63,6 @@ export function validateTeachingEngineIntegrationConfig(env: {
   databaseUrl: string;
   webhookUrl: string;
   webhookSecret: string;
-  accessCode: string;
 }): void {
   // Not enabled: nothing to validate, in any environment.
   if (!env.serviceKey) return;
@@ -100,12 +101,6 @@ export function validateTeachingEngineIntegrationConfig(env: {
     // either credential sufficient for both roles.
     throw new Error(
       'INTEGRATION_NOT_CONFIGURED: TEACHING_ENGINE_WEBHOOK_SECRET must differ from TEACHING_ENGINE_SERVICE_KEY',
-    );
-  }
-  // Production-only, unchanged: see the note above.
-  if (env.isProduction && env.accessCode) {
-    throw new Error(
-      'INTEGRATION_ACCESS_CODE_INCOMPATIBLE: the Kafuo-facing deployment must not set ACCESS_CODE together with TEACHING_ENGINE_SERVICE_KEY',
     );
   }
 }
