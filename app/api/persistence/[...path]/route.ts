@@ -37,6 +37,7 @@ import {
   readEditorGrants,
   type VerifiedEditorGrant,
 } from '@/lib/server/teaching-package/editor-grant';
+import { signLearnerMediaUrls } from '@/lib/server/teaching-package/classroom-media-signature';
 import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-quiz-delivery';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
@@ -656,14 +657,19 @@ export async function handlePersistenceRequest(
       // a `read` grant (learner and preview) passes through the compliance
       // overlay, which blanks a confirmed MOE-prohibited visual. The stored
       // document is untouched and `write`-grant editors see the original. It is
-      // the only read-time transformation of the authoritative document.
+      // the only read-time transformation of the authoritative document (plus,
+      // behind ACCESS_CODE, signed media links for a learner).
       const overlaid =
         request.method === 'GET' &&
         grantEvaluation.covered &&
         !grantEvaluation.refusal &&
         grantEvaluation.mode === 'documents' &&
         grantEvaluation.grant.capability === 'read'
-          ? await withLearnerDelivery(response, grantEvaluation.grant.purpose === 'learner')
+          ? await withLearnerDelivery(
+              response,
+              grantEvaluation.grant.purpose === 'learner',
+              grantEvaluation.grant.exp,
+            )
           : response;
       for (const [name, value] of responseHeaders.entries()) overlaid.headers.append(name, value);
       // A grant-covered document read differs by grant (a learner's has no quiz
@@ -692,14 +698,21 @@ export async function handlePersistenceRequest(
 }
 
 /**
- * The two read-time behaviours of a document served under a `read` grant,
+ * The read-time behaviours of a document served under a `read` grant,
  * applied in a fixed order: (1) omit the planner `outline` for a LEARNER grant —
  * planner documents (which also hold `assistancePlan` / `visualPlan`) are not
  * learner delivery; edit and preview grants keep receiving it — (1b) strip
  * quiz grading secrets for a LEARNER grant (`learner-quiz.ts`) — then (2) the
- * compliance overlay. `stage` and `scenes` are otherwise returned as stored.
+ * compliance overlay — then (3), only while `ACCESS_CODE` gates the media
+ * route, sign a LEARNER's classroom-media links until the grant expires (after
+ * the overlay, so a held visual stays blank and is never signed). `stage` and
+ * `scenes` are otherwise returned as stored.
  */
-async function withLearnerDelivery(response: Response, learner: boolean): Promise<Response> {
+async function withLearnerDelivery(
+  response: Response,
+  learner: boolean,
+  grantExpMs: number,
+): Promise<Response> {
   if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
     return response;
   }
@@ -719,7 +732,10 @@ async function withLearnerDelivery(response: Response, learner: boolean): Promis
   // the unsanitized bytes); grading happens server-side via
   // `POST /api/teaching-packages/{versionId}/quiz-grades`.
   if (learner) delivered = sanitizeLearnerDelivery(delivered) as typeof delivered;
-  const overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
+  let overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
+  if (learner && process.env.ACCESS_CODE) {
+    overlaid = signLearnerMediaUrls(overlaid, Math.floor(grantExpMs / 1000));
+  }
   if (overlaid === body) return response;
   const headers = new Headers(response.headers);
   headers.delete('content-length');

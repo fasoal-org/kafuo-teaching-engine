@@ -62,8 +62,9 @@ const ALLOWED: ReadonlyArray<[string, string, string?]> = [
   ['POST', '/api/tutor/conversations/c1/unarchive'],
   ['POST', '/api/tutor/help/turns'],
   ['GET', '/api/tutor/help/sessions?versionId=v&stageId=s&sceneId=x'],
-  ['GET', '/api/classroom-media/stage-AbC_9-z/media/figure.png'],
-  ['HEAD', '/api/classroom-media/abcDEF1234/audio/scene-1.mp3'],
+  // Signed at learner delivery; the media route verifies the signature.
+  ['GET', '/api/classroom-media/stage-AbC_9-z/media/figure.png?exp=1&sig=s'],
+  ['HEAD', '/api/classroom-media/abcDEF1234/audio/scene-1.mp3?exp=1&sig=s'],
   ['GET', '/api/persistence/documents/stage-AbC_9-z', GRANT_COOKIE],
   ['HEAD', '/api/persistence/documents/abcDEF1234', GRANT_COOKIE],
 ];
@@ -92,11 +93,14 @@ const BLOCKED: ReadonlyArray<[string, string, string?]> = [
   ['POST', '/api/teaching-packagesx'],
   ['GET', '/api/health/details'],
   ['GET', '/api/access-codex/status'],
-  // Classroom media: reads of media/audio only.
-  ['POST', '/api/classroom-media/stage-abc/media/figure.png'],
-  ['GET', '/api/classroom-media/stage-abc/other/file.png'],
-  ['GET', '/api/classroom-media/stage-abc/media/'],
-  ['GET', '/api/classroom-media/stage%2Fabc/media/figure.png'],
+  // Classroom media: signed reads of media/audio only.
+  ['GET', '/api/classroom-media/stage-abc/media/figure.png'],
+  ['GET', '/api/classroom-media/stage-abc/media/figure.png?exp=1'],
+  ['GET', '/api/classroom-media/stage-abc/media/figure.png?sig=s'],
+  ['POST', '/api/classroom-media/stage-abc/media/figure.png?exp=1&sig=s'],
+  ['GET', '/api/classroom-media/stage-abc/other/file.png?exp=1&sig=s'],
+  ['GET', '/api/classroom-media/stage-abc/media/?exp=1&sig=s'],
+  ['GET', '/api/classroom-media/stage%2Fabc/media/figure.png?exp=1&sig=s'],
   // Persistence: one Stage document, read-only, with a grant cookie.
   ['GET', '/api/persistence/documents/stage-abc'],
   ['PUT', '/api/persistence/documents/stage-abc', GRANT_COOKIE],

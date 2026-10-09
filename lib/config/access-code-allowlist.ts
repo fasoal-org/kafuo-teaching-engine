@@ -51,9 +51,10 @@ const LEARNER_DOCUMENT_PATH = new RegExp(`^/api/persistence/documents/${STAGE_ID
 export const GRANT_COOKIE_NAME = 'teaching_package_grant';
 
 /**
- * Stage images and narration audio. The mobile player loads them with no
- * credential (public-cacheable, named by an unguessable Stage id), so this
- * read stays open, exactly as it is without `ACCESS_CODE`.
+ * Stage images and narration audio, as signed at learner delivery
+ * (`classroom-media-signature.ts`): the mobile player sends no credential, so
+ * the link carries `exp` + `sig`, and the media route verifies them. An
+ * unsigned link needs the access cookie like any other `/api` request.
  */
 const CLASSROOM_MEDIA_PATH = new RegExp(`^/api/classroom-media/${STAGE_ID}/(media|audio)/.+`);
 
@@ -67,7 +68,10 @@ export function isOpenApiRequest(
 
   const method = request.method.toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') return false;
-  if (CLASSROOM_MEDIA_PATH.test(pathname)) return true;
+  if (CLASSROOM_MEDIA_PATH.test(pathname)) {
+    const search = request.nextUrl.searchParams;
+    return Boolean(search.get('exp') && search.get('sig'));
+  }
   return (
     LEARNER_DOCUMENT_PATH.test(pathname) &&
     Boolean(request.cookies.get(GRANT_COOKIE_NAME)?.value)

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
 import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
+import { canReadGatedClassroomMedia } from '@/lib/server/teaching-package/classroom-media-signature';
 import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { checksumOfFile, isHeldChecksum } from '@/lib/server/visual-compliance/delivery-hold';
@@ -25,6 +26,8 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const CACHE_HEADERS = { 'Cache-Control': 'public, max-age=86400, immutable' } as const;
+/** Behind ACCESS_CODE: the device may cache, a shared cache may not. */
+const GATED_CACHE_HEADERS = { 'Cache-Control': 'private, max-age=86400, immutable' } as const;
 
 /** Bridge a fs ReadStream into a web ReadableStream, propagating errors and cancel. */
 function toWebStream(stream: ReadStream): ReadableStream {
@@ -63,6 +66,26 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid path' }, { status: 404 });
   }
 
+  // ACCESS_CODE gate: a read needs the browser's access cookie (admins) or a
+  // link signed at learner delivery (the mobile player, which sends no
+  // credential). Without ACCESS_CODE the read stays open, as before.
+  const accessCode = process.env.ACCESS_CODE;
+  if (
+    accessCode &&
+    !canReadGatedClassroomMedia({
+      accessCode,
+      accessCookie: req.cookies.get('openmaic_access')?.value,
+      classroomId,
+      segments: pathSegments,
+      searchParams: req.nextUrl.searchParams,
+    })
+  ) {
+    return NextResponse.json(
+      { error: 'Media link expired or invalid' },
+      { status: 401, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
   const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
   const resolvedBase = path.resolve(CLASSROOMS_DIR, classroomId);
 
@@ -85,7 +108,7 @@ export async function GET(
     // verdict is not served to learners: 404 unless the request holds a `write`
     // grant for this Stage (an editor remediating it), and then never with the
     // public, immutable cache header.
-    let cacheHeaders: Record<string, string> = CACHE_HEADERS;
+    let cacheHeaders: Record<string, string> = accessCode ? GATED_CACHE_HEADERS : CACHE_HEADERS;
     if (subDir === 'media' && contentType.startsWith('image/')) {
       const checksum = await checksumOfFile(realPath);
       if (checksum && (await isHeldChecksum(await getVerdictStore(), checksum))) {
