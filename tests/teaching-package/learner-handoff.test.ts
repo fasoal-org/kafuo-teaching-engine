@@ -5,8 +5,14 @@
  * superseded (pinned history) versions are servable, the grant is `read`, and
  * the runtime sandbox key is stable for one learner session.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+
+import {
+  createMemoryHandoffNonceStoreForTests,
+  resetHandoffNonceMemoryForTests,
+  setHandoffNonceStoreForTests,
+} from '@/lib/server/tutor/handoff-nonce-store';
 
 const routeMocks = vi.hoisted(() => ({ getVersion: vi.fn() }));
 
@@ -33,7 +39,14 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', SERVICE_KEY);
   vi.stubEnv('DATABASE_URL', 'postgres://learner-handoff-test');
-  vi.clearAllMocks();
+  vi.clearAllMocks();  // The redeem's single-use nonce claim (ET-16 a) runs on an in-memory double:
+  // the durable store fails closed without a database (G2).
+  resetHandoffNonceMemoryForTests();
+  setHandoffNonceStoreForTests(createMemoryHandoffNonceStoreForTests());
+});
+
+afterEach(() => {
+  setHandoffNonceStoreForTests(undefined);
 });
 
 const version = (status: string, stageId = 'stage-approved') => ({
@@ -111,17 +124,20 @@ describe('learner handoff mint', () => {
 
 describe('learner handoff redeem', () => {
   it('sets a read grant with a stable learner key and lands on the classroom player', async () => {
-    const { token } = mintEditorHandoffToken({
-      tenantId: 'tenant-l',
-      versionId: 'tpv-test-opaque-001',
-      stageId: 'stage-approved',
-      capability: 'read',
-      purpose: 'learner',
-      learnerRef: LEARNER_REF,
-    });
+    // Two handoffs for the same learner session: a learner handoff is single-use
+    // (ET-16, W2-C3b), so the stable key is shown across two fresh tokens.
+    const mintLearner = () =>
+      mintEditorHandoffToken({
+        tenantId: 'tenant-l',
+        versionId: 'tpv-test-opaque-001',
+        stageId: 'stage-approved',
+        capability: 'read',
+        purpose: 'learner',
+        learnerRef: LEARNER_REF,
+      }).token;
     routeMocks.getVersion.mockResolvedValue(version('approved'));
-    const first = await redeem(token);
-    const second = await redeem(token);
+    const first = await redeem(mintLearner());
+    const second = await redeem(mintLearner());
     expect(first.status).toBe(302);
     expect(first.headers.get('location')).toBe('http://te.test/classroom/stage-approved');
     const learnerKey = (response: Response) =>

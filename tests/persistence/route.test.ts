@@ -36,6 +36,10 @@ describe('embedded persistence route', () => {
     vi.doMock('@/lib/persistence/legacy-help-turns', () => ({
       ensureLegacyHelpTurnsSchema: vi.fn().mockResolvedValue(undefined),
     }));
+    // ET-16 (a) handoff nonces, created at boot since G2.
+    vi.doMock('@/lib/server/tutor/handoff-nonce-store', () => ({
+      ensureHandoffNonceSchema: vi.fn().mockResolvedValue(undefined),
+    }));
   });
 
   it('returns a clear 404 when DATABASE_URL is unset', async () => {

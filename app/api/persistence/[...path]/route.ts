@@ -38,6 +38,11 @@ import {
   type VerifiedEditorGrant,
 } from '@/lib/server/teaching-package/editor-grant';
 import { signLearnerMediaUrls } from '@/lib/server/teaching-package/classroom-media-signature';
+import {
+  evaluateLearnerGrantAccess,
+  learnerDeliveryError,
+  type LearnerAccessScope,
+} from '@/lib/server/tutor/learner-access';
 import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-quiz-delivery';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
@@ -59,6 +64,34 @@ const ROUTE_PREFIX = '/api/persistence';
 
 function jsonError(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });
+}
+
+interface GrantRefusal {
+  status: number;
+  code: string;
+  message: string;
+  /** ET-16 (c): `{ reason }` of a revoked learner grant. */
+  details?: unknown;
+  /** A fail-closed learner access check: `Retry-After` seconds. */
+  retryAfterS?: number;
+}
+
+function refusalResponse(refusal: GrantRefusal): Response {
+  const response = Response.json(
+    {
+      error: {
+        code: refusal.code,
+        message: refusal.message,
+        ...(refusal.details === undefined ? {} : { details: refusal.details }),
+      },
+    },
+    { status: refusal.status },
+  );
+  if (refusal.retryAfterS !== undefined) {
+    response.headers.set('Retry-After', String(refusal.retryAfterS));
+    response.headers.set('Cache-Control', 'no-store');
+  }
+  return response;
 }
 
 /**
@@ -375,16 +408,25 @@ interface PersistenceRequestDeps {
  *
  * GET /documents (list), learner merges, and admin deletes are never
  * delegated. Without a grant, every pre-existing branch behaves identically.
+ *
+ * ET-16 (c), G2: a document READ under a LEARNER grant is re-validated with
+ * Kafuo (`tutor/learner-access.ts`, cached ≤ 5 min): a revoked learner gets
+ * `403 LEARNER_ACCESS_REVOKED` (`details.reason`) or `403 ACCOUNT_INACTIVE`, and a
+ * check that cannot be made fails closed with a retryable 503. Edit, preview and
+ * write grants are never checked. Runtime and asset delegation are not
+ * re-validated here (learner progress writes; open-read assets).
  */
 type GrantEvaluation =
   | { covered: false }
   | {
       covered: true;
-      refusal?: { status: number; code: string; message: string };
+      refusal?: GrantRefusal;
       mode: 'documents' | 'runtime' | 'assets';
       grant: VerifiedEditorGrant;
       /** The runtime learner identity a delegated runtime request runs as. */
       runtimeLearnerKey?: string;
+      /** The re-validated learner scope a learner read signs into its media links. */
+      learnerScope?: LearnerAccessScope | null;
     };
 
 async function evaluateEditorGrant(
@@ -422,6 +464,34 @@ async function evaluateEditorGrant(
           code: 'GRANT_READ_ONLY',
           message: 'this editor grant is read-only; the stage cannot be modified',
         },
+      };
+    }
+    if (grant.purpose === 'learner') {
+      const outcome = await evaluateLearnerGrantAccess(grant, { pool });
+      const error = learnerDeliveryError(outcome);
+      if (error) {
+        const retryAfter = (error.details as { retryAfterS?: unknown } | undefined)?.retryAfterS;
+        return {
+          covered: true,
+          mode: 'documents',
+          grant,
+          refusal: {
+            status: error.status,
+            code: error.code,
+            message: error.message,
+            ...(typeof retryAfter === 'number'
+              ? { retryAfterS: retryAfter }
+              : error.details === undefined
+                ? {}
+                : { details: error.details }),
+          },
+        };
+      }
+      return {
+        covered: true,
+        mode: 'documents',
+        grant,
+        learnerScope: outcome.kind === 'allowed' ? outcome.scope : null,
       };
     }
     return { covered: true, mode: 'documents', grant };
@@ -530,7 +600,7 @@ export async function handlePersistenceRequest(
       if (path === '/documents' || path.startsWith('/documents/')) {
         if (grantEvaluation.covered && grantEvaluation.refusal) {
           const refusal = grantEvaluation.refusal;
-          const response = jsonError(refusal.status, refusal.code, refusal.message);
+          const response = refusalResponse(refusal);
           for (const [name, value] of responseHeaders.entries()) {
             response.headers.append(name, value);
           }
@@ -573,7 +643,7 @@ export async function handlePersistenceRequest(
         }
       } else if (grantEvaluation.covered && grantEvaluation.refusal) {
         const refusal = grantEvaluation.refusal;
-        const response = jsonError(refusal.status, refusal.code, refusal.message);
+        const response = refusalResponse(refusal);
         for (const [name, value] of responseHeaders.entries()) {
           response.headers.append(name, value);
         }
@@ -669,6 +739,7 @@ export async function handlePersistenceRequest(
               response,
               grantEvaluation.grant.purpose === 'learner',
               grantEvaluation.grant.exp,
+              grantEvaluation.learnerScope ?? null,
             )
           : response;
       for (const [name, value] of responseHeaders.entries()) overlaid.headers.append(name, value);
@@ -706,12 +777,14 @@ export async function handlePersistenceRequest(
  * compliance overlay — then (3), only while `ACCESS_CODE` gates the media
  * route, sign a LEARNER's classroom-media links until the grant expires (after
  * the overlay, so a held visual stays blank and is never signed). `stage` and
- * `scenes` are otherwise returned as stored.
+ * `scenes` are otherwise returned as stored. A re-validated learner `scope`
+ * (ET-16 c) is signed into every link, so the media route repeats the check.
  */
 async function withLearnerDelivery(
   response: Response,
   learner: boolean,
   grantExpMs: number,
+  scope: LearnerAccessScope | null = null,
 ): Promise<Response> {
   if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
     return response;
@@ -734,7 +807,7 @@ async function withLearnerDelivery(
   if (learner) delivered = sanitizeLearnerDelivery(delivered) as typeof delivered;
   let overlaid = await applyComplianceOverlay(delivered, await getVerdictStore());
   if (learner && process.env.ACCESS_CODE) {
-    overlaid = signLearnerMediaUrls(overlaid, Math.floor(grantExpMs / 1000));
+    overlaid = signLearnerMediaUrls(overlaid, Math.floor(grantExpMs / 1000), scope);
   }
   if (overlaid === body) return response;
   const headers = new Headers(response.headers);

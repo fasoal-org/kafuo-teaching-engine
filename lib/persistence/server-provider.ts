@@ -18,6 +18,7 @@ import { ensureTeachingModelAttemptsSchema } from '@/lib/persistence/teaching-mo
 import { ensureTeachingPackageSchema } from '@/lib/persistence/teaching-package';
 import { ensureTutorRuntimeSchema } from '@/lib/persistence/tutor-runtime';
 import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators';
+import { ensureHandoffNonceSchema } from '@/lib/server/tutor/handoff-nonce-store';
 
 export type PersistencePoolFactory = (connectionString: string) => Pool;
 
@@ -71,6 +72,9 @@ async function createServerPersistenceProvider(
     // Kafuo R1 legacy Help model-turn results (plan §5.1 `legacy_help_turns`):
     // standalone, 7-day retention through the accounting sweeper.
     await ensureLegacyHelpTurnsSchema(queryable);
+    // ET-16 (a) single-use handoff nonces (`tutor_handoff_redemptions`):
+    // standalone. Created at boot so a redeem never depends on lazy DDL (G2).
+    await ensureHandoffNonceSchema(queryable);
     await ensureAssetSchema(queryable);
     const withTransaction = nodePostgresTransaction(queryable);
     const byteStore = lazyAssetByteStore(process.env.ASSET_S3_BUCKET, queryable);

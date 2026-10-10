@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-unknown-reason",
+  "description": "TE robustness: a reason the TE does not know stays temporarily_unavailable (retryable METER_UNAVAILABLE). The backend never sends it.",
+  "backend": null,
+  "response": {
+    "allowed": false,
+    "reason": "something_new",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "temporarily_unavailable",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 503,
+    "code": "METER_UNAVAILABLE",
+    "retryable": true,
+    "details": {
+      "reason": "temporarily_unavailable",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

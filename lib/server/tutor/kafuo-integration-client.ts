@@ -1,9 +1,10 @@
 /**
  * OpenMAIC → Kafuo integration client (Kafuo R1 contracts §2; plan §8.6, P5).
  *
- * Three signed calls under `KAFUO_INTEGRATION_BASE_URL` (the router prefix,
+ * Four signed calls under `KAFUO_INTEGRATION_BASE_URL` (the router prefix,
  * e.g. `https://api.kafuo.example/api/v2/integrations/teaching-engine`):
- * `POST /meters/reserve`, `POST /meters/finalize`, `POST /grounding/search`.
+ * `POST /meters/reserve`, `POST /meters/finalize`, `POST /grounding/search` and
+ * `POST /learner-access/check` (ET-16 c, G2: learner grant re-validation).
  *
  * Auth is the webhook scheme in the other direction — the SAME secret
  * (`TEACHING_ENGINE_WEBHOOK_SECRET` = Kafuo `teaching_engine_webhook_secret`)
@@ -57,9 +58,21 @@ export function isKafuoIntegrationConfigured(): boolean {
 
 export type MeterCapability = 'free_chat' | 'help';
 
+/**
+ * Help scope (contracts §2.2): `learningItemId` + `learningItemType` name the
+ * pinned version's learning item (W2-C3, ET-34); Kafuo resolves its lesson (or
+ * SECTION), re-checks access on every turn (ET-16 c) and keys the Help counter
+ * `lesson:{lessonId}` / `item:{learningItemId}`. `lessonId` is the deprecated
+ * alias that has always carried the same learning item id.
+ */
 export type MeterScope =
   | { conversationId: string }
-  | { helpSessionId: string; lessonId: string | null };
+  | {
+      helpSessionId: string;
+      lessonId: string | null;
+      learningItemId?: string | null;
+      learningItemType?: string | null;
+    };
 
 export interface MeterReserveRequest {
   tenantId: string;
@@ -78,14 +91,69 @@ export interface MeterAllowanceStatus {
   resetAt: string;
 }
 
+/**
+ * Kafuo's refusal reasons (contracts §2.2). `ai_daily_safety_limit` is the
+ * daily AI safety cap (ET-30); `account_inactive` is an inactive, suspended or
+ * deleted account (SR-36); `feature_not_in_package` is a Package without the
+ * turn's feature (ET-17). W2-C3 adds the operational-control refusals
+ * (`feature_disabled`, `not_in_rollout`; a kill switch is
+ * `temporarily_unavailable`) and the lesson-gate codes a Help turn gets when the
+ * student lost access to the lesson after the grant was minted (ET-16 c):
+ * `lesson_not_acquired`, `paid_ended_lesson_locked`, `lesson_on_hold`,
+ * `learning_item_not_acquired`, `academic_unavailable`, `tenant_catalog_missing`,
+ * and (G2) `learning_item_on_hold` for a held SECTION.
+ * The turn answers every one except `temporarily_unavailable` (retryable
+ * `METER_UNAVAILABLE`) and `account_inactive` (403) as `ALLOWANCE_EXHAUSTED` with
+ * `details.reason`, which the app maps to its denial sheet. Any other reason
+ * parses as `temporarily_unavailable`.
+ */
 export type MeterRefusalReason =
   | 'help_allowance_exhausted'
   | 'tutor_allowance_exhausted'
   | 'feature_not_in_package'
-  | 'temporarily_unavailable';
+  | 'ai_daily_safety_limit'
+  | 'account_inactive'
+  | 'temporarily_unavailable'
+  | 'feature_disabled'
+  | 'not_in_rollout'
+  | 'lesson_not_acquired'
+  | 'paid_ended_lesson_locked'
+  | 'lesson_on_hold'
+  | 'learning_item_not_acquired'
+  | 'learning_item_on_hold'
+  | 'academic_unavailable'
+  | 'tenant_catalog_missing';
 
+const METER_REFUSAL_REASONS: ReadonlySet<string> = new Set<MeterRefusalReason>([
+  'help_allowance_exhausted',
+  'tutor_allowance_exhausted',
+  'feature_not_in_package',
+  'ai_daily_safety_limit',
+  'account_inactive',
+  'temporarily_unavailable',
+  'feature_disabled',
+  'not_in_rollout',
+  'lesson_not_acquired',
+  'paid_ended_lesson_locked',
+  'lesson_on_hold',
+  'learning_item_not_acquired',
+  'learning_item_on_hold',
+  'academic_unavailable',
+  'tenant_catalog_missing',
+]);
+
+/**
+ * `reservationId: null` is the ungated answer (ET-04): Kafuo is not the meter
+ * authority (legacy / shadow / dev), nothing was reserved, and the turn sends
+ * no finalize.
+ */
 export type MeterReserveDecision =
-  | { allowed: true; reservationId: string; replay: boolean; status: MeterAllowanceStatus | null }
+  | {
+      allowed: true;
+      reservationId: string | null;
+      replay: boolean;
+      status: MeterAllowanceStatus | null;
+    }
   | {
       allowed: false;
       reason: MeterRefusalReason;
@@ -97,6 +165,21 @@ export type MeterReserveDecision =
 export type MeterFinalizeRequest = FinalizePayload;
 
 export type MeterFinalizeResult = { status: 'delivered' | 'conflict' | 'not_found' };
+
+/**
+ * `POST /learner-access/check` (contracts §2.4, ET-16 c, G2): may the student
+ * behind a learner grant still open its learning item? `learningItemType` is
+ * informational; Kafuo resolves the item itself.
+ */
+export interface LearnerAccessCheckRequest {
+  tenantId: string;
+  studentRef: string;
+  learningItemId: string;
+  learningItemType: string | null;
+}
+
+/** `reason` is Kafuo's lesson-gate code (the meter refusal vocabulary). */
+export type LearnerAccessCheckResult = { allowed: true } | { allowed: false; reason: string };
 
 export interface GroundingSearchRequest {
   tenantId: string;
@@ -265,13 +348,21 @@ export class KafuoIntegrationClient {
     return { status: response.status, body: parsed };
   }
 
-  /** `POST /meters/reserve` (contracts §2.2). */
+  /**
+   * `POST /meters/reserve` (contracts §2.2). An explicit `reservationId: null`
+   * on an allowed answer is the ungated case (ET-04); a missing key or any
+   * other non-string, non-number id is `malformed_response`.
+   */
   async reserve(request: MeterReserveRequest): Promise<MeterReserveDecision> {
     const { status, body } = await this.post('/meters/reserve', request);
     if (status === 200 && isRecord(body) && typeof body.allowed === 'boolean') {
       if (body.allowed) {
         const reservationId = body.reservationId;
-        if (typeof reservationId !== 'string' && typeof reservationId !== 'number') {
+        if (
+          reservationId !== null &&
+          typeof reservationId !== 'string' &&
+          typeof reservationId !== 'number'
+        ) {
           throw new KafuoIntegrationError(
             'Kafuo reserve answered allowed without a reservationId',
             status,
@@ -281,7 +372,7 @@ export class KafuoIntegrationClient {
         const rawStatus = body.status;
         return {
           allowed: true,
-          reservationId: String(reservationId),
+          reservationId: reservationId === null ? null : String(reservationId),
           replay: body.replay === true,
           status:
             isRecord(rawStatus) &&
@@ -302,11 +393,8 @@ export class KafuoIntegrationClient {
       return {
         allowed: false,
         reason:
-          reason === 'help_allowance_exhausted' ||
-          reason === 'tutor_allowance_exhausted' ||
-          reason === 'feature_not_in_package' ||
-          reason === 'temporarily_unavailable'
-            ? reason
+          typeof reason === 'string' && METER_REFUSAL_REASONS.has(reason)
+            ? (reason as MeterRefusalReason)
             : 'temporarily_unavailable',
         window: typeof body.window === 'string' ? body.window : null,
         resetAt: typeof body.resetAt === 'string' ? body.resetAt : null,
@@ -332,6 +420,30 @@ export class KafuoIntegrationClient {
     if (status === 404) return { status: 'not_found' };
     throw new KafuoIntegrationError(
       `Kafuo finalize refused with HTTP ${status}`,
+      status,
+      errorCodeOf(body),
+    );
+  }
+
+  /**
+   * `POST /learner-access/check` (contracts §2.4). `200 {allowed, reason}` is the
+   * answer; a refusal without a usable reason reads as `temporarily_unavailable`
+   * (the caller fails closed, retryable). `404 student_ref_unknown` and any other
+   * 4xx throw `KafuoIntegrationError`; a 5xx or a transport failure throws
+   * `KafuoUnreachableError`.
+   */
+  async checkLearnerAccess(request: LearnerAccessCheckRequest): Promise<LearnerAccessCheckResult> {
+    const { status, body } = await this.post('/learner-access/check', request);
+    if (status === 200 && isRecord(body) && typeof body.allowed === 'boolean') {
+      if (body.allowed) return { allowed: true };
+      const reason = body.reason;
+      return {
+        allowed: false,
+        reason: typeof reason === 'string' && reason !== '' ? reason : 'temporarily_unavailable',
+      };
+    }
+    throw new KafuoIntegrationError(
+      `Kafuo learner access check refused with HTTP ${status}`,
       status,
       errorCodeOf(body),
     );

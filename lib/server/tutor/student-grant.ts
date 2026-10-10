@@ -3,9 +3,17 @@
  * §9.3, P5).
  *
  * Flow: Kafuo (service key) mints a short-lived HANDOFF for one student →
- * Mobile redeems it at `GET /api/tutor/handoff/redeem` → Mobile holds a
- * STUDENT GRANT (`Authorization: Bearer tsg.<payload>.<hmac>`, TTL 60 min) that
- * is the only credential on `app/api/tutor/**` Free Chat routes.
+ * Mobile redeems it at `POST /api/tutor/handoff/redeem` (body `{ token }`; the
+ * `GET ?token=` form is deprecated) → Mobile holds a STUDENT GRANT
+ * (`Authorization: Bearer tsg.<payload>.<hmac>`, TTL 60 min) that is the only
+ * credential on `app/api/tutor/**` Free Chat routes.
+ *
+ * ET-16 (a), launch plan Wave 2: a handoff is SINGLE-USE. The redeem route
+ * claims the handoff's nonce (`handoff-nonce-store.ts`) before minting, so a
+ * replayed token is `GRANT_INVALID` instead of a fresh 60-min grant
+ * (`redeemStudentHandoffOnce`). The grant's entitlements stay frozen for its
+ * 60 minutes; every Free Chat turn is re-validated by the Kafuo meter reserve
+ * (account, Package feature `ai_tutor`, operational controls, allowance).
  *
  * Kinds are distinct and never interchangeable (§5): a student grant is
  * `kind: 'student-grant'`; the learner (Help) cookie grant is `kind: 'grant'`
@@ -21,6 +29,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { handoffTtlMs } from '@/lib/server/teaching-package/editor-grant';
+import { claimHandoffNonce } from '@/lib/server/tutor/handoff-nonce-store';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { decodeSigned, encodeSigned } from '@/lib/server/teaching-package/signed-token';
 import { isSubjectCode } from '@/lib/server/teaching-model/subject-policy';
@@ -232,6 +241,28 @@ export function redeemStudentHandoff(
     subjects,
     academic: handoff.academic,
   };
+}
+
+/**
+ * ET-16 (a): redeem a handoff exactly once. Verifies it (`verifyStudentHandoff`
+ * errors unchanged), claims its nonce, then mints the grant. A second redeem of
+ * the same token — on any instance — is `GRANT_INVALID` (401), the same answer as
+ * a forged token, so the client takes its normal "fresh handoff" path.
+ */
+export async function redeemStudentHandoffOnce(
+  token: string,
+  now: number = Date.now(),
+): Promise<RedeemedStudentGrant> {
+  const handoff = verifyStudentHandoff(token, now);
+  const claimed = await claimHandoffNonce({
+    kind: 'student-handoff',
+    nonce: handoff.nonce,
+    tenantId: handoff.tenantId,
+    expiresAtMs: handoff.exp,
+    nowMs: now,
+  });
+  if (!claimed) throw invalid('the student handoff token was already redeemed');
+  return redeemStudentHandoff(token, now);
 }
 
 /**

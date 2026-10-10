@@ -15,6 +15,10 @@ import type { DirectGroundingDeps } from '@/lib/server/tutor/grounding/kafuo-gro
 import { getKafuoGroundingReader } from '@/lib/server/tutor/grounding/pg-grounding-reader';
 import { createQueryEmbedder } from '@/lib/server/tutor/grounding/query-embedding';
 import {
+  getMeterRefusalCache,
+  type MeterRefusalCache,
+} from '@/lib/server/tutor/meter-refusal-cache';
+import {
   getKafuoIntegrationClient,
   type KafuoIntegrationClient,
 } from '@/lib/server/tutor/kafuo-integration-client';
@@ -46,6 +50,12 @@ export interface TutorRuntimeDeps {
    * records "not available".
    */
   grounding?: DirectGroundingDeps;
+  /**
+   * ET-34 (W2-C3): recent non-retryable meter refusals, so the next turn is
+   * refused before `prepare` (no embedding / grounding call). The production deps
+   * carry the process-wide cache; test deps omit it (no caching).
+   */
+  refusalCache?: MeterRefusalCache;
 }
 
 const OVERRIDE_KEY = Symbol.for('openmaic.tutor.runtime-deps-override');
@@ -95,6 +105,7 @@ export async function resolveTutorRuntimeDeps(): Promise<TutorRuntimeDeps> {
     pool: pool as unknown as ConnectableQueryable,
     kafuo: getKafuoIntegrationClient(),
     now: Date.now,
+    refusalCache: getMeterRefusalCache(),
     ...(grounding ? { grounding } : {}),
   };
 }

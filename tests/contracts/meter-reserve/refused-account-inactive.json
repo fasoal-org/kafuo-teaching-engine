@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-account-inactive",
+  "description": "SR-36: the account is inactive, suspended or deleted. Refused, never ungated.",
+  "backend": "account_inactive",
+  "response": {
+    "allowed": false,
+    "reason": "account_inactive",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "account_inactive",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 403,
+    "code": "ACCOUNT_INACTIVE",
+    "retryable": false,
+    "details": {
+      "reason": "account_inactive",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

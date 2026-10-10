@@ -1,0 +1,19 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "malformed-allowed-without-reservation-id",
+  "description": "TE robustness: allowed without a reservationId key is malformed (only an explicit null is ungated). The backend never sends it.",
+  "backend": null,
+  "response": {
+    "allowed": true,
+    "replay": false,
+    "status": null
+  },
+  "teDecision": null,
+  "teClientError": "malformed_response",
+  "teTurn": {
+    "httpStatus": 503,
+    "code": "METER_UNAVAILABLE",
+    "retryable": true,
+    "details": null
+  }
+}

@@ -467,8 +467,10 @@ server persistence and a service key are configured:
 
 - `TEACHING_ENGINE_SERVICE_KEY` — required. Kafuo Backend sends it as
   `Authorization: Bearer <key>` on every server-to-server call.
-- `TEACHING_PACKAGE_GRANT_SECRET` — optional. Secret used to sign editor
-  handoff tokens and Editor grant cookies; defaults to the service key.
+- `TEACHING_PACKAGE_GRANT_SECRET` — required in production (the server
+  refuses to start without it, and refuses a value equal to the service key).
+  Secret used to sign editor handoff tokens, learner/student grants and signed
+  media links; in development it defaults to the service key.
 - `TEACHING_PACKAGE_EDITOR_SESSION_SECONDS` — optional. Browser Editor grant
   session lifetime; defaults to `28800` (8 hours).
 - `TEACHING_PACKAGE_ATTEMPT_STALE_MS` — optional. Age at which a `running`

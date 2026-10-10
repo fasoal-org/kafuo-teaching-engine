@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { isOpenApiRequest } from '@/lib/config/access-code-allowlist';
 import { isAgentRuntimeConfigured, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
+import {
+  isOpenAccessOptOut,
+  readAccessToken,
+  resolveAccessGateMode,
+} from '@/lib/server/startup-config';
 
 /** Convert string to Uint8Array */
 function encode(str: string): Uint8Array {
@@ -15,13 +20,15 @@ function bufToHex(buf: ArrayBuffer): string {
     .join('');
 }
 
-/** Verify an HMAC-signed token using Web Crypto API (Edge-compatible) */
+/**
+ * Verify an HMAC-signed token using Web Crypto API (Edge-compatible). The
+ * format and the 12-hour age rule are `readAccessToken`'s, shared with the
+ * Node verifier in `lib/server/access-token.ts`.
+ */
 async function verifyToken(token: string, accessCode: string): Promise<boolean> {
-  const dotIndex = token.indexOf('.');
-  if (dotIndex === -1) return false;
-
-  const timestamp = token.substring(0, dotIndex);
-  const signature = token.substring(dotIndex + 1);
+  const parts = readAccessToken(token, Date.now());
+  if (!parts) return false;
+  const { message, signature } = parts;
 
   const keyData = encode(accessCode);
   const key = await crypto.subtle.importKey(
@@ -32,7 +39,7 @@ async function verifyToken(token: string, accessCode: string): Promise<boolean> 
     ['sign'],
   );
 
-  const data = encode(timestamp);
+  const data = encode(message);
   const expected = bufToHex(await crypto.subtle.sign('HMAC', key, data.buffer as ArrayBuffer));
 
   // Constant-length comparison (not truly constant-time in JS, but sufficient here)
@@ -58,8 +65,15 @@ export async function middleware(request: NextRequest) {
     return new NextResponse('Not found', { status: 404 });
   }
 
+  // Read per request (not at module load): `next start` supplies the runtime
+  // env, and tests stub it.
   const accessCode = process.env.ACCESS_CODE;
-  if (!accessCode) {
+  const gateMode = resolveAccessGateMode({
+    accessCode,
+    isProduction: process.env.NODE_ENV === 'production',
+    allowOpenAccess: isOpenAccessOptOut(process.env.TE_ALLOW_OPEN_ACCESS),
+  });
+  if (gateMode === 'open') {
     return NextResponse.next();
   }
 
@@ -67,6 +81,20 @@ export async function middleware(request: NextRequest) {
   // (server to server) and the mobile app call. Each enforces its own
   // authentication; the access cookie is meaningless to those callers.
   if (isOpenApiRequest(request)) {
+    return NextResponse.next();
+  }
+
+  // Production without ACCESS_CODE (ET-31): the startup guard refuses to boot,
+  // so this only runs if that guard was bypassed. Fail closed: no other /api
+  // route is served. Pages still pass; they call /api and get the 503.
+  // (`!accessCode` only narrows the type: 'gated' always has a code.)
+  if (gateMode === 'closed' || !accessCode) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { success: false, errorCode: 'INTERNAL_ERROR', error: 'Access gate not configured' },
+        { status: 503 },
+      );
+    }
     return NextResponse.next();
   }
 

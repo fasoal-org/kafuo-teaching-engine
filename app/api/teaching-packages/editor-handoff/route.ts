@@ -6,6 +6,13 @@
  * regeneration between mint and redeem invalidates the token), then sets the
  * HttpOnly Stage-scoped grant cookie plus the readable companion learner-key
  * cookie and redirects to the classroom.
+ *
+ * ET-16 (a), launch plan Wave 2: a LEARNER handoff is single-use. Right after
+ * the signature check its nonce is claimed (`claimLearnerHandoffOnce`, durable
+ * across instances); a second redeem of the same token is `GRANT_INVALID` (401,
+ * no cookie), the same refusal a replayed student handoff gets, and the app
+ * asks Kafuo for a fresh handoff. Edit and preview handoffs (admin browser
+ * redirects) are not claimed and behave exactly as before.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -14,6 +21,7 @@ import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import {
   LEARNER_HANDOFF_STATUSES,
   buildEditorGrantPayload,
+  claimLearnerHandoffOnce,
   editorGrantCookieHeaders,
   grantCookieValueForRedeem,
   verifyEditorHandoffToken,
@@ -32,6 +40,13 @@ export async function GET(req: NextRequest) {
     const payload = verifyEditorHandoffToken(token);
     if (!payload) {
       throw new TeachingPackageError('INVALID_REQUEST', 'the handoff token is invalid or expired');
+    }
+    // ET-16 (a): one grant per learner handoff. Edit/preview are never claimed.
+    if (payload.purpose === 'learner' && !(await claimLearnerHandoffOnce(payload))) {
+      throw new TeachingPackageError(
+        'GRANT_INVALID',
+        'the learner handoff token was already redeemed',
+      );
     }
 
     // The token carries the canonical tenant; a version under a different

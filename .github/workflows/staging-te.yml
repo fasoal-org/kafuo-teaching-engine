@@ -33,8 +33,34 @@ jobs:
       name: staging
       url: https://kafuo-staging.tailcd4398.ts.net:8443/api/health
     steps:
+      # Out-of-order guard: runs queue one at a time, but a re-run of an older run (or an
+      # older queued run) would still deploy older code over newer code. Deploy only while
+      # this commit is still the staging tip; otherwise skip (the newer run deploys it).
+      # A failed read fails the job: never deploy without knowing the tip.
+      - name: Check that ${{ github.sha }} is still the staging tip
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/$REPO/git/ref/heads/staging" --jq .object.sha)"
+          if [ -z "$tip" ]; then
+            echo "::error::Could not read the origin/staging tip; refusing to deploy."
+            exit 1
+          fi
+          if [ "$tip" = "$SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "Deploying $SHA: it is the current origin/staging tip."
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::$SHA is no longer the origin/staging tip ($tip). Skipping so older code never replaces newer code; the run for $tip deploys it."
+          fi
+
       # StrictHostKeyChecking with the pinned key: the job talks only to our server.
       - name: Load the SSH key and the server's host key
+        if: steps.tip.outputs.current == 'true'
         env:
           SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
           KNOWN_HOSTS: ${{ vars.STAGING_SSH_KNOWN_HOSTS }}
@@ -47,6 +73,7 @@ jobs:
       # The server runs only `deploy <SHA>` for this key (authorized_keys forced command
       # /srv/kafuo/bin/ci-deploy-app te), and only for a commit that is on origin/staging.
       - name: Deploy ${{ github.sha }}
+        if: steps.tip.outputs.current == 'true'
         env:
           HOST: ${{ vars.STAGING_HOST }}
           USER_NAME: ${{ vars.STAGING_USER }}

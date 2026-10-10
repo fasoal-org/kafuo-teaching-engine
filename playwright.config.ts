@@ -37,6 +37,11 @@ export default defineConfig({
       NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true',
       NEXT_PUBLIC_PI_CHAT_ENABLED: 'true',
       NEXT_PUBLIC_COURSEWARE_REFERENCE_ENABLED: 'true',
+      // CI boots the production build (`pnpm start`, NODE_ENV=production),
+      // where the startup guard refuses an empty ACCESS_CODE or grant secret
+      // (ET-31/ET-34). e2e runs open on purpose, with a throwaway secret.
+      TE_ALLOW_OPEN_ACCESS: '1',
+      TEACHING_PACKAGE_GRANT_SECRET: 'e2e-only-grant-secret-not-a-service-key',
     },
   },
 });

@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-help-allowance-exhausted",
+  "description": "Help allowance for the lesson used up (per lesson, never resets).",
+  "backend": "help_exhausted",
+  "response": {
+    "allowed": false,
+    "reason": "help_allowance_exhausted",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "help_allowance_exhausted",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 429,
+    "code": "ALLOWANCE_EXHAUSTED",
+    "retryable": false,
+    "details": {
+      "reason": "help_allowance_exhausted",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

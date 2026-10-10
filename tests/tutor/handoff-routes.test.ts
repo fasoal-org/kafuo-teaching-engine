@@ -1,12 +1,19 @@
 import { NextRequest } from 'next/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  createMemoryHandoffNonceStoreForTests,
+  resetHandoffNonceMemoryForTests,
+  setHandoffNonceStoreForTests,
+} from '@/lib/server/tutor/handoff-nonce-store';
 import { mintStudentHandoff, verifyStudentGrant, verifyStudentHandoff } from '@/lib/server/tutor/student-grant';
 
 /**
  * `POST /api/tutor/handoff` (service key, contracts §3.1) and
  * `GET /api/tutor/handoff/redeem` (handoff token, contracts §5): gating,
- * authentication and the JSON shapes. No database is touched by either.
+ * authentication and the JSON shapes. No database is touched by either: the
+ * redeem's single-use nonce claim runs on an in-memory test double (the real
+ * store fails closed without a database, G2).
  */
 
 const SERVICE_KEY = 'handoff-routes-svc-key';
@@ -58,6 +65,12 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', SERVICE_KEY);
   vi.stubEnv('DATABASE_URL', 'postgres://handoff-routes-test');
+  resetHandoffNonceMemoryForTests();
+  setHandoffNonceStoreForTests(createMemoryHandoffNonceStoreForTests());
+});
+
+afterEach(() => {
+  setHandoffNonceStoreForTests(undefined);
 });
 
 describe('POST /api/tutor/handoff', () => {

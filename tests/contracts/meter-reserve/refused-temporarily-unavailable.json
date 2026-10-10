@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-temporarily-unavailable",
+  "description": "ET-05: the entitlement mode is misconfigured (R1 latch set, legacy/shadow configured). Fail closed: refused, never ungated; the TE answers a retryable METER_UNAVAILABLE.",
+  "backend": "mode_misconfigured",
+  "response": {
+    "allowed": false,
+    "reason": "temporarily_unavailable",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "temporarily_unavailable",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 503,
+    "code": "METER_UNAVAILABLE",
+    "retryable": true,
+    "details": {
+      "reason": "temporarily_unavailable",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

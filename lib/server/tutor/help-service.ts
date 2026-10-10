@@ -40,6 +40,7 @@ import {
   type WireMessage,
 } from '@/lib/server/tutor/conversation-service';
 import type { VerifiedLearnerGrant } from '@/lib/server/tutor/guards';
+import { evaluateLearnerGrantAccess, learnerHelpError } from '@/lib/server/tutor/learner-access';
 import {
   assessSceneScope,
   selectHelpUnits,
@@ -164,6 +165,14 @@ export async function resolveHelpAnchor(
 // Read a session (GET /api/tutor/help/sessions)
 // ---------------------------------------------------------------------------
 
+/**
+ * ET-16 (c), G2: the Help history is re-validated with Kafuo like the Stage
+ * document (`learner-access.ts`, cached ≤ 5 min), so it stops being readable
+ * when Premium ends, the account is suspended or the lesson is held — not 8 h
+ * later when the grant expires. Refusals use the Help turn's own envelope
+ * (`ALLOWANCE_EXHAUSTED` + `details.reason`, `ACCOUNT_INACTIVE`, retryable
+ * `METER_UNAVAILABLE` when the check cannot be made).
+ */
 export async function getHelpSession(
   deps: TutorRuntimeDeps,
   grant: VerifiedLearnerGrant,
@@ -171,6 +180,10 @@ export async function getHelpSession(
 ): Promise<{ session: WireHelpSession | null; messages: WireMessage[]; hasMore: boolean }> {
   const { versionId, stageId } = requireLearnerAnchor(grant, input);
   const sceneId = requireId(input.sceneId, 'sceneId');
+  const refusal = learnerHelpError(
+    await evaluateLearnerGrantAccess(grant, { pool: deps.pool, client: deps.kafuo, now: deps.now }),
+  );
+  if (refusal) throw refusal;
   const session = await readHelpSessionByAnchor(deps.pool, {
     versionId,
     stageId,
@@ -296,6 +309,19 @@ export async function runHelpTurn(deps: TutorRuntimeDeps, input: HelpTurnInput):
   }
   const text = input.text;
 
+  // --- ET-17: the grant's Help entitlement, before any read, session or model ---
+  // Kafuo puts the Package's `help` feature in the learner grant (contracts §3.2);
+  // a grant that says no is refused here, the same way the meter reserve refuses
+  // it (`feature_not_in_package`), so the app shows the same denial sheet.
+  requireLearnerAnchor(grant, input);
+  if (grant.student.entitlements.help !== true) {
+    throw new TeachingPackageError('ALLOWANCE_EXHAUSTED', 'Help is not in the student package', {
+      reason: 'feature_not_in_package',
+      window: null,
+      resetAt: null,
+    });
+  }
+
   // --- anchor: grant → pinned version → Stage → Scene ---------------------------
   const anchor = await resolveHelpAnchor(deps, grant, input);
   const { version, scene } = anchor;
@@ -382,7 +408,14 @@ export async function runHelpTurn(deps: TutorRuntimeDeps, input: HelpTurnInput):
       academicLanguage: academic.academicLanguage,
       stepRef,
       intentHint,
-      meterScope: { helpSessionId: session.id, lessonId: version.learningItem.id },
+      // ET-34: the learning item is named as such; `lessonId` is the deprecated
+      // alias Kafuo read before W2-C3 (it always carried this item id).
+      meterScope: {
+        helpSessionId: session.id,
+        lessonId: version.learningItem.id,
+        learningItemId: version.learningItem.id,
+        learningItemType: version.learningItem.type,
+      },
       association: {
         sceneId,
         learningItemType: version.learningItem.type,
