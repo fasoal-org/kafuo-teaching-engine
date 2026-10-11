@@ -33,11 +33,12 @@ import {
  * W2-C3 on the Teaching Engine turn runner (Free Chat route, PGlite, mocked LLM,
  * fake Kafuo):
  *
- * - ET-33 / DEF-09 (owner decision #7): a turn that streamed ANY answer text is
- *   finalized `delivered` even when the client hung up or the providers then
- *   failed (the failure stays in `reason`); a turn with no answer text is
- *   `not_delivered`; a completion-transaction failure after text streamed sends
- *   the `delivered` finalize directly instead of leaving it to the sweeper.
+ * - D-3 (owner charging decision): a turn is charged ONLY when the whole answer
+ *   was delivered — `done` was written while the stream was still open. A
+ *   partial answer followed by a provider failure, a client hang-up mid-stream,
+ *   a disconnect before `done`, or a completion-transaction failure all end
+ *   `not_delivered` (released); only the complete answer whose `done` reached
+ *   the client is finalized `delivered`.
  * - ET-34: with a refusal cache in the deps, a non-retryable refusal answers the
  *   next turn before `prepare` (no grounding / embedding, no reserve) for the
  *   cache window; `temporarily_unavailable` is never cached; no cache = no change.
@@ -174,8 +175,8 @@ afterEach(async () => {
   await pool.end();
 });
 
-describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
-  it('a client that hangs up mid-stream is finalized delivered with reason aborted', async () => {
+describe('D-3: a turn is charged only when `done` reached the client', () => {
+  it('partial text, then the client hangs up mid-stream: released (not_delivered, reason aborted)', async () => {
     mocks.streamLLM.mockImplementation((params: { abortSignal: AbortSignal }) => ({
       fullStream: (async function* () {
         yield { type: 'text-delta', text: 'الجواب يبدأ هنا' };
@@ -191,7 +192,8 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
     const response = await send(id);
     expect(response.status).toBe(200);
 
-    // Read until the first answer text arrives, then hang up.
+    // Read until the first answer text arrives, then hang up: no `done` ever
+    // reaches the client, so the incomplete answer is not charged.
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let seen = '';
@@ -203,13 +205,13 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
     await reader.cancel();
 
     const outbox = await settledFinalize('res-1');
-    expect(outbox).toMatchObject({ outcome: 'delivered', reason: 'aborted' });
+    expect(outbox).toMatchObject({ outcome: 'not_delivered', reason: 'aborted' });
     expect(mocks.streamLLM).toHaveBeenCalledTimes(1); // an abort is never retried on the fallback
     const student = (await readMessageByClientId(pool, id, 'cm-1'))!;
     expect(student.status).toBe('failed');
   });
 
-  it('text from the primary, then both routes fail: delivered with reason model_unavailable', async () => {
+  it('partial text from the primary, then both routes fail: released with reason model_unavailable', async () => {
     mocks.streamLLM
       .mockImplementationOnce(() =>
         streamOf([
@@ -225,13 +227,14 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
       event: 'error',
       data: { code: 'TEACHING_MODEL_UNAVAILABLE' },
     });
+    // D-3: fallbacks exhausted mid-answer → no complete answer, no `done`: released.
     expect(await settledFinalize('res-1')).toMatchObject({
-      outcome: 'delivered',
+      outcome: 'not_delivered',
       reason: 'model_unavailable',
     });
     expect(kafuo.finalize.mock.calls[0]![0]).toMatchObject({
       reservationId: 'res-1',
-      outcome: 'delivered',
+      outcome: 'not_delivered',
     });
   });
 
@@ -247,7 +250,62 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
     });
   });
 
-  it('a completion transaction that cannot commit after text streamed still reports delivered', async () => {
+  it('a full answer whose `done` reaches the client: delivered', async () => {
+    mocks.streamLLM.mockImplementation(() => textStream('الجواب كاملًا هنا.'));
+    const id = await conversation();
+    const frames = await readSse(await send(id));
+    expect(frames.map((f) => f.event)).toContain('done');
+    expect(await settledFinalize('res-1')).toMatchObject({ outcome: 'delivered', reason: null });
+    expect(kafuo.finalize.mock.calls[0]![0]).toMatchObject({
+      reservationId: 'res-1',
+      outcome: 'delivered',
+      reason: null,
+    });
+    const student = (await readMessageByClientId(pool, id, 'cm-1'))!;
+    expect(student.status).toBe('completed');
+  });
+
+  it('a full answer whose client disconnects BEFORE `done`: released', async () => {
+    // The model answer completes (text + finish), but the executor is still
+    // awaiting usage when the student hangs up: no `done` can ever be written.
+    let releaseUsage!: () => void;
+    const usageGate = new Promise<unknown>((resolve) => {
+      releaseUsage = () => resolve(USAGE);
+    });
+    mocks.streamLLM.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: 'الجواب كاملًا' };
+        yield { type: 'finish', finishReason: 'stop' };
+      })(),
+      totalUsage: usageGate,
+    }));
+    const id = await conversation();
+    const response = await send(id);
+    expect(response.status).toBe(200);
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    while (!parseSseFrames(seen).some((f) => f.event === 'text_delta')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value);
+    }
+    await reader.cancel();
+    releaseUsage();
+
+    const outbox = await settledFinalize('res-1');
+    expect(outbox).toMatchObject({ outcome: 'not_delivered', reason: 'aborted' });
+    expect(kafuo.finalize.mock.calls[0]![0]).toMatchObject({
+      reservationId: 'res-1',
+      outcome: 'not_delivered',
+    });
+    // The answer itself completed server-side; only the charge was released.
+    const student = (await readMessageByClientId(pool, id, 'cm-1'))!;
+    expect(student.status).toBe('completed');
+  });
+
+  it('a completion transaction that cannot commit releases the reservation directly', async () => {
     mocks.streamLLM.mockImplementation(() => ({
       fullStream: (async function* () {
         yield { type: 'text-delta', text: 'الجواب كاملًا' };
@@ -259,6 +317,7 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
     const id = await conversation();
     const frames = await readSse(await send(id));
     pool.failCommit = false;
+    // No `done` was sent (the turn answers error), so D-3 releases the unit.
     expect(frames.at(-1)).toMatchObject({
       event: 'error',
       data: { code: 'ACCOUNTING_UNAVAILABLE' },
@@ -267,7 +326,7 @@ describe('ET-33 / DEF-09: a turn counts when answer text was delivered', () => {
     expect(kafuo.finalize).toHaveBeenCalledTimes(1);
     expect(kafuo.finalize.mock.calls[0]![0]).toEqual({
       reservationId: 'res-1',
-      outcome: 'delivered',
+      outcome: 'not_delivered',
       reason: 'internal_error',
       turnId: expect.any(String),
     });

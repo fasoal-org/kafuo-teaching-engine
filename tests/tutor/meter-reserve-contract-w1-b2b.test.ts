@@ -33,8 +33,11 @@ import {
  * W1-B2b: the TE side of the `POST /meters/reserve` contract (r1-api-contracts
  * §2.2) — ET-04 (an explicit `reservationId: null` is the ungated answer: the
  * turn runs, no outbox row, no finalize), SR-36 (`account_inactive` → 403
- * `ACCOUNT_INACTIVE`, not retryable) and ET-30 (`ai_daily_safety_limit` → 429
- * `ALLOWANCE_EXHAUSTED` with `details.reason/window/resetAt`).
+ * `ACCOUNT_INACTIVE`, not retryable) and the allowance refusals → 429
+ * `ALLOWANCE_EXHAUSTED` with `details.reason/window/resetAt`. D-1/F05 removed
+ * the daily AI safety cap: the `ai_daily_safety_limit` reason and its fixture
+ * are gone; `guided_assistance_allowance_exhausted` is the guided-assistance
+ * refusal the backend may answer instead.
  *
  * THE FIXTURES ARE SHARED WITH THE BACKEND. The same files live in
  * `zakrly-backend/tests/contracts/meter-reserve/` and must stay byte-identical:
@@ -154,11 +157,15 @@ describe('meter reserve contract fixtures (shared with the backend)', () => {
         'ungated',
         'refused-tutor-allowance-exhausted',
         'refused-help-allowance-exhausted',
-        'refused-ai-daily-safety-limit',
         'refused-account-inactive',
         'refused-unknown-reason',
       ]),
     );
+    // D-1/F05: the daily AI safety cap is dead — no fixture may carry it back.
+    expect(FIXTURES.map((f) => f.case)).not.toContain('refused-ai-daily-safety-limit');
+    for (const fixture of FIXTURES) {
+      expect(JSON.stringify(fixture)).not.toContain('ai_daily_safety');
+    }
   });
 
   it.skipIf(!existsSync(BACKEND_FIXTURE_DIR))(
@@ -195,6 +202,23 @@ describe('KafuoIntegrationClient.reserve parses every fixture (contracts §2.2)'
       RESERVE,
     );
     expect(decision).toMatchObject({ allowed: true, reservationId: '501' });
+  });
+
+  it('parses guided_assistance_allowance_exhausted as itself (429 class, not temporarily_unavailable)', async () => {
+    const decision = await clientAnswering({
+      allowed: false,
+      reason: 'guided_assistance_allowance_exhausted',
+      window: null,
+      resetAt: null,
+      replay: false,
+    }).reserve(RESERVE);
+    expect(decision).toEqual({
+      allowed: false,
+      reason: 'guided_assistance_allowance_exhausted',
+      window: null,
+      resetAt: null,
+      replay: false,
+    });
   });
 });
 
@@ -245,8 +269,8 @@ describe('Free Chat turn per reserve fixture (turn-runner mapping)', () => {
 
   const outboxRows = async () =>
     Number(
-      (await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM meter_finalize_outbox')).rows[0]!
-        .n,
+      (await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM meter_finalize_outbox'))
+        .rows[0]!.n,
     );
 
   beforeEach(async () => {
@@ -308,7 +332,10 @@ describe('Free Chat turn per reserve fixture (turn-runner mapping)', () => {
         if (turn.finalize) {
           expect(settled.meterReservationId).toBe(reservationId);
           expect(kafuo.finalize).toHaveBeenCalledTimes(1);
-          expect(kafuo.finalize.mock.calls[0]![0]).toMatchObject({ reservationId, outcome: 'delivered' });
+          expect(kafuo.finalize.mock.calls[0]![0]).toMatchObject({
+            reservationId,
+            outcome: 'delivered',
+          });
           expect(await readFinalize(pool, reservationId!)).toMatchObject({ status: 'delivered' });
         } else {
           // ET-04 ungated: nothing reserved, so nothing enqueued and nothing finalized.
