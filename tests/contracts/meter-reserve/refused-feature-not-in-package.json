@@ -1,0 +1,32 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp. W2-C3: 'backend' stays null so the W1-B2b scenario map stays closed; 'backendW2C3' names the scenario tests/unit/entitlements/test_w2_c3_reserve_contract.py drives.",
+  "case": "refused-feature-not-in-package",
+  "description": "The Package lacks the turn's feature (ET-17): help for Help, ai_tutor for Free Chat. Checked before any unit.",
+  "backend": null,
+  "backendW2C3": "feature_not_in_package",
+  "response": {
+    "allowed": false,
+    "reason": "feature_not_in_package",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "feature_not_in_package",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 429,
+    "code": "ALLOWANCE_EXHAUSTED",
+    "retryable": false,
+    "details": {
+      "reason": "feature_not_in_package",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

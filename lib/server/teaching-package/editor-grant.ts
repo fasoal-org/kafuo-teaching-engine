@@ -139,6 +139,32 @@ export function mintEditorHandoffToken(input: {
   return { token: encodeSigned(payload), expiresAt };
 }
 
+/**
+ * ET-16 (a), launch plan Wave 2: a LEARNER handoff is single-use. Returns
+ * `false` when this handoff's nonce was already redeemed (on any instance), so
+ * the redeem route answers it exactly like an invalid token and the app takes
+ * its normal "fresh handoff" path (`TeachingEngineRefusal.isStaleHandoff`).
+ * Edit and preview handoffs (admin browser redirects, which a browser may
+ * re-request) are not claimed and always answer `true`.
+ *
+ * Wiring: `app/api/teaching-packages/editor-handoff/route.ts` calls this right
+ * after `verifyEditorHandoffToken` (outside W2-C3's file scope; see the wave report).
+ */
+export async function claimLearnerHandoffOnce(
+  payload: EditorHandoffPayload,
+  now: number = Date.now(),
+): Promise<boolean> {
+  if (payload.purpose !== 'learner') return true;
+  const { claimHandoffNonce } = await import('@/lib/server/tutor/handoff-nonce-store');
+  return claimHandoffNonce({
+    kind: 'learner-handoff',
+    nonce: payload.nonce,
+    tenantId: payload.tenantId,
+    expiresAtMs: payload.exp,
+    nowMs: now,
+  });
+}
+
 export function verifyEditorHandoffToken(token: string): EditorHandoffPayload | null {
   const payload = decodeSigned<EditorHandoffPayload>(token);
   if (!payload || payload.v !== 1 || payload.kind !== 'handoff') return null;

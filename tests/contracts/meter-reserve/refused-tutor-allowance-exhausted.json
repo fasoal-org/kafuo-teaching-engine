@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-tutor-allowance-exhausted",
+  "description": "Free Chat plan allowance used up (Free: half_month window).",
+  "backend": "tutor_exhausted",
+  "response": {
+    "allowed": false,
+    "reason": "tutor_allowance_exhausted",
+    "window": "half_month",
+    "resetAt": "2026-10-15T21:00:00+00:00",
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "tutor_allowance_exhausted",
+    "window": "half_month",
+    "resetAt": "2026-10-15T21:00:00+00:00",
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 429,
+    "code": "ALLOWANCE_EXHAUSTED",
+    "retryable": false,
+    "details": {
+      "reason": "tutor_allowance_exhausted",
+      "window": "half_month",
+      "resetAt": "2026-10-15T21:00:00+00:00"
+    }
+  }
+}

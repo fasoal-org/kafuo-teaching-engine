@@ -230,8 +230,29 @@ export type TeachingPackageErrorCode =
   | 'TURN_DIGEST_CONFLICT'
   /** Kafuo refused the meter reservation (`{ window, resetAt, reason }` in details). */
   | 'ALLOWANCE_EXHAUSTED'
+  /**
+   * Kafuo refused the meter reservation because the student's account is
+   * inactive, suspended or deleted (`reason: account_inactive`, SR-36). Not retryable.
+   */
+  | 'ACCOUNT_INACTIVE'
   /** Kafuo could not be reached for the reservation: no model call was made (retryable). */
   | 'METER_UNAVAILABLE'
+  /**
+   * ET-16 (c), G2: Kafuo's learner access check refused this learner grant's
+   * learning item (Premium ended, a hold, a lost acquisition…; `details.reason`).
+   * The Stage document / signed media is not served. Not retryable unchanged.
+   */
+  | 'LEARNER_ACCESS_REVOKED'
+  /**
+   * ET-16 (c), G2: the learner access check could not be completed (Kafuo
+   * unreachable, a 5xx, a misconfigured entitlement mode). Fails closed (retryable).
+   */
+  | 'LEARNER_ACCESS_UNAVAILABLE'
+  /**
+   * ET-16 (a), G2: the durable handoff-nonce store could not record the redeem,
+   * so no grant is minted (fails closed, retryable).
+   */
+  | 'HANDOFF_STORE_UNAVAILABLE'
   /** Rules + academic block + the student message alone exceed the input budget. */
   | 'REQUEST_TOO_LARGE'
   /** Legacy help-turn grounding units exceed the 10,000-char ceiling. */
@@ -387,7 +408,11 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   TURN_IN_PROGRESS: 409,
   TURN_DIGEST_CONFLICT: 409,
   ALLOWANCE_EXHAUSTED: 429,
+  ACCOUNT_INACTIVE: 403,
   METER_UNAVAILABLE: 503,
+  LEARNER_ACCESS_REVOKED: 403,
+  LEARNER_ACCESS_UNAVAILABLE: 503,
+  HANDOFF_STORE_UNAVAILABLE: 503,
   REQUEST_TOO_LARGE: 422,
   GROUNDING_TOO_LARGE: 422,
   SAFETY_BOUNDARY: 200,

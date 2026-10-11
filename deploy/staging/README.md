@@ -35,8 +35,9 @@ The two `/srv/kafuo` entry points are root-owned. Their reference copies are in 
   - the service key and the webhook secret, which must equal the backend's `TEACHING_ENGINE_SERVICE_KEY` and `TEACHING_ENGINE_WEBHOOK_SECRET`;
   - the webhook and integration URLs;
   - the provider keys;
-  - `ACCESS_CODE` (the browser gate; admins type it once). With it set, only the Backend's and the mobile app's routes pass without the access cookie (`lib/config/access-code-allowlist.ts`); every other `/api` request is a 401.
-- **Must stay unset:** `PERSISTENCE_DEV_TOKEN`, `NEXT_PUBLIC_PERSISTENCE_TOKEN` and `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK`, which are dev only. `PERSISTENCE_DEV_TOKEN` matters twice: with it set, the learner document route would also answer requests no grant covers.
+  - `ACCESS_CODE` (the browser gate; admins type it, then again every 12 hours). With it set, only the Backend's and the mobile app's routes pass without the access cookie (`lib/config/access-code-allowlist.ts`); every other `/api` request is a 401. **Required:** the image runs `NODE_ENV=production`, and the TE refuses to start without it (`lib/server/startup-config.ts`).
+  - `TEACHING_PACKAGE_GRANT_SECRET`, which signs every grant, handoff token and signed media link. **Required:** the TE refuses to start without it, or when it equals the service key. Generate it straight into the file (`openssl rand -hex 32`, never shown). Setting or changing it invalidates every live grant (admins and learners open the lesson again) and every media link in documents already delivered.
+- **Must stay unset:** `PERSISTENCE_DEV_TOKEN`, `NEXT_PUBLIC_PERSISTENCE_TOKEN`, `TEACHING_ENGINE_ALLOW_INSECURE_LOCAL_WEBHOOK` and `TE_ALLOW_OPEN_ACCESS`, which are dev only. `PERSISTENCE_DEV_TOKEN` matters twice: with it set, the learner document route would also answer requests no grant covers. `TE_ALLOW_OPEN_ACCESS` would let the TE start, and serve every route, without `ACCESS_CODE`.
 - **Backups:**
   - every deploy dumps `kafuo_te` into `/srv/kafuo/backups/` and keeps the last 10;
   - the nightly `backup.sh` covers every `kafuo_*` database;

@@ -22,9 +22,12 @@
  *                                streamed as text_delta — no model call, no
  *                                reservation, no finalize
  *   → assemble under budget      REQUEST_TOO_LARGE refused BEFORE any reservation
- *   → meter reserve              refused → ALLOWANCE_EXHAUSTED; unreachable →
- *                                METER_UNAVAILABLE; both before any ledger row
- *                                or model call
+ *   → meter reserve              refused → ALLOWANCE_EXHAUSTED (403
+ *                                ACCOUNT_INACTIVE for `account_inactive`);
+ *                                unreachable → METER_UNAVAILABLE; all before
+ *                                any ledger row or model call. Ungated
+ *                                (`reservationId: null`, ET-04) → the turn
+ *                                runs with no outbox row and no finalize
  *   → SSE stream opens           turn_start → grounding → executor (started
  *                                row → provider → completion via the hook,
  *                                collected for the turn transaction)
@@ -32,15 +35,33 @@
  *   → completion transaction     tutor message + student status + ledger
  *                                completions + tutor_turn_groundings + outbox
  *                                row (delivered | not_delivered + reason;
- *                                SAFETY_BOUNDARY is delivered, L1)
+ *                                SAFETY_BOUNDARY is delivered, L1; none when
+ *                                ungated)
  *   → commit → done | error      accountingComplete is always true (M1)
- *   → inline finalize            post-commit, best effort (M3)
+ *   → inline finalize            post-commit, best effort (M3); skipped when ungated
  *   → afterCommit                title / compaction, non-blocking for the student
  *
  * Every refusal after a successful reservation still runs the completion
  * transaction with a `not_delivered` outbox row, so nothing is ever left
  * `pending` for the sweeper by a refusal (H2). Nothing here logs prompt or
  * student text (§9.1).
+ *
+ * DEF-09 (owner decision #7, ET-33, launch plan Wave 2): a turn COUNTS when any
+ * answer text reached the student. A turn that streamed at least one non-empty
+ * `text_delta` and then failed or was aborted (the client hung up mid-stream) is
+ * finalized `delivered` with the failure as its `reason` (`aborted`,
+ * `model_unavailable`, …); only a turn that delivered no answer text is
+ * `not_delivered` (released). If the completion transaction itself cannot be
+ * written after text streamed, the runner sends the `delivered` finalize
+ * directly (best effort) instead of leaving the unit to the sweeper's release.
+ *
+ * ET-34 (W2-C3): a Kafuo refusal that cannot change soon (allowance used, the
+ * safety cap, no Package feature, lesson access lost) is remembered for this
+ * student, capability and scope for `TUTOR_REFUSAL_CACHE_SECONDS` (60 s) when the
+ * deps carry a `refusalCache` (production does). The next turn inside that
+ * window is refused BEFORE `prepare`, so an exhausted student no longer costs an
+ * embedding / grounding call per message. The H2 order for admitted turns is
+ * unchanged.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -124,6 +145,7 @@ import {
   type HistoryInput,
   type HistoryTurnInput,
 } from '@/lib/server/tutor/prompt-assembly';
+import { refusalCacheKey, type MeterRefusalCache } from '@/lib/server/tutor/meter-refusal-cache';
 import { createTutorSseWriter, type TutorSseWriter } from '@/lib/server/tutor/sse';
 import { resolveProxyRatio } from '@/lib/server/tutor/token-budget';
 import { startTurnProgress, TURN_PROGRESS_STALE_S } from '@/lib/server/tutor/turn-progress';
@@ -280,7 +302,8 @@ export interface CommittedTurn {
   servedBy: 'primary' | 'fallback' | null;
   groundingMode: GroundingMode;
   assembled: AssembledTutorPrompt | null;
-  reservationId: string;
+  /** `null` when Kafuo answered ungated (ET-04): nothing reserved, nothing to finalize. */
+  reservationId: string | null;
   /** Still open until the runner closes it: `title` may be sent through it. */
   sse: TutorSseWriter;
 }
@@ -328,6 +351,11 @@ export interface TurnRunnerDeps {
   progressStaleS?: number;
   heartbeatMs?: number;
   completionTxRetryDelaysMs?: readonly number[];
+  /**
+   * ET-34: remembers non-retryable Kafuo refusals so the next turn is refused
+   * before `prepare` (no embedding / grounding call). Absent = no caching.
+   */
+  refusalCache?: MeterRefusalCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +408,24 @@ export function pairHistoryTurns(messages: readonly TutorMessage[]): HistoryTurn
   return turns;
 }
 
+/** The turn's error code for a Kafuo refusal reason (contracts §2.2). */
+function refusalCode(
+  reason: string,
+): 'METER_UNAVAILABLE' | 'ACCOUNT_INACTIVE' | 'ALLOWANCE_EXHAUSTED' {
+  return reason === 'temporarily_unavailable'
+    ? 'METER_UNAVAILABLE'
+    : reason === 'account_inactive'
+      ? 'ACCOUNT_INACTIVE'
+      : 'ALLOWANCE_EXHAUSTED';
+}
+
+/** The meter scope part of the refusal-cache key (Help: per learning item). */
+function refusalScope(plan: TurnPlan): string {
+  const scope = plan.meterScope as { learningItemId?: unknown; lessonId?: unknown };
+  const item = scope.learningItemId ?? scope.lessonId;
+  return typeof item === 'string' && item !== '' ? `item:${item}` : 'global';
+}
+
 // Retry-After stays the 120 s window (unchanged). The app caps each wait at
 // 30 s, so a dead turn (TE-1) is replayed after ≥ 30 s of silence and taken over.
 function retryAfterS(nowS: number, generatingAt: number, windowS: number): number {
@@ -397,7 +443,7 @@ type Admission = { kind: 'new'; message: TutorMessage } | { kind: 'replay'; mess
  * stream). Throws `TeachingPackageError` for the pre-stream refusals the
  * route maps onto HTTP: TURN_IN_PROGRESS (409 + Retry-After),
  * IDEMPOTENCY_CONFLICT, REQUEST_TOO_LARGE (422), ALLOWANCE_EXHAUSTED (429),
- * METER_UNAVAILABLE (503).
+ * ACCOUNT_INACTIVE (403), METER_UNAVAILABLE (503).
  */
 export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promise<Response> {
   const now = deps.now ?? Date.now;
@@ -502,6 +548,27 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
     );
   }
 
+  // --- 3a. ET-34: a recent non-retryable refusal answers before `prepare` ------
+  const cacheKey = refusalCacheKey({
+    tenantId: parent.tenantId,
+    studentRef: parent.studentRef,
+    capability: plan.capability,
+    scope: refusalScope(plan),
+  });
+  const cached = deps.refusalCache?.get(cacheKey, now());
+  if (cached) {
+    const code = refusalCode(cached.reason);
+    log.info(
+      JSON.stringify({ event: 'tutor.meter_refused_cached', turnId, reason: cached.reason }),
+    );
+    await failBeforeReservation(code);
+    throw new TeachingPackageError(code, `meter refused: ${cached.reason}`, {
+      reason: cached.reason,
+      window: cached.window,
+      resetAt: cached.resetAt,
+    });
+  }
+
   // --- 3. prepare (assessment / retrieval / scene grounding) -----------------
   const window = await store.readWindow(deps.pool, {
     parentId: parent.id,
@@ -568,7 +635,8 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
   }
 
   // --- 5. meter reserve (before any ledger row / model call) ------------------
-  let reservationId: string;
+  // `null` = ungated (ET-04): the turn runs, nothing is enqueued or finalized.
+  let reservationId: string | null;
   try {
     const decision = await deps.kafuo.reserve({
       tenantId: parent.tenantId,
@@ -580,9 +648,18 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
       clientMessageId: plan.clientMessageId,
     });
     if (!decision.allowed) {
-      const code =
-        decision.reason === 'temporarily_unavailable' ? 'METER_UNAVAILABLE' : 'ALLOWANCE_EXHAUSTED';
+      // temporarily_unavailable (and any unknown reason) → retryable 503;
+      // account_inactive (SR-36) → 403; every allowance / safety-cap reason
+      // (incl. ai_daily_safety_limit, ET-30) → 429 with details.reason.
+      const code = refusalCode(decision.reason);
       log.info(JSON.stringify({ event: 'tutor.meter_refused', turnId, reason: decision.reason }));
+      if (decision.reason !== 'temporarily_unavailable') {
+        deps.refusalCache?.remember(
+          cacheKey,
+          { reason: decision.reason, window: decision.window, resetAt: decision.resetAt },
+          now(),
+        );
+      }
       await failBeforeReservation(code);
       throw new TeachingPackageError(code, `meter refused: ${decision.reason}`, {
         reason: decision.reason,
@@ -591,6 +668,9 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
       });
     }
     reservationId = decision.reservationId;
+    if (reservationId === null) {
+      log.info(JSON.stringify({ event: 'tutor.meter_ungated', turnId }));
+    }
   } catch (error) {
     if (error instanceof TeachingPackageError) throw error;
     log.warn(
@@ -881,7 +961,8 @@ interface StreamTurnArgs {
   safety: GuardPreCheck;
   prepared: PreparedTurn;
   assembled: AssembledTutorPrompt;
-  reservationId: string;
+  /** `null` = ungated (ET-04). */
+  reservationId: string | null;
   workerId: string;
   newId: () => string;
   now: () => number;
@@ -925,6 +1006,8 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
   });
   // Student-perceived time to first streamed content (epoch seconds, P7).
   let firstDeltaAt: number | null = null;
+  // DEF-09 (ET-33): whether any answer text was written to the student's stream.
+  let answerTextDelivered = false;
 
   // Ledger completions are collected here and written in the turn transaction (§7.7 step 2).
   const pendingCompletions: Array<{ attemptId: string; completion: AttemptCompletionInput }> = [];
@@ -964,6 +1047,8 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         onDelta: (delta) => {
           if (firstDeltaAt === null && delta.length > 0) firstDeltaAt = nowS();
           sse.textDelta(delta);
+          // Written (the stream was still open after the write): the student got it.
+          if (delta.length > 0 && !sse.closed) answerTextDelivered = true;
         },
         onRestart: () => sse.restart('fallback'),
         onFinish: () => {},
@@ -1023,6 +1108,9 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
 
   // --- completion transaction --------------------------------------------------
   const succeeded = result !== null;
+  // DEF-09: delivered = a reply was produced, or any answer text already streamed
+  // before the failure / abort (the reason still says what went wrong).
+  const meterDelivered = succeeded || answerTextDelivered;
   const groundingMode = assembled.groundingMode;
   let tutorMessage: TutorMessage | null = null;
   const commit = async () => {
@@ -1082,15 +1170,18 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         retrieval: prepared.audit.retrieval ?? null,
         now: nowS(),
       });
-      await enqueueFinalize(q, {
-        reservationId,
-        tenantId: parent.tenantId,
-        turnId,
-        turnAttempt,
-        outcome: succeeded ? 'delivered' : 'not_delivered',
-        reason: finalizeReason,
-        now: nowS(),
-      });
+      // Ungated (ET-04): no reservation, so no outbox row and no finalize.
+      if (reservationId !== null) {
+        await enqueueFinalize(q, {
+          reservationId,
+          tenantId: parent.tenantId,
+          turnId,
+          turnAttempt,
+          outcome: meterDelivered ? 'delivered' : 'not_delivered',
+          reason: finalizeReason,
+          now: nowS(),
+        });
+      }
       await prepared.commit?.(q, { succeeded, groundingMode, tutorMessageSeq });
     });
   };
@@ -1135,6 +1226,27 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
         errorCode: 'ACCOUNTING_UNAVAILABLE',
       })
       .catch(() => {});
+    // DEF-09: no outbox row exists, so the sweeper would release this unit; but
+    // answer text already reached the student, so report it delivered directly.
+    if (reservationId !== null && answerTextDelivered) {
+      try {
+        await deps.kafuo.finalize({
+          reservationId,
+          outcome: 'delivered',
+          reason: finalizeReason ?? 'internal_error',
+          turnId,
+        });
+      } catch (error) {
+        log.warn(
+          JSON.stringify({
+            event: 'meter.finalize_after_failed_commit_failed',
+            turnId,
+            reservationId,
+            error: describeErrorSafely(error).name,
+          }),
+        );
+      }
+    }
     sse.error({ code: 'ACCOUNTING_UNAVAILABLE', retryable: true });
     await sse.close();
     return;
@@ -1168,26 +1280,29 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
       reductions: assembled.reductions,
       servedBy: result?.servedBy ?? null,
       outcome: failure?.code ?? (safety.boundary ? 'SAFETY_BOUNDARY' : 'completed'),
+      meterOutcome: reservationId === null ? null : meterDelivered ? 'delivered' : 'not_delivered',
       totalMs: now() - startedAt,
     }),
   );
 
-  // --- inline finalize (post-commit, best effort) -----------------------------
-  try {
-    await deliverFinalizeInline(deps.pool, reservationId, {
-      client: deps.kafuo as KafuoIntegrationClient,
-      now,
-      workerId: args.workerId,
-    });
-  } catch (error) {
-    log.warn(
-      JSON.stringify({
-        event: 'meter.finalize_deferred',
-        turnId,
-        reservationId,
-        error: describeErrorSafely(error).name,
-      }),
-    );
+  // --- inline finalize (post-commit, best effort; none when ungated) ----------
+  if (reservationId !== null) {
+    try {
+      await deliverFinalizeInline(deps.pool, reservationId, {
+        client: deps.kafuo as KafuoIntegrationClient,
+        now,
+        workerId: args.workerId,
+      });
+    } catch (error) {
+      log.warn(
+        JSON.stringify({
+          event: 'meter.finalize_deferred',
+          turnId,
+          reservationId,
+          error: describeErrorSafely(error).name,
+        }),
+      );
+    }
   }
 
   // --- after commit (title, compaction): the student already has `done` ------

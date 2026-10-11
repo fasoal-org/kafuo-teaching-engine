@@ -24,6 +24,24 @@
  * I/O. Starting a timer does not.
  */
 export async function registerNodeInstrumentation(): Promise<void> {
+  // Production access guards (readiness review ET-31, ET-34): without
+  // ACCESS_CODE every LLM/TTS route is a public proxy on our provider keys, and
+  // without TEACHING_PACKAGE_GRANT_SECRET every grant is signed with the service
+  // key. Throws, so the process refuses to start. First of all, for the same
+  // reason as the asset quota below: nothing has been started yet that a throw
+  // would leave without teardown. A no-op outside production.
+  {
+    const { isOpenAccessOptOut, validateProductionStartupConfig } =
+      await import('@/lib/server/startup-config');
+    validateProductionStartupConfig({
+      isProduction: process.env.NODE_ENV === 'production',
+      accessCode: process.env.ACCESS_CODE ?? '',
+      allowOpenAccess: isOpenAccessOptOut(process.env.TE_ALLOW_OPEN_ACCESS),
+      grantSecret: process.env.TEACHING_PACKAGE_GRANT_SECRET ?? '',
+      serviceKey: process.env.TEACHING_ENGINE_SERVICE_KEY ?? '',
+    });
+  }
+
   // The asset quota, read here rather than at the first persistence request.
   // The provider that consumes it is lazy and memoised, so a malformed ceiling
   // would otherwise let the process boot, pass its health check, and then fail

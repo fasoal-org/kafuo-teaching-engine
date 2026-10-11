@@ -10,13 +10,18 @@
  * presentable as another (`verify…` checks `kind` after the signature).
  *
  * Signing mirrors the repo's HMAC + digest/timing-safe idioms
- * (`middleware.ts`, `lib/persistence/server-auth.ts`); no new secret is
- * introduced (TEACHING_PACKAGE_GRANT_SECRET optionally overrides the service
- * key for rotation independence).
+ * (`middleware.ts`, `lib/persistence/server-auth.ts`). The secret is
+ * TEACHING_PACKAGE_GRANT_SECRET; in production it is REQUIRED and must differ
+ * from the service key (`validateProductionStartupConfig` in
+ * `lib/server/startup-config.ts`, readiness review ET-34), so the service-key
+ * fallback below only ever applies in development.
  */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-/** The grant signing secret: the dedicated override, else the service key. */
+/**
+ * The grant signing secret: TEACHING_PACKAGE_GRANT_SECRET, else (development
+ * only; production refuses to start without it) the service key.
+ */
 export function grantSecret(): string {
   const override = process.env.TEACHING_PACKAGE_GRANT_SECRET?.trim();
   return override || process.env.TEACHING_ENGINE_SERVICE_KEY?.trim() || '';

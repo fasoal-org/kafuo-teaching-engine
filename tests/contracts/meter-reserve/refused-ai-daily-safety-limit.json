@@ -1,0 +1,31 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp.",
+  "case": "refused-ai-daily-safety-limit",
+  "description": "ET-30: the daily AI safety cap; resets at the next Asia/Riyadh midnight.",
+  "backend": "ai_daily_safety_limit",
+  "response": {
+    "allowed": false,
+    "reason": "ai_daily_safety_limit",
+    "window": "day",
+    "resetAt": "2026-10-10T21:00:00+00:00",
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "ai_daily_safety_limit",
+    "window": "day",
+    "resetAt": "2026-10-10T21:00:00+00:00",
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 429,
+    "code": "ALLOWANCE_EXHAUSTED",
+    "retryable": false,
+    "details": {
+      "reason": "ai_daily_safety_limit",
+      "window": "day",
+      "resetAt": "2026-10-10T21:00:00+00:00"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "_note": "Shared contract fixture (r1-api-contracts.md section 2.2). Byte-identical copies live in zakrly-backend/tests/contracts/meter-reserve/ and OpenMAIC/tests/contracts/meter-reserve/; change both together and compare with cmp. W2-C3: 'backend' stays null so the W1-B2b scenario map stays closed; 'backendW2C3' names the scenario tests/unit/entitlements/test_w2_c3_reserve_contract.py drives.",
+  "case": "refused-lesson-access-lost",
+  "description": "A Help turn's learning item is no longer open to the student (ET-16 c): the lesson gate's code is the reason (here Premium ended). Re-checked on every turn.",
+  "backend": null,
+  "backendW2C3": "lesson_access_lost",
+  "response": {
+    "allowed": false,
+    "reason": "paid_ended_lesson_locked",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teDecision": {
+    "allowed": false,
+    "reason": "paid_ended_lesson_locked",
+    "window": null,
+    "resetAt": null,
+    "replay": false
+  },
+  "teClientError": null,
+  "teTurn": {
+    "httpStatus": 429,
+    "code": "ALLOWANCE_EXHAUSTED",
+    "retryable": false,
+    "details": {
+      "reason": "paid_ended_lesson_locked",
+      "window": null,
+      "resetAt": null
+    }
+  }
+}

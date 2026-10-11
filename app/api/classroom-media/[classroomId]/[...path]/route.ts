@@ -4,8 +4,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
 import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
-import { canReadGatedClassroomMedia } from '@/lib/server/teaching-package/classroom-media-signature';
+import { readGatedClassroomMediaAccess } from '@/lib/server/teaching-package/classroom-media-signature';
 import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
+import {
+  checkLearnerAccessScope,
+  learnerDeliveryError,
+} from '@/lib/server/tutor/learner-access';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { checksumOfFile, isHeldChecksum } from '@/lib/server/visual-compliance/delivery-hold';
 
@@ -70,20 +74,46 @@ export async function GET(
   // link signed at learner delivery (the mobile player, which sends no
   // credential). Without ACCESS_CODE the read stays open, as before.
   const accessCode = process.env.ACCESS_CODE;
-  if (
-    accessCode &&
-    !canReadGatedClassroomMedia({
+  if (accessCode) {
+    const access = readGatedClassroomMediaAccess({
       accessCode,
       accessCookie: req.cookies.get('openmaic_access')?.value,
       classroomId,
       segments: pathSegments,
       searchParams: req.nextUrl.searchParams,
-    })
-  ) {
-    return NextResponse.json(
-      { error: 'Media link expired or invalid' },
-      { status: 401, headers: { 'Cache-Control': 'no-store' } },
-    );
+    });
+    if (!access.allowed) {
+      return NextResponse.json(
+        { error: 'Media link expired or invalid' },
+        { status: 401, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    // ET-16 (c), G2: a link signed for a learner carries the learner's access
+    // scope; Kafuo re-validates it (cached ≤ 5 min) before any byte is served, so a
+    // revoked learner stops receiving media before the grant expires. Fails closed.
+    if (access.scope) {
+      const refusal = learnerDeliveryError(await checkLearnerAccessScope(access.scope));
+      if (refusal) {
+        const retryAfter = (refusal.details as { retryAfterS?: unknown } | undefined)
+          ?.retryAfterS;
+        return NextResponse.json(
+          {
+            error: {
+              code: refusal.code,
+              message: refusal.message,
+              ...(refusal.details === undefined ? {} : { details: refusal.details }),
+            },
+          },
+          {
+            status: refusal.status,
+            headers: {
+              'Cache-Control': 'no-store',
+              ...(typeof retryAfter === 'number' ? { 'Retry-After': String(retryAfter) } : {}),
+            },
+          },
+        );
+      }
+    }
   }
 
   const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
