@@ -13,7 +13,9 @@ import {
   markFinalizeTerminalFailed,
   readFinalize,
   readOutboxStatus,
+  rearmFinalize,
   releaseLeases,
+  upgradeProvisionalFinalize,
   type EnqueueFinalizeInput,
 } from '@/lib/persistence/meter-finalize-outbox';
 import {
@@ -498,5 +500,191 @@ describe('meter finalize outbox', () => {
     await handle!.stop();
     expect(registry.getMeterOutboxSweeper()).toBeUndefined();
     expect((await readFinalize(pool, 'res-1'))!.claimed_by).toBeNull();
+  });
+
+  describe('rearmFinalize (M-1 replay of a released turn)', () => {
+    it('puts a delivered release row back to the provisional state the completion transaction writes', async () => {
+      // The released turn: provisional `not_delivered`, then the sweeper
+      // delivered that release to Kafuo (status `delivered`, outcome stays).
+      await enqueueFinalize(
+        pool,
+        row({ reservationId: 'res-1', outcome: 'not_delivered', reason: 'aborted' }),
+      );
+      await upgradeProvisionalFinalize(pool, 'res-1');
+      const kafuo = kafuoStub(ok204);
+      const { deliverFinalizeInline } = await sweeper();
+      await deliverFinalizeInline(cq(), 'res-1', {
+        client: client(kafuo.fetchImpl),
+        now: () => NOW_MS + 1000,
+        workerId: 'host:1:A',
+      });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'delivered',
+        outcome: 'delivered',
+      });
+      // A sweeper held and dropped a lease meanwhile; history accumulated.
+      await pool.query(
+        `UPDATE meter_finalize_outbox SET attempts = 3, last_status = 503, last_error = 'x',
+           claimed_by = 'host:1:A', claimed_until = $1, delivered_at = $1
+         WHERE reservation_id = 'res-1'`,
+        [NOW_S + 60],
+      );
+
+      // The replay re-reserved under the same key: the SAME row goes back to
+      // provisional — due now, no lease, no history, `created_at` kept.
+      await rearmFinalize(pool, {
+        reservationId: 'res-1',
+        tenantId: '1',
+        turnId: 'turn-res-1',
+        turnAttempt: 1,
+        now: NOW_S + 120,
+      });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'pending',
+        outcome: 'not_delivered',
+        reason: null,
+        attempts: 0,
+        next_attempt_at: NOW_S + 120,
+        claimed_by: null,
+        claimed_until: null,
+        last_status: null,
+        last_error: null,
+        delivered_at: null,
+        terminal_failed_at: null,
+        created_at: NOW_S,
+        payload: { reservationId: 'res-1', outcome: 'not_delivered', reason: null, turnId: 'turn-res-1' },
+      });
+      // And it charges through the normal machinery: `done` upgrades it, the
+      // inline delivery delivers it — no second row, no second reservation.
+      await upgradeProvisionalFinalize(pool, 'res-1');
+      expect(
+        await deliverFinalizeInline(cq(), 'res-1', {
+          client: client(kafuo.fetchImpl),
+          now: () => NOW_MS + 121_000,
+          workerId: 'host:1:A',
+        }),
+      ).toBe('delivered');
+      expect(kafuo.bodies.at(-1)).toEqual({
+        reservationId: 'res-1',
+        outcome: 'delivered',
+        reason: null,
+        turnId: 'turn-res-1',
+      });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'delivered', outcome: 'delivered' });
+    });
+
+    it('inserts a fresh provisional row when retention deleted the original', async () => {
+      const day = 24 * 60 * 60;
+      // The release was delivered 8 days ago; retention removed the row.
+      await enqueueFinalize(
+        pool,
+        row({
+          reservationId: 'res-1',
+          outcome: 'not_delivered',
+          reason: 'aborted',
+          now: NOW_S - 8 * day - 5,
+        }),
+      );
+      await markFinalizeDelivered(pool, 'res-1', NOW_S - 8 * day);
+      await deleteExpiredFinalizes(pool, NOW_S);
+      expect(await readFinalize(pool, 'res-1')).toBeNull();
+
+      await rearmFinalize(pool, {
+        reservationId: 'res-1',
+        tenantId: '1',
+        turnId: 'turn-res-1',
+        turnAttempt: 1,
+        now: NOW_S,
+      });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'pending',
+        outcome: 'not_delivered',
+        attempts: 0,
+        next_attempt_at: NOW_S,
+        created_at: NOW_S,
+        payload: { reservationId: 'res-1', outcome: 'not_delivered', reason: null, turnId: 'turn-res-1' },
+      });
+    });
+
+    it('a re-armed row a dead replay instance left behind is released by the sweeper', async () => {
+      await enqueueFinalize(
+        pool,
+        row({ reservationId: 'res-1', outcome: 'not_delivered', reason: 'aborted' }),
+      );
+      await rearmFinalize(pool, {
+        reservationId: 'res-1',
+        tenantId: '1',
+        turnId: 'turn-res-1',
+        turnAttempt: 1,
+        now: NOW_S,
+      });
+      // The instance died mid-replay: no `done`, no upgrade — the sweeper
+      // delivers the provisional release instead of a free full answer.
+      const kafuo = kafuoStub(ok204);
+      const { runMeterOutboxSweepOnce } = await sweeper();
+      const swept = await runMeterOutboxSweepOnce({
+        pool: cq(),
+        client: client(kafuo.fetchImpl),
+        now: () => NOW_MS,
+        workerId: 'host:2:B',
+      });
+      expect(swept).toEqual({ claimed: 1, delivered: 1 });
+      expect(kafuo.bodies[0]).toMatchObject({ reservationId: 'res-1', outcome: 'not_delivered' });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'delivered',
+        outcome: 'not_delivered',
+      });
+    });
+  });
+
+  describe('upgradeProvisionalFinalize (D-3 provisional release → delivered)', () => {
+    it('an unclaimed not_delivered row upgrades to delivered, payload included', async () => {
+      await enqueueFinalize(
+        pool,
+        row({ reservationId: 'res-1', outcome: 'not_delivered', reason: 'aborted' }),
+      );
+      await upgradeProvisionalFinalize(pool, 'res-1');
+      // Still `pending`: delivery to Kafuo is owed; the audit outcome is set.
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'pending',
+        outcome: 'delivered',
+        reason: 'aborted',
+        claimed_by: null,
+        payload: {
+          reservationId: 'res-1',
+          outcome: 'delivered',
+          reason: 'aborted',
+          turnId: 'turn-res-1',
+        },
+      });
+    });
+
+    it('a row claimed by a sweeper (claimed_until set) is never upgraded', async () => {
+      await enqueueFinalize(
+        pool,
+        row({ reservationId: 'res-1', outcome: 'not_delivered', reason: 'aborted' }),
+      );
+      const claimed = await claimDueFinalizes(pool, {
+        workerId: 'host:9:sweeper',
+        batch: 10,
+        leaseUntil: NOW_S + 60,
+        now: NOW_S,
+      });
+      expect(claimed.map((r) => r.reservation_id)).toEqual(['res-1']);
+
+      await upgradeProvisionalFinalize(pool, 'res-1');
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'pending',
+        outcome: 'not_delivered',
+        payload: { outcome: 'not_delivered' },
+        claimed_by: 'host:9:sweeper',
+      });
+
+      // The lease holder owns the row only while it holds it: once the lease
+      // is gone, an upgrade is possible again (and is then final for the row).
+      expect(await releaseLeases(pool, 'host:9:sweeper')).toBe(1);
+      await upgradeProvisionalFinalize(pool, 'res-1');
+      expect((await readFinalize(pool, 'res-1'))!.outcome).toBe('delivered');
+    });
   });
 });
