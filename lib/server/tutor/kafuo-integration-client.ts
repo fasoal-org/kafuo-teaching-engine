@@ -92,10 +92,10 @@ export interface MeterAllowanceStatus {
 }
 
 /**
- * Kafuo's refusal reasons (contracts §2.2). `ai_daily_safety_limit` is the
- * daily AI safety cap (ET-30); `account_inactive` is an inactive, suspended or
- * deleted account (SR-36); `feature_not_in_package` is a Package without the
- * turn's feature (ET-17). W2-C3 adds the operational-control refusals
+ * Kafuo's refusal reasons (contracts §2.2). `account_inactive` is an inactive,
+ * suspended or deleted account (SR-36); `feature_not_in_package` is a Package
+ * without the turn's feature (ET-17). W2-C3 adds the
+ * operational-control refusals
  * (`feature_disabled`, `not_in_rollout`; a kill switch is
  * `temporarily_unavailable`) and the lesson-gate codes a Help turn gets when the
  * student lost access to the lesson after the grant was minted (ET-16 c):
@@ -111,7 +111,6 @@ export type MeterRefusalReason =
   | 'help_allowance_exhausted'
   | 'tutor_allowance_exhausted'
   | 'feature_not_in_package'
-  | 'ai_daily_safety_limit'
   | 'account_inactive'
   | 'temporarily_unavailable'
   | 'feature_disabled'
@@ -128,7 +127,6 @@ const METER_REFUSAL_REASONS: ReadonlySet<string> = new Set<MeterRefusalReason>([
   'help_allowance_exhausted',
   'tutor_allowance_exhausted',
   'feature_not_in_package',
-  'ai_daily_safety_limit',
   'account_inactive',
   'temporarily_unavailable',
   'feature_disabled',

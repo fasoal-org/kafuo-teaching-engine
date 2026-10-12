@@ -1,0 +1,6 @@
+{
+  "scripts/check-node-engine-contract.mjs": "c2420fd976d2622cf37258f9ae31e169e2b382609c76098e975065013bfa3e16",
+  "scripts/check-i18n-keys.mjs": "62735ad3cb21cbe9078f7aa44994fc6623372cf78ffe2ed70087841dbfa77a5c",
+  "scripts/check-package-version-bumps.mjs": "62a11b9e1a567185e9f73868c22d7577be83be38996f1afba6b6ad4dcc6f096a",
+  "scripts/assert-vendor-maic-importer.mjs": "9b8875e86b7de6365ad3270249152901e5ec24e1aced1c6bb1a5cc3ac2f629f7"
+}
