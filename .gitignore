@@ -2,6 +2,15 @@
 
 CLAUDE.local.md
 .claude
+
+# Share the manual implementation Skill while keeping other Claude state local.
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/zakrly-fast-implementation/
+.claude/skills/zakrly-fast-implementation/*
+!.claude/skills/zakrly-fast-implementation/SKILL.md
 .superpowers
 
 # dependencies
@@ -94,3 +103,7 @@ e2e/__screenshots-619/
 
 # SATTS Wave 0 spike outputs (generated audio + raw results)
 scripts/spikes/satts/out/
+
+# Share test enforcement; other local agent state stays ignored.
+!.claude/
+!.claude/settings.json
