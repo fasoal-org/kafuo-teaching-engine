@@ -94,8 +94,7 @@ export interface MeterAllowanceStatus {
 /**
  * Kafuo's refusal reasons (contracts §2.2). `account_inactive` is an inactive,
  * suspended or deleted account (SR-36); `feature_not_in_package` is a Package
- * without the turn's feature (ET-17); `guided_assistance_allowance_exhausted`
- * is the guided-assistance allowance used up (429 class). W2-C3 adds the
+ * without the turn's feature (ET-17). W2-C3 adds the
  * operational-control refusals
  * (`feature_disabled`, `not_in_rollout`; a kill switch is
  * `temporarily_unavailable`) and the lesson-gate codes a Help turn gets when the
@@ -111,7 +110,6 @@ export interface MeterAllowanceStatus {
 export type MeterRefusalReason =
   | 'help_allowance_exhausted'
   | 'tutor_allowance_exhausted'
-  | 'guided_assistance_allowance_exhausted'
   | 'feature_not_in_package'
   | 'account_inactive'
   | 'temporarily_unavailable'
@@ -128,7 +126,6 @@ export type MeterRefusalReason =
 const METER_REFUSAL_REASONS: ReadonlySet<string> = new Set<MeterRefusalReason>([
   'help_allowance_exhausted',
   'tutor_allowance_exhausted',
-  'guided_assistance_allowance_exhausted',
   'feature_not_in_package',
   'account_inactive',
   'temporarily_unavailable',

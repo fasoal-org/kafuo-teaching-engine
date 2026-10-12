@@ -131,20 +131,32 @@ export interface FakeKafuo {
 
 export function fakeKafuo(events: string[] = []): FakeKafuo {
   let nextReservation = 0;
-  const reserve = vi.fn(async (_request: MeterReserveRequest): Promise<MeterReserveDecision> => {
+  // What the real backend does: the reservation key is (capability, turnId,
+  // turnAttempt). Reserving a RELEASED key again re-opens that reservation
+  // and answers the ORIGINAL reservation id; a CONSUMED key answers an
+  // allowed replay (same id, `replay: true`) with no extra charge. Only a
+  // NEW key mints a new id — `res-1`, `res-2`, … in call order.
+  const reservationByKey = new Map<string, string>();
+  const reserve = vi.fn(async (request: MeterReserveRequest): Promise<MeterReserveDecision> => {
     events.push('kafuo:reserve');
-    nextReservation += 1;
-    return {
-      allowed: true,
-      reservationId: `res-${nextReservation}`,
-      replay: false,
-      status: {
+    const key = `${request.capability}:${request.turnId}:${request.turnAttempt}`;
+    const status = () => {
+      const used = nextReservation;
+      return {
         limit: 30,
-        used: nextReservation,
-        remaining: 30 - nextReservation,
+        used,
+        remaining: 30 - used,
         resetAt: '2026-10-01T00:00:00+03:00',
-      },
+      };
     };
+    const reopened = reservationByKey.get(key);
+    if (reopened !== undefined) {
+      return { allowed: true, reservationId: reopened, replay: true, status: status() };
+    }
+    nextReservation += 1;
+    const reservationId = `res-${nextReservation}`;
+    reservationByKey.set(key, reservationId);
+    return { allowed: true, reservationId, replay: false, status: status() };
   });
   const finalize = vi.fn(async (_request: MeterFinalizeRequest): Promise<MeterFinalizeResult> => {
     events.push('kafuo:finalize');

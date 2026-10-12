@@ -172,6 +172,90 @@ export async function enqueueFinalize(
   return result.rows.length === 1;
 }
 
+export interface RearmFinalizeInput {
+  reservationId: string;
+  tenantId: string;
+  turnId: string;
+  turnAttempt: number;
+  /** Epoch seconds. */
+  now: number;
+}
+
+/**
+ * M-1: put the row of a re-opened reservation back to the provisional state
+ * the turn's completion transaction writes — `pending` / `not_delivered`, due
+ * immediately, no lease, no attempt history. A replay that re-reserved a
+ * released turn charges through the SAME reservation id the backend
+ * re-opened (a fresh id never exists), so the replay upgrades and delivers
+ * this row exactly like a live turn's (D-3); an instance death mid-replay
+ * leaves it for the sweeper to release. UPSERT, because retention may have
+ * deleted the row: then it is inserted fresh (`created_at` keeps the
+ * original row's value on the update path).
+ */
+export async function rearmFinalize(
+  queryable: Queryable,
+  input: RearmFinalizeInput,
+): Promise<void> {
+  const payload: FinalizePayload = {
+    reservationId: input.reservationId,
+    outcome: 'not_delivered',
+    reason: null,
+    turnId: input.turnId,
+  };
+  await queryable.query(
+    `INSERT INTO meter_finalize_outbox (
+       reservation_id, tenant_id, turn_id, turn_attempt, outcome, reason, payload, status,
+       attempts, next_attempt_at, created_at
+     ) VALUES ($1, $2, $3, $4, 'not_delivered', NULL, $5::jsonb, 'pending', 0, $6, $6)
+     ON CONFLICT (reservation_id) DO UPDATE
+       SET outcome = 'not_delivered',
+           reason = NULL,
+           payload = $5::jsonb,
+           status = 'pending',
+           attempts = 0,
+           next_attempt_at = $6,
+           claimed_by = NULL,
+           claimed_until = NULL,
+           last_status = NULL,
+           last_error = NULL,
+           delivered_at = NULL,
+           terminal_failed_at = NULL`,
+    [
+      input.reservationId,
+      input.tenantId,
+      input.turnId,
+      input.turnAttempt,
+      JSON.stringify(payload),
+      input.now,
+    ],
+  );
+}
+
+/**
+ * D-3: upgrade a provisional `not_delivered` row to `delivered` once the
+ * turn's `done` was written while the stream was still open. One guarded
+ * UPDATE — a no-op unless the row is still `pending`, still provisional and
+ * NOT claimed: a sweeper that holds the lease (`claimed_until` set) owns the
+ * delivery, and the row is never upgraded out from under it. The payload
+ * travels with the row, so both the column and the JSONB it will be sent
+ * from are rewritten together.
+ */
+export async function upgradeProvisionalFinalize(
+  queryable: Queryable,
+  reservationId: string,
+): Promise<void> {
+  await queryable.query(
+    `UPDATE meter_finalize_outbox
+        SET outcome = 'delivered',
+            payload = jsonb_set(payload, '{outcome}', '"delivered"'::jsonb)
+      WHERE reservation_id = $1
+        AND status = 'pending'
+        AND outcome = 'not_delivered'
+        AND claimed_until IS NULL`,
+    [reservationId],
+  );
+}
+
 export interface ClaimOptions {
   workerId: string;
   batch: number;

@@ -6,7 +6,10 @@
  * order below is fixed here and nowhere else.
  *
  *   grant → ownership            (the route / service, before this runner)
- *   → idempotent turn insert     replay `completed` as SSE; `generating`
+ *   → idempotent turn insert     replay `completed` as SSE — free for a
+ *                                charged turn, the released reservation
+ *                                re-opened under the same key for a
+ *                                released turn (M-1); `generating`
  *                                younger than the route deadline → 409
  *                                TURN_IN_PROGRESS + Retry-After; stale
  *                                generating → treated as failed; `failed` →
@@ -58,10 +61,24 @@
  * completion transaction (nothing is ever left `pending` by the turn, H2) and
  * upgraded to `delivered` only after `done` went out on a live stream. No
  * guard against "stop just before the end": a process death between commit
- * and the upgrade releases a delivered answer — the owner accepted that risk.
+ * and the upgrade releases a delivered answer.
  * If the completion transaction itself cannot be written, no `done` exists,
  * so the runner sends the `not_delivered` finalize directly (best effort)
  * instead of waiting for Kafuo's stale-window release.
+ *
+ * M-1 (replay of a released turn): the app's normal retry with the same
+ * clientMessageId replays a completed-but-released turn's stored answer in
+ * full — D-3's definition of delivered applies to that replay too. The
+ * replay therefore goes through the normal meter-reserve path with the
+ * turn's OWN key (capability, turnId, turnAttempt) BEFORE streaming the
+ * stored answer (byte-identical, no regeneration): the backend re-opens the
+ * released reservation and answers its ORIGINAL reservation id (a consumed
+ * key answers an allowed replay with no extra charge), and the unit is
+ * consumed only when the replay's own `done` goes out live; an exhausted
+ * allowance answers the normal refusal instead of the free replay. A replay
+ * of a charged (`delivered`) turn — its outbox row says so — changes nothing
+ * and charges nothing; a row deleted by retention proves nothing locally, so
+ * the reserve decides.
  *
  * ET-34 (W2-C3): a Kafuo refusal that cannot change soon (allowance used, no
  * Package feature, lesson access lost) is remembered for this
@@ -80,7 +97,13 @@ import {
 } from '@openmaic/storage/server/reference';
 
 import { createLogger } from '@/lib/logger';
-import { enqueueFinalize, type FinalizeReason } from '@/lib/persistence/meter-finalize-outbox';
+import {
+  enqueueFinalize,
+  readFinalize,
+  rearmFinalize,
+  upgradeProvisionalFinalize,
+  type FinalizeReason,
+} from '@/lib/persistence/meter-finalize-outbox';
 import {
   completeAttempt,
   readCalibration,
@@ -440,26 +463,6 @@ function retryAfterS(nowS: number, generatingAt: number, windowS: number): numbe
   return Math.max(1, Math.ceil(windowS - (nowS - generatingAt)));
 }
 
-/**
- * D-3: upgrade the provisional `not_delivered` outbox row to `delivered` once
- * `done` was written while the stream was still open. One guarded UPDATE —
- * no-op when a sweeper already delivered the release (the student was
- * released; the owner accepted that losing race) or when the row is already
- * upgraded. The payload travels with the row, so both the column and the
- * JSONB it will be sent from are rewritten together.
- */
-async function upgradeProvisionalFinalize(pool: Queryable, reservationId: string): Promise<void> {
-  await pool.query(
-    `UPDATE meter_finalize_outbox
-        SET outcome = 'delivered',
-            payload = jsonb_set(payload, '{outcome}', '"delivered"'::jsonb)
-      WHERE reservation_id = $1
-        AND status = 'pending'
-        AND outcome = 'not_delivered'`,
-    [reservationId],
-  );
-}
-
 type Admission = { kind: 'new'; message: TutorMessage } | { kind: 'replay'; message: TutorMessage };
 
 // ---------------------------------------------------------------------------
@@ -770,15 +773,54 @@ async function replayTurn(
   deps: TurnRunnerDeps,
   studentMessage: TutorMessage,
 ): Promise<Response> {
-  const reply = await plan.store.readTutorReplyByTurnId(
-    deps.pool,
-    plan.parent.id,
-    studentMessage.turnId,
-  );
+  const now = deps.now ?? Date.now;
+  const nowS = () => now() / 1000;
+  const workerId = deps.workerId ?? currentWorkerId();
+  const { store, parent } = plan;
+  const reply = await store.readTutorReplyByTurnId(deps.pool, parent.id, studentMessage.turnId);
+
+  // M-1: a replay of a turn whose stored finalize outcome was RELEASED
+  // (`not_delivered` — the model answer completed but the client dropped
+  // before `done`, so D-3 released the unit) delivers the whole stored
+  // answer, so it pays for itself: the turn's OWN key goes through the
+  // normal meter-reserve path BEFORE the replay streams, the backend
+  // re-opens the released reservation and answers its ORIGINAL reservation
+  // id (a consumed key answers an allowed replay with no extra charge), and
+  // the unit is consumed only when the replay's own `done` goes out on a
+  // live stream (the same D-3 rule as a live turn). A `delivered` outcome is
+  // the turn's own record that it was already charged — that replay is free
+  // — and so is no reservation at all (ungated ET-04, clarification,
+  // boundary). A missing row (retention deleted it) proves nothing: the
+  // reserve decides. The replayed bytes are the stored answer — never a
+  // regeneration.
+  let chargeReservationId: string | null = null;
+  if (reply && studentMessage.meterReservationId !== null) {
+    const stored = await readFinalize(deps.pool, studentMessage.meterReservationId);
+    if (stored === null || stored.outcome === 'not_delivered') {
+      chargeReservationId = await reserveReplayUnit(plan, deps, studentMessage);
+    }
+  }
+
   const sse = createTutorSseWriter({
     requestSignal: plan.requestSignal,
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
   });
+  if (chargeReservationId !== null) {
+    // The reserve re-opened the RELEASED reservation — its ORIGINAL id, the
+    // same one the stored outbox row (if any) is keyed by. Put that row back
+    // to the provisional `not_delivered` a live turn's completion transaction
+    // writes, inserting it fresh should retention have deleted it: if this
+    // instance dies mid-replay the sweeper releases the re-opened unit
+    // instead of the student keeping a free full answer, and after the
+    // replay's `done` the normal upgrade + inline finalize charges it.
+    await rearmFinalize(deps.pool, {
+      reservationId: chargeReservationId,
+      tenantId: parent.tenantId,
+      turnId: studentMessage.turnId,
+      turnAttempt: studentMessage.turnAttempt,
+      now: nowS(),
+    });
+  }
   sse.turnStart({ turnId: studentMessage.turnId, turnAttempt: studentMessage.turnAttempt });
   if (reply) {
     sse.textDelta(reply.text);
@@ -795,8 +837,139 @@ async function replayTurn(
       message: 'completed turn without a reply',
     });
   }
+  if (chargeReservationId !== null) {
+    if (!sse.closed && reply) {
+      // D-3: the replay's `done` went out on a live stream — consume the unit.
+      try {
+        await upgradeProvisionalFinalize(deps.pool, chargeReservationId);
+      } catch (error) {
+        log.warn(
+          JSON.stringify({
+            event: 'meter.finalize_upgrade_failed',
+            turnId: studentMessage.turnId,
+            reservationId: chargeReservationId,
+            error: describeErrorSafely(error).name,
+          }),
+        );
+      }
+    }
+    try {
+      await deliverFinalizeInline(deps.pool, chargeReservationId, {
+        client: deps.kafuo as KafuoIntegrationClient,
+        now,
+        workerId,
+      });
+    } catch (error) {
+      log.warn(
+        JSON.stringify({
+          event: 'meter.finalize_deferred',
+          turnId: studentMessage.turnId,
+          reservationId: chargeReservationId,
+          error: describeErrorSafely(error).name,
+        }),
+      );
+    }
+  }
   await sse.close();
   return sse.response;
+}
+
+/**
+ * M-1: the reserve behind a paid replay, made with the turn's OWN key
+ * (capability, turnId, turnAttempt). The backend re-opens the RELEASED
+ * reservation and answers its ORIGINAL reservation id — never a fresh one
+ * (a consumed key answers an allowed replay with no extra charge) — so the
+ * caller re-arms that same reservation's outbox row. Refusal mapping,
+ * refusal cache and unreachable handling are the normal admission's (H2):
+ * an exhausted allowance answers the normal denial instead of the free
+ * replay. The completed row is never failed — the stored answer stays;
+ * `null` = Kafuo answered ungated (ET-04): nothing to charge.
+ */
+async function reserveReplayUnit(
+  plan: TurnPlan,
+  deps: TurnRunnerDeps,
+  studentMessage: TutorMessage,
+): Promise<string | null> {
+  const now = deps.now ?? Date.now;
+  const cacheKey = refusalCacheKey({
+    tenantId: plan.parent.tenantId,
+    studentRef: plan.parent.studentRef,
+    capability: plan.capability,
+    scope: refusalScope(plan),
+  });
+  const cached = deps.refusalCache?.get(cacheKey, now());
+  if (cached) {
+    const code = refusalCode(cached.reason);
+    log.info(
+      JSON.stringify({
+        event: 'tutor.meter_refused_cached',
+        turnId: studentMessage.turnId,
+        reason: cached.reason,
+      }),
+    );
+    throw new TeachingPackageError(code, `meter refused: ${cached.reason}`, {
+      reason: cached.reason,
+      window: cached.window,
+      resetAt: cached.resetAt,
+    });
+  }
+  try {
+    const decision = await deps.kafuo.reserve({
+      tenantId: plan.parent.tenantId,
+      studentRef: plan.parent.studentRef,
+      capability: plan.capability,
+      meterScope: plan.meterScope,
+      turnId: studentMessage.turnId,
+      turnAttempt: studentMessage.turnAttempt,
+      clientMessageId: plan.clientMessageId,
+    });
+    if (!decision.allowed) {
+      const code = refusalCode(decision.reason);
+      log.info(
+        JSON.stringify({
+          event: 'tutor.meter_refused',
+          turnId: studentMessage.turnId,
+          reason: decision.reason,
+          replayCharge: true,
+        }),
+      );
+      if (decision.reason !== 'temporarily_unavailable') {
+        deps.refusalCache?.remember(
+          cacheKey,
+          { reason: decision.reason, window: decision.window, resetAt: decision.resetAt },
+          now(),
+        );
+      }
+      throw new TeachingPackageError(code, `meter refused: ${decision.reason}`, {
+        reason: decision.reason,
+        window: decision.window,
+        resetAt: decision.resetAt,
+      });
+    }
+    log.info(
+      JSON.stringify({
+        event: 'tutor.replay_recharged',
+        turnId: studentMessage.turnId,
+        ...(decision.reservationId !== null ? { reservationId: decision.reservationId } : {}),
+      }),
+    );
+    return decision.reservationId;
+  } catch (error) {
+    if (error instanceof TeachingPackageError) throw error;
+    log.warn(
+      JSON.stringify({
+        event: 'tutor.meter_unavailable',
+        turnId: studentMessage.turnId,
+        error: describeErrorSafely(error).name,
+      }),
+    );
+    throw new TeachingPackageError(
+      'METER_UNAVAILABLE',
+      isKafuoUnreachableError(error)
+        ? 'the entitlement service is unreachable; the stored answer was not replayed'
+        : 'the entitlement service refused the reservation; the stored answer was not replayed',
+    );
+  }
 }
 
 /**

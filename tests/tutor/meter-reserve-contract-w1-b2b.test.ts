@@ -36,8 +36,10 @@ import {
  * `ACCOUNT_INACTIVE`, not retryable) and the allowance refusals → 429
  * `ALLOWANCE_EXHAUSTED` with `details.reason/window/resetAt`. D-1/F05 removed
  * the daily AI safety cap: the `ai_daily_safety_limit` reason and its fixture
- * are gone; `guided_assistance_allowance_exhausted` is the guided-assistance
- * refusal the backend may answer instead.
+ * are gone. The backend never answers `guided_assistance_allowance_exhausted`
+ * on `/meters/reserve` (that refusal travels its own assist envelope), so it
+ * is not in the TE reserve vocabulary and would parse as
+ * `temporarily_unavailable` like any other unknown reason.
  *
  * THE FIXTURES ARE SHARED WITH THE BACKEND. The same files live in
  * `zakrly-backend/tests/contracts/meter-reserve/` and must stay byte-identical:
@@ -202,23 +204,6 @@ describe('KafuoIntegrationClient.reserve parses every fixture (contracts §2.2)'
       RESERVE,
     );
     expect(decision).toMatchObject({ allowed: true, reservationId: '501' });
-  });
-
-  it('parses guided_assistance_allowance_exhausted as itself (429 class, not temporarily_unavailable)', async () => {
-    const decision = await clientAnswering({
-      allowed: false,
-      reason: 'guided_assistance_allowance_exhausted',
-      window: null,
-      resetAt: null,
-      replay: false,
-    }).reserve(RESERVE);
-    expect(decision).toEqual({
-      allowed: false,
-      reason: 'guided_assistance_allowance_exhausted',
-      window: null,
-      resetAt: null,
-      replay: false,
-    });
   });
 });
 

@@ -6,7 +6,7 @@
  * before the meter reserve, because the prompt must fit the budget before a unit
  * is reserved. So a student whose allowance is used up still cost one embedding
  * per message, every message. This cache closes that: a NON-retryable refusal
- * (allowance used, the daily safety cap, no Package feature, lesson access lost,
+ * (allowance used, no Package feature, lesson access lost,
  * account inactive) is remembered for `TUTOR_REFUSAL_CACHE_SECONDS` (default 60,
  * `0` disables), or until the refusal's own `resetAt` if that comes first; the
  * next turn inside that window is refused before `prepare`, with the same
