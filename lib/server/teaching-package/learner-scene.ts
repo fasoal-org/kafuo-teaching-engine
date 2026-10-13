@@ -42,7 +42,11 @@ export interface LearnerScene {
   document: AppDocument;
   scene: AppScene;
   sceneTitle: string;
-  /** The Scene's visible text (`renderSceneText`), for grounding and scope. */
+  /**
+   * The Scene's visible text (`renderSceneText`), for Help grounding and scope. Answer-free:
+   * a quiz's `analysis` is left out (shown only after grading) and its `answer` is never
+   * rendered (R1 FRD HLP-02, help-panel O-3).
+   */
   sceneText: string;
 }
 
@@ -84,7 +88,7 @@ export async function readLearnerScene(
     document,
     scene,
     sceneTitle: typeof scene.title === 'string' ? scene.title : '',
-    sceneText: renderSceneText(scene),
+    sceneText: renderSceneText(scene, { quizAnalysis: false }),
   };
 }
 

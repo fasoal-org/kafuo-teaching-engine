@@ -16,6 +16,9 @@
  *                       note when evidence was required but is unavailable
  *   4. summary          `context_summary` when compaction produced one
  *   5. history          reduced turns, oldest → newest (user / assistant)
+ *   5b. question        Help only, when the request names the question the
+ *                       student is on (stem + choices, never the answer);
+ *                       no reduction step drops it
  *   6. turn note        response-language line + safety directive when
  *                       triggered (volatile, so it sits after the stable head)
  *   7. newest message   the student's current message (user)
@@ -58,6 +61,7 @@ import {
   FREE_CHAT_INSUFFICIENT_GROUNDING_TEXT,
   FREE_CHAT_SCOPE_TEXT,
   GENERAL_ANSWER_NOTE_TEXT,
+  HELP_QUESTION_TEXT,
   HELP_SCOPE_TEXT,
   INSUFFICIENT_GROUNDING_TEXT,
   PARTIAL_SCENE_COVERAGE_TEXT,
@@ -161,6 +165,15 @@ export function isHelpIntentHint(value: unknown): value is HelpIntentHint {
   return typeof value === 'string' && (HELP_INTENT_HINTS as readonly string[]).includes(value);
 }
 
+/**
+ * The question the student is on (Help; contracts §3.4 `helpScope.question`). Stem and
+ * choice text only: it never carries the correct answer or the explanation.
+ */
+export interface HelpQuestionInput {
+  stem: string;
+  choices: Array<{ label: string; text: string }>;
+}
+
 export interface HistoryTurnInput {
   student: string;
   /** `null` when the turn has no completed tutor reply (it is still context). */
@@ -207,6 +220,11 @@ export interface AssembleTutorPromptInput {
   directives?: TurnDirectives;
   /** Help: adds the Scene-scope instruction to the grounding block. */
   helpMode?: boolean;
+  /**
+   * Help only: the question the student is on, rendered as its own system message right
+   * before the turn note. It is not grounding, so no reduction step ever drops it.
+   */
+  helpQuestion?: HelpQuestionInput | null;
   /** Tighter cap for bounded calls (title ≤ 300); never above the pair's tighter cap. */
   capTokens?: number;
 }
@@ -378,6 +396,23 @@ export function responseLanguageLine(directives: TurnDirectives | undefined): st
   return "The student's message has no clear script: reply in the academic language.";
 }
 
+/** The Help question block: the no-answer instruction, the stem and the choices (no ids). */
+export function renderHelpQuestionBlock(question: HelpQuestionInput): string | null {
+  const stem = question.stem.trim();
+  if (!stem) return null;
+  const lines = [HELP_QUESTION_TEXT, '', 'Question / السؤال:', stem];
+  const choices = question.choices
+    .map((choice) => ({ label: choice.label.trim(), text: choice.text.trim() }))
+    .filter((choice) => choice.label || choice.text);
+  if (choices.length) {
+    lines.push('', 'Choices / الخيارات:');
+    for (const choice of choices) {
+      lines.push(choice.label ? `- ${choice.label}) ${choice.text}`.trimEnd() : `- ${choice.text}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function renderTurnNote(directives: TurnDirectives | undefined): string | null {
   const lines: string[] = [];
   const language = responseLanguageLine(directives);
@@ -532,6 +567,9 @@ export function assembleTutorPrompt(input: AssembleTutorPromptInput): AssembledT
       ? `${renderedAcademic}\n\n${FREE_CHAT_SCOPE_TEXT}`
       : FREE_CHAT_SCOPE_TEXT;
   const turnNote = renderTurnNote(input.directives);
+  // Help: the question the student is on. Fixed for the whole assembly (never reduced).
+  const questionBlock =
+    helpMode && input.helpQuestion ? renderHelpQuestionBlock(input.helpQuestion) : null;
 
   const build = (): ModelMessage[] => {
     const messages: ModelMessage[] = [{ role: 'system', content: rules }];
@@ -553,6 +591,7 @@ export function assembleTutorPrompt(input: AssembleTutorPromptInput): AssembledT
         messages.push({ role: 'assistant', content: turn.tutor });
       }
     }
+    if (questionBlock) messages.push({ role: 'system', content: questionBlock });
     if (turnNote) messages.push({ role: 'system', content: turnNote });
     messages.push({ role: 'user', content: input.message });
     return messages;

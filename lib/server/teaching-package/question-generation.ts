@@ -306,8 +306,19 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+export interface RenderSceneTextOptions {
+  /**
+   * Quiz `analysis` as `Explanation: …` lines. Default `true` (question generation reads
+   * it as teaching context). Help passes `false`: the explanation is shown only after
+   * grading, so a learner on the quiz has not seen it (R1 FRD HLP-02, help-panel O-3).
+   * The correct `answer` is never rendered either way.
+   */
+  quizAnalysis?: boolean;
+}
+
 /** Compact, learner-visible teaching text of one Scene. No ids, no layout. */
-export function renderSceneText(scene: AppScene): string {
+export function renderSceneText(scene: AppScene, options: RenderSceneTextOptions = {}): string {
+  const quizAnalysis = options.quizAnalysis !== false;
   const parts: string[] = [];
   const content = (scene as { content?: Record<string, unknown> }).content;
   if (content?.type === 'slide') {
@@ -343,7 +354,9 @@ export function renderSceneText(scene: AppScene): string {
       for (const option of (question.options as Array<Record<string, unknown>>) ?? []) {
         if (typeof option.label === 'string') parts.push(`- ${option.value ?? ''} ${option.label}`);
       }
-      if (typeof question.analysis === 'string') parts.push(`Explanation: ${question.analysis}`);
+      if (quizAnalysis && typeof question.analysis === 'string') {
+        parts.push(`Explanation: ${question.analysis}`);
+      }
     }
   }
   for (const action of scene.actions ?? []) {

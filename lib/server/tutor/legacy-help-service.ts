@@ -7,7 +7,9 @@
  * here. This service therefore:
  *   - validates the body (units ≤ 10,000 chars → GROUNDING_TOO_LARGE, ≤ 40
  *     history entries, `subject.code` in the policy → SUBJECT_ROUTE_UNAVAILABLE,
- *     `requestDigest` recomputed with the Backend's canonical form),
+ *     `requestDigest` recomputed with the Backend's canonical form,
+ *     optional `helpScope.question` = stem + ≤ 6 choice strings, rendered as a
+ *     never-dropped prompt block; it never carries the answer),
  *   - is idempotent on `turnId` + digest through `legacy_help_turns`
  *     (replay → stored result; `generating` younger than the deadline →
  *     TURN_IN_PROGRESS + Retry-After; other digest → TURN_DIGEST_CONFLICT),
@@ -55,6 +57,7 @@ import {
   type AcademicBlockInput,
   type GroundingInput,
   type HelpIntentHint,
+  type HelpQuestionInput,
   type HistoryTurnInput,
 } from '@/lib/server/tutor/prompt-assembly';
 import { parseAcademic, parseLearnerSubject, parseLocaleHint, parseStudentRef } from '@/lib/server/tutor/student-context';
@@ -65,6 +68,11 @@ const log = createLogger('LegacyHelpTurns');
 
 export const LEGACY_HELP_MAX_HISTORY = 40;
 export const LEGACY_HELP_MAX_MESSAGE_CHARS = 8_000;
+/** `helpScope.question` bounds (C-5): the block is never dropped, so it must stay bounded. */
+export const LEGACY_HELP_MAX_QUESTION_STEM_CHARS = 8_000;
+export const LEGACY_HELP_MAX_QUESTION_CHOICES = 6;
+export const LEGACY_HELP_MAX_CHOICE_LABEL_CHARS = 40;
+export const LEGACY_HELP_MAX_CHOICE_TEXT_CHARS = 2_000;
 
 // ---------------------------------------------------------------------------
 // Request parsing (contracts §3.4)
@@ -95,6 +103,8 @@ export interface LegacyHelpTurnRequest {
     /** The runner's committed slide (slides mode): the pinned version and its Scene id. */
     slide: { versionId: string; sceneId: string } | null;
     intentHint: HelpIntentHint | null;
+    /** The question the student is on (C-5): stem + choice strings only, never the answer. */
+    question: HelpQuestionInput | null;
   };
   grounding: { units: LegacyHelpUnit[]; truncated: boolean };
   history: HistoryTurnInput[];
@@ -120,6 +130,43 @@ function optionalString(value: unknown, where: string): string | null {
 function requireString(value: unknown, where: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw invalid(`${where} must be a non-empty string`);
   return value;
+}
+
+function boundedString(value: unknown, where: string, maxChars: number): string {
+  if (typeof value !== 'string') throw invalid(`${where} must be a string`);
+  if (value.length > maxChars) throw invalid(`${where} must be at most ${maxChars} chars`);
+  return value;
+}
+
+/**
+ * `helpScope.question` (C-5): `{stem, choices: [{label, text}]}`, strings only, ≤ 6 choices;
+ * absent or null when the Backend does not know the question. Only `stem`, `label` and
+ * `text` are read, so any other field (an answer, an explanation) can never reach the prompt.
+ */
+function parseHelpQuestion(value: unknown): HelpQuestionInput | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) throw invalid('helpScope.question must be an object');
+  const stem = requireString(value.stem, 'helpScope.question.stem');
+  if (stem.length > LEGACY_HELP_MAX_QUESTION_STEM_CHARS) {
+    throw invalid(
+      `helpScope.question.stem must be at most ${LEGACY_HELP_MAX_QUESTION_STEM_CHARS} chars`,
+    );
+  }
+  if (!Array.isArray(value.choices)) throw invalid('helpScope.question.choices must be an array');
+  if (value.choices.length > LEGACY_HELP_MAX_QUESTION_CHOICES) {
+    throw invalid(
+      `helpScope.question.choices must have at most ${LEGACY_HELP_MAX_QUESTION_CHOICES} entries`,
+    );
+  }
+  const choices = value.choices.map((entry, index) => {
+    const where = `helpScope.question.choices[${index}]`;
+    if (!isRecord(entry)) throw invalid(`${where} must be an object`);
+    return {
+      label: boundedString(entry.label, `${where}.label`, LEGACY_HELP_MAX_CHOICE_LABEL_CHARS),
+      text: boundedString(entry.text, `${where}.text`, LEGACY_HELP_MAX_CHOICE_TEXT_CHARS),
+    };
+  });
+  return { stem, choices };
 }
 
 export function parseLegacyHelpTurnRequest(body: Record<string, unknown>): LegacyHelpTurnRequest {
@@ -175,6 +222,7 @@ export function parseLegacyHelpTurnRequest(body: Record<string, unknown>): Legac
     intent: optionalString(body.helpScope.intent, 'helpScope.intent'),
     slide,
     intentHint: isHelpIntentHint(intentHint) ? intentHint : null,
+    question: parseHelpQuestion(body.helpScope.question),
   };
 
   if (!isRecord(body.grounding) || !Array.isArray(body.grounding.units)) {
@@ -455,6 +503,7 @@ export async function runLegacyHelpTurn(
         intentHint: request.helpScope.intentHint,
       },
       helpMode: true,
+      helpQuestion: request.helpScope.question,
     });
   } catch (error) {
     if (error instanceof TeachingPackageError) await fail(error.code);

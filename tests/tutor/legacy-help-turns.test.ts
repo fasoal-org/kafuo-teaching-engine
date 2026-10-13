@@ -2,13 +2,23 @@ import { APICallError } from 'ai';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
+import type { AppStage } from '@/lib/document-store/persistence-types';
 import { beginLegacyHelpTurn, readLegacyHelpTurn } from '@/lib/persistence/legacy-help-turns';
+import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
+import { insertVersion } from '@/lib/persistence/teaching-package';
 import { readAttempt, type TeachingModelAttemptRow } from '@/lib/persistence/teaching-model-attempts';
+import { readVersionScene } from '@/lib/server/teaching-package/learner-scene';
+import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import { renderSceneText } from '@/lib/server/teaching-package/question-generation';
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { computeHelpTurnDigest } from '@/lib/server/tutor/canonical-json';
 import { SAFETY_BOUNDARY_MESSAGE_AR } from '@/lib/server/tutor/experiment-guard';
 import { countTokens, effectiveCap } from '@/lib/server/tutor/token-budget';
+import { HELP_QUESTION_TEXT } from '@/lib/server/tutor/tutor-rules';
+import type { AppScene } from '@/lib/types/stage';
 
+import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 import { createTutorPool, ok, RecordingPool, STUDENT_REF, T0_MS } from './tutor-test-harness';
 
 /**
@@ -350,6 +360,93 @@ describe('POST /api/teaching-model/help-turns', () => {
     expect((await bad({ intentHint: 'reveal_answer' })).status).toBe(400);
   });
 
+  it('help_card with helpScope.question (C-5): the question is its own block before the turn note; nothing but stem and choices reaches the model', async () => {
+    mocks.callLLM.mockResolvedValueOnce(ok('فكّر: ماذا يحدث لو ضربت البسط والمقام في 2؟'));
+    const question = {
+      stem: 'أي الكسور التالية يكافئ ١/٢؟',
+      choices: [
+        { label: 'أ', text: '٢/٤' },
+        { label: 'ب', text: '٢/٣' },
+      ],
+      // Fields outside C-5 are never read, so they can never reach the prompt.
+      correctAnswer: 'ANSWER-MARK',
+      explanation: 'EXPLANATION-MARK',
+    };
+    const response = await post(
+      body({
+        turnId: 'op:question',
+        helpScope: {
+          kind: 'help_card',
+          label: 'سؤال 2',
+          cardKey: 'q-2',
+          stepNumber: 2,
+          intent: 'give_hint',
+          intentHint: 'hint',
+          question,
+        },
+      }),
+    );
+    expect(response.status).toBe(200);
+    const messages = mocks.callLLM.mock.calls[0]![0].messages as Array<{
+      role: string;
+      content: string;
+    }>;
+    const block = messages[messages.length - 3]!;
+    expect(block.role).toBe('system');
+    expect(block.content.startsWith(HELP_QUESTION_TEXT)).toBe(true);
+    expect(block.content).toContain('أي الكسور التالية يكافئ ١/٢؟');
+    expect(block.content).toContain('- أ) ٢/٤\n- ب) ٢/٣');
+    expect(messages[messages.length - 2]!.content).toContain('HINT ONLY');
+    const prompt = messages.map((m) => m.content).join('\n');
+    expect(prompt).not.toContain('ANSWER-MARK');
+    expect(prompt).not.toContain('EXPLANATION-MARK');
+  });
+
+  it('rejects a malformed helpScope.question with 400 before any model call; absent or null is accepted', async () => {
+    const withQuestion = (question: unknown, turnId = 'op:q-bad') =>
+      post(
+        body({
+          turnId,
+          helpScope: {
+            kind: 'help_card',
+            label: null,
+            cardKey: null,
+            stepNumber: null,
+            intent: null,
+            question,
+          },
+        }),
+      );
+    const choice = { label: 'أ', text: '٢/٤' };
+    for (const bad of [
+      'نص السؤال',
+      { choices: [choice] },
+      { stem: '  ', choices: [choice] },
+      { stem: 7, choices: [choice] },
+      { stem: 'س', choices: 'أ' },
+      { stem: 'س' },
+      { stem: 'س', choices: Array.from({ length: 7 }, () => choice) },
+      { stem: 'س', choices: ['أ'] },
+      { stem: 'س', choices: [{ label: 1, text: '٢/٤' }] },
+      { stem: 'س', choices: [{ label: 'أ', text: null }] },
+      { stem: 'س'.repeat(8_001), choices: [] },
+      { stem: 'س', choices: [{ label: 'أ'.repeat(41), text: 'ن' }] },
+      { stem: 'س', choices: [{ label: 'أ', text: 'ن'.repeat(2_001) }] },
+    ]) {
+      const response = await withQuestion(bad);
+      expect(response.status, JSON.stringify(bad).slice(0, 80)).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: { code: 'INVALID_REQUEST' } });
+    }
+    expect(mocks.callLLM).not.toHaveBeenCalled();
+
+    mocks.callLLM.mockResolvedValue(ok('تلميح.'));
+    expect((await withQuestion(null, 'op:q-null')).status).toBe(200);
+    const noChoices = await withQuestion({ stem: 'سؤال قصير', choices: [] }, 'op:q-no-choices');
+    expect(noChoices.status).toBe(200);
+    const shortAnswer = mocks.callLLM.mock.calls[1]![0].messages as Array<{ content: string }>;
+    expect(shortAnswer.map((m) => m.content).join('\n')).not.toContain('Choices / الخيارات');
+  });
+
   it('both routes fail → 503 TEACHING_MODEL_UNAVAILABLE (retryable), the row is failed and a retry re-runs', async () => {
     mocks.callLLM.mockRejectedValueOnce(apiError(503)).mockRejectedValueOnce(apiError(502));
     const response = await post(body());
@@ -360,5 +457,82 @@ describe('POST /api/teaching-model/help-turns', () => {
     const retry = await post(body());
     expect(retry.status).toBe(200);
     await expect(retry.json()).resolves.toMatchObject({ text: 'نجح الآن.', attemptIds: ['tma-3'] });
+  });
+});
+
+/**
+ * Help-panel O-3 (R1 FRD HLP-02): the slide text Help grounds on comes from `readVersionScene`
+ * (legacy help cards, `resolveSlide`) and `readLearnerScene` (Stage Help). On a quiz slide it
+ * must carry neither the explanation (`analysis`, shown only after grading) nor the answer.
+ * This goes through the real reader and renderer, not the `loadSlide` test seam.
+ */
+describe('Help grounding of a quiz slide (O-3)', () => {
+  const ANALYSIS = 'EXPLANATION-MARK: نضرب البسط والمقام في 2.';
+  const quizScene = (stageId: string): AppScene =>
+    ({
+      ...makeSlideScene('scene-quiz', stageId, 1, 'اختبار الكسور'),
+      type: 'quiz',
+      content: {
+        type: 'quiz',
+        questions: [
+          {
+            id: 'q1',
+            type: 'single',
+            question: 'أي الكسور التالية يكافئ ١/٢؟',
+            options: [
+              { value: 'A', label: '٢/٤' },
+              { value: 'B', label: '٢/٣' },
+            ],
+            answer: ['ANSWER-MARK'],
+            analysis: ANALYSIS,
+            commentPrompt: 'GRADING-MARK',
+            hasAnswer: true,
+          },
+        ],
+      },
+    }) as unknown as AppScene;
+
+  it('readVersionScene renders the question and options without the analysis or the answer; question generation keeps the analysis', async () => {
+    const pool = await createTutorPool([], { packageSchema: true });
+    try {
+      const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+        pool: pool as never,
+        ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+      });
+      const stageId = 'stage-quiz';
+      const scene = quizScene(stageId);
+      await store.saveDocument(makeDocument(stageId, 'الكسور المتكافئة', [scene]));
+      await insertVersion(pool as never, {
+        id: 'tpv-quiz',
+        aggregate: { tenantId: '1', learningItem: { type: 'lesson', id: 'li-quiz' } },
+        version: 1,
+        status: 'approved',
+        currentStageId: stageId,
+        currentAttemptId: null,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+
+      const read = await readVersionScene(
+        { pool: pool as never, loadStageDocument: (id) => store.loadDocument(id) },
+        { tenantId: '1', versionId: 'tpv-quiz', sceneId: 'scene-quiz' },
+      );
+      expect(read.sceneTitle).toBe('اختبار الكسور');
+      expect(read.sceneText).toContain('Question: أي الكسور التالية يكافئ ١/٢؟');
+      expect(read.sceneText).toContain('- A ٢/٤');
+      expect(read.sceneText).toContain('- B ٢/٣');
+      expect(read.sceneText).not.toContain('Explanation:');
+      expect(read.sceneText).not.toContain('EXPLANATION-MARK');
+      expect(read.sceneText).not.toContain('ANSWER-MARK');
+      expect(read.sceneText).not.toContain('GRADING-MARK');
+
+      // Other callers are unchanged: question generation still reads the explanation.
+      expect(renderSceneText(scene)).toContain(`Explanation: ${ANALYSIS}`);
+      expect(renderSceneText(scene)).not.toContain('ANSWER-MARK');
+    } finally {
+      await pool.end();
+    }
   });
 });
