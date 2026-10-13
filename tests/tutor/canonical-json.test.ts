@@ -56,11 +56,75 @@ const GOLDEN_CANONICAL =
 
 const GOLDEN_DIGEST = '72654016844727743df8dbf6f3dd58d5647e172e99eaa8a9d697bdef9b94b742';
 
+/**
+ * Help-panel C-5 golden: a help card on a quiz slide with `helpScope.slide`, `intentHint` and
+ * `question` (Arabic and Arabic-Indic digits, an empty units array, a null link ref). The hex
+ * was produced in Python with the Backend's exact canonicalisation (top-level `actorRef` and
+ * `requestDigest` dropped, `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`,
+ * sha256 of the UTF-8 bytes); the same method reproduces GOLDEN_DIGEST above.
+ */
+const GOLDEN_QUESTION_BODY: Record<string, unknown> = {
+  tenantContext: { tenantId: '1' },
+  origin: 'kafuo_backend',
+  turnId: 'op:help-card-9',
+  requestDigest: 'x',
+  studentRef: 'abcdefghijklmnopqrstuvwx',
+  subject: {
+    code: 'MATH',
+    nameAr: 'الرياضيات',
+    nameEn: 'Mathematics',
+    academicLanguage: 'ar',
+  },
+  academic: {
+    curriculumName: 'المنهج الوطني',
+    curriculumVersionLabel: '2026',
+    gradeLabel: 'الصف الثامن',
+  },
+  lesson: { learningItemType: 'lesson', learningItemId: '284', title: 'الكسور المتكافئة' },
+  helpScope: {
+    kind: 'help_card',
+    label: 'سؤال 2',
+    cardKey: 'q-2',
+    stepNumber: 2,
+    intent: 'give_hint',
+    slide: { versionId: 'tpv-1', sceneId: 'scene-quiz' },
+    intentHint: 'hint',
+    question: {
+      stem: 'أي الكسور التالية يكافئ ١/٢؟',
+      choices: [
+        { label: 'أ', text: '٢/٤' },
+        { label: 'ب', text: '٢/٣' },
+        { label: 'ج', text: '3/5' },
+        { label: 'د', text: '1/3' },
+      ],
+    },
+  },
+  grounding: { units: [], truncated: false },
+  history: [],
+  message: { text: 'أعطني تلميحاً' },
+  localeHint: 'ar',
+  legacyHelpLinkRef: null,
+  actorRef: 'actor-1',
+};
+
+const GOLDEN_QUESTION_CANONICAL =
+  '{"academic":{"curriculumName":"المنهج الوطني","curriculumVersionLabel":"2026","gradeLabel":"الصف الثامن"},"grounding":{"truncated":false,"units":[]},"helpScope":{"cardKey":"q-2","intent":"give_hint","intentHint":"hint","kind":"help_card","label":"سؤال 2","question":{"choices":[{"label":"أ","text":"٢/٤"},{"label":"ب","text":"٢/٣"},{"label":"ج","text":"3/5"},{"label":"د","text":"1/3"}],"stem":"أي الكسور التالية يكافئ ١/٢؟"},"slide":{"sceneId":"scene-quiz","versionId":"tpv-1"},"stepNumber":2},"history":[],"legacyHelpLinkRef":null,"lesson":{"learningItemId":"284","learningItemType":"lesson","title":"الكسور المتكافئة"},"localeHint":"ar","message":{"text":"أعطني تلميحاً"},"origin":"kafuo_backend","studentRef":"abcdefghijklmnopqrstuvwx","subject":{"academicLanguage":"ar","code":"MATH","nameAr":"الرياضيات","nameEn":"Mathematics"},"tenantContext":{"tenantId":"1"},"turnId":"op:help-card-9"}';
+
+const GOLDEN_QUESTION_DIGEST = 'd3d1f0902f2216f4eeb09cd979d4dd5ccb8dfbcc61ef5d291c6fd8952e7989a7';
+
 describe('canonical JSON (Python json.dumps sort_keys, no whitespace, ensure_ascii=False)', () => {
   it('matches the Backend byte for byte on the golden body', () => {
     expect(canonicalHelpTurnRequest(GOLDEN_BODY)).toBe(GOLDEN_CANONICAL);
     expect(computeHelpTurnDigest(GOLDEN_BODY)).toBe(GOLDEN_DIGEST);
     expect(createHash('sha256').update(Buffer.from(GOLDEN_CANONICAL, 'utf8')).digest('hex')).toBe(GOLDEN_DIGEST);
+  });
+
+  it('matches the Backend byte for byte on a help card carrying slide, intentHint and question (C-5)', () => {
+    expect(canonicalHelpTurnRequest(GOLDEN_QUESTION_BODY)).toBe(GOLDEN_QUESTION_CANONICAL);
+    expect(computeHelpTurnDigest(GOLDEN_QUESTION_BODY)).toBe(GOLDEN_QUESTION_DIGEST);
+    expect(
+      createHash('sha256').update(Buffer.from(GOLDEN_QUESTION_CANONICAL, 'utf8')).digest('hex'),
+    ).toBe(GOLDEN_QUESTION_DIGEST);
   });
 
   it('strips actorRef and requestDigest at the top level only', () => {

@@ -147,6 +147,15 @@ export const HELP_SCOPE_TEXT = `This is Lesson Help anchored to the current Scen
 export const PARTIAL_SCENE_COVERAGE_TEXT = `Only part of this Scene's curriculum units is included here (an excerpt of the Scene, not all of it). Do not claim complete Scene evidence; if the answer needs a part you cannot see, say so.
 النصوص التالية جزء من نصوص هذا المشهد وليست كلها. لا تدّعِ أن لديك نص المشهد كاملًا؛ وإن احتاجت الإجابة جزءًا لا تراه فقل ذلك.`;
 
+/**
+ * Help on a question (contracts §3.4 `helpScope.question`, help-panel C-5): the exact
+ * question the student is on, as its own block that the budget ladder never drops. The
+ * request carries no answer and no explanation, and the tutor must not supply one either.
+ */
+export const HELP_QUESTION_TEXT = `## The question the student is on / السؤال الذي يحلّه الطالب
+This is the exact question the student is working on right now. Help them think it through, but never reveal, choose or confirm which choice is correct (not even by ruling out the others), and never give the final answer, even if they ask for it. If they ask whether their own answer is right, help them check their reasoning step by step without saying whether it is correct.
+هذا هو السؤال نفسه الذي يحلّه الطالب الآن. ساعده على التفكير فيه، لكن لا تكشف الخيار الصحيح ولا تختره ولا تؤكده (ولا حتى باستبعاد الخيارات الأخرى)، ولا تعطِ الإجابة النهائية حتى لو طلبها. وإن سأل هل إجابته صحيحة فساعده على مراجعة تفكيره خطوة بخطوة دون أن تقول هل هي صحيحة.`;
+
 /** Title generation (CHAT-02, plan §8.5): ≤ 300 input tokens, output is the title only. */
 export const TITLE_PROMPT_TEXT = `Write a short title for this tutoring conversation: at most 6 words, in the language the student wrote in, naming the topic (not the subject name alone). Output ONLY the title, with no quotes, no punctuation at the end and no explanation.
 اكتب عنوانًا قصيرًا لهذه المحادثة التعليمية: ست كلمات على الأكثر، بلغة الطالب، يسمّي الموضوع (وليس اسم المادة فقط). أخرج العنوان فقط، بلا علامات اقتباس ولا شرح.`;

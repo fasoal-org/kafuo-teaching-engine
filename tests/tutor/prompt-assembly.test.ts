@@ -16,7 +16,12 @@ import {
   tighterCapForPolicy,
   UNIT_CHAR_CAP,
 } from '@/lib/server/tutor/token-budget';
-import { SAFETY_DIRECTIVE_TEXT, TUTOR_RULES_TEXT, TUTOR_RULES_VERSION } from '@/lib/server/tutor/tutor-rules';
+import {
+  HELP_QUESTION_TEXT,
+  SAFETY_DIRECTIVE_TEXT,
+  TUTOR_RULES_TEXT,
+  TUTOR_RULES_VERSION,
+} from '@/lib/server/tutor/tutor-rules';
 
 /**
  * Prompt assembly under the enforced budget (plan §8.1, §8.7; contracts §8).
@@ -465,5 +470,100 @@ describe('discovery-first P7: item headers, grouping, insufficient reasons', () 
     for (const reason of ['retrieval_unavailable', 'retrieval_busy', 'below_evidence_floor', 'embedding_profile_mismatch'] as const) {
       expect(insufficient({ mode: 'insufficient', reason })).toBe(plain);
     }
+  });
+});
+
+describe('Help question block (help-panel C-5)', () => {
+  const QUESTION = {
+    stem: 'أي الكسور التالية يكافئ ١/٢؟',
+    choices: [
+      { label: 'أ', text: '٢/٤' },
+      { label: 'ب', text: '٢/٣' },
+      { label: '', text: 'لا شيء مما سبق' },
+    ],
+  };
+  const helpBase = {
+    academic: ACADEMIC,
+    grounding: {
+      mode: 'scene' as const,
+      sceneTitle: 'الكسور المتكافئة',
+      units: [{ title: 'الكسور', text: 'نضرب البسط والمقام في العدد نفسه.' }],
+    },
+    history: { turns: [{ student: 'س1', tutor: 'ج1' }] },
+    message: 'أعطني تلميحاً',
+    policy: MATH_POLICY,
+    directives: { responseScript: 'ar' as const, intentHint: 'hint' as const },
+    helpMode: true,
+  };
+
+  it('is its own system message right before the turn note, with the no-answer instruction, the stem and the choices', () => {
+    const result = assembleTutorPrompt({ ...helpBase, helpQuestion: QUESTION });
+    expect(roles(result.messages)).toEqual([
+      'system', // rules
+      'system', // academic
+      'system', // grounding
+      'user',
+      'assistant',
+      'system', // question
+      'system', // turn note
+      'user', // newest
+    ]);
+    const block = String(result.messages[5]!.content);
+    expect(block.startsWith(HELP_QUESTION_TEXT)).toBe(true);
+    expect(block).toContain('never reveal, choose or confirm which choice is correct');
+    expect(block).toContain('Question / السؤال:\nأي الكسور التالية يكافئ ١/٢؟');
+    expect(block).toContain('Choices / الخيارات:\n- أ) ٢/٤\n- ب) ٢/٣\n- لا شيء مما سبق');
+    expect(String(result.messages[6]!.content)).toContain('HINT ONLY');
+    // It is not grounding: the grounding block is the same as without a question.
+    const without = assembleTutorPrompt(helpBase);
+    expect(result.messages[2]).toEqual(without.messages[2]);
+  });
+
+  it('renders nothing when absent or outside Help, so existing prompts stay byte-identical', () => {
+    const without = assembleTutorPrompt(helpBase);
+    const nullQuestion = assembleTutorPrompt({ ...helpBase, helpQuestion: null });
+    expect(nullQuestion.messages).toEqual(without.messages);
+    const withoutText = without.messages.map((m) => String(m.content)).join('\n');
+    expect(withoutText).not.toContain('Question / السؤال');
+    const freeChat = { ...helpBase, helpMode: false, grounding: { mode: 'none' as const } };
+    expect(assembleTutorPrompt({ ...freeChat, helpQuestion: QUESTION }).messages).toEqual(
+      assembleTutorPrompt(freeChat).messages,
+    );
+  });
+
+  it('is never dropped: the ladder removes grounding and history first, the question stays', () => {
+    const ladderInput = (messageChars: number) => ({
+      ...helpBase,
+      grounding: {
+        mode: 'scene' as const,
+        sceneTitle: 'الكسور المتكافئة',
+        units: syntheticUnits(9_000, AR_SENTENCE, 1_500),
+      },
+      history: {
+        summary: repeat(AR_SENTENCE, 2_000),
+        turns: syntheticTurns(16, AR_SENTENCE, 3_000),
+      },
+      message: repeat(AR_SENTENCE, messageChars),
+      helpQuestion: QUESTION,
+    });
+    const chars = largestMessage((n) => {
+      try {
+        assembleTutorPrompt(ladderInput(n));
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(chars).toBeGreaterThan(0);
+    const result = assembleTutorPrompt(ladderInput(chars));
+    assertUnderEveryCap(result.messages, MATH_POLICY);
+    expect(result.reductions).toContain('drop_grounding');
+    expect(result.reductions).toContain('drop_recent_turns');
+    expect(result.groundingMode).toBe('insufficient');
+    expect(result.history.turnsIncluded).toBe(0);
+    const question = result.messages[result.messages.length - 3]!;
+    expect(question.role).toBe('system');
+    expect(String(question.content)).toContain('أي الكسور التالية يكافئ ١/٢؟');
+    expect(String(question.content)).toContain('- ب) ٢/٣');
   });
 });
