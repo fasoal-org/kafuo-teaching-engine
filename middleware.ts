@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { isOpenApiRequest } from '@/lib/config/access-code-allowlist';
+import { isEditorGrantExemptRequest, isOpenApiRequest } from '@/lib/config/access-code-allowlist';
 import { isAgentRuntimeConfigured, isProWorkbenchEnabled } from '@/lib/config/feature-flags';
 import {
   isOpenAccessOptOut,
@@ -101,6 +101,14 @@ export async function middleware(request: NextRequest) {
   // Check cookie — validate HMAC signature, not just existence
   const cookie = request.cookies.get('openmaic_access');
   if (cookie?.value && (await verifyToken(cookie.value, accessCode))) {
+    return NextResponse.next();
+  }
+
+  // Teaching Package editor (Roles phase 1, D-8 B / O1): a browser holding the
+  // editor-grant cookie reaches only the reviewed, exact method + path table;
+  // each of those handlers verifies the grant itself. Checked after the
+  // closed-mode 503 and the access cookie, so neither changes.
+  if (isEditorGrantExemptRequest(request)) {
     return NextResponse.next();
   }
 

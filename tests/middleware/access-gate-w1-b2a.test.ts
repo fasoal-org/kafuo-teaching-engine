@@ -109,6 +109,14 @@ describe('ACCESS_CODE gate in production (ET-31)', () => {
       expect(await outcome('POST', '/api/chat', cookie)).toBe(503);
     });
 
+    it('answers 503 to the editor-grant routes (O1) even with a grant cookie', async () => {
+      const grant = 'teaching_package_grant=opaque';
+      expect(
+        await outcome('PUT', '/api/stages/stage-abc/scene-alignment-confirmations', grant),
+      ).toBe(503);
+      expect(await outcome('PUT', '/api/persistence/documents/stage-abc', grant)).toBe(503);
+    });
+
     it('lets the allow-listed Backend and mobile routes through, as today', async () => {
       for (const [method, path, cookie] of ALLOWED) {
         expect(await outcome(method, path, cookie), `${method} ${path}`).toBe('passed');

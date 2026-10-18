@@ -4,7 +4,9 @@
  *
  * Only the routes the Kafuo Backend (server to server) and the mobile app call
  * are here, and each one authenticates on its own. Everything else under
- * `/api` answers 401 until the browser has typed the access code.
+ * `/api` answers 401 until the browser has typed the access code, except the
+ * Teaching Package editor table below (`isEditorGrantExemptRequest`), which the
+ * middleware consults only after the closed-mode 503 and the access cookie.
  *
  * Edge-safe: no Node imports (middleware may run on the edge runtime).
  */
@@ -73,7 +75,65 @@ export function isOpenApiRequest(
     return Boolean(search.get('exp') && search.get('sig'));
   }
   return (
-    LEARNER_DOCUMENT_PATH.test(pathname) &&
-    Boolean(request.cookies.get(GRANT_COOKIE_NAME)?.value)
+    LEARNER_DOCUMENT_PATH.test(pathname) && Boolean(request.cookies.get(GRANT_COOKIE_NAME)?.value)
   );
+}
+
+/**
+ * Teaching Package editor routes a browser holding only the editor-grant cookie
+ * may reach without the access code (Roles phase 1, D-8 B / O1; reviewed list
+ * in `docs/frds/roles/roles-module-phase-1-o1-route-inventory-review.md` §6).
+ *
+ * Presence only: the cookie value is not checked here. Each handler verifies
+ * the grant itself (signature, expiry, tenant, Stage, capability, version
+ * state) before reading or writing anything, which is the only reason a row
+ * may be listed. Exact method (no HEAD, no OPTIONS) and an anchored path;
+ * `:id` is one `STAGE_ID`-charset segment. The learner document read (row 11,
+ * GET/HEAD `/api/persistence/documents/:id`) stays in `isOpenApiRequest`.
+ * A test pins this table.
+ */
+export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string, path: string]> = [
+  ['GET', '/api/stages/:id/teaching-skills'],
+  ['PUT', '/api/stages/:id/teaching-skills'],
+  ['PUT', '/api/stages/:id/scene-alignment-confirmations'],
+  ['GET', '/api/stages/:id/scene-regeneration'],
+  ['GET', '/api/stages/:id/scene-regenerations/:id'],
+  ['POST', '/api/stages/:id/scene-regenerations/:id/restore'],
+  ['GET', '/api/stages/:id/scene-revisions'],
+  ['POST', '/api/stages/:id/scenes/:id/regenerate'],
+  ['GET', '/api/stages/:id/scenes/:id/regenerate'],
+  ['POST', '/api/stages/:id/scenes/:id/narration-audio'],
+  ['PUT', '/api/persistence/documents/:id'],
+  ['PUT', '/api/persistence/documents/:id/stage'],
+  ['GET', '/api/persistence/documents/:id/scenes/:id'],
+  ['PUT', '/api/persistence/documents/:id/scenes/:id'],
+  ['DELETE', '/api/persistence/documents/:id/scenes/:id'],
+];
+
+/** Literal segments are lowercase words; `:id` becomes one `STAGE_ID` segment. */
+function editorRoutePattern(path: string): RegExp {
+  const segments = path.split('/').map((segment) => {
+    if (segment === ':id') return STAGE_ID;
+    if (!/^[a-z-]*$/.test(segment)) throw new Error(`Unexpected editor route segment: ${segment}`);
+    return segment;
+  });
+  return new RegExp(`^${segments.join('/')}$`);
+}
+
+const EDITOR_GRANT_EXEMPTIONS = EDITOR_GRANT_EXEMPT_ROUTES.map(([method, path]) => ({
+  method,
+  pattern: editorRoutePattern(path),
+}));
+
+/**
+ * Whether an editor-grant request may pass the `ACCESS_CODE` gate without the
+ * access cookie. The query string is ignored; the raw pathname must match.
+ */
+export function isEditorGrantExemptRequest(
+  request: Pick<NextRequest, 'nextUrl' | 'method' | 'cookies'>,
+): boolean {
+  if (!request.cookies.get(GRANT_COOKIE_NAME)?.value) return false;
+  const method = request.method.toUpperCase();
+  const { pathname } = request.nextUrl;
+  return EDITOR_GRANT_EXEMPTIONS.some((row) => row.method === method && row.pattern.test(pathname));
 }

@@ -67,6 +67,10 @@ const ALLOWED: ReadonlyArray<[string, string, string?]> = [
   ['HEAD', '/api/classroom-media/abcDEF1234/audio/scene-1.mp3?exp=1&sig=s'],
   ['GET', '/api/persistence/documents/stage-AbC_9-z', GRANT_COOKIE],
   ['HEAD', '/api/persistence/documents/abcDEF1234', GRANT_COOKIE],
+  // Roles phase 1 O1 (D-8 B): editor-grant routes, reviewed table
+  // `EDITOR_GRANT_EXEMPT_ROUTES` (full matrix in editor-grant-exemption.test.ts).
+  ['PUT', '/api/persistence/documents/stage-abc', GRANT_COOKIE],
+  ['GET', '/api/persistence/documents/stage-abc/scenes/s1', GRANT_COOKIE],
 ];
 
 /** Everything else under `/api`, including look-alikes of allowed paths. */
@@ -101,11 +105,10 @@ const BLOCKED: ReadonlyArray<[string, string, string?]> = [
   ['GET', '/api/classroom-media/stage-abc/other/file.png?exp=1&sig=s'],
   ['GET', '/api/classroom-media/stage-abc/media/?exp=1&sig=s'],
   ['GET', '/api/classroom-media/stage%2Fabc/media/figure.png?exp=1&sig=s'],
-  // Persistence: one Stage document, read-only, with a grant cookie.
+  // Persistence: one Stage document, read-only, with a grant cookie (the
+  // editor-grant writes moved to ALLOWED under O1).
   ['GET', '/api/persistence/documents/stage-abc'],
-  ['PUT', '/api/persistence/documents/stage-abc', GRANT_COOKIE],
   ['DELETE', '/api/persistence/documents/stage-abc', GRANT_COOKIE],
-  ['GET', '/api/persistence/documents/stage-abc/scenes/s1', GRANT_COOKIE],
   ['GET', '/api/persistence/documents', GRANT_COOKIE],
   ['GET', '/api/persistence/documents/abc%2F..%2Fruntime', GRANT_COOKIE],
   ['GET', '/api/persistence/assets/a1', GRANT_COOKIE],
