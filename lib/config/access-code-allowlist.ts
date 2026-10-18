@@ -91,6 +91,12 @@ export function isOpenApiRequest(
  * `:id` is one `STAGE_ID`-charset segment. The learner document read (row 11,
  * GET/HEAD `/api/persistence/documents/:id`) stays in `isOpenApiRequest`.
  * A test pins this table.
+ *
+ * Review rule for new rows: a row whose LAST segment is a dynamic `:id` is
+ * allowed only if its handler re-verifies the grant for that exact id. The
+ * middleware sees the path after Next strips a trailing `.rsc`, while the
+ * router dispatches the unstripped path, so such a handler can receive an id
+ * like `R.rsc` that the predicate never saw.
  */
 export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string, path: string]> = [
   ['GET', '/api/stages/:id/teaching-skills'],
@@ -127,7 +133,10 @@ const EDITOR_GRANT_EXEMPTIONS = EDITOR_GRANT_EXEMPT_ROUTES.map(([method, path]) 
 
 /**
  * Whether an editor-grant request may pass the `ACCESS_CODE` gate without the
- * access cookie. The query string is ignored; the raw pathname must match.
+ * access cookie. The query string is ignored. The pathname that must match is
+ * the WHATWG-normalized one middleware receives, after Next strips a trailing
+ * `.rsc` and the `/_next/data/<id>/…json` wrapper for middleware; it is not
+ * the raw request path.
  */
 export function isEditorGrantExemptRequest(
   request: Pick<NextRequest, 'nextUrl' | 'method' | 'cookies'>,

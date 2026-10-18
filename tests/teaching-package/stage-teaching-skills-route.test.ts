@@ -9,7 +9,7 @@
  * records W15 baselines. Authorization is the Editor grant (read/write) plus
  * the existing status guard — no new machinery.
  */
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -462,6 +462,160 @@ describe('W16 stage teaching-skills inspection routes', () => {
       'INVALID_TRANSITION',
     );
   });
+
+  /**
+   * Roles phase 1 review OM-01 (row 3): the PUT is reachable with only the
+   * editor-grant cookie (O1), so the handler's own grant check is the guard.
+   * Every refusal runs on a DRAFT Stage, where a write grant succeeds (the
+   * control at the end of each case), so a dropped check would show up as a 200
+   * and a written baseline.
+   */
+  describe('O1 — PUT scene-alignment-confirmations refuses every non-write grant', () => {
+    const DAY_MS = 24 * 3600 * 1000;
+
+    beforeEach(() => {
+      // A non-empty signing key, as in production: a token signed with any
+      // other key is a forgery.
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'w16-o1-grant-key');
+    });
+
+    const cookieOf = (tokens: string[]) =>
+      `teaching_package_grant=${encodeURIComponent(JSON.stringify(tokens))}`;
+
+    function grantCookie(
+      stageId: string,
+      versionId: string,
+      capability: 'read' | 'write',
+      options: { purpose?: 'edit' | 'preview' | 'learner'; now?: number } = {},
+    ): string {
+      const { token } = buildEditorGrantPayload({
+        tenantId: 'tenant-test',
+        versionId,
+        stageId,
+        capability,
+        ...(options.purpose ? { purpose: options.purpose } : {}),
+        ...(options.now !== undefined ? { now: options.now } : {}),
+      });
+      return cookieOf([token]);
+    }
+
+    async function confirm(stageId: string, cookie: string): Promise<Response> {
+      const route = await loadRoute('scene-alignment-confirmations');
+      const headers = new Headers({ 'content-type': 'application/json' });
+      if (cookie) headers.set('cookie', cookie);
+      return route.PUT(
+        new NextRequest(`http://localhost/api/stages/${stageId}/scene-alignment-confirmations`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ confirmations: [{ sceneId: 's-slide' }] }),
+        }),
+        { params: Promise.resolve({ id: stageId }) },
+      );
+    }
+
+    async function baselineOf(stageId: string) {
+      const document = await makeStore().loadDocument(stageId);
+      return document!.scenes.find((scene) => scene.id === 's-slide')!.alignmentBaseline;
+    }
+
+    it('read, learner and preview grants → 403 READ_ONLY_GRANT; no baseline is written', async () => {
+      const { versionId, stageId } = await seedVersion({});
+      // The shapes the mint produces: only an `edit` handoff carries `write`
+      // (`app/api/teaching-packages/[id]/editor-handoff/route.ts`).
+      for (const cookie of [
+        grantCookie(stageId, versionId, 'read'),
+        grantCookie(stageId, versionId, 'read', { purpose: 'learner' }),
+        grantCookie(stageId, versionId, 'read', { purpose: 'preview' }),
+      ]) {
+        const response = await confirm(stageId, cookie);
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: 'READ_ONLY_GRANT' },
+        });
+      }
+      expect(await baselineOf(stageId)).toBeUndefined();
+
+      // Control: the same Stage accepts a write grant.
+      const accepted = await confirm(
+        stageId,
+        grantCookie(stageId, versionId, 'write', { purpose: 'edit' }),
+      );
+      expect(accepted.status).toBe(200);
+      expect(await baselineOf(stageId)).toMatchObject({ origin: 'reviewer-confirmation' });
+    });
+
+    it('no grant, forged, expired and other-Stage grants → plain 404; no baseline is written', async () => {
+      const { versionId, stageId } = await seedVersion({});
+      const other = await seedVersion({});
+
+      // Forgery 1: a real read token whose payload is edited to `write`, keeping
+      // the original signature.
+      const { token: readToken } = buildEditorGrantPayload({
+        tenantId: 'tenant-test',
+        versionId,
+        stageId,
+        capability: 'read',
+      });
+      const [encoded, signature] = readToken.split('.') as [string, string];
+      const escalated = JSON.stringify({
+        ...(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as object),
+        capability: 'write',
+      });
+      const tampered = `${Buffer.from(escalated, 'utf8').toString('base64url')}.${signature}`;
+      // Forgery 2: a well-formed write payload signed with another key.
+      const { payload: writePayload } = buildEditorGrantPayload({
+        tenantId: 'tenant-test',
+        versionId,
+        stageId,
+        capability: 'write',
+        purpose: 'edit',
+      });
+      const writeJson = JSON.stringify(writePayload);
+      const wrongKey = `${Buffer.from(writeJson, 'utf8').toString('base64url')}.${createHmac(
+        'sha256',
+        'not-the-grant-key',
+      )
+        .update(writeJson)
+        .digest('hex')}`;
+
+      const cases: Array<[label: string, cookie: string]> = [
+        ['no grant cookie', ''],
+        ['opaque cookie value', cookieOf(['forged.token'])],
+        ['tampered payload', cookieOf([tampered])],
+        ['signed with another key', cookieOf([wrongKey])],
+        [
+          'expired write grant',
+          grantCookie(stageId, versionId, 'write', {
+            purpose: 'edit',
+            now: Date.now() - 30 * DAY_MS,
+          }),
+        ],
+        [
+          'another Stage’s write grant',
+          grantCookie(other.stageId, other.versionId, 'write', { purpose: 'edit' }),
+        ],
+        [
+          'a grant for this Stage bound to another Stage’s version',
+          grantCookie(stageId, other.versionId, 'write', { purpose: 'edit' }),
+        ],
+      ];
+      for (const [label, cookie] of cases) {
+        const response = await confirm(stageId, cookie);
+        expect(response.status, label).toBe(404);
+        expect(await response.text(), label).toBe('Not found');
+      }
+      expect(await baselineOf(stageId)).toBeUndefined();
+      expect(await baselineOf(other.stageId)).toBeUndefined();
+
+      // Control: the same Stage accepts its own valid write grant.
+      const accepted = await confirm(
+        stageId,
+        grantCookie(stageId, versionId, 'write', { purpose: 'edit' }),
+      );
+      expect(accepted.status).toBe(200);
+    });
+  });
+
   describe('W5 — the inspection GET carries Actions alongside governance context', () => {
     /**
      * Scenes carrying persisted Actions — the W3-validator view a reviewer

@@ -488,4 +488,121 @@ describe('persistence route editor grant', () => {
     const response = await call('/documents', { headers: { cookie } });
     expect(response.status).toBe(503);
   });
+
+  // Roles phase 1 review OM-03: per-row cases for the persistence rows O1 made
+  // reachable with only the grant cookie (rows 12, 14 and 16), next to the
+  // row 13/15 read-grant refusals above.
+
+  it('O1 row 12: a read grant on PUT /documents/X → 403 GRANT_READ_ONLY; the document is unchanged', async () => {
+    const cookie = grantCookie(STAGE_X, 'read');
+    const response = await call(`/documents/${STAGE_X}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify(makeDocument(STAGE_X, 'overwritten by a read grant', [])),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'GRANT_READ_ONLY' } });
+
+    const stored = await call(`/documents/${STAGE_X}`, { headers: { cookie } });
+    expect(stored.status).toBe(200);
+    await expect(stored.json()).resolves.toMatchObject({
+      stage: { id: STAGE_X, name: 'Package draft' },
+      scenes: [{ id: 'scene-1' }],
+    });
+  });
+
+  it('O1 row 16: a read grant on DELETE /documents/X/scenes/s → 403 GRANT_READ_ONLY; the scene stays', async () => {
+    const cookie = grantCookie(STAGE_X, 'read');
+    const response = await call(`/documents/${STAGE_X}/scenes/scene-1`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'GRANT_READ_ONLY' } });
+
+    const scene = await call(`/documents/${STAGE_X}/scenes/scene-1`, { headers: { cookie } });
+    expect(scene.status).toBe(200);
+    await expect(scene.json()).resolves.toMatchObject({ id: 'scene-1', stageId: STAGE_X });
+  });
+
+  it('O1 row 14: GET /documents/X/scenes/s is sanitized for a learner grant; another Stage’s grant → 503', async () => {
+    const SECRET = 'O1-ROW14-SECRET-EXPLANATION';
+    const quiz = {
+      ...makeSlideScene('scene-quiz', STAGE_X, 2, 'Quiz'),
+      type: 'quiz',
+      content: {
+        type: 'quiz',
+        questions: [
+          {
+            id: 'q-1',
+            type: 'single',
+            question: 'Pick one',
+            options: [
+              { label: 'Alpha', value: 'A' },
+              { label: 'Beta', value: 'B' },
+            ],
+            answer: ['B'],
+            analysis: SECRET,
+            hasAnswer: true,
+            points: 2,
+          },
+        ],
+      },
+    } as unknown as AppScene;
+    await createOwnerBoundDocumentStore<AppScene, AppStage>({
+      pool,
+      ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+      validateScene: validateAppScene,
+      validateStage: validateAppStage,
+      mutationFence: teachingPackageStageGuardFence(),
+    }).putScene(STAGE_X, quiz);
+    const path = `/documents/${STAGE_X}/scenes/scene-quiz`;
+
+    // Control: a preview grant reads the stored grading secrets.
+    const preview = await call(path, {
+      headers: { cookie: grantCookie(STAGE_X, 'read', 'preview') },
+    });
+    expect(preview.status).toBe(200);
+    const previewScene = (await preview.json()) as {
+      content: { questions: Array<Record<string, unknown>> };
+    };
+    expect(previewScene.content.questions[0]).toMatchObject({ answer: ['B'], analysis: SECRET });
+
+    const learner = await call(path, {
+      headers: { cookie: grantCookie(STAGE_X, 'read', 'learner') },
+    });
+    expect(learner.status).toBe(200);
+    expect(learner.headers.get('cache-control')).toBe('private, no-store');
+    const learnerText = await learner.text();
+    expect(learnerText).not.toContain(SECRET);
+    const learnerScene = JSON.parse(learnerText) as {
+      id: string;
+      content: { type: string; questions: Array<Record<string, unknown>> };
+    };
+    expect(learnerScene.id).toBe('scene-quiz');
+    expect(learnerScene.content).toEqual({
+      type: 'quiz',
+      questions: [
+        {
+          id: 'q-1',
+          type: 'single',
+          question: 'Pick one',
+          options: [
+            { label: 'Alpha', value: 'A' },
+            { label: 'Beta', value: 'B' },
+          ],
+          points: 2,
+        },
+      ],
+    });
+
+    // Stage Y's learner grant does not cover Stage X: pre-existing 503.
+    const foreign = await call(path, {
+      headers: { cookie: grantCookie(STAGE_Y, 'read', 'learner') },
+    });
+    expect(foreign.status).toBe(503);
+    await expect(foreign.json()).resolves.toMatchObject({
+      error: { code: 'PERSISTENCE_DEV_TOKEN_MISSING' },
+    });
+  });
 });
