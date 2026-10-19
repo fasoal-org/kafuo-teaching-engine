@@ -22,6 +22,7 @@ import { isServerPersistenceConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { readEditorGrant } from '@/lib/server/teaching-package/editor-grant';
+import { learnerRefusalWithoutAccessCode } from '@/lib/server/teaching-package/editor-grant-tenant-access';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
@@ -72,6 +73,13 @@ export async function GET(req: NextRequest, { params }: Params) {
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
   try {
     const { id: stageId } = await params;
+    // D-O1-5: the grant `resolveGrantVersion` resolves; a learner keeps the
+    // middleware's old 401 without the access code.
+    const learnerRefusal = learnerRefusalWithoutAccessCode(
+      req,
+      readEditorGrant(req.headers, stageId),
+    );
+    if (learnerRefusal) return learnerRefusal;
     const grant = await resolveGrantVersion(req, stageId);
     if (!grant.ok) return grant.response;
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');

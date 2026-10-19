@@ -13,7 +13,13 @@
  * D-O1-6 (owner, 19 Oct 2026), media only: a grant also reads the media of any
  * other Stage of the same lesson in the same tenant, because a successor Stage
  * keeps its predecessor's media links (`stage-clone.ts`).
+ *
+ * D-O1-5 (owner, 19 Oct 2026): a learner grant does not open the editor's GET
+ * rows 1, 4 and 7 without the access code (`learnerRefusalWithoutAccessCode`).
  */
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+
 import { verifyAccessToken } from '@/lib/server/access-token';
 import {
   readEditorGrant,
@@ -24,6 +30,32 @@ import {
 /** Whether the request carries a valid admin access cookie for this `ACCESS_CODE`. */
 export function hasValidAccessCookie(cookieValue: string | undefined, accessCode: string): boolean {
   return Boolean(cookieValue) && verifyAccessToken(cookieValue!, accessCode);
+}
+
+/**
+ * D-O1-5 (owner, 19 Oct 2026): before O1 the middleware answered a learner who
+ * held only the grant cookie with 401 on `GET teaching-skills`,
+ * `GET scene-regeneration` and `GET scene-revisions`. Those handlers call this
+ * with the grant they resolve for the path's Stage, so the learner keeps that
+ * exact answer (the middleware's 401 body) while `ACCESS_CODE` is set and no
+ * valid access cookie is present. Edit, preview and legacy grants, the access
+ * cookie, and a deployment without `ACCESS_CODE` get `null` (no change).
+ *
+ * In the handler, not the middleware: the middleware checks cookie presence
+ * only, and an unsigned extra entry in the cookie would get past a check there.
+ */
+export function learnerRefusalWithoutAccessCode(
+  req: Pick<NextRequest, 'cookies'>,
+  grant: Pick<VerifiedEditorGrant, 'purpose'> | null,
+): Response | null {
+  const accessCode = process.env.ACCESS_CODE;
+  if (!accessCode || grant?.purpose !== 'learner') return null;
+  if (hasValidAccessCookie(req.cookies.get('openmaic_access')?.value, accessCode)) return null;
+  // Byte for byte the middleware's 401 (`middleware.ts`).
+  return NextResponse.json(
+    { success: false, errorCode: 'INVALID_REQUEST', error: 'Access code required' },
+    { status: 401 },
+  );
 }
 
 /** Whether the request holds a non-learner editor grant for a Stage of its own tenant. */
