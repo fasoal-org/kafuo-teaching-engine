@@ -18,6 +18,10 @@ import { synthesizeNarration } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
 import { SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
 import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
+import {
+  TeachingTtsRouteInvalidError,
+  teachingRouteForStage,
+} from '@/lib/server/speech/teaching-route';
 import type { SpeechAction } from '@/lib/types/action';
 
 export const maxDuration = 120;
@@ -50,6 +54,14 @@ export async function POST(req: NextRequest) {
     throw error;
   }
   if (!access) return apiError('SATTS_DIAGNOSTICS_FORBIDDEN', 403, 'Pronunciation diagnostics need an owner or editor grant');
+  // A malformed configured route on the Stage is reported, never replaced.
+  try {
+    teachingRouteForStage(access.stage);
+  } catch (error) {
+    if (error instanceof TeachingTtsRouteInvalidError)
+      return apiError(error.code, 409, error.message);
+    throw error;
+  }
   const document = (await access.loadDocument()) as unknown as DiagnosticsDocument | null;
   if (!document) return apiError('SATTS_STAGE_NOT_FOUND', 404, 'Stage not found');
 

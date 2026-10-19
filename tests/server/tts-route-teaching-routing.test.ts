@@ -352,4 +352,26 @@ describe('routing with SCIENTIFIC_TTS_MODE=on', () => {
     const body = await response.json();
     expect(body.statuses.a1).toEqual({ status: 'current' });
   });
+
+  it('the assess route reports a malformed configured route (409), never a 500 or the table voice', async () => {
+    mocks.loadStage.mockResolvedValue({
+      ...stageOf('ar-SA', 'MATH'),
+      stage: { subjectCode: 'MATH', language: 'ar-SA', ttsRoute: { routeId: 'configured' } },
+    });
+    const { POST: assess } = await import('@/app/api/generate/tts/assess/route');
+    const response = await assess(
+      new NextRequest('http://localhost/api/generate/tts/assess', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          stageId: 'stage-1',
+          ttsProviderId: 'elevenlabs-tts',
+          ttsVoice: 'client-voice',
+          actions: [{ id: 'a1', text: 'ثم نكمل' }],
+        }),
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect((await response.json()).errorCode).toBe('TTS_ROUTE_INVALID');
+  });
 });

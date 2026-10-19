@@ -19,6 +19,7 @@ import { getServerPersistenceProvider } from '@/lib/persistence/server-provider'
 import { resumeGenerationAttempt } from '@/lib/server/teaching-package/generation-correction';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
+  assertConfiguredTtsRouteAvailable,
   buildKafuoStartRequest,
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
@@ -103,6 +104,9 @@ export async function POST(
     // that requires or allows a game (g5.v2–v5) is refused before its state
     // changes. Its retained snapshot is not rewritten; abandon still works.
     assertKafuoFlowWithoutGames(request.teachingModel, 'resume');
+    // A configured narration route's provider must still be usable (plan
+    // D-7): refused before the attempt's state changes, never a silent lesson.
+    assertConfiguredTtsRouteAvailable(kafuo);
 
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
     const { attempt, resumed } = await resumeGenerationAttempt(pool, attemptId, {

@@ -14,14 +14,11 @@ import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type { GenerateClassroomInput } from '@/lib/server/classroom-generation';
 import {
-  routedProviderStatus,
-  routedProviderUnavailableMessage,
-} from '@/lib/server/speech/teaching-route';
-import {
   startGenerationAttempt,
   type StartGenerationAttemptRequest,
 } from '@/lib/server/teaching-package/generation';
 import {
+  assertConfiguredTtsRouteAvailable,
   buildKafuoStartRequest,
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
@@ -124,23 +121,9 @@ export async function POST(req: NextRequest) {
       assertKafuoFlowWithoutGames(request.teachingModel, 'generate');
       // A superadmin-configured narration route (plan D-7): its provider must
       // be keyed and enabled on this server NOW, or the request is refused
-      // before any attempt row — never a silent lesson, never another voice.
-      // The parser already refused an unknown provider/voice or a language
-      // mismatch (TTS_ROUTE_INVALID). Default routes keep today's behaviour.
-      if (kafuo.ttsRoute) {
-        const { status } = routedProviderStatus(kafuo.ttsRoute.providerId);
-        if (status !== 'ok') {
-          throw new TeachingPackageError(
-            'TTS_ROUTE_UNAVAILABLE',
-            routedProviderUnavailableMessage(kafuo.ttsRoute, status),
-            {
-              providerId: kafuo.ttsRoute.providerId,
-              reason: status,
-              settingKey: kafuo.ttsRoute.settingKey,
-            },
-          );
-        }
-      }
+      // before any attempt row. The parser already refused an unknown
+      // provider/voice or a language mismatch (TTS_ROUTE_INVALID).
+      assertConfiguredTtsRouteAvailable(kafuo);
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay

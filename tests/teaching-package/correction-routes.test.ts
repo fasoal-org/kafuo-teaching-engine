@@ -16,7 +16,18 @@ const mocks = vi.hoisted(() => ({
   runGenerationAttempt: vi.fn(),
   afterCallbacks: [] as Array<() => unknown>,
   pool: { query: () => undefined },
+  /** Overrides the server provider status for a configured narration route; unset = real. */
+  routedStatus: vi.fn(),
 }));
+
+vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/speech/teaching-route')>();
+  return {
+    ...actual,
+    routedProviderStatus: (providerId: string) =>
+      mocks.routedStatus(providerId) ?? actual.routedProviderStatus(providerId),
+  };
+});
 
 vi.mock('next/server', async (importOriginal) => ({
   ...(await importOriginal<typeof import('next/server')>()),
@@ -548,6 +559,29 @@ describe('POST …/resume', () => {
       error: { code: 'SUBJECT_ROUTE_UNAVAILABLE' },
     });
     expectNoServiceCall();
+  });
+
+  it('refuses a configured narration route whose provider is no longer usable, before any state changes', async () => {
+    mocks.routedStatus.mockReturnValue({ status: 'missing-key' });
+    try {
+      const request = kafuoRequest({
+        narration: {
+          ttsRoute: {
+            providerId: 'cartesia-tts',
+            voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+            settingKey: 'teaching_tts.route.BIOLOGY',
+          },
+        },
+      });
+      const response = await send(resumePost, '/resume', 'POST', resumeBody({ request }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'TTS_ROUTE_UNAVAILABLE' },
+      });
+      expectNoServiceCall();
+    } finally {
+      mocks.routedStatus.mockReset();
+    }
   });
 
   it.each([

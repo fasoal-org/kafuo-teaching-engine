@@ -146,16 +146,24 @@ export function teachingTtsCatalogVoice(
 
 /**
  * The route persisted on a Stage (`Stage.ttsRoute`), or `null` when it is not
- * well formed. It was validated against the catalogue when the request was
- * accepted, so it is read as frozen: a later catalogue change never moves it.
+ * a catalogue route. The Stage document is client-writable (owner / editor
+ * saves), so the stored value is re-checked here: the voice must still be a
+ * catalogue voice of its provider in the same language, and the model one the
+ * provider lists and the voice speaks with. The model is not required to equal
+ * today's derived model, so a later default-model change never silences a
+ * frozen lesson; a model removed from the catalogue does fail closed.
  */
 export function configuredTeachingTtsRoute(value: unknown): TeachingTtsRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const { providerId, modelId, voiceId, language } = record;
   if (record.routeId !== 'configured' || !isTeachingTtsProviderId(providerId)) return null;
-  if (typeof modelId !== 'string' || !modelId.trim()) return null;
-  if (typeof voiceId !== 'string' || !voiceId.trim()) return null;
-  if (language !== 'en' && language !== 'ar') return null;
-  return { routeId: 'configured', providerId, modelId, voiceId, language };
+  if (typeof modelId !== 'string' || typeof voiceId !== 'string') return null;
+  const voice = teachingTtsCatalogVoice(providerId, voiceId);
+  if (!voice || voice.language !== language) return null;
+  const provider = TTS_PROVIDERS[providerId];
+  if (!provider.models.some((model) => model.id === modelId)) return null;
+  const compatible = provider.voices.find((entry) => entry.id === voiceId)?.compatibleModels;
+  if (compatible && !compatible.includes(modelId)) return null;
+  return { routeId: 'configured', providerId, modelId, voiceId, language: voice.language };
 }

@@ -18,6 +18,10 @@ import { assessNarrationAudio } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
 import { governedSubjectFromStore, SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
 import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
+import {
+  TeachingTtsRouteInvalidError,
+  teachingRouteForStage,
+} from '@/lib/server/speech/teaching-route';
 import type { SpeechAction } from '@/lib/types/action';
 
 const MAX_ACTIONS = 200;
@@ -54,6 +58,14 @@ export async function POST(req: NextRequest) {
       stage = await loadStageForSpeech(req, body.stageId, 'write');
     } catch (error) {
       if (error instanceof SpeechContextUnavailableError) return apiError(error.code, 503, error.message);
+      throw error;
+    }
+    // A malformed configured route on the Stage is reported, never replaced.
+    try {
+      teachingRouteForStage(stage?.stage);
+    } catch (error) {
+      if (error instanceof TeachingTtsRouteInvalidError)
+        return apiError(error.code, 409, error.message);
       throw error;
     }
   }

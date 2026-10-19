@@ -138,6 +138,40 @@ describe('Teaching Engine narration catalogue (superadmin routes, plan §3.1)', 
     expect(teachingTtsCatalogVoice('openai-tts', 42)).toBeNull();
   });
 
+  it('a client-written Stage route outside the catalogue is refused (the Stage is client-writable)', () => {
+    const persisted = {
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: CARTESIA.voiceId,
+      language: 'ar',
+      settingKey: 'teaching_tts.route.MATH',
+    };
+    for (const injected of [
+      // A Cartesia library voice that is not in the catalogue.
+      { ...persisted, voiceId: '00000000-0000-0000-0000-000000000000' },
+      // A model the provider does not list.
+      { ...persisted, modelId: 'sonic-english' },
+      // A listed model the voice does not speak with.
+      { ...persisted, providerId: 'qwen-tts', voiceId: 'longanlufeng', modelId: 'qwen3-tts-flash' },
+      // The voice's language changed.
+      { ...persisted, language: 'en' },
+    ]) {
+      expect(configuredTeachingTtsRoute(injected), JSON.stringify(injected)).toBeNull();
+    }
+    // Another model the provider lists, compatible with the voice, stays frozen
+    // (a later default-model change must not silence old lessons).
+    expect(
+      configuredTeachingTtsRoute({
+        ...persisted,
+        providerId: 'openai-tts',
+        voiceId: 'alloy',
+        modelId: 'tts-1',
+        language: 'en',
+      }),
+    ).toMatchObject({ providerId: 'openai-tts', modelId: 'tts-1', voiceId: 'alloy' });
+  });
+
   it('reads a well-formed persisted route as frozen and refuses a malformed one', () => {
     const persisted = {
       routeId: 'configured',

@@ -18,6 +18,10 @@ import {
   normalizeTeachingLanguage,
   teachingTtsCatalogVoice,
 } from '@/lib/audio/teaching-tts-routing';
+import {
+  routedProviderStatus,
+  routedProviderUnavailableMessage,
+} from '@/lib/server/speech/teaching-route';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
@@ -574,6 +578,27 @@ export function stageTtsRouteOf(request: KafuoGenerationRequest): StageTtsRoute 
     language: voice.language,
     settingKey: route.settingKey,
   };
+}
+
+/**
+ * A configured route's provider must be keyed and enabled on this server NOW
+ * (plan D-7), or the request is refused with `TTS_ROUTE_UNAVAILABLE` before
+ * any attempt starts or resumes — never a silent lesson, never another voice.
+ * Default routes (no `ttsRoute`) keep today's behaviour.
+ */
+export function assertConfiguredTtsRouteAvailable(kafuo: KafuoGenerationContext): void {
+  if (!kafuo.ttsRoute) return;
+  const { status } = routedProviderStatus(kafuo.ttsRoute.providerId);
+  if (status === 'ok') return;
+  throw new TeachingPackageError(
+    'TTS_ROUTE_UNAVAILABLE',
+    routedProviderUnavailableMessage(kafuo.ttsRoute, status),
+    {
+      providerId: kafuo.ttsRoute.providerId,
+      reason: status,
+      settingKey: kafuo.ttsRoute.settingKey,
+    },
+  );
 }
 
 /**

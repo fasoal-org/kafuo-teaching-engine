@@ -71,6 +71,18 @@ describe('POST /api/speech/diagnostics', () => {
     expect(mocks.generateTTS).not.toHaveBeenCalled();
   });
 
+  it('reports a malformed configured route on the Stage (409 TTS_ROUTE_INVALID), never a 500', async () => {
+    mocks.loadStage.mockResolvedValue({
+      stage: { ...document.stage, ttsRoute: { routeId: 'configured', providerId: 'cartesia-tts' } },
+      access: 'owner',
+      loadDocument: async () => document,
+    });
+    const { status, json } = await post({});
+    expect(status).toBe(409);
+    expect(json.errorCode).toBe('TTS_ROUTE_INVALID');
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+  });
+
   it('refuses callers without an owner/editor grant — a learner grant included (403)', async () => {
     mocks.loadStage.mockResolvedValue(null);
     const { status, json } = await post({});
