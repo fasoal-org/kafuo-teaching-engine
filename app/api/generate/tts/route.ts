@@ -19,6 +19,7 @@ import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
 import {
   routedProviderStatus,
   routedProviderUnavailableMessage,
+  TeachingTtsRouteInvalidError,
   teachingRouteForStage,
 } from '@/lib/server/speech/teaching-route';
 import type { SpeechAction } from '@/lib/types/action';
@@ -106,7 +107,16 @@ export async function POST(req: NextRequest) {
         stageAccess = null;
       }
     }
-    const route = teachingRouteForStage(stageAccess?.stage);
+    // A configured route frozen on the Stage wins over the table; a malformed
+    // one fails closed — reported, never replaced by another voice.
+    let route: ReturnType<typeof teachingRouteForStage>;
+    try {
+      route = teachingRouteForStage(stageAccess?.stage);
+    } catch (error) {
+      if (!(error instanceof TeachingTtsRouteInvalidError)) throw error;
+      log.warn(`${error.message} [audioId=${audioId}]`);
+      return apiError(error.code, 409, error.message);
+    }
     const requestedSpeed = ttsSpeed ?? 1.0;
 
     let fallback: FallbackProfile;

@@ -40,6 +40,7 @@ import { providerCapability } from '@/lib/server/speech/provider-capabilities';
 import {
   routedProviderStatus,
   routedProviderUnavailableMessage,
+  TeachingTtsRouteInvalidError,
   teachingRouteForStage,
 } from '@/lib/server/speech/teaching-route';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -331,8 +332,29 @@ export interface ClassroomTtsSummary {
   warningCodes: Record<string, number>;
 }
 
-/** Stage fields the narration context reads (plan §8.1). */
-export type ClassroomTtsStage = Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode'>;
+/** Stage fields the narration context reads (plan §8.1), plus the frozen configured route. */
+export type ClassroomTtsStage = Pick<
+  Stage,
+  'subjectCode' | 'language' | 'speechReadingMode' | 'ttsRoute'
+>;
+
+/**
+ * Plan-capped providers (Cartesia) share ONE limiter per Teaching Engine
+ * process (tts-provider-routing-admin-config-plan D-8): every build in flight
+ * draws on the same account-wide slots, so five parallel builds never send
+ * five times the cap. Keyed by provider and cap, so a changed
+ * `TTS_CARTESIA_BATCH_CONCURRENCY` (a restart, a test) never reuses a limiter
+ * of another size. Live narration stays outside it (the cap is limit − 1).
+ */
+const processProviderLimiters = new Map<string, ReturnType<typeof createConcurrencyLimiter>>();
+
+function processProviderLimiter(providerId: string, cap: number | undefined) {
+  if (!cap) return null;
+  const key = `${providerId}:${cap}`;
+  let limiter = processProviderLimiters.get(key);
+  if (!limiter) processProviderLimiters.set(key, (limiter = createConcurrencyLimiter(cap)));
+  return limiter;
+}
 
 export async function generateTTSForClassroom(
   scenes: Scene[],
@@ -346,7 +368,15 @@ export async function generateTTSForClassroom(
   // Teaching Engine TTS route (from the Stage's language and subject): when it
   // matches, its provider/model/voice are authoritative and an unavailable
   // routed provider skips TTS — never the first configured provider instead.
-  const route = teachingRouteForStage(options.stage);
+  // A configured route frozen on the Stage wins; a malformed one fails closed.
+  let route: ReturnType<typeof teachingRouteForStage>;
+  try {
+    route = teachingRouteForStage(options.stage);
+  } catch (error) {
+    if (!(error instanceof TeachingTtsRouteInvalidError)) throw error;
+    log.warn(`${error.message}; skipping TTS generation`);
+    return;
+  }
   let providerId: TTSProviderId;
   let modelId: string;
   let voice: string;
@@ -395,6 +425,12 @@ export async function generateTTSForClassroom(
         voice,
       ) || '';
   }
+  // One audit line per build (plan D-10): the route and the voice it speaks
+  // with. Identifiers only — never a key, base URL or student data.
+  const settingKey = route?.routeId === 'configured' ? options.stage?.ttsRoute?.settingKey : null;
+  log.info(
+    `Narration route ${route?.routeId ?? 'none'}${settingKey ? ` (${settingKey})` : ''}: ${providerId}/${modelId || 'default'}/${voice}`,
+  );
   const speechConfig = readSpeechConfig();
   const summary: ClassroomTtsSummary = {
     generated: 0,
@@ -439,16 +475,11 @@ export async function generateTTSForClassroom(
   // (default 1 s) apart. Each Action keeps its own try/catch, so one failure
   // never sinks the batch; audio files are per-Action and written temp-then-rename.
   const spacer = createStartSpacer(speechConfig.batchStartGapMs);
-  // A provider with a plan concurrency limit (Cartesia Free: 2) gets its own tighter
-  // cap, keyed by the provider each Action actually synthesises with.
-  const providerLimiters = new Map<string, ReturnType<typeof createConcurrencyLimiter>>();
-  const providerLimiter = (id: string) => {
-    const cap = speechConfig.providerBatchConcurrency[id];
-    if (!cap) return null;
-    let limiter = providerLimiters.get(id);
-    if (!limiter) providerLimiters.set(id, (limiter = createConcurrencyLimiter(cap)));
-    return limiter;
-  };
+  // A provider with a plan concurrency limit (Cartesia) gets its own tighter cap,
+  // keyed by the provider each Action actually synthesises with and shared by
+  // every build in this process (D-8).
+  const providerLimiter = (id: string) =>
+    processProviderLimiter(id, speechConfig.providerBatchConcurrency[id]);
   await mapWithConcurrency(jobs, speechConfig.arConcurrency, async ({ speechAction, audioId }) => {
     try {
       const { plan, profile } = await prepareNarration({

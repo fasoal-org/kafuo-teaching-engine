@@ -116,6 +116,28 @@ describe('W7 matrix — fixture mirror discipline (the shared artifact)', () => 
     }
   });
 
+  it('pins the configured narration route (vector 5): only `narration` separates it from vector 1', () => {
+    // tts-provider-routing-admin-config-plan §3.2: Kafuo's semantic payload
+    // mirrors `narration` when present and omits it when absent. Vector 5 is
+    // vector 1 plus the route (requestId is outside the digest), so dropping
+    // the field must give back vector 1's pinned legacy digest byte for byte.
+    const routed = vectors.vectors[4]!;
+    expect(routed.request.narration).toEqual({
+      ttsRoute: {
+        providerId: 'cartesia-tts',
+        voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+        settingKey: 'teaching_tts.route.BIOLOGY',
+      },
+    });
+    expect(routed.digest).not.toBe(vectors.vectors[0]!.digest);
+    const { narration: _route, ...withoutRoute } = JSON.parse(
+      JSON.stringify(routed.request),
+    ) as Vector['request'];
+    expect(canonicalRequestDigest(parseKafuoGenerationRequest(withoutRoute).request)).toBe(
+      vectors.vectors[0]!.digest,
+    );
+  });
+
   it('mirrors the exact governed shape Kafuo emits: marker + policy on every flow entry', () => {
     const wire = governedVector();
     expect(wire.teachingSkills).toBe(TEACHING_SKILLS_CONTRACT_V1);

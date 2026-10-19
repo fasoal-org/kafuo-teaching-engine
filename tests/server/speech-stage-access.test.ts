@@ -69,4 +69,23 @@ describe('loadStageForSpeech', () => {
     vi.stubEnv('DATABASE_URL', '');
     expect(await loadStageForSpeech(request, 'stage-1', 'read')).toBeNull();
   });
+
+  it('carries the configured route frozen on the Stage through the projection; a legacy Stage has none', async () => {
+    const ttsRoute = {
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+      language: 'ar',
+      settingKey: 'teaching_tts.route.MATH',
+    };
+    mocks.ownerDoc.mockResolvedValue({ ...doc, stage: { ...doc.stage, ttsRoute } });
+    expect((await loadStageForSpeech(request, 'stage-1', 'read'))?.stage.ttsRoute).toEqual(
+      ttsRoute,
+    );
+    mocks.ownerDoc.mockResolvedValue(doc);
+    expect(await loadStageForSpeech(request, 'stage-1', 'read')).not.toHaveProperty(
+      'stage.ttsRoute',
+    );
+  });
 });

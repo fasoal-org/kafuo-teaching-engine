@@ -617,5 +617,20 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
       await generate(subjectCode === undefined ? {} : { subjectCode });
       expect(persistedStage()).not.toHaveProperty('subjectCode');
     });
+
+    it('freezes a configured narration route on the Stage; without one the Stage has none', async () => {
+      const ttsRoute = {
+        routeId: 'configured' as const,
+        providerId: 'cartesia-tts',
+        modelId: 'sonic-3.6',
+        voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+        language: 'en' as const,
+        settingKey: 'teaching_tts.route.MATH',
+      };
+      await generate({ subjectCode: 'MATH', language: 'en', ttsRoute });
+      expect(persistedStage()).toMatchObject({ subjectCode: 'MATH', ttsRoute });
+      await generate({ subjectCode: 'MATH', language: 'en' });
+      expect(persistedStage()).not.toHaveProperty('ttsRoute');
+    });
   });
 });

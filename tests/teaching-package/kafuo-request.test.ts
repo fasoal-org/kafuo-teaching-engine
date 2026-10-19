@@ -326,3 +326,83 @@ describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {
     expect(canonicalRequestDigest(governed)).not.toBe(canonicalRequestDigest(widened));
   });
 });
+
+describe('narration.ttsRoute (superadmin-configured route, plan §3.2)', () => {
+  const REEM = '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72';
+  const ROUTE = {
+    providerId: 'cartesia-tts',
+    voiceId: REEM,
+    settingKey: 'teaching_tts.route.MATH',
+  };
+  const withRoute = (ttsRoute: unknown) => body({ narration: { ttsRoute } });
+
+  it('absent stays absent: no field on the request and no route on the context', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(body());
+    expect(request).not.toHaveProperty('narration');
+    expect(buildKafuoStartRequest(request, aggregate).kafuo).not.toHaveProperty('ttsRoute');
+  });
+
+  it('parses a catalogue voice and freezes model + language from the catalogue on the context', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(withRoute(ROUTE));
+    expect(request.narration).toEqual({ ttsRoute: ROUTE });
+    expect(buildKafuoStartRequest(request, aggregate).kafuo.ttsRoute).toEqual({
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: REEM,
+      language: 'ar',
+      settingKey: 'teaching_tts.route.MATH',
+    });
+  });
+
+  it('changes the digest when present, and with every route field', () => {
+    const plain = canonicalRequestDigest(parseKafuoGenerationRequest(body()).request);
+    const routed = canonicalRequestDigest(parseKafuoGenerationRequest(withRoute(ROUTE)).request);
+    const otherKey = canonicalRequestDigest(
+      parseKafuoGenerationRequest(withRoute({ ...ROUTE, settingKey: 'teaching_tts.route.PHYSICS' }))
+        .request,
+    );
+    const qwen = canonicalRequestDigest(
+      parseKafuoGenerationRequest(
+        withRoute({ ...ROUTE, providerId: 'qwen-tts', voiceId: 'longanlufeng' }),
+      ).request,
+    );
+    expect(new Set([plain, routed, otherKey, qwen]).size).toBe(4);
+  });
+
+  it.each([
+    ['not an object', 'cartesia-tts'],
+    ['a missing ttsRoute', undefined],
+    ['an unknown provider', { ...ROUTE, providerId: 'elevenlabs-tts' }],
+    ['a voice of another provider', { ...ROUTE, voiceId: 'longanlufeng' }],
+    [
+      'a non-Arabic/English catalogue voice',
+      { ...ROUTE, providerId: 'qwen-tts', voiceId: 'Cherry' },
+    ],
+    ['a malformed setting key', { ...ROUTE, settingKey: 'billing.plan' }],
+  ])('refuses %s with TTS_ROUTE_INVALID (400)', (_label, ttsRoute) => {
+    expect(() => parseKafuoGenerationRequest(withRoute(ttsRoute))).toThrowError(
+      expect.objectContaining({ code: 'TTS_ROUTE_INVALID', status: 400 }),
+    );
+  });
+
+  it('refuses null narration (only an absent field means the default table)', () => {
+    expect(() => parseKafuoGenerationRequest(body({ narration: null }))).toThrowError(
+      expect.objectContaining({ code: 'TTS_ROUTE_INVALID' }),
+    );
+  });
+
+  it('refuses a voice whose language differs from learningItem.language (D-5)', () => {
+    const english = body();
+    english.learningItem = { ...english.learningItem, language: 'en' };
+    expect(() =>
+      parseKafuoGenerationRequest({ ...english, narration: { ttsRoute: ROUTE } }),
+    ).toThrowError(expect.objectContaining({ code: 'TTS_ROUTE_INVALID' }));
+    expect(
+      parseKafuoGenerationRequest({
+        ...english,
+        narration: { ttsRoute: { ...ROUTE, providerId: 'openai-tts', voiceId: 'alloy' } },
+      }).request.narration?.ttsRoute.voiceId,
+    ).toBe('alloy');
+  });
+});

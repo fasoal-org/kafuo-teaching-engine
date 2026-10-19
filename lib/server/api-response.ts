@@ -59,6 +59,8 @@ export const API_ERROR_CODES = {
   /** Pronunciation diagnostics need an owner or editor grant (learners are refused). */
   SATTS_DIAGNOSTICS_FORBIDDEN: 'SATTS_DIAGNOSTICS_FORBIDDEN',
   SATTS_STAGE_NOT_FOUND: 'SATTS_STAGE_NOT_FOUND',
+  /** The Stage's persisted narration route is malformed: refused, never moved to another voice. */
+  TTS_ROUTE_INVALID: 'TTS_ROUTE_INVALID',
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];

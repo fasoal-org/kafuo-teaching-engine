@@ -254,6 +254,30 @@ describe('regenerateSceneNarrationAudio', () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("hands the Stage's frozen configured route to synthesis, so a repaired slide keeps the lesson voice", async () => {
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const ttsRoute = {
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+      language: 'ar',
+      settingKey: 'teaching_tts.route.CHEMISTRY',
+    };
+    const synthesize = synthesizer();
+    const { value } = deps({
+      synthesize,
+      loadStage: async () => ({ ...stage, ttsRoute }) as unknown as AppStage,
+    });
+    await regenerateSceneNarrationAudio(GRANT, 'scene-q', value);
+    expect(synthesize.mock.calls[0]![0]).toMatchObject({ stage: { ttsRoute } });
+    // A Stage without one passes no route at all (the default table).
+    const legacy = synthesizer();
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    await regenerateSceneNarrationAudio(GRANT, 'scene-q', deps({ synthesize: legacy }).value);
+    expect(legacy.mock.calls[0]![0]).not.toHaveProperty('stage.ttsRoute');
+  });
+
   it('refuses while a regeneration of the same scene is running, before any synthesis', async () => {
     storeState.live = { scene: quiz([line('a1')]), rev: 1 };
     storeState.running = ['scene-q'];

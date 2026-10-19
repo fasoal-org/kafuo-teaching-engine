@@ -62,6 +62,7 @@ import {
   type Scene,
   type SceneGenerationIssue,
   type Stage,
+  type StageTtsRoute,
 } from '@/lib/types/stage';
 import {
   placeholderQuizContent,
@@ -415,6 +416,13 @@ export interface GenerateClassroomInput {
    * null or unknown → the Stage carries no subject (general narration path).
    */
   subjectCode?: string | null;
+  /**
+   * The superadmin-configured narration route for the subject, already
+   * validated by the caller (Kafuo: `narration.ttsRoute` resolved against the
+   * catalogue). Stamped on the Stage as `ttsRoute`, so every later narration of
+   * the lesson keeps its voice. Absent → the default routing table.
+   */
+  ttsRoute?: StageTtsRoute | null;
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
   webSearchApiKey?: string;
@@ -1503,6 +1511,7 @@ export async function generateClassroom(
         ...(contentLanguage !== undefined ? { language: contentLanguage } : {}),
         ...(textDirection !== undefined ? { textDirection } : {}),
         ...(isSubjectCode(input.subjectCode) ? { subjectCode: input.subjectCode } : {}),
+        ...(input.ttsRoute ? { ttsRoute: input.ttsRoute } : {}),
         ...(registerPolicy
           ? {
               speechRegister: {

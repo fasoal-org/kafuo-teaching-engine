@@ -10,10 +10,22 @@
  *   2. Arabic + CHEMISTRY                           → Cartesia sonic-3.6, Reem
  *   3. Arabic + MATH | PHYSICS | ARABIC | BIOLOGY   → Qwen qwen-audio-3.0-tts-plus, longanlufeng
  *   otherwise `null`: the caller keeps its current resolution unchanged.
+ *
+ * A superadmin may instead configure a subject's route (provider + catalogue
+ * voice) in the Kafuo admin panel. The Backend sends it in the generation
+ * request and the Teaching Engine freezes it on the Stage as `Stage.ttsRoute`
+ * (route id `configured`); a persisted route wins over this table (§3.3 of
+ * docs/frds/tts-provider-routing-admin-config-plan.md). The table itself is
+ * unchanged.
  */
+import { TTS_PROVIDERS } from './constants';
 import type { BuiltInTTSProviderId } from './types';
 
-export type TeachingTtsRouteId = 'en-openai' | 'ar-chemistry-cartesia' | 'ar-qwen-plus';
+export type TeachingTtsRouteId =
+  | 'en-openai'
+  | 'ar-chemistry-cartesia'
+  | 'ar-qwen-plus'
+  | 'configured';
 
 export interface TeachingTtsRoute {
   /** Stable identifier for logs and tests. */
@@ -81,4 +93,69 @@ export function resolveTeachingTtsRoute(input: {
     };
   }
   return null;
+}
+
+/** The providers a configured route may name: the ones with a server env prefix. */
+export const TEACHING_TTS_PROVIDER_IDS = [
+  'openai-tts',
+  'cartesia-tts',
+  'qwen-tts',
+] as const satisfies readonly BuiltInTTSProviderId[];
+
+export type TeachingTtsProviderId = (typeof TEACHING_TTS_PROVIDER_IDS)[number];
+
+export function isTeachingTtsProviderId(value: unknown): value is TeachingTtsProviderId {
+  return (
+    typeof value === 'string' && (TEACHING_TTS_PROVIDER_IDS as readonly string[]).includes(value)
+  );
+}
+
+/** One catalogue voice a configured route may use, with the model it speaks with. */
+export interface TeachingTtsCatalogVoice {
+  id: string;
+  name: string;
+  language: 'en' | 'ar';
+  modelId: string;
+}
+
+/**
+ * A routable provider's Arabic and English catalogue voices (the static
+ * `TTS_PROVIDERS` list, never a provider API). The model follows the voice:
+ * its first compatible model, otherwise the provider's default model.
+ */
+export function teachingTtsCatalogVoices(
+  providerId: TeachingTtsProviderId,
+): TeachingTtsCatalogVoice[] {
+  const provider = TTS_PROVIDERS[providerId];
+  return provider.voices.flatMap((voice) => {
+    const language = normalizeTeachingLanguage(voice.language);
+    if (!language) return [];
+    const modelId = voice.compatibleModels?.[0] ?? provider.defaultModelId;
+    return [{ id: voice.id, name: voice.name, language, modelId }];
+  });
+}
+
+/** The catalogue voice `voiceId` of `providerId`, or `null` when either is unknown. */
+export function teachingTtsCatalogVoice(
+  providerId: unknown,
+  voiceId: unknown,
+): TeachingTtsCatalogVoice | null {
+  if (!isTeachingTtsProviderId(providerId) || typeof voiceId !== 'string') return null;
+  return teachingTtsCatalogVoices(providerId).find((voice) => voice.id === voiceId) ?? null;
+}
+
+/**
+ * The route persisted on a Stage (`Stage.ttsRoute`), or `null` when it is not
+ * well formed. It was validated against the catalogue when the request was
+ * accepted, so it is read as frozen: a later catalogue change never moves it.
+ */
+export function configuredTeachingTtsRoute(value: unknown): TeachingTtsRoute | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const { providerId, modelId, voiceId, language } = record;
+  if (record.routeId !== 'configured' || !isTeachingTtsProviderId(providerId)) return null;
+  if (typeof modelId !== 'string' || !modelId.trim()) return null;
+  if (typeof voiceId !== 'string' || !voiceId.trim()) return null;
+  if (language !== 'en' && language !== 'ar') return null;
+  return { routeId: 'configured', providerId, modelId, voiceId, language };
 }

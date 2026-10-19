@@ -301,6 +301,47 @@ describe('generateTTSForClassroom concurrency (TTS_AR_CONCURRENCY, SATTS plan §
     expect(cartesia.peak).toBe(3);
   });
 
+  it('parallel builds share ONE process-wide Cartesia cap (plan D-8), not one cap each', async () => {
+    vi.stubEnv('TTS_CARTESIA_API_KEY', 'server-cartesia-key');
+    vi.stubEnv('TTS_CARTESIA_BATCH_CONCURRENCY', '3');
+    const cartesia = trackInFlight();
+    const { generateTTSForClassroom } = await load();
+    const stage = { subjectCode: 'CHEMISTRY', language: 'ar-SA' };
+    const summaries = await Promise.all(
+      ['stage-a', 'stage-b', 'stage-c'].map((id) =>
+        generateTTSForClassroom(manyScenes(2, 2), id, '', { stage }),
+      ),
+    );
+    for (const summary of summaries) expect(summary).toMatchObject({ generated: 4, failed: 0 });
+    expect(cartesia.peak).toBe(3);
+  });
+
+  it('a configured Cartesia route on the Stage takes the same process-wide cap', async () => {
+    vi.stubEnv('TTS_CARTESIA_API_KEY', 'server-cartesia-key');
+    const cartesia = trackInFlight();
+    const { generateTTSForClassroom } = await load();
+    const stage = {
+      subjectCode: 'MATH',
+      language: 'ar-SA',
+      ttsRoute: {
+        routeId: 'configured' as const,
+        providerId: 'cartesia-tts',
+        modelId: 'sonic-3.6',
+        voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+        language: 'ar' as const,
+        settingKey: 'teaching_tts.route.MATH',
+      },
+    };
+    const summaries = await Promise.all(
+      ['stage-a', 'stage-b'].map((id) =>
+        generateTTSForClassroom(manyScenes(2, 2), id, '', { stage }),
+      ),
+    );
+    for (const summary of summaries) expect(summary).toMatchObject({ generated: 4, failed: 0 });
+    expect(mocks.generateTTS.mock.calls[0]![0]).toMatchObject({ providerId: 'cartesia-tts' });
+    expect(cartesia.peak).toBe(2);
+  });
+
   it('a Cartesia 5xx is retried once like any other transient failure', async () => {
     vi.stubEnv('TTS_CARTESIA_API_KEY', 'server-cartesia-key');
     mocks.generateTTS

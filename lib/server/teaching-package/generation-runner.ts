@@ -552,6 +552,9 @@ async function runKafuoAttempt(
     // stamps it on the Stage when it is a known code, so narration can later
     // pick subject-aware pronunciation without guessing from text.
     subjectCode: kafuo.subjectCode,
+    // The superadmin-configured narration route (validated at acceptance):
+    // generation freezes it on the Stage so the lesson keeps one voice.
+    ...(kafuo.ttsRoute ? { ttsRoute: kafuo.ttsRoute } : {}),
     // The prompt contract itself, not just prose on the requirement: this is
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.

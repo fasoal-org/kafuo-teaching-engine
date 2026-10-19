@@ -13,14 +13,21 @@ import { createHash } from 'node:crypto';
 
 import { parseTeachingScenePolicy } from '@openmaic/generation';
 
+import {
+  isTeachingTtsProviderId,
+  normalizeTeachingLanguage,
+  teachingTtsCatalogVoice,
+} from '@/lib/audio/teaching-tts-routing';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
+import type { StageTtsRoute } from '@/lib/types/stage';
 import type {
   GenerationExecutionInput,
   KafuoContentResource,
   KafuoGenerationRequest,
+  KafuoNarrationTtsRoute,
   KafuoNormalizedContentResource,
   KafuoSubjectOffering,
   LearningObjectiveRef,
@@ -499,6 +506,76 @@ function parseNormalizedContentResource(
   return resource;
 }
 
+const TTS_ROUTE_SETTING_KEY = /^teaching_tts\.route\.[A-Z][A-Z_]*$/;
+
+/**
+ * The optional superadmin-configured narration route (tts-provider-routing-
+ * admin-config-plan §3.2). Absent stays absent. Present, it must name a
+ * routable provider, one of that provider's catalogue voices, and a voice
+ * whose language family equals the lesson's (D-5); anything else is refused
+ * with `TTS_ROUTE_INVALID` before any attempt exists. Availability (the
+ * server key) is checked by the generate route, not here.
+ */
+function parseNarration(
+  raw: unknown,
+  lessonLanguage: string,
+): { ttsRoute: KafuoNarrationTtsRoute } | undefined {
+  if (raw === undefined) return undefined;
+  const invalid = (message: string) => new TeachingPackageError('TTS_ROUTE_INVALID', message);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid('narration must be an object when present');
+  }
+  const route = (raw as Record<string, unknown>).ttsRoute;
+  if (!route || typeof route !== 'object' || Array.isArray(route)) {
+    throw invalid('narration.ttsRoute must be an object');
+  }
+  const { providerId, voiceId, settingKey } = route as Record<string, unknown>;
+  if (!isTeachingTtsProviderId(providerId)) {
+    throw invalid(
+      `narration.ttsRoute.providerId ${JSON.stringify(providerId)} is not a Teaching Engine narration provider`,
+    );
+  }
+  const voice = teachingTtsCatalogVoice(providerId, voiceId);
+  if (!voice) {
+    throw invalid(
+      `narration.ttsRoute.voiceId ${JSON.stringify(voiceId)} is not a catalogue voice of ${providerId}`,
+    );
+  }
+  if (voice.language !== normalizeTeachingLanguage(lessonLanguage)) {
+    throw invalid(
+      `narration.ttsRoute voice ${JSON.stringify(voice.id)} speaks ${voice.language}, but learningItem.language is ${JSON.stringify(lessonLanguage)}`,
+    );
+  }
+  if (typeof settingKey !== 'string' || !TTS_ROUTE_SETTING_KEY.test(settingKey)) {
+    throw invalid('narration.ttsRoute.settingKey must be a teaching_tts.route.<CODE> setting key');
+  }
+  return { ttsRoute: { providerId, voiceId: voice.id, settingKey } };
+}
+
+/**
+ * The route frozen on the Stage for a request's `narration.ttsRoute`: the
+ * model and language come from the catalogue entry the parser validated.
+ */
+export function stageTtsRouteOf(request: KafuoGenerationRequest): StageTtsRoute | null {
+  const route = request.narration?.ttsRoute;
+  if (!route) return null;
+  const voice = teachingTtsCatalogVoice(route.providerId, route.voiceId);
+  if (!voice) {
+    throw new TeachingPackageError(
+      'TTS_ROUTE_INVALID',
+      `narration.ttsRoute.voiceId ${JSON.stringify(route.voiceId)} is not a catalogue voice of ${route.providerId}`,
+    );
+  }
+  return {
+    routeId: 'configured',
+    providerId: route.providerId,
+    modelId: voice.modelId,
+    voiceId: voice.id,
+    language: voice.language,
+    settingKey: route.settingKey,
+  };
+}
+
 /**
  * Parse and validate the structured Kafuo generation request (FRD §9.2).
  * Duplicate stage keys are allowed — identity is `(flowIndex, stage)`.
@@ -709,6 +786,8 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
       : {}),
   };
 
+  const narration = parseNarration(body.narration, item.language);
+
   const request: KafuoGenerationRequest = {
     requestId,
     learningItem: item,
@@ -723,6 +802,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     // Mode derived ONCE at this single detection point (plan §B.13): the
     // marker's presence/absence is settled here and carried as a value.
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
+    ...(narration ? { narration } : {}),
   };
   return {
     request,
@@ -774,6 +854,14 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
     generation: request.generation,
   };
   if (request.versionId !== undefined) payload.versionId = request.versionId;
+  // The configured narration route is a generation input (it decides the
+  // voice), so it is covered — mirrored by the Backend's
+  // `canonical_request_digest`. Absent stays absent: every request without
+  // it keeps its byte-identical legacy digest.
+  if (request.narration !== undefined) {
+    const { providerId, voiceId, settingKey } = request.narration.ttsRoute;
+    payload.narration = { ttsRoute: { providerId, voiceId, settingKey } };
+  }
   return payload;
 }
 
@@ -873,6 +961,12 @@ export interface KafuoGenerationContext {
   subjectCode: string | null;
   /** The offering as received (display names, academic language) — never a routing input. */
   subjectOffering: KafuoSubjectOffering | null;
+  /**
+   * The configured narration route (`narration.ttsRoute` resolved against the
+   * catalogue), stamped on the Stage as `ttsRoute`. Null/absent ⇒ the default
+   * routing table.
+   */
+  ttsRoute?: StageTtsRoute | null;
 }
 
 /** Assemble the StartGenerationAttemptRequest for a parsed Kafuo request. */
@@ -882,6 +976,7 @@ export function buildKafuoStartRequest(
 ): { start: StartGenerationAttemptRequestAlias; kafuo: KafuoGenerationContext } {
   const requirement = buildKafuoRequirement(request);
   const digest = canonicalRequestDigest(request);
+  const ttsRoute = stageTtsRouteOf(request);
   const execution: GenerationExecutionInput = {
     requirement,
     ...request.generation,
@@ -933,6 +1028,7 @@ export function buildKafuoStartRequest(
       versionId: request.versionId ?? null,
       subjectCode: subjectCodeOf(request),
       subjectOffering: request.learningItem.subjectOffering ?? null,
+      ...(ttsRoute ? { ttsRoute } : {}),
     },
   };
 }

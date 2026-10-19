@@ -23,6 +23,7 @@ import { governedSubjectFromStore } from '@/lib/server/speech/speech-context';
 import {
   routedProviderStatus,
   routedProviderUnavailableMessage,
+  TeachingTtsRouteInvalidError,
   teachingRouteForStage,
 } from '@/lib/server/speech/teaching-route';
 import { createLogger } from '@/lib/logger';
@@ -42,8 +43,11 @@ export interface SceneTtsInput {
   force: boolean;
   roster?: readonly GeneratedAgentConfig[] | null;
   signal?: AbortSignal;
-  /** The document Stage: subject, language and reading mode for narration (SATTS §7.3). */
-  stage?: Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode'> | null;
+  /**
+   * The document Stage: subject, language and reading mode for narration
+   * (SATTS §7.3), plus its frozen configured route (`ttsRoute`), if any.
+   */
+  stage?: Pick<Stage, 'subjectCode' | 'language' | 'speechReadingMode' | 'ttsRoute'> | null;
   /**
    * A reviewer's audio repair on a Teaching Package (4 Oct 2026) stores the
    * audio the package build's way. Absent → the agent runtime's defaults.
@@ -69,7 +73,16 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
   // Teaching Engine TTS route (from the Stage's language and subject): when it
   // matches, its provider/model/voice override the roster binding, and an
   // unavailable routed provider is reported — never replaced by another one.
-  const route = teachingRouteForStage(input.stage);
+  // A configured route frozen on the Stage wins; a malformed one is reported
+  // as unavailable, never moved to another voice.
+  let route: ReturnType<typeof teachingRouteForStage>;
+  try {
+    route = teachingRouteForStage(input.stage);
+  } catch (error) {
+    if (!(error instanceof TeachingTtsRouteInvalidError)) throw error;
+    log.warn(error.message);
+    return { available: false, changed: false, generated: 0, skipped: 0, failed: [] };
+  }
   let providerId: TTSProviderId;
   let apiKey: string | undefined;
   let baseUrl: string | undefined;

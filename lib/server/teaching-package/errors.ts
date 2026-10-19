@@ -303,6 +303,18 @@ export type TeachingPackageErrorCode =
   | 'NARRATION_AUDIO_UNAVAILABLE'
   /** No spoken line could be synthesized; nothing was written. */
   | 'NARRATION_AUDIO_GENERATION_FAILED'
+  // --- Superadmin-configured narration route (tts-provider-routing-admin-config-plan §3.2) ---
+  /**
+   * `narration.ttsRoute` names an unknown provider or catalogue voice, or a
+   * voice whose language differs from `learningItem.language`. Refused before
+   * any attempt exists; never replaced by another voice.
+   */
+  | 'TTS_ROUTE_INVALID'
+  /**
+   * The configured route's provider has no server key or is disabled. Refused
+   * before any attempt exists, so no silent lesson is built (D-7).
+   */
+  | 'TTS_ROUTE_UNAVAILABLE'
   // --- Admin-correction pause / resume (slide-classification-admin-correction-plan §3) ---
   /** The attempt is not paused for correction (or its checkpoint is not awaiting). */
   | 'CORRECTION_NOT_AWAITING'
@@ -437,6 +449,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SCENE_REVISION_CONFLICT: 409,
   NARRATION_AUDIO_UNAVAILABLE: 503,
   NARRATION_AUDIO_GENERATION_FAILED: 502,
+  TTS_ROUTE_INVALID: 400,
+  TTS_ROUTE_UNAVAILABLE: 409,
 };
 
 export class TeachingPackageError extends Error {

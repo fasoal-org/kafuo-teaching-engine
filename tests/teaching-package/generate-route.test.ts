@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import type { GenerationAttempt } from '@/lib/types/teaching-package';
@@ -7,7 +7,18 @@ const mocks = vi.hoisted(() => ({
   startGenerationAttempt: vi.fn(),
   runGenerationAttempt: vi.fn(),
   afterCallbacks: [] as Array<() => unknown>,
+  /** Overrides the server provider status for a configured narration route; unset = real. */
+  routedStatus: vi.fn(),
 }));
+
+vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/speech/teaching-route')>();
+  return {
+    ...actual,
+    routedProviderStatus: (providerId: string) =>
+      mocks.routedStatus(providerId) ?? actual.routedProviderStatus(providerId),
+  };
+});
 
 vi.mock('next/server', async (importOriginal) => ({
   ...(await importOriginal<typeof import('next/server')>()),
@@ -457,6 +468,94 @@ describe('POST /api/teaching-packages/generate', () => {
       });
       const response = await post(fullBody);
       expect(response.status).toBe(202);
+    });
+  });
+
+  describe('a superadmin-configured narration route (tts-provider-routing plan §3.2, D-7)', () => {
+    const REEM = '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72';
+    const ROUTE = {
+      providerId: 'cartesia-tts',
+      voiceId: REEM,
+      settingKey: 'teaching_tts.route.BIOLOGY',
+    };
+
+    // The server provider config is read once per module load, so the
+    // provider's state is set through `routedStatus` rather than env stubs.
+    afterEach(() => mocks.routedStatus.mockReset());
+
+    it('an available provider: accepted, and the frozen route reaches the runner', async () => {
+      mocks.routedStatus.mockReturnValue({ status: 'ok', apiKey: 'server-cartesia-key' });
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody({ narration: { ttsRoute: ROUTE } }));
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        ttsRoute: {
+          routeId: 'configured',
+          providerId: 'cartesia-tts',
+          modelId: 'sonic-3.6',
+          voiceId: REEM,
+          language: 'ar',
+          settingKey: 'teaching_tts.route.BIOLOGY',
+        },
+      });
+      expect(JSON.stringify(await response.json())).not.toContain('server-cartesia-key');
+    });
+
+    it('a missing key → 409 TTS_ROUTE_UNAVAILABLE naming the env var, before any attempt', async () => {
+      mocks.routedStatus.mockReturnValue({ status: 'missing-key' });
+      const response = await post(kafuoShapedBody({ narration: { ttsRoute: ROUTE } }));
+      expect(response.status).toBe(409);
+      const json = (await response.json()) as { error: { code: string; message: string } };
+      expect(json.error.code).toBe('TTS_ROUTE_UNAVAILABLE');
+      expect(json.error.message).toContain('TTS_CARTESIA_API_KEY');
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('a disabled provider → 409 TTS_ROUTE_UNAVAILABLE, before any attempt', async () => {
+      mocks.routedStatus.mockReturnValue({ status: 'disabled' });
+      const response = await post(kafuoShapedBody({ narration: { ttsRoute: ROUTE } }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'TTS_ROUTE_UNAVAILABLE' },
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('an unknown voice or a language mismatch → 400 TTS_ROUTE_INVALID, before any attempt', async () => {
+      mocks.routedStatus.mockReturnValue({ status: 'ok' });
+      for (const body of [
+        kafuoShapedBody({ narration: { ttsRoute: { ...ROUTE, voiceId: 'unknown-voice' } } }),
+        // An English voice on an Arabic lesson (D-5).
+        kafuoShapedBody({
+          narration: { ttsRoute: { ...ROUTE, providerId: 'openai-tts', voiceId: 'alloy' } },
+        }),
+      ]) {
+        const response = await post(body);
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: 'TTS_ROUTE_INVALID' },
+        });
+      }
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('no route: an unavailable provider changes nothing (default routes keep today)', async () => {
+      mocks.routedStatus.mockReturnValue({ status: 'missing-key' });
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody());
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).not.toHaveProperty('ttsRoute');
     });
   });
 

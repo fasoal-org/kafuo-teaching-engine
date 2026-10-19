@@ -229,6 +229,57 @@ describe('a matched route never falls through to another provider', () => {
   });
 });
 
+describe('a configured route frozen on the Stage (superadmin setting, plan §3.3)', () => {
+  const configured = {
+    routeId: 'configured',
+    providerId: 'cartesia-tts',
+    modelId: 'sonic-3.6',
+    voiceId: REEM,
+    language: 'ar',
+    settingKey: 'teaching_tts.route.MATH',
+  };
+
+  it('wins over the table and the client body: Arabic Math narrates with Cartesia / Reem', async () => {
+    mocks.loadStage.mockResolvedValue({
+      ...stageOf('ar-SA', 'MATH'),
+      stage: { subjectCode: 'MATH', language: 'ar-SA', ttsRoute: configured },
+    });
+    const { status } = await post({ stageId: 'stage-1' });
+    expect(status).toBe(200);
+    expect(sentConfig()).toMatchObject({
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voice: REEM,
+      apiKey: 'server-cartesia-key',
+    });
+  });
+
+  it('a configured provider without a key → MISSING_API_KEY naming the env var, no synthesis', async () => {
+    vi.stubEnv('TTS_CARTESIA_API_KEY', '');
+    mocks.loadStage.mockResolvedValue({
+      ...stageOf('ar-SA', 'MATH'),
+      stage: { subjectCode: 'MATH', language: 'ar-SA', ttsRoute: configured },
+    });
+    const { status, json } = await post({ stageId: 'stage-1' });
+    expect(status).toBe(400);
+    expect(json.errorCode).toBe('MISSING_API_KEY');
+    expect(json.error).toContain('configured');
+    expect(json.error).toContain('TTS_CARTESIA_API_KEY');
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+  });
+
+  it('a malformed persisted route → TTS_ROUTE_INVALID 409, never the table voice', async () => {
+    mocks.loadStage.mockResolvedValue({
+      ...stageOf('ar-SA', 'MATH'),
+      stage: { subjectCode: 'MATH', language: 'ar-SA', ttsRoute: { routeId: 'configured' } },
+    });
+    const { status, json } = await post({ stageId: 'stage-1', dynamic: true });
+    expect(status).toBe(409);
+    expect(json.errorCode).toBe('TTS_ROUTE_INVALID');
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+  });
+});
+
 describe('routing with SCIENTIFIC_TTS_MODE=on', () => {
   beforeEach(() => {
     vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');

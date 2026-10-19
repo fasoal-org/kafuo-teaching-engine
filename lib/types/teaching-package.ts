@@ -650,6 +650,20 @@ export interface KafuoGenerationRequest {
    * presence (plan §M).
    */
   teachingSkillsContract?: string;
+  /**
+   * The superadmin-configured narration route for the lesson's subject
+   * (tts-provider-routing-admin-config-plan §3.2). Absent ⇒ the default
+   * routing table, and the canonical digest is byte-identical to before.
+   */
+  narration?: { ttsRoute: KafuoNarrationTtsRoute };
+}
+
+/** `narration.ttsRoute` as Kafuo sends it; the model and language come from the TE catalogue. */
+export interface KafuoNarrationTtsRoute {
+  providerId: string;
+  voiceId: string;
+  /** The Kafuo runtime setting key, e.g. `teaching_tts.route.CHEMISTRY` (audit lineage). */
+  settingKey: string;
 }
 
 // ---------------------------------------------------------------------------

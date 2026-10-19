@@ -435,6 +435,22 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     vi.restoreAllMocks();
   });
 
+  it('hands generation the configured narration route only when the request carried one', async () => {
+    const ttsRoute = {
+      routeId: 'configured' as const,
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+      language: 'ar' as const,
+      settingKey: 'teaching_tts.route.MATH',
+    };
+    await startKafuo({ ...kafuoContext(), ttsRoute });
+    expect(mocks.generateClassroom.mock.calls[0]![0]).toMatchObject({ ttsRoute });
+    mocks.generateClassroom.mockClear();
+    await startKafuo();
+    expect(mocks.generateClassroom.mock.calls[0]![0]).not.toHaveProperty('ttsRoute');
+  });
+
   it('acquires once, runs once for a valid flow, and binds version 1 draft', async () => {
     const attemptId = await startKafuo();
     const { readAttemptById, readVersion } = await import('@/lib/persistence/teaching-package');

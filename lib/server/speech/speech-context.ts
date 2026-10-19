@@ -17,6 +17,8 @@ export interface StageSpeechFields {
   subjectCode?: unknown;
   language?: unknown;
   speechReadingMode?: unknown;
+  /** The configured narration route frozen on the Stage (`Stage.ttsRoute`); read by `teachingRouteForStage`. */
+  ttsRoute?: unknown;
 }
 
 /** Looks up the governed attempt's subject for a Stage; throws when the store fails. */

@@ -429,6 +429,83 @@
         "actorRef": "42"
       },
       "digest": "4112d45db15717cc6b6b164cd254018d47498357e56419991c6bccc20c2f177e"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-5",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "10",
+            "name": "Science",
+            "code": "BIOLOGY",
+            "nameAr": "العلوم",
+            "nameEn": "Science",
+            "academicLanguage": "ar"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once."
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1."
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "narration": {
+          "ttsRoute": {
+            "providerId": "cartesia-tts",
+            "voiceId": "92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72",
+            "settingKey": "teaching_tts.route.BIOLOGY"
+          }
+        },
+        "actorRef": "42"
+      },
+      "digest": "6e3eecaca83d8e5857622b69a0d3286e72931ea39e4dbf54ae7f4432be5ce1ce"
     }
   ]
 }

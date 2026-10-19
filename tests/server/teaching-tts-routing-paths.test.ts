@@ -51,7 +51,7 @@ function picked(call: unknown[]) {
   return Object.fromEntries(ROUTE_FIELDS.map((key) => [key, config[key]]));
 }
 
-async function runBoth(stage: { language: string; subjectCode: string }) {
+async function runBoth(stage: { language: string; subjectCode: string; ttsRoute?: never }) {
   const { generateTTSForClassroom } = await import('@/lib/server/classroom-media-generation');
   const { synthesizeSceneNarration } = await import('@/lib/server/agent-runtime/scene-tts');
   const batchScenes = [scene()];
@@ -137,6 +137,63 @@ describe('a routed provider without a key never falls back', () => {
     const { batch, agent, batchCalls, agentCalls } = await runBoth({
       language: 'ar-SA',
       subjectCode: 'PHYSICS',
+    });
+    expect(batch).toBeUndefined();
+    expect(agent).toMatchObject({ available: false, generated: 0 });
+    expect(batchCalls).toHaveLength(0);
+    expect(agentCalls).toHaveLength(0);
+  });
+});
+
+const REEM = '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72';
+const CONFIGURED_REEM = {
+  routeId: 'configured',
+  providerId: 'cartesia-tts',
+  modelId: 'sonic-3.6',
+  voiceId: REEM,
+  language: 'ar',
+  settingKey: 'teaching_tts.route.MATH',
+} as never;
+
+describe('a configured route frozen on the Stage (plan §3.3)', () => {
+  it.each(['MATH', 'SOCIAL_STUDIES'])(
+    'wins over the table for %s on both paths',
+    async (subjectCode) => {
+      const { batch, agent, batchCalls, agentCalls } = await runBoth({
+        language: 'ar-SA',
+        subjectCode,
+        ttsRoute: CONFIGURED_REEM,
+      });
+      expect(batch).toMatchObject({ generated: 1, failed: 0 });
+      expect(agent).toMatchObject({ available: true, generated: 1 });
+      expect(picked(batchCalls[0]!)).toMatchObject({
+        providerId: 'cartesia-tts',
+        modelId: 'sonic-3.6',
+        voice: REEM,
+        apiKey: 'server-cartesia-key',
+      });
+      expect(picked(agentCalls[0]!)).toEqual(picked(batchCalls[0]!));
+    },
+  );
+
+  it('a configured provider without a key never falls back to the table or another provider', async () => {
+    vi.stubEnv('TTS_CARTESIA_API_KEY', '');
+    const { batch, agent, batchCalls, agentCalls } = await runBoth({
+      language: 'ar-SA',
+      subjectCode: 'MATH',
+      ttsRoute: CONFIGURED_REEM,
+    });
+    expect(batch).toBeUndefined();
+    expect(agent).toMatchObject({ available: false, generated: 0 });
+    expect(batchCalls).toHaveLength(0);
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it('a malformed persisted route fails closed: no narration, never the table voice', async () => {
+    const { batch, agent, batchCalls, agentCalls } = await runBoth({
+      language: 'ar-SA',
+      subjectCode: 'MATH',
+      ttsRoute: { routeId: 'configured', providerId: 'cartesia-tts' } as never,
     });
     expect(batch).toBeUndefined();
     expect(agent).toMatchObject({ available: false, generated: 0 });

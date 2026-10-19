@@ -91,6 +91,9 @@ export async function loadStageForSpeech(
         subjectCode: stage.subjectCode,
         language: stage.language,
         speechReadingMode: stage.speechReadingMode,
+        // The configured narration route frozen on the Stage (D-1): every
+        // narration of this lesson keeps the voice it was built with.
+        ...(stage.ttsRoute !== undefined ? { ttsRoute: stage.ttsRoute } : {}),
       },
       access,
       loadDocument: async () => document as unknown as { stage: AppStage; scenes: unknown[] },

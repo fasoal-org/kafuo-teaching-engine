@@ -249,6 +249,8 @@ export async function regenerateSceneNarrationAudio(
         subjectCode: stage.subjectCode,
         language: stage.language,
         speechReadingMode: stage.speechReadingMode,
+        // A repaired slide speaks with the lesson's frozen configured route.
+        ...(stage.ttsRoute !== undefined ? { ttsRoute: stage.ttsRoute } : {}),
       },
       // The package build's storage, retry and failure rule (batch TTS): a
       // provider error or timeout fails its own line, never the voiced ones.

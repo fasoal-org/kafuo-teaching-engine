@@ -31,6 +31,24 @@ export interface StageSpeechRegister {
   register: 'saudi-white-spoken' | 'msa';
 }
 
+/**
+ * The narration route a superadmin configured for the lesson's subject, frozen
+ * on the Stage when the lesson is generated (`Stage.ttsRoute`). Every later
+ * narration of the Stage uses it, so one lesson keeps one voice.
+ */
+export interface StageTtsRoute {
+  routeId: 'configured';
+  /** A Teaching Engine TTS provider id, e.g. `cartesia-tts`. */
+  providerId: string;
+  /** The model the voice speaks with, derived from the catalogue at generation. */
+  modelId: string;
+  voiceId: string;
+  /** The voice's language family; equals the lesson language family. */
+  language: 'ar' | 'en';
+  /** The Kafuo runtime setting the route came from, e.g. `teaching_tts.route.CHEMISTRY`. */
+  settingKey: string;
+}
+
 /** Frozen set of every valid {@link SpeechReadingMode}. */
 export const SPEECH_READING_MODES = [
   'natural',
@@ -204,6 +222,11 @@ export interface Stage {
    * not a model's. Absent on legacy Stages and non-Arabic lessons.
    */
   speechRegister?: StageSpeechRegister;
+  /**
+   * The configured narration route the Stage was generated under. Absent on
+   * legacy Stages and on subjects left on the default routing table.
+   */
+  ttsRoute?: StageTtsRoute;
   style?: string;
   // Whiteboard data
   whiteboard?: Whiteboard[];

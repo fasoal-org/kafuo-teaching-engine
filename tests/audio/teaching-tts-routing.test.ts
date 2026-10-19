@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { isQwenCloneVoice, TTS_PROVIDERS } from '@/lib/audio/constants';
-import { resolveTeachingTtsRoute } from '@/lib/audio/teaching-tts-routing';
+import {
+  configuredTeachingTtsRoute,
+  isTeachingTtsProviderId,
+  resolveTeachingTtsRoute,
+  TEACHING_TTS_PROVIDER_IDS,
+  teachingTtsCatalogVoice,
+  teachingTtsCatalogVoices,
+} from '@/lib/audio/teaching-tts-routing';
 
 const OPENAI = {
   routeId: 'en-openai',
@@ -89,5 +96,75 @@ describe('resolveTeachingTtsRoute', () => {
     expect(isQwenCloneVoice('longanlufeng')).toBe(false);
     const voice = TTS_PROVIDERS['qwen-tts'].voices.find((v) => v.id === 'longanlufeng');
     expect(voice?.compatibleModels).toEqual(['qwen-audio-3.0-tts-plus']);
+  });
+});
+
+describe('Teaching Engine narration catalogue (superadmin routes, plan §3.1)', () => {
+  it('lists exactly the three providers with a server env prefix', () => {
+    expect([...TEACHING_TTS_PROVIDER_IDS]).toEqual(['openai-tts', 'cartesia-tts', 'qwen-tts']);
+    expect(isTeachingTtsProviderId('cartesia-tts')).toBe(true);
+    expect(isTeachingTtsProviderId('elevenlabs-tts')).toBe(false);
+    expect(isTeachingTtsProviderId(undefined)).toBe(false);
+  });
+
+  it('offers Arabic and English voices only, each with the model the table uses', () => {
+    expect(teachingTtsCatalogVoices('cartesia-tts')).toEqual([
+      { id: CARTESIA.voiceId, name: 'Reem', language: 'ar', modelId: 'sonic-3.6' },
+    ]);
+    // Qwen's Mandarin/Cantonese and other-language presets are never offered.
+    expect(teachingTtsCatalogVoices('qwen-tts')).toEqual([
+      {
+        id: 'longanlufeng',
+        name: 'Longan Lufeng (longanlufeng)',
+        language: 'ar',
+        modelId: 'qwen-audio-3.0-tts-plus',
+      },
+    ]);
+    const openai = teachingTtsCatalogVoices('openai-tts');
+    expect(openai.every((voice) => voice.language === 'en')).toBe(true);
+    expect(openai.find((voice) => voice.id === 'alloy')?.modelId).toBe('gpt-4o-mini-tts');
+  });
+
+  it('the catalogue reproduces every table route (provider + voice → the same model)', () => {
+    for (const route of [OPENAI, CARTESIA, QWEN_PLUS]) {
+      expect(teachingTtsCatalogVoice(route.providerId, route.voiceId)?.modelId).toBe(route.modelId);
+    }
+  });
+
+  it('an unknown provider or a voice of another provider is not in the catalogue', () => {
+    expect(teachingTtsCatalogVoice('elevenlabs-tts', 'any')).toBeNull();
+    expect(teachingTtsCatalogVoice('cartesia-tts', 'longanlufeng')).toBeNull();
+    expect(teachingTtsCatalogVoice('qwen-tts', 'Cherry')).toBeNull();
+    expect(teachingTtsCatalogVoice('openai-tts', 42)).toBeNull();
+  });
+
+  it('reads a well-formed persisted route as frozen and refuses a malformed one', () => {
+    const persisted = {
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: CARTESIA.voiceId,
+      language: 'ar',
+      settingKey: 'teaching_tts.route.MATH',
+    };
+    expect(configuredTeachingTtsRoute(persisted)).toEqual({
+      routeId: 'configured',
+      providerId: 'cartesia-tts',
+      modelId: 'sonic-3.6',
+      voiceId: CARTESIA.voiceId,
+      language: 'ar',
+    });
+    for (const broken of [
+      null,
+      'cartesia-tts',
+      [],
+      { ...persisted, routeId: 'ar-qwen-plus' },
+      { ...persisted, providerId: 'elevenlabs-tts' },
+      { ...persisted, modelId: '' },
+      { ...persisted, voiceId: undefined },
+      { ...persisted, language: 'fr' },
+    ]) {
+      expect(configuredTeachingTtsRoute(broken), JSON.stringify(broken)).toBeNull();
+    }
   });
 });
