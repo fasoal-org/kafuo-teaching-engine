@@ -90,7 +90,17 @@ describe('D-O1-1 / D-O1-2: the teacher editor grant on stage-meta and classroom-
   });
 
   /** A tenant's draft Stage: the document, its version, and one audio file. */
-  async function seedStage(tenantId = TENANT): Promise<{ stageId: string; versionId: string }> {
+  /** A tenant's Stage of one lesson (a fresh lesson unless `lessonId` is given). */
+  async function seedStage(
+    options: {
+      tenantId?: string;
+      lessonId?: string;
+      version?: number;
+      status?: 'draft' | 'approved' | 'superseded';
+    } = {},
+  ): Promise<{ stageId: string; versionId: string; lessonId: string }> {
+    const tenantId = options.tenantId ?? TENANT;
+    const lessonId = options.lessonId ?? nextId('li');
     const stageId = nextId('stage');
     await createOwnerBoundDocumentStore<AppScene, AppStage>({
       pool,
@@ -102,9 +112,9 @@ describe('D-O1-1 / D-O1-2: the teacher editor grant on stage-meta and classroom-
     const versionId = nextId('tpv');
     await insertVersion(qp(), {
       id: versionId,
-      aggregate: { tenantId, learningItem: { type: 'lesson', id: nextId('li') } },
-      version: 1,
-      status: 'draft',
+      aggregate: { tenantId, learningItem: { type: 'lesson', id: lessonId } },
+      version: options.version ?? 1,
+      status: options.status ?? 'draft',
       currentStageId: stageId,
       currentAttemptId: null,
       teachingModel: { key: 'g5', version: 'g5.v1' },
@@ -112,7 +122,7 @@ describe('D-O1-1 / D-O1-2: the teacher editor grant on stage-meta and classroom-
     });
     mkdirSync(join(mediaDir, stageId, 'audio'), { recursive: true });
     writeFileSync(join(mediaDir, stageId, 'audio', 'tts_a1.mp3'), 'mp3-bytes');
-    return { stageId, versionId };
+    return { stageId, versionId, lessonId };
   }
 
   function grantToken(
@@ -247,7 +257,7 @@ describe('D-O1-1 / D-O1-2: the teacher editor grant on stage-meta and classroom-
     });
 
     it('refuses a grant whose tenant does not own the Stage, even for the right Stage id', async () => {
-      const { stageId } = await seedStage(OTHER_TENANT);
+      const { stageId } = await seedStage({ tenantId: OTHER_TENANT });
       const response = await stageMeta(stageId, grantCookie(grantToken(stageId, 'tpv-x')));
       expect(response.status).toBe(404);
     });
@@ -320,6 +330,105 @@ describe('D-O1-1 / D-O1-2: the teacher editor grant on stage-meta and classroom-
       const open = await media(audioUrl(stageId));
       expect(open.status).toBe(200);
       expect(open.headers.get('cache-control')).toBe('public, max-age=86400, immutable');
+    });
+  });
+
+  describe('inherited media of the same lesson (D-O1-6)', () => {
+    /** An approved version (Stage A) and its draft successor (Stage B) of one lesson. */
+    async function seedLessonWithSuccessor() {
+      const first = await seedStage({ status: 'approved' });
+      const successor = await seedStage({ lessonId: first.lessonId, version: 2 });
+      return { first, successor };
+    }
+
+    it('serves Stage A media to an edit or preview grant for the successor Stage B', async () => {
+      const { first, successor } = await seedLessonWithSuccessor();
+      for (const token of [
+        grantToken(successor.stageId, successor.versionId, { purpose: 'edit' }),
+        grantToken(successor.stageId, successor.versionId, {
+          capability: 'read',
+          purpose: 'preview',
+        }),
+      ]) {
+        const response = await media(audioUrl(first.stageId), grantCookie(token));
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('mp3-bytes');
+        expect(response.headers.get('cache-control')).toBe('private, max-age=86400, immutable');
+      }
+    });
+
+    it('also accepts it when the cookie holds other Stage grants first', async () => {
+      const { first, successor } = await seedLessonWithSuccessor();
+      const unrelated = await seedStage();
+      const cookie = grantCookie(
+        grantToken(unrelated.stageId, unrelated.versionId),
+        grantToken(successor.stageId, successor.versionId),
+      );
+      expect((await media(audioUrl(first.stageId), cookie)).status).toBe(200);
+    });
+
+    it('refuses a learner grant, another lesson, another tenant and a bad grant', async () => {
+      const { first, successor } = await seedLessonWithSuccessor();
+      const otherLesson = await seedStage();
+      // The same lesson id in another tenant is another tenant's lesson.
+      const otherTenantSameLessonId = await seedStage({
+        tenantId: OTHER_TENANT,
+        lessonId: first.lessonId,
+      });
+      const successorGrant = grantToken(successor.stageId, successor.versionId);
+      const [body, signature] = successorGrant.split('.');
+      const flipped = `${signature.slice(0, -1)}${signature.endsWith('0') ? '1' : '0'}`;
+      const cases: Array<[string, string, string]> = [
+        [
+          'learner grant for the successor',
+          audioUrl(first.stageId),
+          grantCookie(
+            grantToken(successor.stageId, successor.versionId, {
+              capability: 'read',
+              purpose: 'learner',
+            }),
+          ),
+        ],
+        ["another lesson's Stage", audioUrl(otherLesson.stageId), grantCookie(successorGrant)],
+        [
+          'the same lesson id in another tenant',
+          audioUrl(otherTenantSameLessonId.stageId),
+          grantCookie(successorGrant),
+        ],
+        [
+          'a successor grant signed for another tenant',
+          audioUrl(first.stageId),
+          grantCookie(
+            grantToken(successor.stageId, successor.versionId, { tenantId: OTHER_TENANT }),
+          ),
+        ],
+        [
+          'an expired successor grant',
+          audioUrl(first.stageId),
+          grantCookie(
+            grantToken(successor.stageId, successor.versionId, { now: Date.now() - HOURS_9_MS }),
+          ),
+        ],
+        ['an altered signature', audioUrl(first.stageId), grantCookie(`${body}.${flipped}`)],
+        [
+          'a grant naming an unknown version',
+          audioUrl(first.stageId),
+          grantCookie(grantToken(successor.stageId, 'tpv-unknown')),
+        ],
+      ];
+      for (const [label, url, cookie] of cases) {
+        const response = await media(url, cookie);
+        expect(response.status, label).toBe(401);
+      }
+    });
+
+    it('keeps stage-meta to the exact Stage of the grant', async () => {
+      const { first, successor } = await seedLessonWithSuccessor();
+      const response = await stageMeta(
+        first.stageId,
+        grantCookie(grantToken(successor.stageId, successor.versionId)),
+      );
+      expect(response.status).toBe(404);
     });
   });
 });

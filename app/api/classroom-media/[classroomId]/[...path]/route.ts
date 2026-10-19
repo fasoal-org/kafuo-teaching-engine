@@ -6,7 +6,7 @@ import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
 import { readGatedClassroomMediaAccess } from '@/lib/server/teaching-package/classroom-media-signature';
 import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
-import { holdsTenantEditorGrant } from '@/lib/server/teaching-package/editor-grant-tenant-access';
+import { holdsLessonEditorGrant } from '@/lib/server/teaching-package/editor-grant-tenant-access';
 import {
   checkLearnerAccessScope,
   learnerDeliveryError,
@@ -83,11 +83,13 @@ export async function GET(
       segments: pathSegments,
       searchParams: req.nextUrl.searchParams,
     });
-    // D-O1-1 (Roles Module phase 1): a teacher's edit/preview grant for this
-    // Stage of its own tenant reads the media as the admin's access cookie
-    // does. It only ever adds access: a learner grant is not accepted here and
-    // still needs its signed link, so the scope check below keeps running.
-    if (!access.allowed && (await holdsTenantEditorGrant(req.headers, classroomId))) {
+    // D-O1-1 / D-O1-6 (Roles Module phase 1): a teacher's edit/preview grant
+    // for this Stage, or for another Stage of the same lesson, in its own
+    // tenant reads the media as the admin's access cookie does (a successor
+    // Stage keeps its predecessor's media links). It only ever adds access: a
+    // learner grant is not accepted here and still needs its signed link, so
+    // the scope check below keeps running.
+    if (!access.allowed && (await holdsLessonEditorGrant(req.headers, classroomId))) {
       access = { allowed: true, scope: null };
     }
     if (!access.allowed) {

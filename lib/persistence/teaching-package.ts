@@ -1806,6 +1806,45 @@ export async function stageBelongsToTenant(
   return result.rows[0]?.ok === true;
 }
 
+/**
+ * Same-lesson Stage (Roles Module phase 1, D-O1-6, owner 19 Oct 2026): whether
+ * `stageId` belongs to the same tenant AND the same learning item as the
+ * grant's version `versionId`, through any version's `current_stage_id` or an
+ * attempt row retaining the Stage (the rule of {@link stageBelongsToTenant},
+ * narrowed to one learning item). A successor Stage copies its scenes as they
+ * are, so its inherited media still names an earlier Stage of the same lesson.
+ */
+export async function stageBelongsToVersionLesson(
+  queryable: Queryable,
+  stageId: string,
+  versionId: string,
+  tenantId: string,
+): Promise<boolean> {
+  const result = await queryable.query<{ ok: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM teaching_package_versions g
+        WHERE g.id = $2 AND g.tenant_id = $3
+          AND (
+            EXISTS(
+              SELECT 1 FROM teaching_package_versions v
+               WHERE v.tenant_id = g.tenant_id
+                 AND v.learning_item_type = g.learning_item_type
+                 AND v.learning_item_id = g.learning_item_id
+                 AND v.current_stage_id = $1
+            ) OR EXISTS(
+              SELECT 1 FROM teaching_package_generation_attempts a
+               WHERE a.tenant_id = g.tenant_id
+                 AND a.learning_item_type = g.learning_item_type
+                 AND a.learning_item_id = g.learning_item_id
+                 AND a.stage_id = $1 AND a.stage_released_at IS NULL
+            )
+          )
+     ) AS ok`,
+    [stageId, versionId, tenantId],
+  );
+  return result.rows[0]?.ok === true;
+}
+
 // ---------------------------------------------------------------------------
 // Durable lesson source context (Kafuo question-flow closure, B1.2)
 // ---------------------------------------------------------------------------
