@@ -173,7 +173,8 @@ function isSameOriginRequest(request: Pick<NextRequest, 'nextUrl' | 'headers'>):
  * the WHATWG-normalized one middleware receives, after Next strips a trailing
  * `.rsc` and the `/_next/data/<id>/…json` wrapper for middleware; it is not
  * the raw request path. POST rows also require a same-origin request
- * (`SAME_ORIGIN_ONLY_METHODS`).
+ * (`SAME_ORIGIN_ONLY_METHODS`), and the `/api/persistence/` rows are not
+ * exempt while `PERSISTENCE_DEV_TOKEN` is set.
  */
 export function isEditorGrantExemptRequest(
   request: Pick<NextRequest, 'nextUrl' | 'method' | 'cookies' | 'headers'>,
@@ -192,5 +193,10 @@ export function isEditorGrantExemptRequest(
     (entry) => entry.method === method && entry.pattern.test(pathname),
   );
   if (!row) return false;
+  // D-O1-R4 (owner, 19 Oct 2026): the persistence rows (12-16) fail closed for
+  // a request no grant covers only while `PERSISTENCE_DEV_TOKEN` is unset, so
+  // with it set they keep the access code. Read per request, like
+  // `ACCESS_CODE` in `middleware.ts`. Row 11 lives in `isOpenApiRequest`.
+  if (process.env.PERSISTENCE_DEV_TOKEN && pathname.startsWith('/api/persistence/')) return false;
   return !SAME_ORIGIN_ONLY_METHODS.has(row.method) || isSameOriginRequest(request);
 }

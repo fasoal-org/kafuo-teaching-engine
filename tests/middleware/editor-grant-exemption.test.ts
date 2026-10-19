@@ -19,6 +19,9 @@
  *   only with `Sec-Fetch-Site: same-origin`, or, when that header is absent, an
  *   `Origin` equal to the request's public origin. GET, PUT and DELETE rows and
  *   the access cookie ignore fetch headers.
+ * - Owner decision D-O1-R4 (19 Oct 2026): while `PERSISTENCE_DEV_TOKEN` is set,
+ *   the persistence rows 12-16 are not exempt; row 11 and the Stage rows are
+ *   unchanged.
  *
  * Reviewed list: `docs/frds/roles/roles-module-phase-1-o1-route-inventory-review.md` §6.
  */
@@ -131,6 +134,10 @@ async function outcome(
 const POST_ROWS = ROWS.filter(([method]) => method === 'POST');
 /** Every other row: GET, PUT and DELETE. */
 const NON_POST_ROWS = ROWS.filter(([method]) => method !== 'POST');
+
+/** Rows 12-16, under `/api/persistence/` (D-O1-R4). */
+const PERSISTENCE_ROWS = ROWS.filter(([, path]) => path.startsWith('/api/persistence/'));
+const NON_PERSISTENCE_ROWS = ROWS.filter(([, path]) => !path.startsWith('/api/persistence/'));
 
 /** Fetch-metadata headers that are not the TE's own origin. */
 const NOT_SAME_ORIGIN: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
@@ -275,6 +282,8 @@ describe('editor-grant exemption (O1)', () => {
     vi.unstubAllEnvs();
     vi.stubEnv('TE_ALLOW_OPEN_ACCESS', '');
     vi.stubEnv('ACCESS_CODE', CODE);
+    // Hermetic: a token exported in the shell would close rows 12-16 (D-O1-R4).
+    vi.stubEnv('PERSISTENCE_DEV_TOKEN', '');
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -517,6 +526,59 @@ describe('editor-grant exemption (O1)', () => {
         }
       });
     });
+
+    describe('with PERSISTENCE_DEV_TOKEN set (D-O1-R4)', () => {
+      beforeEach(() => {
+        vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'dev-token');
+      });
+
+      it('applies to exactly rows 12-16', () => {
+        expect(PERSISTENCE_ROWS).toEqual([
+          ['PUT', `/api/persistence/documents/${S}`],
+          ['PUT', `/api/persistence/documents/${S}/stage`],
+          ['GET', `/api/persistence/documents/${S}/scenes/${CHILD}`],
+          ['PUT', `/api/persistence/documents/${S}/scenes/${CHILD}`],
+          ['DELETE', `/api/persistence/documents/${S}/scenes/${CHILD}`],
+        ]);
+      });
+
+      it('answers 401 to rows 12-16 even with the grant cookie and Sec-Fetch-Site', async () => {
+        for (const [method, path] of PERSISTENCE_ROWS) {
+          expect(await outcome(method, path, GRANT, SAME_ORIGIN), `${method} ${path}`).toBe(401);
+          expect(
+            isEditorGrantExemptRequest(request(method, path, GRANT, SAME_ORIGIN)),
+            `${method} ${path} (predicate)`,
+          ).toBe(false);
+        }
+        // Read per request: unset again, the rows pass again.
+        vi.stubEnv('PERSISTENCE_DEV_TOKEN', '');
+        for (const [method, path] of PERSISTENCE_ROWS) {
+          expect(await outcome(method, path, GRANT), `${method} ${path} unset`).toBe('passed');
+        }
+      });
+
+      it('keeps the learner document rule (row 11) unchanged', async () => {
+        const path = `/api/persistence/documents/${S}`;
+        expect(await outcome('GET', path, GRANT)).toBe('passed');
+        expect(await outcome('HEAD', path, GRANT)).toBe('passed');
+        expect(await outcome('GET', path)).toBe(401);
+      });
+
+      it('keeps every non-persistence row, and the media reads, unchanged', async () => {
+        for (const [method, path] of NON_PERSISTENCE_ROWS) {
+          expect(await outcome(method, path, GRANT), `${method} ${path}`).toBe('passed');
+        }
+        expect(await outcome('GET', `/api/classroom-media/${S}/media/figure.png`, GRANT)).toBe(
+          'passed',
+        );
+      });
+
+      it('lets a valid access cookie through, as before', async () => {
+        for (const [method, path] of PERSISTENCE_ROWS) {
+          expect(await outcome(method, path, accessCookie()), `${method} ${path}`).toBe('passed');
+        }
+      });
+    });
   });
 
   describe('production with an empty ACCESS_CODE (closed mode)', () => {
@@ -604,6 +666,7 @@ describe('editor-grant exemption table (structural pin)', () => {
   it('blocks every other route file in app/api with only a grant cookie', async () => {
     vi.stubEnv('TE_ALLOW_OPEN_ACCESS', '');
     vi.stubEnv('ACCESS_CODE', CODE);
+    vi.stubEnv('PERSISTENCE_DEV_TOKEN', '');
     const OPEN_FOLDERS = new Set([
       'access-code',
       'health',
