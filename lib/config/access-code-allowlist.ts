@@ -135,14 +135,48 @@ const EDITOR_GRANT_EXEMPTIONS = EDITOR_GRANT_EXEMPT_ROUTES.map(([method, path]) 
 }));
 
 /**
+ * D-O1-R8 (owner, 19 Oct 2026), CSRF: the table's POST rows (6 restore,
+ * 8 regenerate, 10 narration-audio) start paid or state-changing work and are
+ * CORS "simple" requests, so a cross-origin page could send them with the
+ * `SameSite=Lax` grant cookie and no preflight. On staging the admin, the
+ * website and the TE share one host on different ports, so `same-site` is the
+ * real attack and is refused too. PUT and DELETE rows always preflight; GET
+ * rows change nothing.
+ */
+const SAME_ORIGIN_ONLY_METHODS: ReadonlySet<string> = new Set(['POST']);
+
+/** The TE's public origin for this request (as `requestOrigin` in `lib/server/media-origin.ts`). */
+function publicRequestOrigin(request: Pick<NextRequest, 'nextUrl' | 'headers'>): string {
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  if (forwardedHost) {
+    return `${request.headers.get('x-forwarded-proto') || 'http'}://${forwardedHost}`;
+  }
+  return request.nextUrl.origin;
+}
+
+/**
+ * Whether the browser sent the request from the TE's own origin:
+ * `Sec-Fetch-Site: same-origin` exactly (`same-site`, `cross-site` and `none`
+ * are refused). Only when that header is absent, an `Origin` equal to the
+ * request's public origin; neither header → refused.
+ */
+function isSameOriginRequest(request: Pick<NextRequest, 'nextUrl' | 'headers'>): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  if (site !== null) return site === 'same-origin';
+  const origin = request.headers.get('origin');
+  return Boolean(origin) && origin === publicRequestOrigin(request);
+}
+
+/**
  * Whether an editor-grant request may pass the `ACCESS_CODE` gate without the
  * access cookie. The query string is ignored. The pathname that must match is
  * the WHATWG-normalized one middleware receives, after Next strips a trailing
  * `.rsc` and the `/_next/data/<id>/…json` wrapper for middleware; it is not
- * the raw request path.
+ * the raw request path. POST rows also require a same-origin request
+ * (`SAME_ORIGIN_ONLY_METHODS`).
  */
 export function isEditorGrantExemptRequest(
-  request: Pick<NextRequest, 'nextUrl' | 'method' | 'cookies'>,
+  request: Pick<NextRequest, 'nextUrl' | 'method' | 'cookies' | 'headers'>,
 ): boolean {
   if (!request.cookies.get(GRANT_COOKIE_NAME)?.value) return false;
   const method = request.method.toUpperCase();
@@ -154,5 +188,9 @@ export function isEditorGrantExemptRequest(
   if ((method === 'GET' || method === 'HEAD') && CLASSROOM_MEDIA_PATH.test(pathname)) {
     return true;
   }
-  return EDITOR_GRANT_EXEMPTIONS.some((row) => row.method === method && row.pattern.test(pathname));
+  const row = EDITOR_GRANT_EXEMPTIONS.find(
+    (entry) => entry.method === method && entry.pattern.test(pathname),
+  );
+  if (!row) return false;
+  return !SAME_ORIGIN_ONLY_METHODS.has(row.method) || isSameOriginRequest(request);
 }

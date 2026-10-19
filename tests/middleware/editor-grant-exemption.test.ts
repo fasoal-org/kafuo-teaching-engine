@@ -15,6 +15,10 @@
  *   pass with the grant cookie. Both handlers accept only an edit/preview grant
  *   for that Stage of its own tenant (route tests in
  *   `tests/teaching-package/editor-grant-tenant-access-routes.test.ts`).
+ * - Owner decision D-O1-R8 (19 Oct 2026), CSRF: the POST rows 6, 8 and 10 pass
+ *   only with `Sec-Fetch-Site: same-origin`, or, when that header is absent, an
+ *   `Origin` equal to the request's public origin. GET, PUT and DELETE rows and
+ *   the access cookie ignore fetch headers.
  *
  * Reviewed list: `docs/frds/roles/roles-module-phase-1-o1-route-inventory-review.md` §6.
  */
@@ -91,19 +95,57 @@ const ROWS = REVIEWED.map(([method, template]) => [method, fill(template)] as co
 
 const METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
-function request(method: string, path: string, cookie?: string): NextRequest {
-  return new NextRequest(new URL(path, 'http://te.test'), {
-    method,
-    headers: cookie ? { cookie } : {},
-  });
+/** What a browser sends on the TE editor's own fetches (D-O1-R8). */
+const SAME_ORIGIN: Readonly<Record<string, string>> = { 'sec-fetch-site': 'same-origin' };
+
+/**
+ * `fetchHeaders` defaults to `SAME_ORIGIN` when the cookie carries the grant
+ * cookie (the editor's own request), and to none otherwise; `{}` sends none.
+ */
+function request(
+  method: string,
+  path: string,
+  cookie?: string,
+  fetchHeaders?: Readonly<Record<string, string>>,
+): NextRequest {
+  const headers: Record<string, string> = {
+    ...(fetchHeaders ?? (cookie?.includes(`${GRANT_COOKIE_NAME}=`) ? SAME_ORIGIN : {})),
+  };
+  if (cookie) headers.cookie = cookie;
+  return new NextRequest(new URL(path, 'http://te.test'), { method, headers });
 }
 
 /** `passed`, or the refusal status. */
-async function outcome(method: string, path: string, cookie?: string): Promise<'passed' | number> {
-  const response = await middleware(request(method, path, cookie));
+async function outcome(
+  method: string,
+  path: string,
+  cookie?: string,
+  fetchHeaders?: Readonly<Record<string, string>>,
+): Promise<'passed' | number> {
+  const response = await middleware(request(method, path, cookie, fetchHeaders));
   if (response.headers.get('x-middleware-next') === '1') return 'passed';
   return response.status;
 }
+
+/** Rows 6, 8 and 10: the only POST rows, the only ones a cross-site form can send. */
+const POST_ROWS = ROWS.filter(([method]) => method === 'POST');
+/** Every other row: GET, PUT and DELETE. */
+const NON_POST_ROWS = ROWS.filter(([method]) => method !== 'POST');
+
+/** Fetch-metadata headers that are not the TE's own origin. */
+const NOT_SAME_ORIGIN: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
+  ['same-site', { 'sec-fetch-site': 'same-site' }],
+  ['cross-site', { 'sec-fetch-site': 'cross-site' }],
+  ['none', { 'sec-fetch-site': 'none' }],
+  ['empty Sec-Fetch-Site', { 'sec-fetch-site': '' }],
+  ['no fetch headers', {}],
+  // Sec-Fetch-Site decides when present, even next to a matching Origin.
+  ['same-site with a matching Origin', { 'sec-fetch-site': 'same-site', origin: 'http://te.test' }],
+  [
+    'cross-site with a matching Origin',
+    { 'sec-fetch-site': 'cross-site', origin: 'http://te.test' },
+  ],
+];
 
 /** Routes that must keep the access code even with a grant cookie. */
 const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
@@ -347,6 +389,134 @@ describe('editor-grant exemption (O1)', () => {
         }
       }
     });
+
+    describe('CSRF on the POST rows 6, 8 and 10 (D-O1-R8)', () => {
+      it('applies to exactly rows 6, 8 and 10', () => {
+        expect(POST_ROWS.map(([, path]) => path)).toEqual([
+          `/api/stages/${S}/scene-regenerations/${CHILD}/restore`,
+          `/api/stages/${S}/scenes/${CHILD}/regenerate`,
+          `/api/stages/${S}/scenes/${CHILD}/narration-audio`,
+        ]);
+      });
+
+      it('passes them with Sec-Fetch-Site: same-origin', async () => {
+        for (const [method, path] of POST_ROWS) {
+          expect(await outcome(method, path, GRANT, SAME_ORIGIN), `${method} ${path}`).toBe(
+            'passed',
+          );
+        }
+      });
+
+      it('answers 401 to same-site, cross-site, none and no fetch headers', async () => {
+        for (const [method, path] of POST_ROWS) {
+          for (const [label, headers] of NOT_SAME_ORIGIN) {
+            expect(await outcome(method, path, GRANT, headers), `${method} ${path} ${label}`).toBe(
+              401,
+            );
+            expect(
+              isEditorGrantExemptRequest(request(method, path, GRANT, headers)),
+              `${method} ${path} ${label} (predicate)`,
+            ).toBe(false);
+          }
+        }
+      });
+
+      it('without Sec-Fetch-Site, passes an Origin equal to the public origin', async () => {
+        const matching: ReadonlyArray<Readonly<Record<string, string>>> = [
+          { origin: 'http://te.test' },
+          {
+            origin: 'https://te.example:8443',
+            'x-forwarded-host': 'te.example:8443',
+            'x-forwarded-proto': 'https',
+          },
+          // No forwarded proto: http, as `requestOrigin` builds it.
+          { origin: 'http://te.example', 'x-forwarded-host': 'te.example' },
+        ];
+        for (const [method, path] of POST_ROWS) {
+          for (const headers of matching) {
+            expect(
+              await outcome(method, path, GRANT, headers),
+              `${method} ${path} ${JSON.stringify(headers)}`,
+            ).toBe('passed');
+          }
+        }
+      });
+
+      it('without Sec-Fetch-Site, answers 401 to a mismatching Origin', async () => {
+        const mismatching: ReadonlyArray<Readonly<Record<string, string>>> = [
+          { origin: 'http://te.test:8444' },
+          { origin: 'https://te.test' },
+          { origin: 'http://admin.test' },
+          { origin: 'null' },
+          { origin: '' },
+          // The forwarded host wins over the URL's own origin.
+          {
+            origin: 'http://te.test',
+            'x-forwarded-host': 'te.example',
+            'x-forwarded-proto': 'https',
+          },
+          {
+            origin: 'https://te.example:8444',
+            'x-forwarded-host': 'te.example:8443',
+            'x-forwarded-proto': 'https',
+          },
+          { origin: 'https://te.example', 'x-forwarded-host': 'te.example' },
+        ];
+        for (const [method, path] of POST_ROWS) {
+          for (const headers of mismatching) {
+            expect(
+              await outcome(method, path, GRANT, headers),
+              `${method} ${path} ${JSON.stringify(headers)}`,
+            ).toBe(401);
+          }
+        }
+      });
+
+      it('leaves the GET, PUT and DELETE rows unaffected by fetch headers', async () => {
+        for (const [method, path] of NON_POST_ROWS) {
+          for (const [label, headers] of NOT_SAME_ORIGIN) {
+            expect(await outcome(method, path, GRANT, headers), `${method} ${path} ${label}`).toBe(
+              'passed',
+            );
+          }
+          expect(
+            await outcome(method, path, GRANT, { origin: 'http://admin.test' }),
+            `${method} ${path} foreign Origin`,
+          ).toBe('passed');
+        }
+        // The D-O1-1 media reads and the row-11 learner document read too.
+        for (const [method, path] of [
+          ['GET', `/api/classroom-media/${S}/media/figure.png`],
+          ['GET', `/api/persistence/documents/${S}`],
+        ] as const) {
+          expect(
+            await outcome(method, path, GRANT, { 'sec-fetch-site': 'cross-site' }),
+            `${method} ${path}`,
+          ).toBe('passed');
+        }
+      });
+
+      it('lets a valid access cookie through cross-site, as before', async () => {
+        for (const [method, path] of POST_ROWS) {
+          for (const cookie of [accessCookie(), `${accessCookie()}; ${GRANT}`]) {
+            for (const [label, headers] of NOT_SAME_ORIGIN) {
+              expect(
+                await outcome(method, path, cookie, headers),
+                `${method} ${path} ${label}`,
+              ).toBe('passed');
+            }
+          }
+        }
+      });
+
+      it('still answers 401 without a grant cookie, whatever the fetch headers', async () => {
+        for (const [method, path] of POST_ROWS) {
+          expect(await outcome(method, path, undefined, SAME_ORIGIN), `${method} ${path}`).toBe(
+            401,
+          );
+        }
+      });
+    });
   });
 
   describe('production with an empty ACCESS_CODE (closed mode)', () => {
@@ -366,6 +536,19 @@ describe('editor-grant exemption (O1)', () => {
           await outcome(method, path, `${accessCookie()}; ${GRANT}`),
           `${method} ${path} with access cookie`,
         ).toBe(503);
+      }
+    });
+
+    it('still answers 503 on the POST rows whatever the fetch headers (D-O1-R8)', async () => {
+      for (const [method, path] of POST_ROWS) {
+        for (const [label, headers] of [
+          ['same-origin', SAME_ORIGIN],
+          ...NOT_SAME_ORIGIN,
+        ] as const) {
+          expect(await outcome(method, path, GRANT, headers), `${method} ${path} ${label}`).toBe(
+            503,
+          );
+        }
       }
     });
   });
