@@ -28,6 +28,10 @@ import { isServerPersistenceConfigured } from '@/lib/config/feature-flags';
 import { resolveStageAccess } from '@/lib/server/stage-access';
 import { withRequestOwnerId } from '@/lib/server/agent-runtime/with-owner';
 import { readEditorGrant } from '@/lib/server/teaching-package/editor-grant';
+import {
+  hasValidAccessCookie,
+  holdsTenantEditorGrant,
+} from '@/lib/server/teaching-package/editor-grant-tenant-access';
 
 // Per-viewer and mutable on every publish/unpublish/delete: this response must
 // never be cached, by Next or by anything in front of it.
@@ -47,8 +51,26 @@ export async function GET(req: NextRequest, { params }: Params) {
   // owner".
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
 
+  const { stageId } = await params;
+
+  // D-O1-2 (Roles Module phase 1): with ACCESS_CODE on, a request without the
+  // access cookie reaches this route only through the editor-grant exemption,
+  // so it must hold an edit/preview grant for this Stage of its own tenant.
+  // Refused exactly like an absent Stage, before any owner is resolved, so no
+  // cookie is minted and existence stays hidden.
+  const accessCode = process.env.ACCESS_CODE;
+  if (
+    accessCode &&
+    !hasValidAccessCookie(req.cookies.get('openmaic_access')?.value, accessCode) &&
+    !(await holdsTenantEditorGrant(req.headers, stageId))
+  ) {
+    return NextResponse.json(
+      { error: 'not_found' },
+      { status: 404, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
   return withRequestOwnerId(req, async (ownerId, responseHeaders) => {
-    const { stageId } = await params;
     try {
       const access = await resolveStageAccess(stageId);
 

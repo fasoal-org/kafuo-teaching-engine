@@ -10,6 +10,12 @@
  * - Closed mode keeps the 503; the access cookie behaves as before; the
  *   learner document rule (row 11) is unchanged.
  *
+ * - Owner decisions D-O1-1 / D-O1-2 (19 Oct 2026): `GET /api/stage-meta/:id`
+ *   joins the table, and GET/HEAD reads of `classroom-media/:id/(media|audio)/…`
+ *   pass with the grant cookie. Both handlers accept only an edit/preview grant
+ *   for that Stage of its own tenant (route tests in
+ *   `tests/teaching-package/editor-grant-tenant-access-routes.test.ts`).
+ *
  * Reviewed list: `docs/frds/roles/roles-module-phase-1-o1-route-inventory-review.md` §6.
  */
 import { readdirSync, readFileSync, statSync } from 'fs';
@@ -47,6 +53,7 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   ['GET', '/api/persistence/documents/:id/scenes/:id'], // 14
   ['PUT', '/api/persistence/documents/:id/scenes/:id'], // 15
   ['DELETE', '/api/persistence/documents/:id/scenes/:id'], // 16
+  ['GET', '/api/stage-meta/:id'], // x10 (D-O1-2, owner 19 Oct 2026)
 ];
 
 /** The handler file behind each reviewed Stage path (`app/api/…`). */
@@ -63,6 +70,7 @@ const STAGE_ROUTE_FILES: Readonly<Record<string, string>> = {
   '/api/stages/:id/scenes/:id/regenerate': 'stages/[id]/scenes/[sceneId]/regenerate/route.ts',
   '/api/stages/:id/scenes/:id/narration-audio':
     'stages/[id]/scenes/[sceneId]/narration-audio/route.ts',
+  '/api/stage-meta/:id': 'stage-meta/[stageId]/route.ts',
 };
 const PERSISTENCE_ROUTE_FILE = 'persistence/[...path]/route.ts';
 
@@ -157,10 +165,14 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['PATCH', `/api/persistence/documents/${S}`],
   ['POST', `/api/persistence/documents/${S}/scenes`],
   ['PATCH', `/api/persistence/documents/${S}/scenes/${CHILD}`],
-  // Stage meta (x10) and unsigned classroom media (x11).
-  ['GET', `/api/stage-meta/${S}`],
-  ['GET', `/api/classroom-media/${S}/media/figure.png`],
-  ['HEAD', `/api/classroom-media/${S}/audio/scene-1.mp3`],
+  // Classroom media (x11) outside the D-O1-1 read rule: writes and other folders.
+  ['POST', `/api/classroom-media/${S}/media/figure.png`],
+  ['PUT', `/api/classroom-media/${S}/audio/scene-1.mp3`],
+  ['DELETE', `/api/classroom-media/${S}/media/figure.png`],
+  ['OPTIONS', `/api/classroom-media/${S}/media/figure.png`],
+  ['GET', `/api/classroom-media/${S}/other/file.png`],
+  ['GET', `/api/classroom-media/${S}/media/`],
+  ['GET', `/api/classroom-media/stage%2Fabc/media/figure.png`],
 ];
 
 /** Look-alikes of reviewed paths, all under `/api/`. */
@@ -240,6 +252,26 @@ describe('editor-grant exemption (O1)', () => {
       expect(
         await outcome('PUT', '/api/teaching-packages/pkg-1/scene-alignment-confirmations'),
       ).toBe('passed');
+    });
+
+    it('lets classroom media reads through with only a grant cookie (D-O1-1)', async () => {
+      const reads: ReadonlyArray<readonly [string, string]> = [
+        ['GET', `/api/classroom-media/${S}/media/figure.png`],
+        ['HEAD', `/api/classroom-media/${S}/audio/scene-1.mp3`],
+        ['GET', `/api/classroom-media/${S}/audio/nested/tts_a1.mp3`],
+      ];
+      for (const [method, path] of reads) {
+        expect(await outcome(method, path, GRANT), `${method} ${path}`).toBe('passed');
+        expect(await outcome(method, path), `${method} ${path} no cookie`).toBe(401);
+        expect(
+          await outcome(method, path, 'teaching_package_learner_key=tp:abc'),
+          `${method} ${path} learner key only`,
+        ).toBe(401);
+      }
+      // The signed-link rule is unchanged and needs no cookie at all.
+      expect(await outcome('GET', `/api/classroom-media/${S}/media/figure.png?exp=1&sig=s`)).toBe(
+        'passed',
+      );
     });
 
     it('ignores the query string', async () => {
@@ -324,6 +356,10 @@ describe('editor-grant exemption (O1)', () => {
     });
 
     it('still answers 503 on every row with a grant cookie', async () => {
+      expect(
+        await outcome('GET', `/api/classroom-media/${S}/media/figure.png`, GRANT),
+        'unsigned classroom media with a grant cookie',
+      ).toBe(503);
       for (const [method, path] of ROWS) {
         expect(await outcome(method, path, GRANT), `${method} ${path}`).toBe(503);
         expect(
@@ -348,12 +384,16 @@ describe('editor-grant exemption table (structural pin)', () => {
 
   it('lists only routes whose handler verifies the grant', () => {
     for (const [method, path] of EDITOR_GRANT_EXEMPT_ROUTES) {
-      const isStageRoute = path.startsWith('/api/stages/');
+      const isStageRoute = path in STAGE_ROUTE_FILES;
       const file = isStageRoute ? STAGE_ROUTE_FILES[path] : PERSISTENCE_ROUTE_FILE;
       expect(file, path).toBeDefined();
       const source = readFileSync(join(API_DIR, file), 'utf8');
       const label = `${method} ${path} (${file})`;
       expect(source, label).toMatch(new RegExp(`export (async function|const) ${method}\\b`));
+      if (path === '/api/stage-meta/:id') {
+        // D-O1-2: without the access cookie, the handler requires the tenant grant.
+        expect(source, label).toMatch(/holdsTenantEditorGrant/);
+      }
       if (isStageRoute) {
         expect(source, label).toMatch(/readEditorGrant|resolveRegenerationGrant/);
         if (method !== 'GET') {

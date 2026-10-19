@@ -6,6 +6,7 @@ import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
 import { readGatedClassroomMediaAccess } from '@/lib/server/teaching-package/classroom-media-signature';
 import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
+import { holdsTenantEditorGrant } from '@/lib/server/teaching-package/editor-grant-tenant-access';
 import {
   checkLearnerAccessScope,
   learnerDeliveryError,
@@ -75,13 +76,20 @@ export async function GET(
   // credential). Without ACCESS_CODE the read stays open, as before.
   const accessCode = process.env.ACCESS_CODE;
   if (accessCode) {
-    const access = readGatedClassroomMediaAccess({
+    let access = readGatedClassroomMediaAccess({
       accessCode,
       accessCookie: req.cookies.get('openmaic_access')?.value,
       classroomId,
       segments: pathSegments,
       searchParams: req.nextUrl.searchParams,
     });
+    // D-O1-1 (Roles Module phase 1): a teacher's edit/preview grant for this
+    // Stage of its own tenant reads the media as the admin's access cookie
+    // does. It only ever adds access: a learner grant is not accepted here and
+    // still needs its signed link, so the scope check below keeps running.
+    if (!access.allowed && (await holdsTenantEditorGrant(req.headers, classroomId))) {
+      access = { allowed: true, scope: null };
+    }
     if (!access.allowed) {
       return NextResponse.json(
         { error: 'Media link expired or invalid' },

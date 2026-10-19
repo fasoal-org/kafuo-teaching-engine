@@ -114,6 +114,9 @@ export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string,
   ['GET', '/api/persistence/documents/:id/scenes/:id'],
   ['PUT', '/api/persistence/documents/:id/scenes/:id'],
   ['DELETE', '/api/persistence/documents/:id/scenes/:id'],
+  // D-O1-2 (owner, 19 Oct 2026): the handler requires an edit/preview grant
+  // for this Stage of its own tenant when the access cookie is absent.
+  ['GET', '/api/stage-meta/:id'],
 ];
 
 /** Literal segments are lowercase words; `:id` becomes one `STAGE_ID` segment. */
@@ -144,5 +147,12 @@ export function isEditorGrantExemptRequest(
   if (!request.cookies.get(GRANT_COOKIE_NAME)?.value) return false;
   const method = request.method.toUpperCase();
   const { pathname } = request.nextUrl;
+  // D-O1-1 (owner, 19 Oct 2026): the editor's own media reads carry the grant
+  // cookie and no signed link. Reads of `media/` and `audio/` only; the handler
+  // accepts only an edit/preview grant for this Stage of its own tenant, and a
+  // learner grant still needs a signed link.
+  if ((method === 'GET' || method === 'HEAD') && CLASSROOM_MEDIA_PATH.test(pathname)) {
+    return true;
+  }
   return EDITOR_GRANT_EXEMPTIONS.some((row) => row.method === method && row.pattern.test(pathname));
 }
