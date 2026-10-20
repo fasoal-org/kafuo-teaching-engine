@@ -291,7 +291,8 @@ describe('redeem route', () => {
 
     const response = await redeem(token);
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('http://localhost/classroom/stage-x');
+    // Relative: the browser stays on the origin it used (never the bind address).
+    expect(response.headers.get('location')).toBe('/classroom/stage-x');
     const cookies = response.headers.getSetCookie();
     const grant = cookies.find((cookie) => cookie.startsWith('teaching_package_grant='));
     const learner = cookies.find((cookie) => cookie.startsWith('teaching_package_learner_key='));
@@ -324,7 +325,7 @@ describe('redeem route', () => {
     const response = await redeem(token);
 
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('http://localhost/classroom/stage-x?mode=edit');
+    expect(response.headers.get('location')).toBe('/classroom/stage-x?mode=edit');
   });
 
   it('refuses an edit handoff once the version left draft|rejected', async () => {

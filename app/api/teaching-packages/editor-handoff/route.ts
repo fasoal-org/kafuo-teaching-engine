@@ -105,7 +105,11 @@ export async function GET(req: NextRequest) {
     // than a redirect it would have to refuse to follow. Browser behaviour is
     // byte-for-byte unchanged.
     const wantsJson = (req.headers.get('accept') ?? '').includes('application/json');
-    const classroomUrl = new URL(`/classroom/${grant.stageId}`, req.nextUrl.origin);
+    // The redirect is RELATIVE, so the browser stays on the origin it reached
+    // this route through. `req.nextUrl.origin` is the server's own bind address
+    // behind a proxy (`http://0.0.0.0:3000` on staging behind Tailscale Serve),
+    // which no browser can open. The base below only builds the path and query.
+    const classroomUrl = new URL(`/classroom/${grant.stageId}`, 'http://relative.invalid');
     // An Admin "Edit" handoff is an explicit request to edit. Carry that
     // intent through the redirect so the classroom opens Pro mode directly;
     // making the reviewer toggle a second, unrelated control left the
@@ -114,6 +118,7 @@ export async function GET(req: NextRequest) {
     if (grant.purpose === 'edit' && grant.capability === 'write') {
       classroomUrl.searchParams.set('mode', 'edit');
     }
+    const classroomLocation = `${classroomUrl.pathname}${classroomUrl.search}`;
     const response = wantsJson
       ? NextResponse.json(
           {
@@ -127,9 +132,9 @@ export async function GET(req: NextRequest) {
             headers: { 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' },
           },
         )
-      : NextResponse.redirect(classroomUrl, {
+      : new NextResponse(null, {
           status: 302,
-          headers: { 'Referrer-Policy': 'no-referrer' },
+          headers: { Location: classroomLocation, 'Referrer-Policy': 'no-referrer' },
         });
     for (const cookie of editorGrantCookieHeaders(cookieValue, grant.learnerKey)) {
       response.headers.append('Set-Cookie', cookie);

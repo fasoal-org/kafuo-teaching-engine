@@ -139,7 +139,7 @@ describe('learner handoff redeem', () => {
     const first = await redeem(mintLearner());
     const second = await redeem(mintLearner());
     expect(first.status).toBe(302);
-    expect(first.headers.get('location')).toBe('http://te.test/classroom/stage-approved');
+    expect(first.headers.get('location')).toBe('/classroom/stage-approved');
     const learnerKey = (response: Response) =>
       decodeURIComponent(
         response.headers
