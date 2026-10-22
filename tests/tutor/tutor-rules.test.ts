@@ -11,9 +11,22 @@ import { TUTOR_RULES_TEXT, TUTOR_RULES_VERSION } from '@/lib/server/tutor/tutor-
 const [ENGLISH_RULES, ARABIC_RULES] = TUTOR_RULES_TEXT.split('\n---\n') as [string, string];
 
 describe('tutor rules — answer format (FMT-01)', () => {
-  it('is versioned r4', () => {
-    expect(TUTOR_RULES_VERSION).toBe('tutor-rules@r4');
+  it('is versioned r5', () => {
+    expect(TUTOR_RULES_VERSION).toBe('tutor-rules@r5');
     expect(TUTOR_RULES_TEXT.split('\n---\n')).toHaveLength(2);
+  });
+
+  it('uses Saudi Arabic without changing language selection or academic quotations', () => {
+    expect(ENGLISH_RULES).toContain('widely understood Saudi Arabic');
+    expect(ENGLISH_RULES).toContain("regardless of the dialect of the student's input");
+    expect(ENGLISH_RULES).toContain('avoid Egyptian dialect');
+    expect(ENGLISH_RULES).toContain('quoted curriculum text');
+    expect(ENGLISH_RULES).toContain(
+      'does not change the response language or any answer-reveal boundary',
+    );
+    expect(ARABIC_RULES).toContain('لهجة سعودية بيضاء');
+    expect(ARABIC_RULES).toContain('مهما كانت لهجة سؤال الطالب');
+    expect(ARABIC_RULES).toContain('نصوص المنهج المقتبسة وأمثلة اللغة العربية بالفصحى');
   });
 
   it('names the fixed section headings in both languages', () => {

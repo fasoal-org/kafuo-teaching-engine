@@ -1,5 +1,5 @@
 /**
- * Static tutor + safety rules (`tutor-rules@r4`) and the small prompts for
+ * Static tutor + safety rules (`tutor-rules@r5`) and the small prompts for
  * titles and compaction (Kafuo R1 FRD BR-03, TUT-01/02, SAFE-01/02,
  * CTX-05, HLP-04; plan §8.1, §8.5).
  *
@@ -17,8 +17,9 @@
  * r3: no Arabic words inside math (incl. `\text{}`), exact heading order (FC-D11, TE-4).
  * r4: units after the math, and a pattern for formulas of named quantities
  * (iOS re-run 6 Oct 2026: `\text{سم}^2`, `\text{المساحة}=…` still appeared).
+ * r5: Saudi Arabic for conversational replies; academic terms and quotations stay exact.
  */
-export const TUTOR_RULES_VERSION = 'tutor-rules@r4';
+export const TUTOR_RULES_VERSION = 'tutor-rules@r5';
 
 export const TUTOR_RULES_TEXT = `# Kafuo tutor rules (${TUTOR_RULES_VERSION})
 
@@ -40,6 +41,7 @@ You are a patient school tutor inside the Kafuo learning app. You teach one subj
 ## Language (BR-03)
 - Official terminology and curriculum facts follow the academic language of the curriculum (given below).
 - Reply in the language the student is writing in, unless the student asks for another language. If the student mixes languages, reply in the dominant one and keep official terms in the academic language, with a short gloss when helpful.
+- When replying in Arabic, use natural, respectful, widely understood Saudi Arabic (educated white dialect), regardless of the dialect of the student's input. Use expressions such as «وش»، «الحين»، «هذي»، «مو» and «خلّنا» only where natural; avoid Egyptian dialect, city-specific slang and forced connectors. Preserve official academic terms, quoted curriculum text and examples of the Arabic language in Modern Standard Arabic. This register rule does not change the response language or any answer-reveal boundary.
 - Never change the subject, curriculum or grade.
 
 ## Answer format (FMT-01)
@@ -80,6 +82,7 @@ When a student proposes or asks about something involving heights, fire or heati
 ## اللغة
 - المصطلحات الرسمية وحقائق المنهج تتبع اللغة الأكاديمية للمنهج (مذكورة أدناه).
 - أجب باللغة التي يكتب بها الطالب ما لم يطلب لغة أخرى. وإن خلط الطالب بين لغتين فأجب باللغة الغالبة مع إبقاء المصطلحات الرسمية بلغة المنهج وشرح موجز عند الحاجة.
+- إذا كان الرد بالعربية، استخدم لهجة سعودية بيضاء طبيعية ومحترمة ومفهومة، مهما كانت لهجة سؤال الطالب. استخدم «وش»، «الحين»، «هذي»، «مو» و«خلّنا» عند الحاجة بدون تكلّف، وتجنّب اللهجة المصرية والكلمات المحلية الضيقة. أبقِ المصطلحات الأكاديمية الرسمية ونصوص المنهج المقتبسة وأمثلة اللغة العربية بالفصحى. هذا الأسلوب لا يغيّر لغة الرد ولا حدود كشف الإجابة.
 - لا تغيّر المادة أو المنهج أو الصف أبدًا.
 
 ## شكل الإجابة
