@@ -5,7 +5,7 @@
  * Fixed block order, each block its own system message so the stable head
  * can hit provider prefix caches:
  *
- *   1. rules            `tutor-rules@r4` (byte-stable across turns)
+ *   1. rules            `tutor-rules@r5` (byte-stable across turns)
  *   2. academic         subject names, curriculum, grade, academic language;
  *                       Free Chat adds its scope line (other subject → that
  *                       subject's chat; never «this lesson») — TE-3
