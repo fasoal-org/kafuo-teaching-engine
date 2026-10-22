@@ -1,0 +1,80 @@
+# Production CI/CD for the Teaching Engine. The setup is in zakrly-backend
+# deploy/production/README.md; this repo's own steps are in deploy/production/.
+#
+#   "Run workflow" button on main -> deploy the main branch's current commit to production
+#
+# Started by hand only (workflow_dispatch), from main only. Pushes to staging never start it.
+# The checks for main are ci.yml (it runs on every push to main); start this after they pass.
+#
+# GitHub holds only the CI SSH key and the server's address and host key, all in the
+# `production` environment (deployment branches: main only). The app's own secrets stay on the
+# server in /srv/kafuo/env.
+name: Production Teaching Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to production
+    if: github.ref == 'refs/heads/main'
+    # One deploy at a time, and never cancel one halfway.
+    concurrency:
+      group: production-te
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: https://learn.kafuo.me/api/health
+    steps:
+      # Deploy only the commit that is main's tip right now: never older code over newer code.
+      # A failed read fails the job: never deploy without knowing the tip.
+      - name: Check that ${{ github.sha }} is the main tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
+          if [ -z "$tip" ]; then
+            echo "::error::Could not read the origin/main tip; refusing to deploy."
+            exit 1
+          fi
+          if [ "$tip" != "$SHA" ]; then
+            echo "::error::$SHA is not the origin/main tip ($tip). Start the workflow again."
+            exit 1
+          fi
+          echo "Deploying $SHA: it is the current origin/main tip."
+
+      # StrictHostKeyChecking with the pinned key: the job talks only to our server.
+      - name: Load the SSH key and the server's host key
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/prod_ci
+          chmod 600 ~/.ssh/prod_ci
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The server runs only `deploy <SHA>` for this key (authorized_keys forced command
+      # ci-deploy-app te), and only for a commit that is on origin/main.
+      - name: Deploy ${{ github.sha }}
+        env:
+          HOST: ${{ vars.PROD_HOST }}
+          USER_NAME: ${{ vars.PROD_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/prod_ci \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            "$USER_NAME@$HOST" "deploy $SHA"
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/prod_ci

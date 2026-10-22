@@ -1,0 +1,55 @@
+# Kafuo production: the Teaching Engine, next to the backend on the app server (kafuo-prod-app).
+#
+# Used only by deploy/production/deploy.sh and by hand on the server, always with this file:
+#   docker compose -f /srv/kafuo/kafuo-teaching-engine/deploy/production/compose.yml ps
+# Never run plain `docker compose config`: it prints every secret. Use `--services`.
+#
+# Its own project, not kafuo-prod: the backend's deploy runs `up --remove-orphans`, which would
+# remove any container of its project that its own compose file does not list.
+# The volume is kafuo-prod-te_te-data, so this name must never change.
+name: kafuo-prod-te
+
+services:
+  te:
+    image: kafuo-te:production
+    # Secrets live outside git, in /srv/kafuo/env (deploy-only, 700/600). te-db.env LAST: its
+    # DATABASE_URL (kafuo_te on kafuo-prod-db, over WireGuard) wins over any copy in te.env.
+    env_file: [/srv/kafuo/env/te.env, /srv/kafuo/env/te-db.env]
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    # Loopback only: the host nginx (learn.kafuo.me) is the only way in. Never publish on
+    # 0.0.0.0, because Docker's port rules bypass ufw.
+    ports: ["127.0.0.1:3000:3000"]
+    # Classrooms, audio and media (CLASSROOMS_DIR is /app/data/classrooms). Owned by uid 1001.
+    volumes:
+      - te-data:/app/data
+    # The backend's network: the TE reaches api:8000 by name (KAFUO_INTEGRATION_BASE_URL).
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # Postgres client tools (pg_dump, psql) for kafuo_te on kafuo-prod-db. The same image as the
+  # database server, so pg_dump matches the server version. pg-from-url.sh turns DATABASE_URL
+  # into PG* variables, so the password never appears on a command line.
+  pgtools:
+    image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    profiles: [tools]
+    env_file: [/srv/kafuo/env/te-db.env]
+    volumes: ["./pg-from-url.sh:/usr/local/bin/pg-from-url.sh:ro"]
+    entrypoint: ["bash", "/usr/local/bin/pg-from-url.sh", "DATABASE_URL"]
+    networks: [backend]
+    restart: "no"
+
+networks:
+  backend:
+    name: kafuo-prod_default
+    external: true
+
+volumes:
+  te-data: {}
