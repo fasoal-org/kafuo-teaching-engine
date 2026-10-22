@@ -81,6 +81,14 @@ RUNNERS = {'pytest','py.test','vitest','jest','playwright','mocha','ava','nosete
 SHELLS = {'bash','sh','zsh','dash','fish'}
 INTERPRETERS = {'python','python3','python3.13','node','bun','tsx','ts-node','ruby','perl'}
 BROAD_TOOLS = {'tox','nox','make','gmake','just','task'}
+# Remote execution: the staging server only (see Guard.ssh). Owner decision, 18 Oct 2026.
+SSH_HOSTS = {'kafuo-staging'}
+SSH_FLAGS = {'-t','-tt','-T','-q','-n'}
+SSH_OPTION_KEYS = {'batchmode','connecttimeout','serveraliveinterval','serveralivecountmax','loglevel'}
+REMOTE_TEST_WORDS = re.compile(
+    r"(?<![\w.-])(pytest|py\.test|vitest|jest|playwright|mocha|ava|nosetests|tox|nox|unittest|run_unit_tests(\.sh)?)(?![\w-])"
+    r"|\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(flutter|dart|go|cargo)\s+test\b|\bnode\s+--test\b|\bmake\s+test\b"
+)
 
 class Guard:
     def __init__(self):
@@ -198,9 +206,12 @@ class Guard:
             while rest and rest[0] in ['--no-sync','--offline','--no-project','--']:rest.pop(0)
             if rest and rest[0].startswith('-'):raise Block('Unsupported environment-runner option.')
             return self.argv(rest,cwd,depth+1)
-        if exe in ['docker','podman','ssh','kubectl']:
+        if exe=='ssh':
+            self.ssh(a)
+            return cwd
+        if exe in ['docker','podman','kubectl']:
             # Remote/container command execution cannot share local selection guarantees.
-            if any(x in a for x in ['exec','run']) or exe=='ssh':raise Block('Remote/container execution requires separate approved verification.')
+            if any(x in a for x in ['exec','run']):raise Block('Remote/container execution requires separate approved verification.')
             return cwd
         if exe in BROAD_TOOLS:
             raise Block('Task-runner wrappers require a direct scoped command or explicit authorization.')
@@ -233,6 +244,23 @@ class Guard:
         if p.is_file() and (p.suffix in ['.sh','.py','.js','.mjs','.cjs','.ts'] or '/' in args[0]):
             return self.script(args[0],a,cwd,depth+1)
         return cwd
+    def ssh(self, a):
+        # Non-interactive ssh to the staging host alias only, with a few harmless -o options,
+        # and never a test runner in the remote command. Everything else stays blocked.
+        i=0
+        while i<len(a) and a[i].startswith('-'):
+            if a[i] in SSH_FLAGS:i+=1;continue
+            if a[i]=='-o' and i+1<len(a):
+                key=a[i+1].split('=',1)[0].strip().lower()
+                if key not in SSH_OPTION_KEYS:raise Block('ssh option not allowed: '+a[i+1].split('=',1)[0])
+                i+=2;continue
+            raise Block('ssh option not allowed: '+a[i])
+        if i>=len(a) or a[i] not in SSH_HOSTS:
+            raise Block('Remote execution is allowed only to the staging host alias (kafuo-staging).')
+        remote=' '.join(a[i+1:])
+        if not remote.strip():raise Block('Interactive ssh sessions are not allowed.')
+        if REMOTE_TEST_WORDS.search(remote):
+            raise Block('Test runners on remote hosts require separate approved verification.')
 
     def script(self, name, forwarded, cwd, depth):
         p=(cwd/name).resolve()
