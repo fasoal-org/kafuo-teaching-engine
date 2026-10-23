@@ -289,6 +289,8 @@ A read-only reviewer sub-agent that did not write the code reviewed `fc4973fa`. 
 | L5 — a first-attempt refusal assumes nothing below `fetch` duplicated the POST | LOW | Accepted and documented (browsers do not silently resend a POST that got an answer) |
 | L6 — test gaps | LOW | Partly closed (§9.3 list). Still open: the PG suite is unexecuted; the fake clock does not advance during a fetch; no clock-skew test |
 
+The hardening commit `8ea82415` rewrote the 8b/8c loops (margin, last read, later-attempt `ADMISSION_CLOSED`). It has a separate narrow re-review: _result recorded below when it returns_. It stays in the Codex re-review gate either way.
+
 ### 9.5 Remaining limitations and UNVERIFIED
 
 - **UNVERIFIED — PostgreSQL concurrency.** The `PG_CONTRACT_URL` suite was skipped (no disposable database was identified). The real lock-wait and FOR SHARE-versus-T1 races are reasoned and simulated in PGlite only, and have not been run.
@@ -300,4 +302,6 @@ A read-only reviewer sub-agent that did not write the code reviewed `fc4973fa`. 
 - **A lost commit acknowledgement** still answers `INSERTION_PERSISTENCE_FAILED` as a definite failure (review M3; pre-existing). The handler finished and its run cannot commit later, so the release itself is safe. The slide may in fact have landed; the next load shows it, and revision preconditions protect the next save.
 - **By-id read refused by the TE.** The TE's own `404 INSERTION_NOT_FOUND`, or a `403` with a TE envelope, on a known id ends the hold as `unknown` (review L2; pre-existing). T2 does not check the grant, so the run may still commit. This tab's writes are refused once its grant is read-only, and the revision preconditions guard what lands later.
 - **A duplicated POST below `fetch`** (review L5): a first-attempt refusal is trusted as the only request. Browsers do not silently resend a POST that received an answer.
+- **A silently hanging first POST.** One POST attempt may take 5 min, because it waits for the whole generation, and the admission window is 2 min. A first POST that hangs without ever reaching the TE is not retried inside the window. After its timeout, the key settles as `failed INSERTION_ADMISSION_CLOSED` (nothing started; try again) instead of recovering. This is safe and inherent to the window. Under the old 20 min budget the same case could recover.
+- **Merge target.** `codex/fix-scene-insertion-network-hold` contains every implementation commit. Merge **this** branch, never `codex/reviewer-generated-slide-for-lesson-part` alone, which still has both findings. This fix adds **no schema change**: E-1..E-3 are as before, and a merge to `staging` still deploys the TE and runs them at boot, so it needs the owner's yes.
 - **Pending gates:** CI on the branch, staging acceptance A-1..A-28, the PG contract suite, and a Codex re-review. Nothing was deployed, no TE was restarted, no live database was queried and no provider was called.
