@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   plannerAnswer: null as null | ((prompt: string) => string),
   prompts: [] as string[],
   duringGeneration: null as null | (() => Promise<void>),
+  /** Runs between the new-run checks and T1 (the route is resolved there). */
+  duringRoute: null as null | (() => Promise<void>),
 }));
 
 vi.mock('@/lib/server/teaching-package/insert-one-scene', () => ({
@@ -50,14 +52,17 @@ vi.mock('@/lib/server/teaching-package/insert-one-scene', () => ({
 }));
 vi.mock('@/lib/server/teaching-package/routed-insertion-call', () => ({
   INSERTION_PLANNER_STAGE: 'scene-outlines-stream',
-  createInsertionRoute: vi.fn(async () => ({
-    aiCallFor: () => async (system: string, user: string) => {
-      mocks.prompts.push(`${system}\n${user}`);
-      return mocks.plannerAnswer!(user);
-    },
-    assertAvailable: () => {},
-    description: { mode: 'test' },
-  })),
+  createInsertionRoute: vi.fn(async () => {
+    await mocks.duringRoute?.();
+    return {
+      aiCallFor: () => async (system: string, user: string) => {
+        mocks.prompts.push(`${system}\n${user}`);
+        return mocks.plannerAnswer!(user);
+      },
+      assertAvailable: () => {},
+      description: { mode: 'test' },
+    };
+  }),
 }));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -312,6 +317,7 @@ describe('reviewer-generated slide insertion routes', () => {
     mocks.insert.mockReset();
     mocks.prompts = [];
     mocks.duringGeneration = null;
+    mocks.duringRoute = null;
     mocks.plannerAnswer = () => plannerJson(false);
     mocks.insert.mockImplementation(async (input: InsertOneSceneInput) => {
       await mocks.duringGeneration?.();
@@ -639,13 +645,23 @@ describe('reviewer-generated slide insertion routes', () => {
         now - 1_000_000,
       ],
     );
+    // A new-run check would now refuse (the version is locked): the replay
+    // must answer first.
+    await pool.query(`UPDATE teaching_package_versions SET status = 'approved' WHERE id = $1`, [
+      seeded.versionId,
+    ]);
     const response = await post(seeded, request);
     expect(response.status).toBe(409);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
       'INSERTION_LEASE_LOST',
     );
     expect(mocks.prompts).toHaveLength(0);
-    expect(await events(seeded.versionId)).toEqual([]);
+    // The scoped reclaim recorded the lost lease (and nothing was refused).
+    expect((await events(seeded.versionId)).map((event) => event.event_type)).toEqual([
+      'scene_insertion_failed',
+    ]);
+    const [row] = await insertionRows(seeded.stageId);
+    expect(row).toMatchObject({ status: 'failed', error_code: 'LEASE_EXPIRED' });
   });
 
   it('a different body with the same key is IDEMPOTENCY_KEY_REUSED', async () => {
@@ -852,6 +868,46 @@ describe('reviewer-generated slide insertion routes', () => {
     const after = await scenesOf(seeded.stageId);
     expect(after.find((row) => row.id === 's2')!.scene.title).toBe('edited during the run');
     expect(after).toHaveLength(5);
+  });
+
+  it('a neighbour deleted between the new-run checks and T1 → 409 INSERTION_POSITION_CHANGED, audited, no run', async () => {
+    const seeded = await seed();
+    mocks.duringRoute = async () => {
+      const document = await editorStore().loadDocument(seeded.stageId);
+      await editorStore().saveDocument({
+        ...document!,
+        scenes: document!.scenes.filter((scene) => scene.id !== 's4'),
+      });
+    };
+    const response = await post(seeded, body());
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'INSERTION_POSITION_CHANGED',
+    );
+    expect(mocks.prompts).toHaveLength(0);
+    expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+    expect((await events(seeded.versionId)).map((event) => event.event_type)).toEqual([
+      'scene_insertion_refused',
+    ]);
+  });
+
+  it('an unexpected generation error is SCENE_CONTENT_GENERATION_FAILED live AND on replay', async () => {
+    const seeded = await seed();
+    mocks.insert.mockImplementationOnce(async () => {
+      throw new Error('socket hang up');
+    });
+    const request = body({ idempotencyKey: 'key-unexpected-1' });
+    const live = await post(seeded, request);
+    expect(live.status).toBe(502);
+    expect(((await live.json()) as { error: { code: string } }).error.code).toBe(
+      'SCENE_CONTENT_GENERATION_FAILED',
+    );
+    const replay = await post(seeded, request);
+    expect(replay.status).toBe(502);
+    expect(((await replay.json()) as { error: { code: string } }).error.code).toBe(
+      'SCENE_CONTENT_GENERATION_FAILED',
+    );
+    expect(mocks.insert).toHaveBeenCalledOnce();
   });
 
   it('a neighbour deleted during the run → INSERTION_POSITION_CHANGED, nothing else changes', async () => {

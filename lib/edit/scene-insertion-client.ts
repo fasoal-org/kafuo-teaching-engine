@@ -171,25 +171,35 @@ export interface SceneInsertionRequest extends InsertionPosition {
 }
 
 /** Gateway answers that carry no server error code: the run may still be going. */
-const GATEWAY_STATUSES = new Set([408, 502, 503, 504]);
+const GATEWAY_STATUSES = new Set([408, 429, 502, 503, 504, 524]);
 
 /**
- * POST, retried with the SAME key only when the transport itself failed — or
- * when a gateway answered for the server (a proxy timeout, no error code): the
- * first POST waits for the whole run, so the server may still be generating,
- * and the same key replays it (`202` running, or the stored outcome). When
- * those retries run out the error is thrown as a transport failure, so the
- * caller reports `unknown` (keep the key), never a definite failure.
+ * An answer that does not say what happened to the insertion: a gateway or
+ * rate limiter answering for the TE (no error envelope), or the TE's own
+ * unmapped `INTERNAL_ERROR`. The same key replays the truth.
+ */
+function isAmbiguousAnswer(status: number, code: string): boolean {
+  return (code === 'HTTP_ERROR' && GATEWAY_STATUSES.has(status)) || code === 'INTERNAL_ERROR';
+}
+
+/**
+ * POST, retried with the SAME key when the transport itself failed or the
+ * answer is ambiguous (above): the first POST waits for the whole run, so a
+ * proxy may cut it while the server keeps generating, and the same key
+ * replays it (`202` running, or the stored outcome) — never a second run.
+ * When those retries run out the error is thrown as a transport failure, so
+ * the caller reports `unknown` (keep the key), never a definite failure.
  */
 export async function postSceneInsertion(
   stageId: string,
   body: SceneInsertionRequest,
-  options: { fetchImpl?: typeof fetch; transportRetries?: number } = {},
+  options: { fetchImpl?: typeof fetch; transportRetries?: number; retryDelayMs?: number } = {},
 ): Promise<{ status: 200 | 202; insertion: SceneInsertionStatus | { insertionId: string } }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const retries = options.transportRetries ?? 2;
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (attempt > 0) await delay((options.retryDelayMs ?? 1000) * attempt);
     let response: Response;
     try {
       response = await fetchImpl(`${stagePath(stageId)}/scene-insertions`, {
@@ -204,8 +214,8 @@ export async function postSceneInsertion(
     }
     if (!response.ok) {
       const error = await errorFrom(response);
-      if (GATEWAY_STATUSES.has(response.status) && error.code === 'HTTP_ERROR') {
-        lastError = new Error(`the gateway answered HTTP ${response.status}`);
+      if (isAmbiguousAnswer(response.status, error.code)) {
+        lastError = new Error(`the request ended without an outcome (HTTP ${response.status})`);
         continue;
       }
       throw error;
@@ -216,6 +226,9 @@ export async function postSceneInsertion(
   throw lastError instanceof Error ? lastError : new Error('the request could not be sent');
 }
 
+/** One status read; a stalled connection is cut so the poll loop keeps its bound. */
+const STATUS_READ_TIMEOUT_MS = 30_000;
+
 export async function fetchInsertionStatus(
   stageId: string,
   insertionId: string,
@@ -223,7 +236,13 @@ export async function fetchInsertionStatus(
 ): Promise<SceneInsertionStatus> {
   const response = await fetchImpl(
     `${stagePath(stageId)}/scene-insertions/${encodeURIComponent(insertionId)}`,
-    { credentials: 'same-origin', cache: 'no-store' },
+    {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? { signal: AbortSignal.timeout(STATUS_READ_TIMEOUT_MS) }
+        : {}),
+    },
   );
   if (!response.ok) throw await errorFrom(response);
   return (await response.json()) as SceneInsertionStatus;
@@ -332,7 +351,10 @@ export async function runSceneInsertion(
     let status: SceneInsertionStatus | null = null;
     let insertionId: string | null = null;
     try {
-      const posted = await postSceneInsertion(stageId, input.request, { fetchImpl });
+      const posted = await postSceneInsertion(stageId, input.request, {
+        fetchImpl,
+        ...(deps.pollIntervalMs !== undefined ? { retryDelayMs: deps.pollIntervalMs } : {}),
+      });
       insertionId = posted.insertion.insertionId;
       if (posted.status === 200) status = posted.insertion as SceneInsertionStatus;
     } catch (error) {
@@ -350,16 +372,19 @@ export async function runSceneInsertion(
     }
     // Poll until the row is terminal, still holding: a run the server may yet
     // commit must never release the hold early (the status read reclaims an
-    // expired lease, so a terminal answer always comes). Transport and
-    // gateway errors are retried; the budget outlasts the 900 s lease.
+    // expired lease, so a terminal answer always comes). Every error is
+    // transient except a definite "this tab may not see it" (404 / 403); the
+    // budget outlasts the lease.
     for (let poll = 0; status === null || status.status === 'running'; poll += 1) {
       if (poll >= (deps.maxPolls ?? DEFAULT_MAX_POLLS)) return { kind: 'unknown', insertionId };
       if (poll > 0) await delay(deps.pollIntervalMs ?? 2000);
       try {
         status = await fetchInsertionStatus(stageId, insertionId, fetchImpl);
       } catch (error) {
-        // A definite answer from the TE (e.g. INSERTION_NOT_FOUND) ends polling.
-        if (error instanceof SceneInsertionRequestError && error.code !== 'HTTP_ERROR') {
+        if (
+          error instanceof SceneInsertionRequestError &&
+          (error.status === 404 || error.status === 403)
+        ) {
           return { kind: 'unknown', insertionId };
         }
       }

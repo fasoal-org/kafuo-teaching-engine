@@ -395,20 +395,43 @@ describe('scene insertion client — result application (step 9)', () => {
     const { impl } = fetchRouter({ post: () => new Response('bad gateway', { status: 502 }) });
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
-      { fetchImpl: impl },
+      { fetchImpl: impl, pollIntervalMs: 1 },
     );
     expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
   });
 
-  it('a transient poll error keeps polling while holding', async () => {
+  it('an unmapped TE INTERNAL_ERROR on the POST is retried with the same key (the replay answers)', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    let posts = 0;
+    const { impl } = fetchRouter({
+      post: () => {
+        posts += 1;
+        return posts === 1
+          ? Response.json({ error: { code: 'INTERNAL_ERROR' } }, { status: 500 })
+          : Response.json({ insertion: running, replayed: true }, { status: 202 });
+      },
+    });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(posts).toBe(2);
+  });
+
+  it('transient poll errors (transport, gateway, coded 500) keep polling — and keep holding', async () => {
     const running = { ...succeeded, status: 'running' as const, revTransitions: null };
     let polls = 0;
+    const heldDuringPolls: boolean[] = [];
     const { impl } = fetchRouter({
       post: () => Response.json({ insertion: running, replayed: true }, { status: 202 }),
       status: () => {
         polls += 1;
+        heldDuringPolls.push(isStageWritesHeld(STAGE) && isStageEditingLocked(STAGE));
         if (polls === 1) throw new TypeError('network down');
         if (polls === 2) return new Response('gateway', { status: 504 });
+        if (polls === 3)
+          return Response.json({ error: { code: 'INTERNAL_ERROR' } }, { status: 500 });
         return Response.json(succeeded);
       },
     });
@@ -417,7 +440,22 @@ describe('scene insertion client — result application (step 9)', () => {
       { fetchImpl: impl, pollIntervalMs: 1 },
     );
     expect(outcome).toMatchObject({ kind: 'success' });
-    expect(polls).toBe(3);
+    expect(polls).toBe(4);
+    expect(heldDuringPolls).toEqual([true, true, true, true]);
+    expect(isStageWritesHeld(STAGE)).toBe(false);
+  });
+
+  it('a definite 404 on the status read ends polling as unknown', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: running, replayed: true }, { status: 202 }),
+      status: () => Response.json({ error: { code: 'INSERTION_NOT_FOUND' } }, { status: 404 }),
+    });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toEqual({ kind: 'unknown', insertionId: 'tpsi_1' });
   });
 });
 

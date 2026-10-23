@@ -69,12 +69,17 @@ import type { AppScene } from '@/lib/types/stage';
 const EDITABLE: readonly TeachingPackageStatus[] = ['draft', 'rejected'];
 
 export const DEFAULT_SCENE_INSERTION_LEASE_SECONDS = 900;
+/**
+ * The editor polls a run, holding its writes, for at most 20 minutes; a lease
+ * may not outlast that, or the hold could end while the server can commit.
+ */
+export const MAX_SCENE_INSERTION_LEASE_SECONDS = 1080;
 
-/** `SCENE_INSERTION_LEASE_SECONDS`, default 900 (15 min), clamped to ≥ 60. */
+/** `SCENE_INSERTION_LEASE_SECONDS`, default 900 (15 min), clamped to 60..1080. */
 export function sceneInsertionLeaseSeconds(): number {
   const raw = Number(process.env.SCENE_INSERTION_LEASE_SECONDS);
   return Number.isFinite(raw) && raw >= 60
-    ? Math.floor(raw)
+    ? Math.min(Math.floor(raw), MAX_SCENE_INSERTION_LEASE_SECONDS)
     : DEFAULT_SCENE_INSERTION_LEASE_SECONDS;
 }
 

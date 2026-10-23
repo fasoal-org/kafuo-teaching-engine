@@ -127,7 +127,15 @@ export function SlideNavRail() {
     position?: InsertionPosition;
   } | null>(null);
   const inserting = insertingState && insertingState.stageId === stageId ? insertingState : null;
-  const [insertionRunning, setInsertionRunning] = useState(false);
+  // A previous Stage's dialog is forgotten on a switch (its run, if any, keeps
+  // its own handle and settles on its own).
+  useEffect(() => {
+    setInserting((current) => (current && current.stageId !== stageId ? null : current));
+  }, [stageId]);
+  // The Stage whose insertion run is in flight here: only THAT Stage's rail
+  // refuses mutations (the lock itself is Stage-scoped too).
+  const [runningInsertionStageId, setRunningInsertionStageId] = useState<string | null>(null);
+  const insertionRunning = runningInsertionStageId !== null && runningInsertionStageId === stageId;
   // True while an insertion holds the Stage-wide editing lock (plan §5.1).
   const editingLocked = useStageEditingLocked(stageId);
   // Same-tab mutual exclusion (plan §11.7): an insertion never starts while a
@@ -756,7 +764,10 @@ export function SlideNavRail() {
           localGenerationRunning={localGenerationRunning}
           gateRunning={insertionGate?.running}
           onRunningChange={(running) => {
-            setInsertionRunning(running);
+            const runStageId = stageId;
+            setRunningInsertionStageId((current) =>
+              running ? runStageId : current === runStageId ? null : current,
+            );
             // Re-read after every settled run: a success or an "already
             // covered" refusal changes coverage, and a `busy` retry needs the
             // gate's current `running` (a frozen `unknown` retry resends its

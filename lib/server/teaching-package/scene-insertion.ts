@@ -639,12 +639,16 @@ export async function insertGeneratedSlide(
         'this idempotency key was already used for a different request',
       );
     }
-    if (prior.status !== 'running' || prior.leaseExpiresAt > clock()) {
-      return replayResponse(prior, clock());
+    const now = clock();
+    if (prior.status !== 'running' || prior.leaseExpiresAt > now) {
+      return replayResponse(prior, now);
     }
-    // An expired running row is a lost lease (a later T1 or status read
-    // records it): answer it as its replay would, before any new-run check.
-    throw storedInsertionFailureError({ ...prior, status: 'failed', errorCode: 'LEASE_EXPIRED' });
+    // An expired running row, before any new-run check: the scoped reclaim
+    // takes the row lock, so a commit whose fence passed just before the
+    // expiry finishes first and is replayed as its success; otherwise the row
+    // is recorded LEASE_EXPIRED and replayed as the lost lease.
+    const settled = await readSceneInsertionStatus(pool, prior.id, now);
+    return replayResponse(settled ?? prior, now);
   }
 
   // New-run checks — no writes; a refusal here is audited (version resolved).

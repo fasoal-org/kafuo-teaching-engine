@@ -151,13 +151,17 @@ function systemPrompt(): string {
 
 /**
  * The reviewer's instruction, unable to close (or reopen) its own wrapper:
- * the delimiter markers are removed, so the text cannot pose as prompt.
+ * runs of three or more angle brackets are removed until none is left (a
+ * removal can join neighbours into a new run, e.g. `<<` `>>>` `<`; every pass
+ * shortens the text, so this ends), so no nesting can rebuild a delimiter.
  */
 export function untrustedText(value: string): string {
-  return value
-    .replace(/<<<\s*INSTRUCTION/gi, '')
-    .replace(/INSTRUCTION\s*>>>/gi, '')
-    .trim();
+  let text = value;
+  for (let previous = ''; text !== previous; ) {
+    previous = text;
+    text = text.replace(/<{3,}|>{3,}/g, '');
+  }
+  return text.trim();
 }
 
 function userPrompt(input: PlanInsertedSlideInput): string {
