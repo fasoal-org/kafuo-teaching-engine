@@ -147,7 +147,7 @@ Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key
 | Attribute | Value |
 |---|---|
 | Branch | `codex/fix-scene-insertion-network-hold`, from the implementation HEAD `7a392eae`; `origin/staging` was `eae05f4c` (the implementation's base), so nothing had to be incorporated |
-| Code commits | `fc4973fa` (the fix), `8ea82415` (hardening after the independent review, §9.4) |
+| Code commits | `fc4973fa` (the fix), `8ea82415` (hardening after the independent review), `e3d5c095` (re-review follow-ups) — §9.4 |
 | Superseded here | §7 review-4 rows on the run deadline and `leaseRemainingMs`; §7 "Known tradeoff"; §8 "the edge where the client's deadline and the server's lease end…" |
 
 ### 9.1 The two findings
@@ -221,14 +221,14 @@ Preserved:
 
 - Mapped statically first: `scene-insertion-client.ts` (callers: the dialog, the rail's gate read), `scene-insertion-store.ts`, `scene-insertion.ts`, `errors.ts`, the four routes, the dialog's `KNOWN_ERROR_CODES`, and the 12 locales.
 - Sized the impacted tests with `pnpm exec vitest list` (131 tests in 8 files at `fc4973fa`), then ran them at most three files per command. No full suite was run.
-- After the hardening (`8ea82415`), the same 8 files were rerun.
+- After the hardening (`8ea82415`), the same 8 files were rerun. After the re-review fixes, the first row was rerun (the other files are unaffected: only the client comment, one unreachable line and a store test changed).
 
-| `pnpm exec vitest run …` (on `8ea82415`) | Result |
+| `pnpm exec vitest run …` | Result |
 |---|---|
-| `tests/edit/scene-insertion-client.test.ts tests/teaching-package/scene-insertion-route.test.ts tests/teaching-package/scene-insertion-store.test.ts` | 89 passed (client 49) |
-| `tests/teaching-package/scene-insertion-store.pg.test.ts tests/components/edit/generate-slide-for-part-dialog.test.ts tests/components/edit/lesson-parts-panel.test.ts` | 33 passed, 6 skipped (pg, no `PG_CONTRACT_URL`) |
-| `tests/i18n/edit-chrome-keys.test.ts tests/document-store/slide-nav-rail-teaching-stage.test.ts` | 18 passed |
-| **Total** | **140 passed, 6 skipped, 0 failed** |
+| `tests/edit/scene-insertion-client.test.ts tests/teaching-package/scene-insertion-route.test.ts tests/teaching-package/scene-insertion-store.test.ts` | 90 passed (client 49, store 13, route 28) — after the re-review fixes |
+| `tests/teaching-package/scene-insertion-store.pg.test.ts tests/components/edit/generate-slide-for-part-dialog.test.ts tests/components/edit/lesson-parts-panel.test.ts` | 33 passed, 6 skipped (pg, no `PG_CONTRACT_URL`) — on `8ea82415` |
+| `tests/i18n/edit-chrome-keys.test.ts tests/document-store/slide-nav-rail-teaching-stage.test.ts` | 18 passed — on `8ea82415` |
+| **Total** | **141 passed, 6 skipped, 0 failed** |
 
 Regression coverage added:
 - **Client** (fake clock and fake pause; every pause records whether the Stage is still held):
@@ -289,7 +289,16 @@ A read-only reviewer sub-agent that did not write the code reviewed `fc4973fa`. 
 | L5 — a first-attempt refusal assumes nothing below `fetch` duplicated the POST | LOW | Accepted and documented (browsers do not silently resend a POST that got an answer) |
 | L6 — test gaps | LOW | Partly closed (§9.3 list). Still open: the PG suite is unexecuted; the fake clock does not advance during a fetch; no clock-skew test |
 
-The hardening commit `8ea82415` rewrote the 8b/8c loops (margin, last read, later-attempt `ADMISSION_CLOSED`). It has a separate narrow re-review: _result recorded below when it returns_. It stays in the Codex re-review gate either way.
+The hardening commit `8ea82415` rewrote the 8b/8c loops (margin, last read, later-attempt `ADMISSION_CLOSED`). A second read-only reviewer reviewed only that commit and ran the three main files (89/89). It found **no BLOCKER, MAJOR or MEDIUM**: the hold is only made more conservative, the loops terminate, no last-read answer is discarded, and both final-read tests fail against the parent commit. Verdict: safe. It stays in the Codex re-review gate.
+
+| Finding (re-review of `8ea82415`) | Severity | Disposition |
+|---|---|---|
+| The 30 s margin is a heuristic for one TE clock, not a proof under several skewed instances | LOW | Accepted; documented in §9.5. A database clock is the robust option |
+| A code-less non-JSON 4xx now refuses; a browser resend below `fetch` combined with an evicted grant could hide a started first transmission | LOW | Accepted (very unlikely; coded refusals have the same exposure); §9.5 |
+| The READ COMMITTED pin had no test | LOW | **Fixed** (`e3d5c095`): a PGlite test sets the session default to REPEATABLE READ and asserts the pin is the first statement and in force at the lock. Removing the pin fails the test (checked) |
+| An unreachable `status === null` guard after the 8b loop | LOW | **Removed** |
+| The `unknown` comment did not name the "TE refused the status read" exception | note | **Fixed** (comment) |
+| The insertion routes are missing from `EDITOR_GRANT_EXEMPT_ROUTES` (`lib/config/access-code-allowlist.ts`): with `ACCESS_CODE` on and no access cookie, grant-only editors get a 401 on the gate, so nothing is sent | note (implementation, not this fix) | **Not changed here** (outside this task): fails safe, but blocks the feature for grant-only editors on staging. Follow-up; §9.5 |
 
 ### 9.5 Remaining limitations and UNVERIFIED
 
@@ -301,7 +310,8 @@ The hardening commit `8ea82415` rewrote the 8b/8c loops (margin, last read, late
 - **Late-attempt refusal delay.** A refusal of a later attempt is reported only after the key settles. This can wait until the admission window plus the 30 s margin passes, at most about 2.5 min.
 - **A lost commit acknowledgement** still answers `INSERTION_PERSISTENCE_FAILED` as a definite failure (review M3; pre-existing). The handler finished and its run cannot commit later, so the release itself is safe. The slide may in fact have landed; the next load shows it, and revision preconditions protect the next save.
 - **By-id read refused by the TE.** The TE's own `404 INSERTION_NOT_FOUND`, or a `403` with a TE envelope, on a known id ends the hold as `unknown` (review L2; pre-existing). T2 does not check the grant, so the run may still commit. This tab's writes are refused once its grant is read-only, and the revision preconditions guard what lands later.
-- **A duplicated POST below `fetch`** (review L5): a first-attempt refusal is trusted as the only request. Browsers do not silently resend a POST that received an answer.
+- **A duplicated POST below `fetch`** (review L5, re-review L-2): a first-attempt refusal is trusted as the only request. `sent` counts `fetch` calls, not transmissions. A silent browser resend on a reset reused connection, together with a grant that expired in between (the plain 404), could hide a first transmission that started a run. Very unlikely; accepted.
+- **Access-code exemption (found by the re-review; implementation gap, not this fix).** `scene-insertion`, `scene-insertions` and `content-units` are not in `EDITOR_GRANT_EXEMPT_ROUTES`. With `ACCESS_CODE` on (as on staging) and no access cookie, a grant-only editor's gate read gets a 401, so nothing is ever sent. This fails safe, but it blocks the feature for those editors. Follow-up before staging acceptance.
 - **A silently hanging first POST.** One POST attempt may take 5 min, because it waits for the whole generation, and the admission window is 2 min. A first POST that hangs without ever reaching the TE is not retried inside the window. After its timeout, the key settles as `failed INSERTION_ADMISSION_CLOSED` (nothing started; try again) instead of recovering. This is safe and inherent to the window. Under the old 20 min budget the same case could recover.
 - **Merge target.** `codex/fix-scene-insertion-network-hold` contains every implementation commit. Merge **this** branch, never `codex/reviewer-generated-slide-for-lesson-part` alone, which still has both findings. This fix adds **no schema change**: E-1..E-3 are as before, and a merge to `staging` still deploys the TE and runs them at boot, so it needs the owner's yes.
 - **Pending gates:** CI on the branch, staging acceptance A-1..A-28, the PG contract suite, and a Codex re-review. Nothing was deployed, no TE was restarted, no live database was queried and no provider was called.
