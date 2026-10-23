@@ -821,6 +821,7 @@
         "INSERTION_STAGE_BUSY": "The lesson kept changing while the slide was being added. Nothing was added; try again.",
         "INSERTION_PERSISTENCE_FAILED": "The slide was generated but could not be saved. Nothing was added; try again.",
         "INSERTION_LEASE_LOST": "The run stopped before it finished. Nothing was added; try again.",
+        "INSERTION_ADMISSION_CLOSED": "The request could not reach the server in time, so it did not start. Nothing was added; try again.",
         "INSERTION_NOT_FOUND": "The earlier request could not be found. Try again.",
         "SCENE_INSERTION_IN_PROGRESS": "An AI slide is already being added to this lesson.",
         "STAGE_GENERATION_IN_PROGRESS": "Another AI generation is running on this lesson. Try again when it finishes.",

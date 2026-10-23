@@ -7,9 +7,10 @@
  * - **T1 `startSceneInsertion`** — under `stage_meta FOR UPDATE` (the
  *   Stage-wide paid-generation mutex the regeneration T1 takes too, R2) and
  *   the version `FOR SHARE`: reclaim the Stage's expired insertion AND
- *   regeneration leases, answer an idempotent replay, re-check the request on
- *   the live data, refuse while an insertion or a regeneration runs, insert
- *   the `running` row and the `started` event.
+ *   regeneration leases, answer an idempotent replay, refuse a request past
+ *   its admission deadline, re-check the request on the live data, refuse
+ *   while an insertion or a regeneration runs, insert the `running` row and
+ *   the `started` event.
  * - **T2 `commitSceneInsertion`** — a revision → document → revision
  *   sandwich builds the whole document (R1), then ONE owner-bound
  *   `saveDocument` with {@link insertionCommitFence} composed ahead of the
@@ -70,8 +71,11 @@ const EDITABLE: readonly TeachingPackageStatus[] = ['draft', 'rejected'];
 
 export const DEFAULT_SCENE_INSERTION_LEASE_SECONDS = 900;
 /**
- * The editor polls a run, holding its writes, for at most 20 minutes; a lease
- * may not outlast that, or the hold could end while the server can commit.
+ * The editor holds its writes until its admission window plus this lease
+ * (plus a grace) has passed, counted from its read of the server clock: a run
+ * starts only before its admission deadline (T1) and commits only inside its
+ * lease (T2), so no lease may be longer, or the hold could end while the
+ * server can commit.
  */
 export const MAX_SCENE_INSERTION_LEASE_SECONDS = 1080;
 
@@ -344,7 +348,17 @@ export interface StartSceneInsertionInput {
    * the live data, run under T1's locks (§11.3 step 5). `null` = pass.
    */
   recheck: (live: LiveStageData) => SceneInsertionRefusal | null;
+  /**
+   * Server time after which this request may not start a run (§5.1 step 8).
+   * Checked under the Stage lock, after the replay lookup, against the clock
+   * read AFTER the lock was granted — so a request that waited for the lock
+   * past it is refused, and the lease of any run it starts ends by
+   * `admitBy + lease`. Unset = no deadline (direct store callers only).
+   */
+  admitBy?: number;
+  /** A fixed time (tests); otherwise `clock`, read after the Stage lock. */
   now?: number;
+  clock?: () => number;
   leaseSeconds?: number;
 }
 
@@ -390,12 +404,14 @@ async function startOnce(
 ): Promise<StartSceneInsertionOutcome> {
   const withTransaction = nodePostgresTransaction(pool);
   return withTransaction(async (tx) => {
-    const now = input.now ?? Date.now();
     // 1. The Stage mutex: service-owned, live.
     const meta = await tx.query<{ owner_id: string; deleted_at: unknown }>(
       'SELECT owner_id, deleted_at FROM stage_meta WHERE stage_id = $1 FOR UPDATE',
       [input.stageId],
     );
+    // The clock is read only once the lock is held: the admission check and
+    // the lease start both see the time this T1 actually runs.
+    const now = input.now ?? (input.clock ?? Date.now)();
     const stageRow = meta.rows[0];
     if (
       !stageRow ||
@@ -449,6 +465,16 @@ async function startOnce(
         );
       }
       return { kind: 'replay', insertion: prior };
+    }
+    // 4b. Admission (after the replay: a late retry of an admitted key still
+    //     replays). Under the lock, so no T1 can start after this refusal or
+    //     after a by-key read that saw the deadline passed.
+    if (input.admitBy !== undefined && now > input.admitBy) {
+      return refused(
+        'INSERTION_ADMISSION_CLOSED',
+        'this request reached the server too late to start; nothing was changed — try again',
+        true,
+      );
     }
     // 5. Re-check on the live data (cheap reads, authoritative).
     const recheck = input.recheck(await readLiveStageData(tx, input.stageId));
@@ -722,11 +748,14 @@ export function insertionCommitFence(
       if (before !== undefined) transitions[scene.id] = { before, after: scene.rev };
     }
     const completedAt = clock();
+    // The lease again, right before COMMIT: only the COMMIT itself can land
+    // after the lease, which the editor's release grace covers.
     const updated = await queryable.query<{ id: string }>(
       `UPDATE teaching_package_scene_insertions
           SET status = 'succeeded', result_scene = $3::jsonb, result_scene_rev = $4,
               scene_rev_transitions = $5::jsonb, completed_at = $6
         WHERE id = $1 AND status = 'running' AND attempt_token = $2
+          AND lease_expires_at > $6
         RETURNING id`,
       [
         context.insertionId,
@@ -947,5 +976,30 @@ export async function readSceneInsertionStatus(
   return withTransaction(async (tx) => {
     await reclaimExpiredSceneInsertions(tx, { id }, now);
     return readSceneInsertion(tx, id);
+  });
+}
+
+/**
+ * The by-key read an editor resolves an ambiguous POST with (§5.1 step 8).
+ * Under `stage_meta FOR SHARE`: a T1 holds the lock FOR UPDATE from its
+ * admission check to its COMMIT, so this read waits for it and sees its row.
+ * The clock is read after the lock, so `row === null` with
+ * `serverNow > admitBy` proves that no run under this key exists and none can
+ * start (every later T1 reads a later clock). Lock order stage_meta →
+ * insertion row, as in T1 and T2.
+ */
+export async function readSceneInsertionByKeyUnderStageLock(
+  pool: ConnectableQueryable,
+  input: { stageId: string; versionId: string; idempotencyKey: string },
+  clock: () => number = Date.now,
+): Promise<{ row: SceneInsertion | null; serverNow: number }> {
+  const withTransaction = nodePostgresTransaction(pool);
+  return withTransaction(async (tx) => {
+    await tx.query('SELECT 1 FROM stage_meta WHERE stage_id = $1 FOR SHARE', [input.stageId]);
+    const serverNow = clock();
+    const found = await readSceneInsertionByKey(tx, input.versionId, input.idempotencyKey);
+    if (!found) return { row: null, serverNow };
+    await reclaimExpiredSceneInsertions(tx, { id: found.id }, serverNow);
+    return { row: await readSceneInsertion(tx, found.id), serverNow };
   });
 }

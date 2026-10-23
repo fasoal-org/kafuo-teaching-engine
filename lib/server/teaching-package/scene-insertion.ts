@@ -102,6 +102,7 @@ import {
   listRunningSceneInsertions,
   newSceneInsertionId,
   readSceneInsertionByKey,
+  readSceneInsertionByKeyUnderStageLock,
   readSceneInsertionStatus,
   recordSceneInsertionProgress,
   recordSceneInsertionRefusal,
@@ -149,7 +150,20 @@ export interface SceneInsertionRequest extends InsertionAnchors {
   instruction: string;
   reason: string;
   idempotencyKey: string;
+  /**
+   * The editor's admission deadline, in server time (its read of the gate's
+   * `serverNow` plus its window). Transport only: not part of the digest, so
+   * a later run of the same request (same key, new deadline) still replays.
+   */
+  admitBy?: number;
 }
+
+/**
+ * The longest a request may wait between reaching the service and starting
+ * its run in T1, whatever `admitBy` it carries: every request has a
+ * server-enforced admission deadline.
+ */
+export const SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS = 5 * 60 * 1000;
 
 function invalid(field: string, rule: string, limit?: number): TeachingPackageError {
   return new TeachingPackageError(
@@ -231,6 +245,14 @@ export function parseSceneInsertionRequest(
   if (afterSceneId !== null && afterSceneId === beforeSceneId) {
     throw invalid('beforeSceneId', 'format');
   }
+  const admitBy = body.admitBy;
+  if (
+    admitBy !== undefined &&
+    admitBy !== null &&
+    (typeof admitBy !== 'number' || !Number.isSafeInteger(admitBy) || admitBy <= 0)
+  ) {
+    throw invalid('admitBy', 'format');
+  }
   return {
     unitIds,
     afterSceneId,
@@ -239,10 +261,14 @@ export function parseSceneInsertionRequest(
     instruction,
     reason,
     idempotencyKey: key,
+    ...(typeof admitBy === 'number' ? { admitBy } : {}),
   };
 }
 
-/** The digest an idempotency key is bound to: same key + different body → 409. */
+/**
+ * The digest an idempotency key is bound to: same key + different body → 409.
+ * `admitBy` is deliberately left out (transport, not the operation).
+ */
 export function sceneInsertionRequestDigest(
   request: Omit<SceneInsertionRequest, 'idempotencyKey'>,
 ): string {
@@ -633,6 +659,12 @@ export async function insertGeneratedSlide(
 ): Promise<SceneInsertionResponse> {
   const { pool } = deps;
   const clock = deps.now ?? Date.now;
+  // The admission deadline T1 enforces: the editor's own (server time), never
+  // later than the service's maximum after this request reached it.
+  const admitBy = Math.min(
+    request.admitBy ?? Number.POSITIVE_INFINITY,
+    clock() + SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS,
+  );
   const actorRef = sceneInsertionActorRef(grant.stageId);
   const requestDigest = sceneInsertionRequestDigest(request);
 
@@ -796,7 +828,9 @@ export async function insertGeneratedSlide(
       recorded: snapshot?.speechRegister ?? stage.speechRegister ?? null,
     },
     recheck,
-    now: clock(),
+    admitBy,
+    // Read under the Stage lock (admission check and lease start).
+    clock,
     ...(deps.leaseSeconds !== undefined ? { leaseSeconds: deps.leaseSeconds } : {}),
   });
   if (started.kind === 'refused') {
@@ -1234,27 +1268,45 @@ function buildFinalDocument(
 // Reads
 // ---------------------------------------------------------------------------
 
-/** The status read for a write grant; another Stage's or version's id is a 404. */
+/**
+ * The status read for a write grant; another Stage's or version's id is a 404.
+ * By key it runs under the Stage lock, and its 404 carries `serverNow` (read
+ * after the lock): with `serverNow > admitBy` the editor knows no run under
+ * that key exists or can start (§5.1 step 8).
+ */
 export async function readSceneInsertionForGrant(
   pool: ConnectableQueryable,
   grant: Pick<InsertionGrant, 'tenantId' | 'versionId' | 'stageId'>,
   locate: { id: string } | { idempotencyKey: string },
-  now = Date.now(),
+  now?: number,
 ): Promise<SceneInsertionStatusBody> {
-  const id =
-    'id' in locate
-      ? locate.id
-      : (await readSceneInsertionByKey(pool, grant.versionId, locate.idempotencyKey))?.id;
-  const found = id ? await readSceneInsertionStatus(pool, id, now) : null;
+  let found: SceneInsertion | null;
+  let serverNow: number;
+  if ('id' in locate) {
+    serverNow = now ?? Date.now();
+    found = await readSceneInsertionStatus(pool, locate.id, serverNow);
+  } else {
+    const read = await readSceneInsertionByKeyUnderStageLock(
+      pool,
+      { stageId: grant.stageId, versionId: grant.versionId, idempotencyKey: locate.idempotencyKey },
+      now === undefined ? Date.now : () => now,
+    );
+    found = read.row;
+    serverNow = read.serverNow;
+  }
   if (
     !found ||
     found.versionId !== grant.versionId ||
     found.stageId !== grant.stageId ||
     found.tenantId !== grant.tenantId
   ) {
-    throw new TeachingPackageError('INSERTION_NOT_FOUND', 'slide insertion not found');
+    throw new TeachingPackageError(
+      'INSERTION_NOT_FOUND',
+      'slide insertion not found',
+      'id' in locate ? undefined : { serverNow },
+    );
   }
-  return insertionStatusBody(found, now);
+  return insertionStatusBody(found, serverNow);
 }
 
 /** The UI gate (§15). Never writes; expired rows are reported as not running. */
@@ -1288,6 +1340,8 @@ export async function readSceneInsertionGate(
     supported: context.unsupportedReason === null,
     unsupportedReason: context.unsupportedReason,
     running,
+    /** The server clock: the editor's admission deadline is counted from it. */
+    serverNow: now,
   };
 }
 

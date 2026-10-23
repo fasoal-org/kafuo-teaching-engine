@@ -14,6 +14,7 @@ import { ensureTeachingPackageSchema, insertVersion } from '@/lib/persistence/te
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
   commitSceneInsertion,
+  readSceneInsertionByKeyUnderStageLock,
   startSceneInsertion,
 } from '@/lib/server/teaching-package/scene-insertion-store';
 import { startSceneRegeneration } from '@/lib/server/teaching-package/scene-regeneration-store';
@@ -81,7 +82,11 @@ describe.skipIf(!contractUrl)('slide insertion on PostgreSQL', () => {
     return { stageId, versionId };
   }
 
-  const insertionStart = (stageId: string, versionId: string) =>
+  const insertionStart = (
+    stageId: string,
+    versionId: string,
+    overrides: Partial<Parameters<typeof startSceneInsertion>[1]> = {},
+  ) =>
     startSceneInsertion(queryable(), {
       tenantId: 'tenant-pg',
       versionId,
@@ -99,6 +104,7 @@ describe.skipIf(!contractUrl)('slide insertion on PostgreSQL', () => {
       actorRef: 'actor',
       sessionRef: null,
       recheck: () => null,
+      ...overrides,
     });
 
   const regenerationStart = (stageId: string, versionId: string) =>
@@ -200,6 +206,53 @@ describe.skipIf(!contractUrl)('slide insertion on PostgreSQL', () => {
       });
     const [a, b] = await Promise.all([start(), start()]);
     expect([a.kind, b.kind].sort()).toEqual(['replay', 'started']);
+  });
+
+  it('a T1 that waits for the Stage lock past its admission deadline is refused (a real lock wait)', async () => {
+    const { stageId, versionId } = await seed();
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT 1 FROM stage_meta WHERE stage_id = $1 FOR UPDATE', [stageId]);
+    const late = insertionStart(stageId, versionId, { admitBy: Date.now() + 200 });
+    await pause(600);
+    await holder.query('COMMIT');
+    holder.release();
+    expect(await late).toMatchObject({
+      kind: 'refused',
+      refusal: { code: 'INSERTION_ADMISSION_CLOSED' },
+    });
+  });
+
+  it('the by-key read queued behind a T1 sees its row; once past the deadline, no T1 can start', async () => {
+    const { stageId, versionId } = await seed();
+    const key = `k-${randomUUID()}`;
+    const [started, read] = await inOrder(
+      stageId,
+      () =>
+        insertionStart(stageId, versionId, { idempotencyKey: key, admitBy: Date.now() + 60_000 }),
+      () =>
+        readSceneInsertionByKeyUnderStageLock(queryable(), {
+          stageId,
+          versionId,
+          idempotencyKey: key,
+        }),
+    );
+    expect(started.kind).toBe('started');
+    expect(read.row?.idempotencyKey).toBe(key);
+
+    const other = `k-${randomUUID()}`;
+    const admitBy = Date.now() + 100;
+    await pause(300);
+    const absent = await readSceneInsertionByKeyUnderStageLock(queryable(), {
+      stageId,
+      versionId,
+      idempotencyKey: other,
+    });
+    expect(absent.row).toBeNull();
+    expect(absent.serverNow).toBeGreaterThan(admitBy);
+    expect(
+      await insertionStart(stageId, versionId, { idempotencyKey: other, admitBy }),
+    ).toMatchObject({ kind: 'refused', refusal: { code: 'INSERTION_ADMISSION_CLOSED' } });
   });
 
   it('a commit racing the T2 write: the fence sees the moved revision and the rebuild keeps it', async () => {

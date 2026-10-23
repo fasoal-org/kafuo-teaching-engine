@@ -10,6 +10,7 @@ import { ensureTeachingPackageSchema, insertVersion } from '@/lib/persistence/te
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
   commitSceneInsertion,
+  readSceneInsertionByKeyUnderStageLock,
   readSceneInsertionStatus,
   startSceneInsertion,
   type StartSceneInsertionInput,
@@ -222,6 +223,108 @@ describe('scene insertion store', () => {
     if (started.kind !== 'started') throw new Error('not started');
     const row = await readSceneInsertionStatus(tx(), started.insertion.id, 1_000 + 61_000);
     expect(row).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED' });
+  });
+
+  /** Run `onLock` when a transaction issues a statement matching `pattern` (a simulated lock wait). */
+  function onStatement(pattern: RegExp, onLock: () => void): () => void {
+    const original = pool.connect.bind(pool);
+    pool.connect = async () => {
+      const client = await original();
+      return {
+        ...client,
+        query: (text: string, params?: unknown[]) => {
+          if (pattern.test(text)) onLock();
+          return client.query(text, params);
+        },
+      };
+    };
+    return () => {
+      pool.connect = original;
+    };
+  }
+
+  it('T1 reads its clock after the Stage lock: a lock granted past `admitBy` refuses, and the lease starts then', async () => {
+    let now = 10_000;
+    const restore = onStatement(/FROM stage_meta WHERE stage_id = \$1 FOR UPDATE/, () => {
+      now += 5 * 60_000;
+    });
+    try {
+      const late = await start({ clock: () => now, admitBy: 10_000 + 60_000 });
+      expect(late).toMatchObject({
+        kind: 'refused',
+        refusal: { code: 'INSERTION_ADMISSION_CLOSED', audited: true },
+      });
+      const inTime = await start({
+        clock: () => now,
+        admitBy: now + 6 * 60_000,
+        idempotencyKey: 'key-isx-2',
+        leaseSeconds: 60,
+      });
+      if (inTime.kind !== 'started') throw new Error('not started');
+      // The lease is counted from the time the lock was granted.
+      expect(inTime.insertion.requestedAt).toBe(now);
+      expect(inTime.insertion.leaseExpiresAt).toBe(now + 60_000);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a replay answers before the admission check (an admitted key replays after its deadline)', async () => {
+    const first = await start({ now: 1_000, admitBy: 2_000 });
+    if (first.kind !== 'started') throw new Error('not started');
+    const late = await start({ now: 50_000, admitBy: 2_000 });
+    expect(late).toMatchObject({ kind: 'replay', insertion: { id: first.insertion.id } });
+  });
+
+  it('T2 re-checks the lease right before COMMIT: a lease that ends between the phases writes nothing', async () => {
+    const started = await start({ now: 1_000, leaseSeconds: 60 });
+    if (started.kind !== 'started') throw new Error('not started');
+    // 'before' (lease check) inside the lease, 'after' (completion) past it.
+    const times = [1_000 + 59_000, 1_000 + 61_000];
+    await expect(
+      commitSceneInsertion(
+        tx(),
+        {
+          insertionId: started.insertion.id,
+          attemptToken: started.insertion.attemptToken,
+          tenantId: TENANT,
+          versionId: 'tpv-isx',
+          stageId: STAGE,
+          newSceneId: 'scene-new',
+          actorRef: 'actor',
+          reason: 'a reason',
+          now: () => times.shift() ?? 1_000 + 61_000,
+        },
+        insertAfterS1,
+      ),
+    ).rejects.toMatchObject({ code: 'INSERTION_LEASE_LOST' });
+    const document = await store().loadDocument(STAGE);
+    expect(document!.scenes.map((scene) => scene.id)).toEqual(['s1', 's2']);
+  });
+
+  it('the by-key read takes the Stage lock first, then the clock; it reclaims an expired row', async () => {
+    let now = 20_000;
+    const restore = onStatement(/FROM stage_meta WHERE stage_id = \$1 FOR SHARE/, () => {
+      now += 3 * 60_000;
+    });
+    try {
+      const missing = await readSceneInsertionByKeyUnderStageLock(
+        tx(),
+        { stageId: STAGE, versionId: 'tpv-isx', idempotencyKey: 'never-sent' },
+        () => now,
+      );
+      expect(missing).toEqual({ row: null, serverNow: 20_000 + 3 * 60_000 });
+    } finally {
+      restore();
+    }
+    const started = await start({ now: 1_000, leaseSeconds: 60 });
+    if (started.kind !== 'started') throw new Error('not started');
+    const expired = await readSceneInsertionByKeyUnderStageLock(
+      tx(),
+      { stageId: STAGE, versionId: 'tpv-isx', idempotencyKey: 'key-isx-1' },
+      () => 1_000 + 61_000,
+    );
+    expect(expired.row).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED' });
   });
 
   it('E-1/E-2 widen an OLD schema in place, and a re-boot is a no-op', async () => {

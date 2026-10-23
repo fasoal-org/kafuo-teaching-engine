@@ -16,6 +16,9 @@ vi.mock('@/lib/utils/stage-storage', () => ({
 }));
 
 import {
+  INSERTION_ADMISSION_WINDOW_MS,
+  INSERTION_MAX_LEASE_MS,
+  INSERTION_RELEASE_GRACE_MS,
   runSceneInsertion,
   type SceneInsertionRequest,
   type SceneInsertionStatus,
@@ -107,7 +110,17 @@ function deferred<T>() {
 
 type Route = (init?: RequestInit) => Response | Promise<Response>;
 
-function fetchRouter(routes: { post?: Route; status?: Route }) {
+/** The server clock the stubs report (server time, ms). */
+const SERVER_NOW = 5_000_000;
+
+/** The TE's own by-key 404: no row, `serverNow` read under the Stage lock. */
+const absentByKey = (serverNow: number) =>
+  Response.json(
+    { error: { code: 'INSERTION_NOT_FOUND', message: 'not found', details: { serverNow } } },
+    { status: 404 },
+  );
+
+function fetchRouter(routes: { post?: Route; status?: Route; key?: Route; gate?: Route }) {
   const calls: Array<{ url: string; method: string }> = [];
   const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -116,13 +129,59 @@ function fetchRouter(routes: { post?: Route; status?: Route }) {
     if (method === 'POST' && url.endsWith('/scene-insertions')) {
       return (routes.post ?? (() => Response.json({ insertion: succeeded })))(init);
     }
+    if (url.includes('/scene-insertions?key=')) {
+      // Default: no row yet, admission still open.
+      return (routes.key ?? (() => absentByKey(SERVER_NOW)))(init);
+    }
     if (url.includes('/scene-insertions/')) {
       return (routes.status ?? (() => Response.json(succeeded)))(init);
+    }
+    if (url.endsWith('/scene-insertion')) {
+      return (
+        routes.gate ??
+        (() =>
+          Response.json({
+            capability: 'write',
+            editable: true,
+            versionStatus: 'draft',
+            supported: true,
+            unsupportedReason: null,
+            running: [],
+            serverNow: SERVER_NOW,
+          }))
+      )(init);
     }
     return new Response('not found', { status: 404 });
   });
   return { impl: impl as unknown as typeof fetch, calls };
 }
+
+/**
+ * A fake monotonic clock and pause: no real lease is waited through. Every
+ * pause records whether the Stage was still held at that moment.
+ */
+function fakeTime() {
+  let now = 0;
+  const heldAtPause: boolean[] = [];
+  return {
+    clock: () => now,
+    sleep: async (ms: number) => {
+      heldAtPause.push(isStageWritesHeld(STAGE));
+      now += ms;
+    },
+    advance: (ms: number) => {
+      now += ms;
+    },
+    now: () => now,
+    /** Server time moves with the fake clock (same rate). */
+    serverNow: () => SERVER_NOW + now,
+    heldAtPause,
+  };
+}
+
+const runningStatus = { ...succeeded, status: 'running' as const, revTransitions: null };
+const parsedBody = (init?: RequestInit) =>
+  JSON.parse(String(init?.body)) as Record<string, unknown>;
 
 const posts = (calls: Array<{ method: string }>) => calls.filter((call) => call.method === 'POST');
 
@@ -307,17 +366,24 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(JSON.stringify(useStageStore.getState().scenes)).toBe(before);
   });
 
-  it('polling gives up → unknown, no fetch; the key is kept by the caller', async () => {
-    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+  it('a row that never settles holds until it can no longer commit, then unknown — never earlier', async () => {
+    const time = fakeTime();
     const { impl } = fetchRouter({
-      post: () => Response.json({ insertion: running }, { status: 202 }),
-      status: () => Response.json(running),
+      post: () => Response.json({ insertion: runningStatus }, { status: 202 }),
+      status: () => Response.json(runningStatus),
     });
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
-      { fetchImpl: impl, maxPolls: 2, pollIntervalMs: 1 },
+      { fetchImpl: impl, clock: time.clock, sleep: time.sleep },
     );
     expect(outcome).toEqual({ kind: 'unknown', insertionId: 'tpsi_1' });
+    // Released only past window + longest lease + grace, held at every pause.
+    expect(time.now()).toBeGreaterThanOrEqual(
+      INSERTION_ADMISSION_WINDOW_MS + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS,
+    );
+    expect(time.heldAtPause.length).toBeGreaterThan(0);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+    expect(isStageWritesHeld(STAGE)).toBe(false);
     expect(loadStageData).not.toHaveBeenCalled();
   });
 
@@ -391,13 +457,22 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(posts).toBe(1);
   });
 
-  it('ambiguous POST answers until the run deadline → unknown (keep the key), never failed', async () => {
-    const { impl } = fetchRouter({ post: () => new Response('bad gateway', { status: 502 }) });
+  it('gateway answers until the window closes: failed only once the server attests no run can start', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({
+      post: () => new Response('bad gateway', { status: 502 }),
+      key: () => absentByKey(time.serverNow()),
+    });
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
-      { fetchImpl: impl, pollIntervalMs: 1, budgetMs: 30 },
+      { fetchImpl: impl, clock: time.clock, sleep: time.sleep },
     );
-    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'INSERTION_ADMISSION_CLOSED' });
+    // Retries stopped at the window; the release waited for the server's word.
+    expect(time.now()).toBeGreaterThan(INSERTION_ADMISSION_WINDOW_MS);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+    const lastPost = calls.map((call) => call.method).lastIndexOf('POST');
+    expect(calls.slice(lastPost + 1).every((call) => call.method === 'GET')).toBe(true);
     expect(isStageWritesHeld(STAGE)).toBe(false);
   });
 
@@ -440,28 +515,21 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(bodies[0]).toBe(bodies[1]);
   });
 
-  it('the polling deadline follows the server-reported lease', async () => {
-    let polls = 0;
-    const leased = {
-      ...succeeded,
-      status: 'running' as const,
-      revTransitions: null,
-      leaseRemainingMs: 500,
-    };
-    const { impl } = fetchRouter({
-      post: () => Response.json({ insertion: leased, replayed: true }, { status: 202 }),
-      status: () => {
-        polls += 1;
-        return polls < 15 ? Response.json(leased) : Response.json(succeeded);
-      },
+  it('a long run is polled by id to its end, holding throughout, without another POST', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({
+      post: () => Response.json({ insertion: runningStatus, replayed: true }, { status: 202 }),
+      // Commits 15 minutes in.
+      status: () => Response.json(time.now() < 15 * 60_000 ? runningStatus : succeeded),
     });
-    // A run budget that alone would stop after the first poll or so.
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
-      { fetchImpl: impl, pollIntervalMs: 1, budgetMs: 1 },
+      { fetchImpl: impl, clock: time.clock, sleep: time.sleep },
     );
-    expect(outcome).toMatchObject({ kind: 'success' });
-    expect(polls).toBe(15);
+    expect(outcome).toMatchObject({ kind: 'success', applied: 'applied' });
+    expect(time.now()).toBeGreaterThanOrEqual(15 * 60_000);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+    expect(posts(calls)).toHaveLength(1);
   });
 
   it('a plain 404 (edge, misroute) is transient; only the TE’s INSERTION_NOT_FOUND ends polling', async () => {
@@ -481,11 +549,15 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(outcome).toMatchObject({ kind: 'success' });
   });
 
-  it('the server lease can never outlast the editor’s run budget', async () => {
+  it('the release bound covers the server’s longest lease and fits its admission window', async () => {
     const { MAX_SCENE_INSERTION_LEASE_SECONDS, sceneInsertionLeaseSeconds } =
       await import('@/lib/server/teaching-package/scene-insertion-store');
-    const { INSERTION_RUN_BUDGET_MS } = await import('@/lib/edit/scene-insertion-client');
-    expect(MAX_SCENE_INSERTION_LEASE_SECONDS * 1000 + 60_000).toBeLessThan(INSERTION_RUN_BUDGET_MS);
+    const { SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS } =
+      await import('@/lib/server/teaching-package/scene-insertion');
+    expect(INSERTION_MAX_LEASE_MS).toBe(MAX_SCENE_INSERTION_LEASE_SECONDS * 1000);
+    expect(INSERTION_ADMISSION_WINDOW_MS).toBeLessThanOrEqual(
+      SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS,
+    );
     vi.stubEnv('SCENE_INSERTION_LEASE_SECONDS', '5000');
     expect(sceneInsertionLeaseSeconds()).toBe(MAX_SCENE_INSERTION_LEASE_SECONDS);
     vi.stubEnv('SCENE_INSERTION_LEASE_SECONDS', '120');
@@ -530,6 +602,256 @@ describe('scene insertion client — result application (step 9)', () => {
       { fetchImpl: impl, pollIntervalMs: 1 },
     );
     expect(outcome).toEqual({ kind: 'unknown', insertionId: 'tpsi_1' });
+  });
+});
+
+describe('scene insertion client — admission and settling (step 8)', () => {
+  const run = (impl: typeof fetch, time: ReturnType<typeof fakeTime>) =>
+    runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, clock: time.clock, sleep: time.sleep },
+    );
+
+  it('earlier POSTs never reach the server; a late accepted POST loses its answer → settled by key, held to the end', async () => {
+    const time = fakeTime();
+    let admittedAt: number | null = null;
+    const bodies: Array<Record<string, unknown>> = [];
+    const { impl } = fetchRouter({
+      post: (init) => {
+        bodies.push(parsedBody(init));
+        // Attempts until the last 10 s of the window never reach the TE…
+        if (time.now() < INSERTION_ADMISSION_WINDOW_MS - 10_000) throw new TypeError('offline');
+        // …this one does: admitted (server time before admitBy), its answer lost.
+        admittedAt ??= time.now();
+        throw new TypeError('connection reset');
+      },
+      key: () =>
+        admittedAt === null ? absentByKey(time.serverNow()) : Response.json(runningStatus),
+      // Its run commits 14 minutes after admission.
+      status: () =>
+        Response.json(
+          admittedAt !== null && time.now() >= admittedAt + 14 * 60_000 ? succeeded : runningStatus,
+        ),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success', applied: 'applied' });
+    expect(admittedAt).not.toBeNull();
+    // Never released before the late run committed.
+    expect(time.now()).toBeGreaterThanOrEqual(admittedAt! + 14 * 60_000);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+    // One exact body on every attempt: same key, same server-time deadline.
+    expect(new Set(bodies.map((body) => JSON.stringify(body))).size).toBe(1);
+    expect(bodies[0]).toMatchObject({
+      idempotencyKey: request.idempotencyKey,
+      admitBy: SERVER_NOW + INSERTION_ADMISSION_WINDOW_MS,
+    });
+    expect(isStageWritesHeld(STAGE)).toBe(false);
+  });
+
+  it('a request still waiting for the Stage lock after its POST timed out starts later — the hold waits for it', async () => {
+    const time = fakeTime();
+    const { impl } = fetchRouter({
+      // The request reached the TE and waits on the lock; the client cuts it.
+      post: () => {
+        throw new DOMException('The operation timed out.', 'TimeoutError');
+      },
+      // It takes the lock 90 s in (before admitBy) and starts its run.
+      key: () =>
+        time.now() >= 90_000 ? Response.json(runningStatus) : absentByKey(time.serverNow()),
+      status: () => Response.json(time.now() >= 10 * 60_000 ? succeeded : runningStatus),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(time.now()).toBeGreaterThanOrEqual(10 * 60_000);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('offline once the POST left: held until nothing of it can still commit, then unknown', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({
+      post: () => {
+        throw new TypeError('offline');
+      },
+      key: () => {
+        throw new TypeError('offline');
+      },
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+    expect(time.now()).toBeGreaterThanOrEqual(
+      INSERTION_ADMISSION_WINDOW_MS + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS,
+    );
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+    // POSTs only inside the window; key reads after it.
+    expect(posts(calls).length).toBeGreaterThan(1);
+    expect(isStageWritesHeld(STAGE)).toBe(false);
+  });
+
+  it('a truncated 202 body is ambiguous: the key settles it, without a second POST', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({
+      post: () =>
+        new Response('{"insertion":{"insertionId":"tpsi_1","sta', {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        }),
+      key: () => Response.json(runningStatus),
+      status: () => Response.json(succeeded),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success', insertionId: 'tpsi_1' });
+    expect(posts(calls)).toHaveLength(1);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('a 202 whose body read is interrupted is ambiguous too', async () => {
+    const time = fakeTime();
+    const cut = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"insertion":{"insertionId":'));
+          controller.error(new TypeError('terminated'));
+        },
+      });
+    const { impl } = fetchRouter({
+      post: () => new Response(cut(), { status: 202 }),
+      key: () => Response.json(runningStatus),
+      status: () => Response.json(succeeded),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it.each([
+    ['a foreign success body', { ok: true }],
+    ['an empty insertion', { insertion: {} }],
+    [
+      'a success without its Scene id',
+      { insertion: { insertionId: 'tpsi_1', status: 'succeeded' } },
+    ],
+  ])('%s is ambiguous: the same key and body are re-sent, never a failure', async (_label, bad) => {
+    const time = fakeTime();
+    const bodies: string[] = [];
+    const { impl } = fetchRouter({
+      post: (init) => {
+        bodies.push(String(init?.body));
+        return bodies.length === 1 ? Response.json(bad) : Response.json({ insertion: succeeded });
+      },
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success', sceneId: NEW });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
+  });
+
+  it('same-key recovery reaching a stored failure reports it; nothing is applied', async () => {
+    const time = fakeTime();
+    const { impl } = fetchRouter({
+      post: () => {
+        throw new TypeError('connection reset');
+      },
+      key: () =>
+        Response.json({
+          ...succeeded,
+          status: 'failed',
+          errorCode: 'INSERTION_PLAN_INVALID',
+          scene: null,
+          revTransitions: null,
+        }),
+    });
+    const before = JSON.stringify(useStageStore.getState().scenes);
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'INSERTION_PLAN_INVALID' });
+    expect(loadStageData).not.toHaveBeenCalled();
+    expect(JSON.stringify(useStageStore.getState().scenes)).toBe(before);
+  });
+
+  it('a refusal of a LATER attempt waits for the key: the earlier attempt may still start (and does)', async () => {
+    const time = fakeTime();
+    let attempts = 0;
+    const { impl, calls } = fetchRouter({
+      post: () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('connection reset');
+        return Response.json(
+          { error: { code: 'STAGE_GENERATION_IN_PROGRESS', message: 'a regeneration runs' } },
+          { status: 409 },
+        );
+      },
+      // The first attempt was waiting behind that regeneration; it starts 30 s in.
+      key: () =>
+        time.now() < 30_000 ? absentByKey(time.serverNow()) : Response.json(runningStatus),
+      status: () => Response.json(succeeded),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success' });
+    // No POST after the refusal.
+    expect(posts(calls)).toHaveLength(2);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('…and when the key stays empty past the deadline, that refusal is reported', async () => {
+    const time = fakeTime();
+    let attempts = 0;
+    const { impl } = fetchRouter({
+      post: () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('connection reset');
+        return Response.json(
+          { error: { code: 'STAGE_GENERATION_IN_PROGRESS', message: 'a regeneration runs' } },
+          { status: 409 },
+        );
+      },
+      key: () => absentByKey(time.serverNow()),
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'STAGE_GENERATION_IN_PROGRESS' });
+    expect(time.now()).toBeGreaterThan(INSERTION_ADMISSION_WINDOW_MS);
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('INSERTION_ADMISSION_CLOSED is definite on any attempt (decided under the Stage lock)', async () => {
+    const time = fakeTime();
+    let attempts = 0;
+    const { impl } = fetchRouter({
+      post: () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('connection reset');
+        return Response.json(
+          { error: { code: 'INSERTION_ADMISSION_CLOSED', message: 'too late' } },
+          { status: 409 },
+        );
+      },
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'INSERTION_ADMISSION_CLOSED' });
+    expect(attempts).toBe(2);
+  });
+
+  it('no server clock: nothing is sent, the Stage is released, the key is kept (unknown)', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({ gate: () => new Response('down', { status: 503 }) });
+    const outcome = await run(impl, time);
+    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+    expect(posts(calls)).toHaveLength(0);
+    expect(isStageWritesHeld(STAGE)).toBe(false);
+  });
+
+  it('a malformed status read is transient and never applied', async () => {
+    const time = fakeTime();
+    let reads = 0;
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: runningStatus, replayed: true }, { status: 202 }),
+      status: () => {
+        reads += 1;
+        return reads === 1 ? Response.json({}) : Response.json(succeeded);
+      },
+    });
+    const outcome = await run(impl, time);
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(reads).toBe(2);
+    expect(loadStageData).toHaveBeenCalledOnce();
   });
 });
 

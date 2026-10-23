@@ -325,6 +325,8 @@ export type TeachingPackageErrorCode =
   | 'INSERTION_STAGE_BUSY'
   /** The insertion's lease expired or its token changed. */
   | 'INSERTION_LEASE_LOST'
+  /** The request reached T1 after its admission deadline: no run under its key can start any more. */
+  | 'INSERTION_ADMISSION_CLOSED'
   /** A status lookup outside tenant + version + Stage. */
   | 'INSERTION_NOT_FOUND'
   /** The slide was generated but could not be recorded; nothing was written. */
@@ -497,6 +499,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   INSERTION_VISUAL_NOT_APPROVED: 422,
   INSERTION_STAGE_BUSY: 409,
   INSERTION_LEASE_LOST: 409,
+  INSERTION_ADMISSION_CLOSED: 409,
   INSERTION_NOT_FOUND: 404,
   INSERTION_PERSISTENCE_FAILED: 503,
   SCENE_INSERTION_IN_PROGRESS: 409,

@@ -1082,5 +1082,144 @@ describe('reviewer-generated slide insertion routes', () => {
       supported: true,
       running: [],
     });
+    // The editor's admission deadline is counted from the server's clock.
+    expect(typeof gate.serverNow).toBe('number');
+  });
+
+  // ------------------------------------------------------ admission (§5.1 step 8)
+
+  /**
+   * Run `onLock` when a transaction takes the given `stage_meta` lock — the
+   * moment a real request would have waited for it (PGlite has one
+   * connection, so the wait itself is simulated by moving the clock).
+   */
+  function onStageLock(pattern: RegExp, onLock: () => void): () => void {
+    const original = pool.connect.bind(pool);
+    pool.connect = async () => {
+      const client = await original();
+      return {
+        ...client,
+        query: (text: string, params?: unknown[]) => {
+          if (pattern.test(text)) onLock();
+          return client.query(text, params);
+        },
+      };
+    };
+    return () => {
+      pool.connect = original;
+    };
+  }
+  const T1_LOCK = /SELECT owner_id, deleted_at FROM stage_meta WHERE stage_id = \$1 FOR UPDATE/;
+  const KEY_READ_LOCK = /FROM stage_meta WHERE stage_id = \$1 FOR SHARE/;
+
+  it('a request past its admission deadline is refused at T1: audited, no row, no model call', async () => {
+    const seeded = await seed();
+    const response = await post(seeded, body({ admitBy: Date.now() - 1 }));
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'INSERTION_ADMISSION_CLOSED',
+    );
+    expect(mocks.prompts).toHaveLength(0);
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+    expect((await events(seeded.versionId)).map((event) => event.event_type)).toEqual([
+      'scene_insertion_refused',
+    ]);
+  });
+
+  it('a request that waits for the Stage lock past its deadline is refused (the clock is read after the lock)', async () => {
+    const seeded = await seed();
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    // The lock is granted ten minutes after the request arrived.
+    const restore = onStageLock(T1_LOCK, () => {
+      offset = 10 * 60_000;
+    });
+    try {
+      const response = await post(seeded, body({ admitBy: realNow() + 60_000 }));
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'INSERTION_ADMISSION_CLOSED',
+      );
+    } finally {
+      restore();
+      clock.mockRestore();
+    }
+    expect(mocks.prompts).toHaveLength(0);
+    expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+  });
+
+  it('the service enforces its own maximum admission window, whatever `admitBy` says', async () => {
+    const seeded = await seed();
+    const { SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS } =
+      await import('@/lib/server/teaching-package/scene-insertion');
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    const restore = onStageLock(T1_LOCK, () => {
+      offset = SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS + 60_000;
+    });
+    try {
+      // A far-future deadline is clamped to arrival + the service's maximum.
+      const response = await post(seeded, body({ admitBy: realNow() + 24 * 3_600_000 }));
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        'INSERTION_ADMISSION_CLOSED',
+      );
+    } finally {
+      restore();
+      clock.mockRestore();
+    }
+  });
+
+  it('`admitBy` is not part of the digest: a later run of the same request replays, even past its deadline', async () => {
+    const seeded = await seed();
+    const request = body({ idempotencyKey: 'key-admit-1', admitBy: Date.now() + 60_000 });
+    const first = await post(seeded, request);
+    expect(first.status).toBe(200);
+    // The dialog's retry after `unknown`: same key and fields, a new (here: past) deadline.
+    const again = await post(seeded, { ...request, admitBy: Date.now() - 1 });
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { replayed: boolean }).replayed).toBe(true);
+    expect(mocks.insert).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a malformed `admitBy` before anything else', async () => {
+    const seeded = await seed();
+    const response = await post(seeded, body({ admitBy: 'soon' }));
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'INVALID_REQUEST',
+    );
+  });
+
+  it('the by-key read: no row → the TE’s 404 with `serverNow` read after the Stage lock; a row → its status', async () => {
+    const seeded = await seed();
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    const restore = onStageLock(KEY_READ_LOCK, () => {
+      offset = 7 * 60_000;
+    });
+    let missing: Response;
+    const before = realNow();
+    try {
+      missing = await get('byKey', seeded, 'key-never-sent');
+    } finally {
+      restore();
+      clock.mockRestore();
+    }
+    expect(missing.status).toBe(404);
+    const envelope = (await missing.json()) as {
+      error: { code: string; details: { serverNow: number } };
+    };
+    expect(envelope.error.code).toBe('INSERTION_NOT_FOUND');
+    // Read once the lock was held (the simulated wait moved the clock first).
+    expect(envelope.error.details.serverNow).toBeGreaterThanOrEqual(before + 7 * 60_000);
+
+    expect((await post(seeded, body({ idempotencyKey: 'key-by-key-1' }))).status).toBe(200);
+    const found = await get('byKey', seeded, 'key-by-key-1');
+    expect(found.status).toBe(200);
+    expect(((await found.json()) as { status: string }).status).toBe('succeeded');
   });
 });

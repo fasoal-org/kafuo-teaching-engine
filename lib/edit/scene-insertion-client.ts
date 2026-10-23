@@ -9,7 +9,12 @@
  *    5 hold            → no flush round starts; direct saves are deferred
  *    6 re-prove        → synchronous, right after the hold
  *    7 baseline        → the mark + the bound revisions
- *    8 POST + poll     → same key on a transport retry
+ *    8 admit + settle  → read the server clock; every POST carries ONE
+ *                        server-time admission deadline (T1 refuses a run
+ *                        after it); retry the same key and body only inside
+ *                        that window; settle by id, else by key under the
+ *                        Stage lock; hold until a definite answer or until
+ *                        no run this request started can still commit
  *    9 fetch, then apply synchronously → loadStageData is the LAST await;
  *                        applyInsertionResult re-checks the handle and the dirt
  *                        present at that moment (clean apply or local-wins merge)
@@ -51,6 +56,8 @@ export interface InsertionGate {
   supported: boolean;
   unsupportedReason: 'no_flow' | 'legacy_successor' | 'no_content_units' | null;
   running: Array<{ kind: 'insertion' | 'regeneration'; id: string; sceneId?: string }>;
+  /** The server clock when the gate was read (server time, ms). */
+  serverNow?: number;
 }
 
 export interface ContentUnitSummary {
@@ -96,7 +103,7 @@ export interface SceneInsertionStatus {
   revTransitions: Record<string, { before: number; after: number }> | null;
   requestedAt: number;
   completedAt: number | null;
-  /** Running rows: the lease time left, measured on the server (no clock skew). */
+  /** Running rows: the lease time left, measured on the server (informational). */
   leaseRemainingMs?: number | null;
 }
 
@@ -126,6 +133,15 @@ async function errorFrom(response: Response): Promise<SceneInsertionRequestError
 
 const stagePath = (stageId: string) => `/api/stages/${encodeURIComponent(stageId)}`;
 
+/** One read (gate, status); a stalled connection is cut so every loop keeps its bound. */
+const STATUS_READ_TIMEOUT_MS = 30_000;
+
+function timeoutSignal(ms: number): { signal?: AbortSignal } {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? { signal: AbortSignal.timeout(ms) }
+    : {};
+}
+
 /** The gate for a Stage, or `null` when this tab holds no grant for it. */
 export async function fetchInsertionGate(
   stageId: string,
@@ -134,6 +150,7 @@ export async function fetchInsertionGate(
   const response = await fetchImpl(`${stagePath(stageId)}/scene-insertion`, {
     credentials: 'same-origin',
     cache: 'no-store',
+    ...timeoutSignal(STATUS_READ_TIMEOUT_MS),
   });
   if (!response.ok) return null;
   return (await response.json()) as InsertionGate;
@@ -172,94 +189,224 @@ export interface SceneInsertionRequest extends InsertionPosition {
   idempotencyKey: string;
 }
 
-/** Gateway answers that carry no server error code: the run may still be going. */
-const GATEWAY_STATUSES = new Set([408, 429, 502, 503, 504, 524]);
-
 /**
- * An answer that does not say what happened to the insertion: a gateway or
- * rate limiter answering for the TE (no error envelope), or the TE's own
- * unmapped `INTERNAL_ERROR`. The same key replays the truth.
+ * The admission window, counted from the server clock read right before the
+ * first POST. Every POST of a run carries `admitBy` = that reading + this
+ * window, and the server starts a run only before it (T1 checks it under the
+ * Stage lock, with the clock read after the lock). It is also the POST retry
+ * budget: a later POST could only replay.
  */
-function isAmbiguousAnswer(status: number, code: string): boolean {
-  return (code === 'HTTP_ERROR' && GATEWAY_STATUSES.has(status)) || code === 'INTERNAL_ERROR';
-}
-
-/**
- * The whole run's wall-clock budget: the POST retries and the polling share
- * it, and it outlasts the server's longest lease (1080 s) counted from before
- * the first POST, so the editor's hold never ends while the server may commit.
- */
-export const INSERTION_RUN_BUDGET_MS = 20 * 60 * 1000;
-/** One POST attempt; the server ignores a disconnect, and the same key then replays. */
+export const INSERTION_ADMISSION_WINDOW_MS = 2 * 60 * 1000;
+/** The server's longest lease (`MAX_SCENE_INSERTION_LEASE_SECONDS`, pinned by a test). */
+export const INSERTION_MAX_LEASE_MS = 1080 * 1000;
+/** Past the last possible lease end: the commit statement itself, and clock rate. */
+export const INSERTION_RELEASE_GRACE_MS = 2 * 60 * 1000;
+/** One POST attempt (it waits for the whole run); the server ignores a disconnect. */
 const POST_ATTEMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
-function timeoutSignal(ms: number): { signal?: AbortSignal } {
-  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-    ? { signal: AbortSignal.timeout(ms) }
-    : {};
+const INSERTION_STATES = new Set(['running', 'succeeded', 'failed']);
+
+/** A status body as the TE writes it, or `null` (cut, malformed, or not the TE's). */
+function statusFrom(value: unknown): SceneInsertionStatus | null {
+  if (!value || typeof value !== 'object') return null;
+  const status = value as Partial<SceneInsertionStatus>;
+  if (typeof status.insertionId !== 'string' || status.insertionId === '') return null;
+  if (typeof status.status !== 'string' || !INSERTION_STATES.has(status.status)) return null;
+  if (
+    status.status === 'succeeded' &&
+    (typeof status.newSceneId !== 'string' || status.newSceneId === '')
+  ) {
+    return null;
+  }
+  return status as SceneInsertionStatus;
 }
+
+/** The TE's error envelope, or `null` (a gateway's page, or a cut body). */
+function envelopeFrom(value: unknown): { code: string; message: string; details?: unknown } | null {
+  const error = (value as { error?: { code?: unknown; message?: unknown; details?: unknown } })
+    ?.error;
+  if (!error || typeof error.code !== 'string' || error.code === '') return null;
+  return {
+    code: error.code,
+    message:
+      typeof error.message === 'string' ? error.message : `the request failed (${error.code})`,
+    details: error.details,
+  };
+}
+
+/** The body as JSON; `undefined` when it could not be read to the end or parsed. */
+async function jsonFrom(response: Response): Promise<unknown> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    return undefined;
+  }
+  try {
+    return text === '' ? null : (JSON.parse(text) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+type PostAnswer =
+  /** The TE's answer about this key: `200` (an outcome) or `202` (running). */
+  | { kind: 'status'; status: SceneInsertionStatus }
+  /** A definite refusal of THIS request: it was answered without a run. */
+  | { kind: 'refused'; error: SceneInsertionRequestError }
+  /** Nothing says what happened (transport, cut or malformed body, gateway, TE-internal). */
+  | { kind: 'ambiguous' };
+
+/** Without a TE envelope these 4xx are a gateway's or a rate limiter's, not an answer. */
+const AMBIGUOUS_CLIENT_STATUSES = new Set([408, 429]);
 
 /**
- * POST, retried with the SAME key when the transport itself failed or the
- * answer is ambiguous (above), with a capped backoff until `deadline`: the
- * first POST waits for the whole run, so a proxy or a network drop may cut it
- * while the server keeps generating, and the same key replays it (`202`
- * running, or the stored outcome) — never a second run. Past the deadline the
- * error is thrown as a transport failure, so the caller reports `unknown`
- * (keep the key), never a definite failure.
+ * One POST. Reading and validating the body is part of the answer: a body cut
+ * mid-read, invalid JSON or a success envelope that is not a status are as
+ * ambiguous as a dropped connection — the server may be running the request.
+ * A coded TE error is definite, except the TE's own unmapped
+ * `INTERNAL_ERROR`; without a TE envelope a 5xx, 408 or 429 is a gateway's
+ * (ambiguous), while any other 4xx status line consumed the request.
  */
-export async function postSceneInsertion(
+async function postOnce(
   stageId: string,
-  body: SceneInsertionRequest,
-  options: { fetchImpl?: typeof fetch; deadline?: number; retryDelayMs?: number } = {},
-): Promise<{ status: 200 | 202; insertion: SceneInsertionStatus | { insertionId: string } }> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const deadline = options.deadline ?? Date.now() + INSERTION_RUN_BUDGET_MS;
-  const step = options.retryDelayMs ?? 1000;
-  let lastError: unknown;
-  for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt += 1) {
-    if (attempt > 0) await delay(Math.min(step * attempt, step * 10));
-    let response: Response;
-    try {
-      response = await fetchImpl(`${stagePath(stageId)}/scene-insertions`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        ...timeoutSignal(POST_ATTEMPT_TIMEOUT_MS),
-      });
-    } catch (error) {
-      lastError = error;
-      continue;
-    }
-    if (!response.ok) {
-      const error = await errorFrom(response);
-      if (isAmbiguousAnswer(response.status, error.code)) {
-        lastError = new Error(`the request ended without an outcome (HTTP ${response.status})`);
-        continue;
-      }
-      throw error;
-    }
-    const parsed = (await response.json()) as { insertion: SceneInsertionStatus };
-    return { status: response.status === 202 ? 202 : 200, insertion: parsed.insertion };
+  body: SceneInsertionRequest & { admitBy: number },
+  fetchImpl: typeof fetch,
+): Promise<PostAnswer> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`${stagePath(stageId)}/scene-insertions`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      ...timeoutSignal(POST_ATTEMPT_TIMEOUT_MS),
+    });
+  } catch {
+    return { kind: 'ambiguous' };
   }
-  throw lastError instanceof Error ? lastError : new Error('the request could not be sent');
+  const json = await jsonFrom(response);
+  if (response.ok) {
+    const status =
+      response.status === 200 || response.status === 202
+        ? statusFrom((json as { insertion?: unknown } | null | undefined)?.insertion)
+        : null;
+    return status ? { kind: 'status', status } : { kind: 'ambiguous' };
+  }
+  const envelope = envelopeFrom(json);
+  if (envelope && envelope.code !== 'INTERNAL_ERROR') {
+    return {
+      kind: 'refused',
+      error: new SceneInsertionRequestError(
+        response.status,
+        envelope.code,
+        envelope.message,
+        envelope.details,
+      ),
+    };
+  }
+  if (
+    json === undefined ||
+    envelope ||
+    response.status >= 500 ||
+    AMBIGUOUS_CLIENT_STATUSES.has(response.status)
+  ) {
+    return { kind: 'ambiguous' };
+  }
+  return {
+    kind: 'refused',
+    error: new SceneInsertionRequestError(
+      response.status,
+      response.status === 404 ? 'NOT_FOUND' : 'HTTP_ERROR',
+      `the request failed (HTTP ${response.status})`,
+    ),
+  };
 }
 
-/** One status read; a stalled connection is cut so the poll loop keeps its bound. */
-const STATUS_READ_TIMEOUT_MS = 30_000;
+type KeyAnswer =
+  | { kind: 'status'; status: SceneInsertionStatus }
+  /** The TE's own 404: no row under this key; `serverNow` was read under the Stage lock. */
+  | { kind: 'absent'; serverNow: number | null }
+  | { kind: 'unreadable' };
 
-export async function fetchInsertionStatus(
+/** The by-key status read: it never creates anything. */
+async function readByKey(
+  stageId: string,
+  idempotencyKey: string,
+  fetchImpl: typeof fetch,
+): Promise<KeyAnswer> {
+  let response: Response;
+  try {
+    response = await fetchImpl(
+      `${stagePath(stageId)}/scene-insertions?key=${encodeURIComponent(idempotencyKey)}`,
+      { credentials: 'same-origin', cache: 'no-store', ...timeoutSignal(STATUS_READ_TIMEOUT_MS) },
+    );
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  const json = await jsonFrom(response);
+  if (response.ok) {
+    const status = statusFrom(json);
+    return status ? { kind: 'status', status } : { kind: 'unreadable' };
+  }
+  const envelope = envelopeFrom(json);
+  if (response.status === 404 && envelope?.code === 'INSERTION_NOT_FOUND') {
+    const serverNow = (envelope.details as { serverNow?: unknown } | undefined)?.serverNow;
+    return {
+      kind: 'absent',
+      serverNow: typeof serverNow === 'number' && Number.isFinite(serverNow) ? serverNow : null,
+    };
+  }
+  return { kind: 'unreadable' };
+}
+
+type IdAnswer =
+  | { kind: 'status'; status: SceneInsertionStatus }
+  /** The TE refused the read itself (scoped 404, or no write grant): this tab cannot write the Stage. */
+  | { kind: 'gone' }
+  | { kind: 'unreadable' };
+
+async function readById(
   stageId: string,
   insertionId: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<SceneInsertionStatus> {
-  const response = await fetchImpl(
-    `${stagePath(stageId)}/scene-insertions/${encodeURIComponent(insertionId)}`,
-    { credentials: 'same-origin', cache: 'no-store', ...timeoutSignal(STATUS_READ_TIMEOUT_MS) },
-  );
-  if (!response.ok) throw await errorFrom(response);
-  return (await response.json()) as SceneInsertionStatus;
+  fetchImpl: typeof fetch,
+): Promise<IdAnswer> {
+  let response: Response;
+  try {
+    response = await fetchImpl(
+      `${stagePath(stageId)}/scene-insertions/${encodeURIComponent(insertionId)}`,
+      { credentials: 'same-origin', cache: 'no-store', ...timeoutSignal(STATUS_READ_TIMEOUT_MS) },
+    );
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  const json = await jsonFrom(response);
+  if (response.ok) {
+    const status = statusFrom(json);
+    return status && status.insertionId === insertionId
+      ? { kind: 'status', status }
+      : { kind: 'unreadable' };
+  }
+  const envelope = envelopeFrom(json);
+  // A plain 404 from an edge or a deploy misroute is not the TE's answer.
+  if (
+    (response.status === 404 && envelope?.code === 'INSERTION_NOT_FOUND') ||
+    (response.status === 403 && envelope !== null)
+  ) {
+    return { kind: 'gone' };
+  }
+  return { kind: 'unreadable' };
+}
+
+/** The server clock, from the gate; `null` when it cannot be read (then nothing is sent). */
+async function readServerClock(stageId: string, fetchImpl: typeof fetch): Promise<number | null> {
+  try {
+    const gate = await fetchInsertionGate(stageId, fetchImpl);
+    const serverNow = gate?.serverNow;
+    return typeof serverNow === 'number' && Number.isFinite(serverNow) ? serverNow : null;
+  } catch {
+    return null;
+  }
 }
 
 export type SceneInsertionOutcome =
@@ -285,9 +432,12 @@ export type SceneInsertionOutcome =
   | { kind: 'not-durable'; pendingKeys: string[]; conflict: boolean }
   /** Another generation runs (this tab or the gate): nothing was sent. */
   | { kind: 'busy' }
-  /** The server refused or failed: nothing changed. */
+  /** The server refused or failed, and no run of this request can still commit: nothing changed. */
   | { kind: 'failed'; status: number; code: string; message: string; details?: unknown }
-  /** The outcome could not be read: keep the key; a later retry replays it. */
+  /**
+   * The outcome could not be read — returned only once no run of this request
+   * can still commit, or when nothing was sent: keep the key; a retry replays.
+   */
   | { kind: 'unknown'; insertionId: string | null };
 
 export interface RunSceneInsertionInput {
@@ -301,27 +451,37 @@ export interface RunSceneInsertionInput {
 
 export interface RunSceneInsertionDeps {
   fetchImpl?: typeof fetch;
+  /** The pause base: POST retries and key reads back off from it; polls wait twice it. */
   pollIntervalMs?: number;
-  maxPolls?: number;
-  /** The run's wall-clock budget (default {@link INSERTION_RUN_BUDGET_MS}). */
-  budgetMs?: number;
   /** Test seam: the read of step 9a. */
   loadStage?: typeof loadStageData;
   /** Test seam: runs right after the handle is created (lock taken). */
   onLocked?: () => void;
+  /** Test seams: a monotonic clock (ms) and the pause between attempts. */
+  clock?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/**
- * A safety cap on the poll count; the bound that matters is the wall-clock
- * deadline (the run budget, extended to the server-reported lease + grace).
- */
-const DEFAULT_MAX_POLLS = 1200;
-/** Polling continues this long past the server-reported end of the lease. */
-const LEASE_GRACE_MS = 60_000;
+/** Never faster than real time (unlike `Date.now`, which the user can move). */
+const monotonicNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+
 /** The result fetch, tried this many times before `saved-not-shown`. */
 const FETCH_ATTEMPTS = 3;
+
+function failedFrom(error: SceneInsertionRequestError): SceneInsertionOutcome {
+  return {
+    kind: 'failed',
+    status: error.status,
+    code: error.code,
+    message: error.message,
+    details: error.details,
+  };
+}
 
 export async function runSceneInsertion(
   input: RunSceneInsertionInput,
@@ -329,6 +489,9 @@ export async function runSceneInsertion(
 ): Promise<SceneInsertionOutcome> {
   const { stageId } = input;
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const clock = deps.clock ?? monotonicNow;
+  const sleep = deps.sleep ?? delay;
+  const step = deps.pollIntervalMs ?? 1000;
   // 1. Preconditions (no side effects).
   if (
     input.localGenerationRunning ||
@@ -368,62 +531,85 @@ export async function runSceneInsertion(
     // 7. Baseline.
     const baseline = handle.captureBaseline();
 
-    // 8. POST, then poll — both inside ONE wall-clock deadline, taken before
-    // the first POST (so it starts no later than the server's lease).
-    let deadline = Date.now() + (deps.budgetMs ?? INSERTION_RUN_BUDGET_MS);
-    const extendToLease = (reported: Pick<SceneInsertionStatus, 'leaseRemainingMs'> | null) => {
-      const remaining = reported?.leaseRemainingMs;
-      if (typeof remaining === 'number' && remaining > 0) {
-        deadline = Math.max(deadline, Date.now() + remaining + LEASE_GRACE_MS);
-      }
-    };
+    // 8a. Admission. The server's clock, read right before the first POST (no
+    // clock: nothing is sent, and the caller keeps the key). From the moment
+    // it arrives, two separate bounds:
+    //   - retryUntil: a POST may still start the run (T1 refuses one that
+    //     reaches it after `admitBy`), so retries stop here;
+    //   - releaseAt: any run this request started began by `admitBy` and
+    //     commits only inside its lease (T2), so after the window, the
+    //     longest lease and a grace nothing of it can still commit.
+    const serverNow = await readServerClock(stageId, fetchImpl);
+    if (serverNow === null) return { kind: 'unknown', insertionId: null };
+    const clockReadAt = clock();
+    const admitBy = serverNow + INSERTION_ADMISSION_WINDOW_MS;
+    const retryUntil = clockReadAt + INSERTION_ADMISSION_WINDOW_MS;
+    const releaseAt = retryUntil + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS;
+    // One exact body for every attempt of this run: same key, same deadline.
+    const body = { ...input.request, admitBy };
+
+    // 8b. Learn the row. POST (same key, same body) while it could start the
+    // run; after an ambiguous answer read the key, which creates nothing. The
+    // key is settled when the TE names its row, or reports none under the
+    // Stage lock past `admitBy` — then no attempt of this run can start.
     let status: SceneInsertionStatus | null = null;
-    let insertionId: string | null = null;
-    try {
-      const posted = await postSceneInsertion(stageId, input.request, {
-        fetchImpl,
-        deadline,
-        ...(deps.pollIntervalMs !== undefined ? { retryDelayMs: deps.pollIntervalMs } : {}),
-      });
-      insertionId = posted.insertion.insertionId;
-      if (posted.status === 200) status = posted.insertion as SceneInsertionStatus;
-      else extendToLease(posted.insertion as SceneInsertionStatus);
-    } catch (error) {
-      if (error instanceof SceneInsertionRequestError) {
-        return {
-          kind: 'failed',
-          status: error.status,
-          code: error.code,
-          message: error.message,
-          details: error.details,
-        };
-      }
-      // The request may or may not have reached the server: the same key replays it.
-      return { kind: 'unknown', insertionId: null };
-    }
-    // Poll until the row is terminal, still holding: a run the server may yet
-    // commit must never release the hold early (the status read reclaims an
-    // expired lease, so a terminal answer always comes). The deadline follows
-    // the server-reported lease. Every error is transient except the TE's own
-    // definite refusal (its envelope's 404 INSERTION_NOT_FOUND, or a 403) — a
-    // plain 404 from an edge or a deploy misroute is not one.
-    for (let poll = 0; status === null || status.status === 'running'; poll += 1) {
-      if (poll >= (deps.maxPolls ?? DEFAULT_MAX_POLLS) || (poll > 0 && Date.now() >= deadline)) {
-        return { kind: 'unknown', insertionId };
-      }
-      if (poll > 0) await delay(deps.pollIntervalMs ?? 2000);
-      try {
-        status = await fetchInsertionStatus(stageId, insertionId, fetchImpl);
-        if (status.status === 'running') extendToLease(status);
-      } catch (error) {
-        if (
-          error instanceof SceneInsertionRequestError &&
-          ((error.status === 404 && error.code === 'INSERTION_NOT_FOUND') || error.status === 403)
-        ) {
-          return { kind: 'unknown', insertionId };
+    let refusal: SceneInsertionRequestError | null = null;
+    let sent = 0;
+    for (let pauses = 0; status === null; pauses += 1) {
+      if (pauses > 0) await sleep(Math.min(step * pauses, step * 10));
+      if (sent === 0 || (refusal === null && clock() < retryUntil)) {
+        const answer = await postOnce(stageId, body, fetchImpl);
+        sent += 1;
+        if (answer.kind === 'status') {
+          status = answer.status;
+          break;
+        }
+        if (answer.kind === 'refused') {
+          // Definite when it was the only request sent, or when it proves no
+          // attempt can start (the deadline passed under the lock, or the key
+          // belongs to another request). Otherwise an earlier attempt may
+          // still be on its way or waiting for the lock: settle the key first.
+          const { code } = answer.error;
+          if (
+            sent === 1 ||
+            code === 'INSERTION_ADMISSION_CLOSED' ||
+            code === 'IDEMPOTENCY_KEY_REUSED'
+          ) {
+            return failedFrom(answer.error);
+          }
+          refusal = answer.error;
         }
       }
+      if (clock() >= releaseAt) return { kind: 'unknown', insertionId: null };
+      const read = await readByKey(stageId, body.idempotencyKey, fetchImpl);
+      if (read.kind === 'status') {
+        status = read.status;
+        break;
+      }
+      if (read.kind === 'absent' && read.serverNow !== null && read.serverNow > admitBy) {
+        return failedFrom(
+          refusal ??
+            new SceneInsertionRequestError(
+              409,
+              'INSERTION_ADMISSION_CLOSED',
+              'the request did not start before its admission deadline; nothing was changed',
+            ),
+        );
+      }
     }
+    if (status === null) return { kind: 'unknown', insertionId: null };
+
+    // 8c. A known row is settled by its id only — never another POST — still
+    // holding, until it is terminal or can no longer commit. Every read error
+    // is transient except the TE's own refusal of the read.
+    while (status.status === 'running') {
+      if (clock() >= releaseAt) return { kind: 'unknown', insertionId: status.insertionId };
+      await sleep(step * 2);
+      const read = await readById(stageId, status.insertionId, fetchImpl);
+      if (read.kind === 'status') status = read.status;
+      else if (read.kind === 'gone') return { kind: 'unknown', insertionId: status.insertionId };
+    }
+    const { insertionId } = status;
     if (status.status === 'failed') {
       return {
         kind: 'failed',
@@ -437,7 +623,7 @@ export async function runSceneInsertion(
     // holding: giving up leaves lock-bypassing dirt on pre-shift revisions.
     let serverData: Awaited<ReturnType<typeof loadStageData>> = null;
     for (let attempt = 0; attempt < FETCH_ATTEMPTS && !serverData; attempt += 1) {
-      if (attempt > 0) await delay(deps.pollIntervalMs ?? 2000);
+      if (attempt > 0) await sleep(step * 2);
       try {
         serverData = await (deps.loadStage ?? loadStageData)(stageId);
       } catch {
@@ -456,7 +642,8 @@ export async function runSceneInsertion(
     }
     return { kind: 'success', ...saved, applied };
   } finally {
-    // 10. Release, after the apply returned (or on any refusal / failure).
+    // 10. Release: after the apply returned, on a definite refusal or failure,
+    // or once nothing of this request can still commit.
     handle.release();
     unsubscribe();
   }
