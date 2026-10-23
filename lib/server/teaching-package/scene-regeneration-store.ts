@@ -4,10 +4,14 @@
  *
  * Three transactions around one uncommitted model run:
  *
- * - **T1 `startSceneRegeneration`** — under `stage_meta FOR SHARE` and the
- *   version `FOR SHARE`: reclaim expired leases, answer an idempotent replay,
- *   capture the pre-image and its revision, insert the `running` row (one per
- *   Scene, `tpsr_single_running`) and the `started` event.
+ * - **T1 `startSceneRegeneration`** — under `stage_meta FOR UPDATE` (the
+ *   Stage-wide paid-generation mutex it shares with the reviewer-generated
+ *   slide insertion, reviewer-generated-slide plan B-2) and the version
+ *   `FOR SHARE`: reclaim this Scene's expired leases and the Stage's expired
+ *   insertion leases, answer an idempotent replay, capture the pre-image and
+ *   its revision, refuse while an insertion runs on the Stage (B-3), insert
+ *   the `running` row (one per Scene, `tpsr_single_running`) and the
+ *   `started` event.
  * - **T2 `commitSceneRegeneration`** — the replacement is written through the
  *   SAME owner-bound store path every grant write uses, with
  *   {@link regenerationCommitFence} composed ahead of the stage guard. Its
@@ -48,6 +52,10 @@ import {
   type TeachingPackageErrorCode,
 } from '@/lib/server/teaching-package/errors';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import {
+  reclaimExpiredSceneInsertions,
+  runningSceneInsertionId,
+} from '@/lib/server/teaching-package/stage-generation-mutex';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { ReviewEventType, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
@@ -279,10 +287,14 @@ async function appendRegenerationEvent(
   });
 }
 
-/** Reclaim this Scene's expired running rows: `failed / LEASE_EXPIRED` + a `failed` event each. */
+/**
+ * Reclaim expired running rows — one row, one Scene's, or (the insertion's T1,
+ * reviewer-generated-slide plan B-2) the whole Stage's: `failed /
+ * LEASE_EXPIRED` + a `failed` event each.
+ */
 async function reclaimExpired(
   queryable: Queryable,
-  where: { stageId: string; sceneId: string } | { id: string },
+  where: { stageId: string; sceneId: string } | { stageId: string } | { id: string },
   now: number,
 ): Promise<number> {
   const result = await queryable.query<RawRegenerationRow>(
@@ -291,11 +303,20 @@ async function reclaimExpired(
             SET status = 'failed', error_code = 'LEASE_EXPIRED', completed_at = $2
           WHERE id = $1 AND status = 'running' AND lease_expires_at <= $2
           RETURNING ${COLUMNS}`
-      : `UPDATE teaching_package_scene_regenerations
-            SET status = 'failed', error_code = 'LEASE_EXPIRED', completed_at = $3
-          WHERE stage_id = $1 AND scene_id = $2 AND status = 'running' AND lease_expires_at <= $3
-          RETURNING ${COLUMNS}`,
-    'id' in where ? [where.id, now] : [where.stageId, where.sceneId, now],
+      : 'sceneId' in where
+        ? `UPDATE teaching_package_scene_regenerations
+              SET status = 'failed', error_code = 'LEASE_EXPIRED', completed_at = $3
+            WHERE stage_id = $1 AND scene_id = $2 AND status = 'running' AND lease_expires_at <= $3
+            RETURNING ${COLUMNS}`
+        : `UPDATE teaching_package_scene_regenerations
+              SET status = 'failed', error_code = 'LEASE_EXPIRED', completed_at = $2
+            WHERE stage_id = $1 AND status = 'running' AND lease_expires_at <= $2
+            RETURNING ${COLUMNS}`,
+    'id' in where
+      ? [where.id, now]
+      : 'sceneId' in where
+        ? [where.stageId, where.sceneId, now]
+        : [where.stageId, now],
   );
   for (const raw of result.rows) {
     const row = rowToRegeneration(raw);
@@ -322,6 +343,19 @@ async function reclaimExpired(
     );
   }
   return result.rows.length;
+}
+
+/**
+ * The Stage-wide reclaim of expired regeneration leases (B-2), for the
+ * insertion's T1 under its own `stage_meta FOR UPDATE`. Same semantics as the
+ * per-Scene reclaim; the regeneration's own T1 keeps its per-Scene scope.
+ */
+export function reclaimExpiredStageRegenerations(
+  queryable: Queryable,
+  stageId: string,
+  now: number,
+): Promise<number> {
+  return reclaimExpired(queryable, { stageId }, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,10 +438,12 @@ async function startOnce(
   const withTransaction = nodePostgresTransaction(pool);
   return withTransaction(async (tx) => {
     const now = input.now ?? Date.now();
-    // 1. The Stage: service-owned and live. Writers take FOR UPDATE, so the
-    //    pre-image and its revision are stable for the rest of T1.
+    // 1. The Stage: service-owned and live. FOR UPDATE (B-2): the pre-image
+    //    and its revision are stable for the rest of T1, and this lock is the
+    //    Stage-wide mutex the insertion's T1 takes too — FOR SHARE would be
+    //    compatible with itself and exclude nothing.
     const meta = await tx.query<{ owner_id: string; deleted_at: unknown }>(
-      'SELECT owner_id, deleted_at FROM stage_meta WHERE stage_id = $1 FOR SHARE',
+      'SELECT owner_id, deleted_at FROM stage_meta WHERE stage_id = $1 FOR UPDATE',
       [input.stageId],
     );
     const stageRow = meta.rows[0];
@@ -445,8 +481,10 @@ async function startOnce(
         versionStatus,
       );
     }
-    // 3. Reclaim this Scene's expired leases.
+    // 3. Reclaim this Scene's expired leases, and the Stage's expired
+    //    insertion leases (B-2: expired leases are reclaimed in both directions).
     await reclaimExpired(tx, { stageId: input.stageId, sceneId: input.sceneId }, now);
+    await reclaimExpiredSceneInsertions(tx, { stageId: input.stageId }, now);
     // 4. Idempotency.
     const existing = await tx.query<RawRegenerationRow>(
       `SELECT ${COLUMNS} FROM teaching_package_scene_regenerations
@@ -497,6 +535,16 @@ async function startOnce(
       return refused(
         'SCENE_REGENERATION_IN_PROGRESS',
         'another regeneration of this slide is in progress',
+        true,
+        versionStatus,
+      );
+    }
+    // B-3: an insertion shifts every Scene (each revision moves), which would
+    // fail this paid regeneration at its commit — refuse before any spend.
+    if (await runningSceneInsertionId(tx, input.stageId, now)) {
+      return refused(
+        'STAGE_GENERATION_IN_PROGRESS',
+        'an AI slide insertion is running on this lesson; try again when it finishes',
         true,
         versionStatus,
       );

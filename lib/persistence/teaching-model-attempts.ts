@@ -28,7 +28,9 @@ export type TeachingCapability =
   | 'help'
   | 'free_chat'
   // Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §8.2).
-  | 'scene_regeneration';
+  | 'scene_regeneration'
+  // Reviewer-generated slide for a lesson part (reviewer-generated-slide plan §14).
+  | 'scene_insertion';
 export type TeachingOrigin = 'openmaic_runtime' | 'kafuo_backend';
 export type AttemptRole = 'primary' | 'fallback';
 export type AccountingStatus = 'started' | 'complete' | 'incomplete';
@@ -67,7 +69,7 @@ const TEACHING_MODEL_ATTEMPT_TABLES = `
 CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0),
-  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration')),
+  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration','scene_insertion')),
   subject_code TEXT NOT NULL,
   policy_version TEXT NOT NULL,
   stage TEXT NOT NULL,
@@ -126,6 +128,7 @@ CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   scene_id TEXT,
   legacy_help_link_ref TEXT,
   scene_regeneration_id TEXT,
+  scene_insertion_id TEXT,
   worker_id TEXT NOT NULL,
   late_completion BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DOUBLE PRECISION NOT NULL,
@@ -192,6 +195,27 @@ BEGIN
   END IF;
 END;
 $$;
+-- Reviewer-generated slide insertion (reviewer-generated-slide plan §12 E-3):
+-- its own association column and a superset CHECK, guarded on its own value.
+-- The block above is unchanged: on a pre-regeneration ledger it widens to five
+-- values first, and this one then widens to six. A re-boot is a no-op.
+ALTER TABLE teaching_model_attempts ADD COLUMN IF NOT EXISTS scene_insertion_id TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_model_attempts_capability_check'
+       AND pg_get_constraintdef(oid) LIKE '%scene_insertion%'
+  ) THEN
+    ALTER TABLE teaching_model_attempts
+      DROP CONSTRAINT IF EXISTS teaching_model_attempts_capability_check;
+    ALTER TABLE teaching_model_attempts
+      ADD CONSTRAINT teaching_model_attempts_capability_check
+      CHECK (capability IN ('package_generation','question_generation','help',
+                            'free_chat','scene_regeneration','scene_insertion'));
+  END IF;
+END;
+$$;
 `;
 
 export const TEACHING_MODEL_ATTEMPTS_SCHEMA = `${TEACHING_MODEL_ATTEMPT_TABLES}
@@ -235,6 +259,8 @@ export type AttemptAssociation =
        * its spend is reported on its own and never folds into the attempt's.
        */
       sceneRegenerationId?: string | null;
+      /** A reviewer-generated slide insertion: same rule, its own row id. */
+      sceneInsertionId?: string | null;
     }
   | {
       kind: 'turn';
@@ -381,6 +407,7 @@ export interface TeachingModelAttemptRow {
   scene_id: string | null;
   legacy_help_link_ref: string | null;
   scene_regeneration_id?: string | null;
+  scene_insertion_id?: string | null;
   worker_id: string;
   late_completion: boolean;
   created_at: number;
@@ -421,7 +448,7 @@ export async function insertStartedAttempt(
        started_at, origin,
        generation_attempt_id, generation_run, version_id, learning_item_type, learning_item_id, question_set_ref,
        conversation_id, turn_id, help_session_id, student_ref, scene_id, legacy_help_link_ref,
-       worker_id, created_at, scene_regeneration_id
+       worker_id, created_at, scene_regeneration_id, scene_insertion_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10, $11, $12,
@@ -430,7 +457,7 @@ export async function insertStartedAttempt(
        $17, $18,
        $19, $20, $21, $22, $23, $24,
        $25, $26, $27, $28, $29, $30,
-       $31, $17, $32
+       $31, $17, $32, $33
      )`,
     [
       input.id,
@@ -465,6 +492,7 @@ export async function insertStartedAttempt(
       turn?.legacyHelpLinkRef ?? null,
       input.workerId,
       generation?.sceneRegenerationId ?? null,
+      generation?.sceneInsertionId ?? null,
     ],
   );
 }
@@ -862,7 +890,8 @@ export type AttemptGroupBy =
   | 'version_id'
   | 'generation_attempt_id'
   | 'learning_item_id'
-  | 'scene_regeneration_id';
+  | 'scene_regeneration_id'
+  | 'scene_insertion_id';
 
 const GROUP_BY_COLUMNS: ReadonlySet<AttemptGroupBy> = new Set([
   'capability',
@@ -881,6 +910,7 @@ const GROUP_BY_COLUMNS: ReadonlySet<AttemptGroupBy> = new Set([
   'generation_attempt_id',
   'learning_item_id',
   'scene_regeneration_id',
+  'scene_insertion_id',
 ]);
 
 /** Shared row filter for the reporting queries (all optional). */

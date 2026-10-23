@@ -298,6 +298,43 @@ export type TeachingPackageErrorCode =
   | 'PRECONDITION_REQUIRED'
   /** A grant-delegated Scene write was based on a revision that is no longer current. */
   | 'SCENE_REVISION_CONFLICT'
+  // --- Reviewer-generated slide for a lesson part (reviewer-generated-slide plan §16) ---
+  /** No flow, a legacy successor, or no retained lesson parts (`details.reason`). */
+  | 'INSERTION_NOT_SUPPORTED'
+  /** Unknown, non-instructional, textless, duplicate, or more than 3 units. */
+  | 'INSERTION_UNIT_INVALID'
+  /** A chosen unit is already cited by a live slide. */
+  | 'INSERTION_UNIT_ALREADY_COVERED'
+  /** The anchors are not adjacent, or no teaching stage is allowed there. */
+  | 'INSERTION_POSITION_NOT_ALLOWED'
+  /** The anchors or the stage changed before the commit. */
+  | 'INSERTION_POSITION_CHANGED'
+  /** The projected or final document fails the exact Teaching Model Flow. */
+  | 'INSERTION_FLOW_INVALID'
+  /** The new slide adds a scene-policy diagnostic. */
+  | 'INSERTION_FLOW_POLICY_VIOLATION'
+  /** The planner's answer failed validation after one corrective re-ask. */
+  | 'INSERTION_PLAN_INVALID'
+  /** A governed slide's alignment baseline could not be stamped. */
+  | 'INSERTION_ALIGNMENT_UNAVAILABLE'
+  /** Whole-stage Skill validation fails on existing scenes or the flow (`details.offendingSceneIds`). */
+  | 'INSERTION_SKILLS_INVALID'
+  /** The candidate shows an image outside the eligible approved set. */
+  | 'INSERTION_VISUAL_NOT_APPROVED'
+  /** Three build attempts found no stable stage revision. */
+  | 'INSERTION_STAGE_BUSY'
+  /** The insertion's lease expired or its token changed. */
+  | 'INSERTION_LEASE_LOST'
+  /** A status lookup outside tenant + version + Stage. */
+  | 'INSERTION_NOT_FOUND'
+  /** The slide was generated but could not be recorded; nothing was written. */
+  | 'INSERTION_PERSISTENCE_FAILED'
+  /** Another insertion runs on the Stage. */
+  | 'SCENE_INSERTION_IN_PROGRESS'
+  /** A regeneration runs (for an insertion), or an insertion runs (for a regeneration, B-3). */
+  | 'STAGE_GENERATION_IN_PROGRESS'
+  /** The idempotency key was already used for a different insertion request. */
+  | 'IDEMPOTENCY_KEY_REUSED'
   // --- Reviewer audio repair of one Scene (scene-narration-audio-regeneration-plan) ---
   /** The Stage's TTS route (or any server TTS provider) is not available now. */
   | 'NARRATION_AUDIO_UNAVAILABLE'
@@ -447,6 +484,24 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SCENE_CHANGED_SINCE_REGENERATION: 409,
   PRECONDITION_REQUIRED: 428,
   SCENE_REVISION_CONFLICT: 409,
+  INSERTION_NOT_SUPPORTED: 422,
+  INSERTION_UNIT_INVALID: 422,
+  INSERTION_UNIT_ALREADY_COVERED: 409,
+  INSERTION_POSITION_NOT_ALLOWED: 422,
+  INSERTION_POSITION_CHANGED: 409,
+  INSERTION_FLOW_INVALID: 422,
+  INSERTION_FLOW_POLICY_VIOLATION: 422,
+  INSERTION_PLAN_INVALID: 502,
+  INSERTION_ALIGNMENT_UNAVAILABLE: 422,
+  INSERTION_SKILLS_INVALID: 422,
+  INSERTION_VISUAL_NOT_APPROVED: 422,
+  INSERTION_STAGE_BUSY: 409,
+  INSERTION_LEASE_LOST: 409,
+  INSERTION_NOT_FOUND: 404,
+  INSERTION_PERSISTENCE_FAILED: 503,
+  SCENE_INSERTION_IN_PROGRESS: 409,
+  STAGE_GENERATION_IN_PROGRESS: 409,
+  IDEMPOTENCY_KEY_REUSED: 409,
   NARRATION_AUDIO_UNAVAILABLE: 503,
   NARRATION_AUDIO_GENERATION_FAILED: 502,
   TTS_ROUTE_INVALID: 400,

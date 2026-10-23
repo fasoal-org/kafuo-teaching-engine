@@ -78,7 +78,7 @@ export interface InsertionPositionOption extends InsertionPosition {
 }
 
 export interface ContentUnitsResponse {
-  lineageStatus: 'own_attempt' | 'predecessor' | 'unavailable';
+  lineageStatus: 'own_attempt' | 'predecessor_attempt' | 'unavailable';
   units: ContentUnitSummary[];
   /** One entry per gap, from before the first Scene to after the last. */
   positions: InsertionPositionOption[];
