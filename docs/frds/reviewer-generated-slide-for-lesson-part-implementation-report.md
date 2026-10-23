@@ -124,6 +124,12 @@ Review (4), on `8dd30da1` — fixed in `ddff7126`:
 | (4) A T1 commit whose acknowledgement is lost leaves a running row with no generation; the editor then waits for `LEASE_EXPIRED` (≤ 18 min) | LOW | Accepted (rare); the status read reclaims the lease, and the hold ends with a terminal answer |
 | (4) Step 9a `loadStageData` has no timeout | LOW | Deferred: it is the shared `stage-storage` read used by every load; the result fetch is retried 3 times while holding |
 
+`ddff7126` itself has had no separate independent review; it is covered by the pending Codex re-review gate (§8).
+
+Verified fact behind the hold-until-lease design: a dropped or aborted POST connection (the client's 5 min per-attempt timeout, or an edge `proxy_read_timeout`) does not cancel the server run. No request signal is passed into generation: `grep -n signal|abort` over the four insertion routes, `scene-insertion.ts`, `insert-one-scene.ts`, `routed-insertion-call.ts` and `plan-inserted-slide.ts` finds only the POST route's comment that the run ignores `req.signal`.
+
+Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key until the 20 min deadline. A server bug that fails every attempt keeps the editor's Stage locked that long before `unknown` (no duplicate run is possible — one row per version + key). Before review 3 it failed fast. A possible later refinement: after a coded `INTERNAL_ERROR`, a `GET ?key=` answering `INSERTION_NOT_FOUND` is definite, because that handler has already finished.
+
 ## 8. Pending gates and limitations
 
 - `PG_CONTRACT_URL` suites (`tests/teaching-package/scene-insertion-store.pg.test.ts`, `scene-regeneration-store.pg.test.ts`) were **skipped**: no disposable PostgreSQL was identified. True two-connection races (A-5) are only proven there.
