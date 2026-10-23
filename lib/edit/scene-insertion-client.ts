@@ -96,6 +96,8 @@ export interface SceneInsertionStatus {
   revTransitions: Record<string, { before: number; after: number }> | null;
   requestedAt: number;
   completedAt: number | null;
+  /** Running rows: the lease time left, measured on the server (no clock skew). */
+  leaseRemainingMs?: number | null;
 }
 
 export class SceneInsertionRequestError extends Error {
@@ -183,23 +185,40 @@ function isAmbiguousAnswer(status: number, code: string): boolean {
 }
 
 /**
+ * The whole run's wall-clock budget: the POST retries and the polling share
+ * it, and it outlasts the server's longest lease (1080 s) counted from before
+ * the first POST, so the editor's hold never ends while the server may commit.
+ */
+export const INSERTION_RUN_BUDGET_MS = 20 * 60 * 1000;
+/** One POST attempt; the server ignores a disconnect, and the same key then replays. */
+const POST_ATTEMPT_TIMEOUT_MS = 5 * 60 * 1000;
+
+function timeoutSignal(ms: number): { signal?: AbortSignal } {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? { signal: AbortSignal.timeout(ms) }
+    : {};
+}
+
+/**
  * POST, retried with the SAME key when the transport itself failed or the
- * answer is ambiguous (above): the first POST waits for the whole run, so a
- * proxy may cut it while the server keeps generating, and the same key
- * replays it (`202` running, or the stored outcome) — never a second run.
- * When those retries run out the error is thrown as a transport failure, so
- * the caller reports `unknown` (keep the key), never a definite failure.
+ * answer is ambiguous (above), with a capped backoff until `deadline`: the
+ * first POST waits for the whole run, so a proxy or a network drop may cut it
+ * while the server keeps generating, and the same key replays it (`202`
+ * running, or the stored outcome) — never a second run. Past the deadline the
+ * error is thrown as a transport failure, so the caller reports `unknown`
+ * (keep the key), never a definite failure.
  */
 export async function postSceneInsertion(
   stageId: string,
   body: SceneInsertionRequest,
-  options: { fetchImpl?: typeof fetch; transportRetries?: number; retryDelayMs?: number } = {},
+  options: { fetchImpl?: typeof fetch; deadline?: number; retryDelayMs?: number } = {},
 ): Promise<{ status: 200 | 202; insertion: SceneInsertionStatus | { insertionId: string } }> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const retries = options.transportRetries ?? 2;
+  const deadline = options.deadline ?? Date.now() + INSERTION_RUN_BUDGET_MS;
+  const step = options.retryDelayMs ?? 1000;
   let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    if (attempt > 0) await delay((options.retryDelayMs ?? 1000) * attempt);
+  for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt += 1) {
+    if (attempt > 0) await delay(Math.min(step * attempt, step * 10));
     let response: Response;
     try {
       response = await fetchImpl(`${stagePath(stageId)}/scene-insertions`, {
@@ -207,6 +226,7 @@ export async function postSceneInsertion(
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
+        ...timeoutSignal(POST_ATTEMPT_TIMEOUT_MS),
       });
     } catch (error) {
       lastError = error;
@@ -236,13 +256,7 @@ export async function fetchInsertionStatus(
 ): Promise<SceneInsertionStatus> {
   const response = await fetchImpl(
     `${stagePath(stageId)}/scene-insertions/${encodeURIComponent(insertionId)}`,
-    {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-        ? { signal: AbortSignal.timeout(STATUS_READ_TIMEOUT_MS) }
-        : {}),
-    },
+    { credentials: 'same-origin', cache: 'no-store', ...timeoutSignal(STATUS_READ_TIMEOUT_MS) },
   );
   if (!response.ok) throw await errorFrom(response);
   return (await response.json()) as SceneInsertionStatus;
@@ -289,6 +303,8 @@ export interface RunSceneInsertionDeps {
   fetchImpl?: typeof fetch;
   pollIntervalMs?: number;
   maxPolls?: number;
+  /** The run's wall-clock budget (default {@link INSERTION_RUN_BUDGET_MS}). */
+  budgetMs?: number;
   /** Test seam: the read of step 9a. */
   loadStage?: typeof loadStageData;
   /** Test seam: runs right after the handle is created (lock taken). */
@@ -297,8 +313,13 @@ export interface RunSceneInsertionDeps {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 600 polls × 2 s = 20 min: longer than the server's default 900 s lease plus margin. */
-const DEFAULT_MAX_POLLS = 600;
+/**
+ * A safety cap on the poll count; the bound that matters is the wall-clock
+ * deadline (the run budget, extended to the server-reported lease + grace).
+ */
+const DEFAULT_MAX_POLLS = 1200;
+/** Polling continues this long past the server-reported end of the lease. */
+const LEASE_GRACE_MS = 60_000;
 /** The result fetch, tried this many times before `saved-not-shown`. */
 const FETCH_ATTEMPTS = 3;
 
@@ -347,16 +368,26 @@ export async function runSceneInsertion(
     // 7. Baseline.
     const baseline = handle.captureBaseline();
 
-    // 8. POST, then poll.
+    // 8. POST, then poll — both inside ONE wall-clock deadline, taken before
+    // the first POST (so it starts no later than the server's lease).
+    let deadline = Date.now() + (deps.budgetMs ?? INSERTION_RUN_BUDGET_MS);
+    const extendToLease = (reported: Pick<SceneInsertionStatus, 'leaseRemainingMs'> | null) => {
+      const remaining = reported?.leaseRemainingMs;
+      if (typeof remaining === 'number' && remaining > 0) {
+        deadline = Math.max(deadline, Date.now() + remaining + LEASE_GRACE_MS);
+      }
+    };
     let status: SceneInsertionStatus | null = null;
     let insertionId: string | null = null;
     try {
       const posted = await postSceneInsertion(stageId, input.request, {
         fetchImpl,
+        deadline,
         ...(deps.pollIntervalMs !== undefined ? { retryDelayMs: deps.pollIntervalMs } : {}),
       });
       insertionId = posted.insertion.insertionId;
       if (posted.status === 200) status = posted.insertion as SceneInsertionStatus;
+      else extendToLease(posted.insertion as SceneInsertionStatus);
     } catch (error) {
       if (error instanceof SceneInsertionRequestError) {
         return {
@@ -372,18 +403,22 @@ export async function runSceneInsertion(
     }
     // Poll until the row is terminal, still holding: a run the server may yet
     // commit must never release the hold early (the status read reclaims an
-    // expired lease, so a terminal answer always comes). Every error is
-    // transient except a definite "this tab may not see it" (404 / 403); the
-    // budget outlasts the lease.
+    // expired lease, so a terminal answer always comes). The deadline follows
+    // the server-reported lease. Every error is transient except the TE's own
+    // definite refusal (its envelope's 404 INSERTION_NOT_FOUND, or a 403) — a
+    // plain 404 from an edge or a deploy misroute is not one.
     for (let poll = 0; status === null || status.status === 'running'; poll += 1) {
-      if (poll >= (deps.maxPolls ?? DEFAULT_MAX_POLLS)) return { kind: 'unknown', insertionId };
+      if (poll >= (deps.maxPolls ?? DEFAULT_MAX_POLLS) || (poll > 0 && Date.now() >= deadline)) {
+        return { kind: 'unknown', insertionId };
+      }
       if (poll > 0) await delay(deps.pollIntervalMs ?? 2000);
       try {
         status = await fetchInsertionStatus(stageId, insertionId, fetchImpl);
+        if (status.status === 'running') extendToLease(status);
       } catch (error) {
         if (
           error instanceof SceneInsertionRequestError &&
-          (error.status === 404 || error.status === 403)
+          ((error.status === 404 && error.code === 'INSERTION_NOT_FOUND') || error.status === 403)
         ) {
           return { kind: 'unknown', insertionId };
         }

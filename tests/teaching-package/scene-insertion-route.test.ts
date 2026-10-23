@@ -687,6 +687,34 @@ describe('reviewer-generated slide insertion routes', () => {
     expect(((await foreign.json()) as { error: { code: string } }).error.code).toBe(
       'INSERTION_NOT_FOUND',
     );
+    // The owner's read: a terminal row reports no lease.
+    const own = await get('byId', seeded, insertion.insertionId);
+    expect(own.status).toBe(200);
+    expect(await own.json()).toMatchObject({ status: 'succeeded', leaseRemainingMs: null });
+  });
+
+  it('a running row reports its remaining lease, so the editor keeps holding past its budget', async () => {
+    const { insertionStatusBody } = await import('@/lib/server/teaching-package/scene-insertion');
+    const { readSceneInsertion } =
+      await import('@/lib/server/teaching-package/scene-insertion-store');
+    const seeded = await seed();
+    const now = Date.now();
+    await pool.query(
+      `INSERT INTO teaching_package_scene_insertions
+         (id, tenant_id, version_id, stage_id, new_scene_id, new_outline_id, unit_ids, teaching_stage,
+          idempotency_key, request_digest, reason, actor_ref, status, attempt_token, lease_expires_at,
+          requested_at)
+       VALUES ('tpsi_leased', $1, $2, $3, 'n', 'ins_n', '["cu_3"]'::jsonb,
+               '{"key":"explain","flowIndex":1}'::jsonb, 'k-leased', 'd', 'r', 'a', 'running', 't', $4, $5)`,
+      [TENANT, seeded.versionId, seeded.stageId, now + 600_000, now],
+    );
+    const row = await readSceneInsertion(pool as unknown as ConnectableQueryable, 'tpsi_leased');
+    expect(row).not.toBeNull();
+    expect(insertionStatusBody(row!, now)).toMatchObject({
+      status: 'running',
+      leaseRemainingMs: 600_000,
+    });
+    expect(insertionStatusBody(row!, now + 700_000).leaseRemainingMs).toBe(0);
   });
 
   // -------------------------------------------------------------- refusals

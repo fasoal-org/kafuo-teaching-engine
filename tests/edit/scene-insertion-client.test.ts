@@ -391,22 +391,42 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(posts).toBe(1);
   });
 
-  it('gateway answers on every POST attempt → unknown (keep the key), never failed', async () => {
+  it('ambiguous POST answers until the run deadline → unknown (keep the key), never failed', async () => {
     const { impl } = fetchRouter({ post: () => new Response('bad gateway', { status: 502 }) });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1, budgetMs: 30 },
+    );
+    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+    expect(isStageWritesHeld(STAGE)).toBe(false);
+  });
+
+  it('a network drop over many POST attempts keeps retrying the same key inside the deadline', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    const bodies: string[] = [];
+    const { impl } = fetchRouter({
+      post: (init) => {
+        bodies.push(String(init?.body));
+        if (bodies.length <= 6) throw new TypeError('network down');
+        return Response.json({ insertion: running, replayed: true }, { status: 202 });
+      },
+    });
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
       { fetchImpl: impl, pollIntervalMs: 1 },
     );
-    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(bodies).toHaveLength(7);
+    expect(new Set(bodies).size).toBe(1);
   });
 
   it('an unmapped TE INTERNAL_ERROR on the POST is retried with the same key (the replay answers)', async () => {
     const running = { ...succeeded, status: 'running' as const, revTransitions: null };
-    let posts = 0;
+    const bodies: string[] = [];
     const { impl } = fetchRouter({
-      post: () => {
-        posts += 1;
-        return posts === 1
+      post: (init) => {
+        bodies.push(String(init?.body));
+        return bodies.length === 1
           ? Response.json({ error: { code: 'INTERNAL_ERROR' } }, { status: 500 })
           : Response.json({ insertion: running, replayed: true }, { status: 202 });
       },
@@ -416,7 +436,61 @@ describe('scene insertion client — result application (step 9)', () => {
       { fetchImpl: impl, pollIntervalMs: 1 },
     );
     expect(outcome).toMatchObject({ kind: 'success' });
-    expect(posts).toBe(2);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
+  });
+
+  it('the polling deadline follows the server-reported lease', async () => {
+    let polls = 0;
+    const leased = {
+      ...succeeded,
+      status: 'running' as const,
+      revTransitions: null,
+      leaseRemainingMs: 500,
+    };
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: leased, replayed: true }, { status: 202 }),
+      status: () => {
+        polls += 1;
+        return polls < 15 ? Response.json(leased) : Response.json(succeeded);
+      },
+    });
+    // A run budget that alone would stop after the first poll or so.
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1, budgetMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(polls).toBe(15);
+  });
+
+  it('a plain 404 (edge, misroute) is transient; only the TE’s INSERTION_NOT_FOUND ends polling', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    let polls = 0;
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: running, replayed: true }, { status: 202 }),
+      status: () => {
+        polls += 1;
+        return polls === 1 ? new Response('Not found', { status: 404 }) : Response.json(succeeded);
+      },
+    });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'success' });
+  });
+
+  it('the server lease can never outlast the editor’s run budget', async () => {
+    const { MAX_SCENE_INSERTION_LEASE_SECONDS, sceneInsertionLeaseSeconds } =
+      await import('@/lib/server/teaching-package/scene-insertion-store');
+    const { INSERTION_RUN_BUDGET_MS } = await import('@/lib/edit/scene-insertion-client');
+    expect(MAX_SCENE_INSERTION_LEASE_SECONDS * 1000 + 60_000).toBeLessThan(INSERTION_RUN_BUDGET_MS);
+    vi.stubEnv('SCENE_INSERTION_LEASE_SECONDS', '5000');
+    expect(sceneInsertionLeaseSeconds()).toBe(MAX_SCENE_INSERTION_LEASE_SECONDS);
+    vi.stubEnv('SCENE_INSERTION_LEASE_SECONDS', '120');
+    expect(sceneInsertionLeaseSeconds()).toBe(120);
+    vi.unstubAllEnvs();
   });
 
   it('transient poll errors (transport, gateway, coded 500) keep polling — and keep holding', async () => {

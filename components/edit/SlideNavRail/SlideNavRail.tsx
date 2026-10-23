@@ -151,10 +151,15 @@ export function SlideNavRail() {
   }, [insertionRunning, stageId, t]);
 
   const insertionRequest = useRef(0);
+  // The Stage on screen now: a callback bound to an earlier Stage (a run that
+  // settles after a switch) must not touch the current Stage's state.
+  const currentStageIdRef = useRef(stageId);
+  currentStageIdRef.current = stageId;
   // Re-read on Stage change, on every dialog/panel open (the gate's `running`
   // must be fresh) and after a slide was added (coverage changed).
   const refreshInsertion = useCallback(async () => {
     if (!stageId || !isTeachingPackageGrantSession()) return;
+    if (currentStageIdRef.current !== stageId) return;
     const request = ++insertionRequest.current;
     const gate = await fetchInsertionGate(stageId).catch(() => null);
     if (request !== insertionRequest.current) return;
@@ -754,7 +759,11 @@ export function SlideNavRail() {
           open
           loadFailed={contentUnits?.failed ?? false}
           onOpenChange={(open) => {
-            if (!open) setInserting(null);
+            // Only this Stage's dialog: a run settling after a switch must not
+            // close the next Stage's open dialog.
+            const dialogStageId = stageId;
+            if (!open)
+              setInserting((current) => (current?.stageId === dialogStageId ? null : current));
           }}
           stageId={stageId}
           data={contentUnits?.data ?? null}

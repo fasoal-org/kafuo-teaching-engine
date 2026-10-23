@@ -336,9 +336,17 @@ export interface SceneInsertionStatusBody {
   revTransitions: Record<string, { before: number; after: number }> | null;
   requestedAt: number;
   completedAt: number | null;
+  /**
+   * Running rows: the lease time left, measured on the server, so the editor
+   * keeps holding at least until the server could no longer commit.
+   */
+  leaseRemainingMs: number | null;
 }
 
-export function insertionStatusBody(row: SceneInsertion): SceneInsertionStatusBody {
+export function insertionStatusBody(
+  row: SceneInsertion,
+  now = Date.now(),
+): SceneInsertionStatusBody {
   return {
     insertionId: row.id,
     status: row.status,
@@ -349,6 +357,7 @@ export function insertionStatusBody(row: SceneInsertion): SceneInsertionStatusBo
     revTransitions: row.sceneRevTransitions,
     requestedAt: row.requestedAt,
     completedAt: row.completedAt,
+    leaseRemainingMs: row.status === 'running' ? Math.max(0, row.leaseExpiresAt - now) : null,
   };
 }
 
@@ -358,10 +367,10 @@ export type SceneInsertionResponse =
 
 function replayResponse(row: SceneInsertion, now: number): SceneInsertionResponse {
   if (row.status === 'running' && row.leaseExpiresAt > now) {
-    return { status: 202, body: { insertion: insertionStatusBody(row), replayed: true } };
+    return { status: 202, body: { insertion: insertionStatusBody(row, now), replayed: true } };
   }
   if (row.status === 'succeeded' && row.resultScene && row.resultSceneRev !== null) {
-    return { status: 200, body: { insertion: insertionStatusBody(row), replayed: true } };
+    return { status: 200, body: { insertion: insertionStatusBody(row, now), replayed: true } };
   }
   throw storedInsertionFailureError(row);
 }
@@ -826,11 +835,14 @@ export async function insertGeneratedSlide(
     });
   };
 
-  // Generation — no transaction is open while the model runs.
-  const eligible = await eligibleVisuals(outlineRecord, request.unitIds, deps);
-  const eligibleImages = eligible.map((visual) => visual.image);
+  // Generation — no transaction is open while the model runs. Everything from
+  // here on is inside the try: a throw must fail the row, never strand it.
+  let eligible: EligibleVisual[] = [];
+  let eligibleImages: PdfImage[] = [];
   let governedContext: GovernedRegenerationContext | undefined;
   try {
+    eligible = await eligibleVisuals(outlineRecord, request.unitIds, deps);
+    eligibleImages = eligible.map((visual) => visual.image);
     governedContext = context.governed
       ? await (deps.resolveGoverned ?? resolveGovernedRegenerationContext)(pool, grant.versionId, {
           teachingStage: request.teachingStage,
@@ -955,6 +967,7 @@ export async function insertGeneratedSlide(
           revTransitions: committed.sceneRevTransitions,
           requestedAt: row.requestedAt,
           completedAt: committed.completedAt,
+          leaseRemainingMs: null,
         },
         replayed: false,
       },
@@ -1241,7 +1254,7 @@ export async function readSceneInsertionForGrant(
   ) {
     throw new TeachingPackageError('INSERTION_NOT_FOUND', 'slide insertion not found');
   }
-  return insertionStatusBody(found);
+  return insertionStatusBody(found, now);
 }
 
 /** The UI gate (§15). Never writes; expired rows are reported as not running. */
