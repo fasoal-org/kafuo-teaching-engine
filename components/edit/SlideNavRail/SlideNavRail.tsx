@@ -749,8 +749,14 @@ export function SlideNavRail() {
           fixedPosition={inserting.position}
           localGenerationRunning={localGenerationRunning}
           gateRunning={insertionGate?.running}
-          onRunningChange={setInsertionRunning}
-          onInserted={() => void refreshInsertion()}
+          onRunningChange={(running) => {
+            setInsertionRunning(running);
+            // Re-read after every settled run: a success or an "already
+            // covered" refusal changes coverage, and a `busy` retry needs the
+            // gate's current `running` (a frozen `unknown` retry resends its
+            // own body, so the refresh cannot change it).
+            if (!running) void refreshInsertion();
+          }}
         />
       ) : null}
     </aside>
