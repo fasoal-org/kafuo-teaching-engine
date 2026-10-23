@@ -7,7 +7,7 @@
 | Review report | `reviewer-generated-slide-for-lesson-part-plan-review.md` — kept unchanged as historical evidence |
 | Branch | `codex/reviewer-generated-slide-for-lesson-part`, from `origin/staging` at `eae05f4c` |
 | Scope | W0–W5, B-1..B-4, E-1..E-3 (authorized by the owner for this task) |
-| Status | Implemented; focused tests pass; independent review done (§7); **not runtime-verified** (§8) |
+| Status | Implemented; focused tests pass; independent review done (§7); network-hold fix on `codex/fix-scene-insertion-network-hold` (§9); **not runtime-verified** (§8, §9.5) |
 
 ## 1. What was built
 
@@ -147,7 +147,7 @@ Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key
 | Attribute | Value |
 |---|---|
 | Branch | `codex/fix-scene-insertion-network-hold`, from the implementation HEAD `7a392eae`; `origin/staging` was `eae05f4c` (the implementation's base), so nothing had to be incorporated |
-| Code commit | `fc4973fa` |
+| Code commits | `fc4973fa` (the fix), `8ea82415` (hardening after the independent review, §9.4) |
 | Superseded here | §7 review-4 rows on the run deadline and `leaseRemainingMs`; §7 "Known tradeoff"; §8 "the edge where the client's deadline and the server's lease end…" |
 
 ### 9.1 The two findings
@@ -166,13 +166,13 @@ Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key
    - After the baseline, the editor reads `serverNow` from the gate. Every POST of the run carries `admitBy = serverNow + 2 min` in an identical body.
    - T1 takes `stage_meta FOR UPDATE` and only then reads its clock (`scene-insertion-store.ts`, `startOnce`). It answers a replay first and refuses `now > admitBy` with `409 INSERTION_ADMISSION_CLOSED` (audited, no row). The lease starts at that same post-lock time.
    - A request still in transit, in the unlocked pre-T1 phase, or queued on the lock after the client's timeout can therefore start a run only by `admitBy`. Its lease ends by `admitBy + 1080 s`.
-   - The service enforces `min(admitBy, arrival + 5 min)`, so every request has a server-side deadline. A client timestamp is never trusted on its own: `admitBy` is a server-clock value, and the server compares it with its own clock.
+   - The service enforces `min(admitBy, arrival + 5 min)`, so every request has a server-side deadline. `admitBy` is required by the parser (`400 INVALID_REQUEST` without it), so a client without the protocol cannot run. A client timestamp is never trusted on its own: `admitBy` is a server-clock value, and the server compares it with its own clock.
    - `admitBy` is not part of the digest. The dialog's retry after `unknown` (same key, a new run, a new deadline) still replays.
 2. **T2 commits only inside its lease.** The `'before'` phase already checked the lease under the row lock. The `'after'` phase now repeats the check right before COMMIT (`AND lease_expires_at > completedAt`), so only the COMMIT statement itself can land after the lease.
 3. **The by-key read is linearizable with T1.**
-   - It takes `stage_meta FOR SHARE`, then reads the clock, then selects by key (and lazily reclaims an expired row) — `readSceneInsertionByKeyUnderStageLock`.
+   - It pins READ COMMITTED, takes `stage_meta FOR SHARE`, then reads the clock, then selects by key (and lazily reclaims an expired row) — `readSceneInsertionByKeyUnderStageLock`.
    - A T1 holds the lock FOR UPDATE from its admission check to its COMMIT, so the read waits for it and sees its row.
-   - Its 404 carries `details.serverNow`. No row with `serverNow > admitBy` proves that no run under the key exists or can start: every later T1 reads a later clock.
+   - Its 404 carries `details.serverNow`. The editor trusts "no row" only when `serverNow > admitBy + 30 s` (`INSERTION_CLOCK_MARGIN_MS`). Then no run under the key exists or can start: every later T1 reads a later clock, and the margin absorbs a TE clock stepped back by less than 30 s.
    - The lock order is stage_meta, then the insertion row, as in T1 and T2.
 4. **The client separates its two bounds**, both counted on `performance.now()` from the gate's answer:
    - *Retry budget* — `retryUntil` = 2 min.
@@ -182,8 +182,9 @@ Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key
    - POSTs only within the retry budget;
    - after an ambiguous attempt, reads the key, which creates nothing;
    - settles a known id only by its status reads, never by another POST;
-   - waits for the key to settle after a refusal of a *later* attempt;
-   - ends the hold only on a definite answer or at `releaseAt`.
+   - waits for the key to settle after a refusal of a *later* attempt, including a later `INSERTION_ADMISSION_CLOSED`;
+   - past `releaseAt`, makes one last read. By key, it queues behind any T2 still holding `stage_meta`; by id, its lazy reclaim waits for T2's row lock and settles an expired lease. Only when that read fails is the outcome `unknown`;
+   - ends the hold only on a definite answer, or when that last read fails.
 5. **Bodies are part of the attempt (Finding 2).**
    - `postOnce`, `readByKey` and `readById` read `text()` and parse inside the attempt. Each status body is validated: `insertionId`, a known `status`, and `newSceneId` on success.
    - The following are ambiguous:
@@ -194,14 +195,14 @@ Known tradeoff: a TE-coded `INTERNAL_ERROR` on the POST now retries the same key
      - the TE's `INTERNAL_ERROR`.
 
      Ambiguous means: the same body again within the budget, else the key read.
-   - A coded TE error, or a code-less 4xx status line, stays a refusal of that request.
+   - A coded TE error, or a code-less 4xx status line whatever its body, stays a refusal of that request.
    - A malformed status read is transient. It can no longer leave the poll loop with `status: undefined`, and it can no longer reach the apply step.
 
 **Why release is now safe:**
-- Every return path either got a definite answer, or ran past `releaseAt`. The definite answers are:
+- Every return path either got a definite answer, or ran past `releaseAt` and a last read failed. The definite answers are:
   - a terminal row;
-  - the TE's server-attested "no row past `admitBy`";
-  - `INSERTION_ADMISSION_CLOSED` or `IDEMPOTENCY_KEY_REUSED`;
+  - the TE's server-attested "no row a margin past `admitBy`";
+  - `IDEMPOTENCY_KEY_REUSED`;
   - a refusal of the only request sent;
   - the TE refusing the status read itself.
 - Two server-enforced facts make `releaseAt` safe. A run can start only by `admitBy`, and it can commit only before its lease ends.
@@ -219,14 +220,15 @@ Preserved:
 ### 9.3 Verification
 
 - Mapped statically first: `scene-insertion-client.ts` (callers: the dialog, the rail's gate read), `scene-insertion-store.ts`, `scene-insertion.ts`, `errors.ts`, the four routes, the dialog's `KNOWN_ERROR_CODES`, and the 12 locales.
-- Sized the impacted tests with `pnpm exec vitest list` (131 tests in 8 files), then ran them at most three files per command. No full suite was run.
+- Sized the impacted tests with `pnpm exec vitest list` (131 tests in 8 files at `fc4973fa`), then ran them at most three files per command. No full suite was run.
+- After the hardening (`8ea82415`), the same 8 files were rerun.
 
-| `pnpm exec vitest run …` | Result |
+| `pnpm exec vitest run …` (on `8ea82415`) | Result |
 |---|---|
-| `tests/edit/scene-insertion-client.test.ts tests/teaching-package/scene-insertion-route.test.ts tests/teaching-package/scene-insertion-store.test.ts` | 80 passed |
+| `tests/edit/scene-insertion-client.test.ts tests/teaching-package/scene-insertion-route.test.ts tests/teaching-package/scene-insertion-store.test.ts` | 89 passed (client 49) |
 | `tests/teaching-package/scene-insertion-store.pg.test.ts tests/components/edit/generate-slide-for-part-dialog.test.ts tests/components/edit/lesson-parts-panel.test.ts` | 33 passed, 6 skipped (pg, no `PG_CONTRACT_URL`) |
 | `tests/i18n/edit-chrome-keys.test.ts tests/document-store/slide-nav-rail-teaching-stage.test.ts` | 18 passed |
-| **Total** | **131 passed, 6 skipped, 0 failed** |
+| **Total** | **140 passed, 6 skipped, 0 failed** |
 
 Regression coverage added:
 - **Client** (fake clock and fake pause; every pause records whether the Stage is still held):
@@ -236,7 +238,12 @@ Regression coverage added:
   - a truncated 202 body; an interrupted 202 body read; three malformed success envelopes (re-sent with the same key and body);
   - same-key recovery to a stored failure;
   - a later attempt's refusal that waits for the key (and the earlier attempt starts), or is reported once the key stays empty past the deadline;
-  - `INSERTION_ADMISSION_CLOSED` definite on any attempt;
+  - a later attempt's `INSERTION_ADMISSION_CLOSED` waits for the key, trusted only a clock margin past the deadline;
+  - `IDEMPOTENCY_KEY_REUSED` definite on any attempt;
+  - a code-less 404 on the only POST is its refusal (no long hold); a code-less 408 or 429 is ambiguous and re-sent;
+  - a by-key 404 without `serverNow` never settles the key;
+  - past `releaseAt`, the last read still settles: by key (a run that committed late) and by id (an expired lease reclaimed as a failure);
+  - a TE `403 READ_ONLY_GRANT` on the status read ends polling as `unknown`;
   - no server clock → nothing sent;
   - a malformed status read is transient;
   - a never-settling row held to `releaseAt`;
@@ -253,7 +260,7 @@ Regression coverage added:
   - a T1 lock granted past `admitBy` → refused;
   - the service clamp;
   - `admitBy` excluded from the digest (a later run replays even past its deadline);
-  - a malformed `admitBy` → 400;
+  - a malformed or missing `admitBy` → 400, no row;
   - the by-key 404 carries a post-lock `serverNow`;
   - the gate reports `serverNow`.
 - **PG-gated (written, NOT run):**
@@ -268,17 +275,29 @@ Static:
 
 ### 9.4 Independent review
 
-_Pending — filled in from the reviewer's report._
+A read-only reviewer sub-agent that did not write the code reviewed `fc4973fa`. It walked every return path, the lock order and the clock reasoning, and ran the three main test files (80/80). Verdict: Findings 1 and 2 are resolved. **No BLOCKER and no MAJOR.**
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| M1 — "no row past the deadline" and T1's check compare one TE clock with no slack; a backward clock step, or a second TE instance, could admit a queued attempt after the editor settled | MEDIUM | **Fixed** (`8ea82415`): the key settles only 30 s past `admitBy`, and a later attempt's `ADMISSION_CLOSED` waits for the key. Residual: a clock difference above 30 s (§9.5) |
+| M2 — the 2 min grace for COMMIT is not enforced by the server | MEDIUM | **Mitigated** (`8ea82415`): past `releaseAt` one last read waits behind any T2 still holding its locks. Residual: when that read also fails (offline) |
+| M3 — a lost COMMIT acknowledgement answers `INSERTION_PERSISTENCE_FAILED` as definite | MEDIUM | **Not changed**: pre-existing, outside the diff and outside the bug class (the release comes after the commit). Documented in §9.5 |
+| L1 — the by-key proof depends on READ COMMITTED | LOW | **Fixed**: the read pins `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` |
+| L2 — a by-id 403 releases while the run can still commit | LOW | Not changed (pre-existing); the tab's writes are refused server-side once read-only. Documented |
+| L3 — a code-less non-JSON 4xx on the POST became ambiguous (up to a 22 min hold), contradicting the comment | LOW | **Fixed**: any code-less 4xx status line other than 408/429 refuses that attempt; tests added |
+| L4 — a client without `admitBy` still runs with the old protocol | LOW | **Fixed**: `admitBy` is required (400) |
+| L5 — a first-attempt refusal assumes nothing below `fetch` duplicated the POST | LOW | Accepted and documented (browsers do not silently resend a POST that got an answer) |
+| L6 — test gaps | LOW | Partly closed (§9.3 list). Still open: the PG suite is unexecuted; the fake clock does not advance during a fetch; no clock-skew test |
 
 ### 9.5 Remaining limitations and UNVERIFIED
 
 - **UNVERIFIED — PostgreSQL concurrency.** The `PG_CONTRACT_URL` suite was skipped (no disposable database was identified). The real lock-wait and FOR SHARE-versus-T1 races are reasoned and simulated in PGlite only, and have not been run.
-- **UNVERIFIED — single TE instance.** Admission and lease checks compare server wall clocks. Two TE instances with skewed clocks would weaken the bound by the skew.
-- **UNVERIFIED — wall-clock steps.** A backward step of the TE's wall clock larger than the 2 min grace could admit a request after `admitBy` in real time. The pre-existing lease logic has the same dependency.
-- **UNVERIFIED — COMMIT latency.** After T2's `'after'` check, the COMMIT statement is assumed to finish within the grace.
+- **UNVERIFIED — one TE clock.** Admission and lease checks compare TE wall clocks (`Date.now()`). The production and staging compose files each run a single `te` service. Clock differences — a second instance, or a backward step of the host clock — are absorbed up to 30 s on the "no row" path and up to 2 min on the release bound; beyond that they are not. The pre-existing lease logic has the same dependency. A database clock (`clock_timestamp()`) would remove it, but it was not adopted here because leases are stored and compared in TE time everywhere else.
+- **UNVERIFIED — COMMIT latency when offline.** After T2's `'after'` check, the COMMIT is assumed to land within the 2 min grace *only if* the last read past `releaseAt` also fails. When the read reaches the server, it waits behind the T2 instead.
 - **Hold length.** While offline after a POST left, the editor holds for up to about 22 min (window + lease + grace) before `unknown`. That is the price of a finite safe bound.
 - **No server clock.** When the gate cannot be read, nothing is sent. The outcome is `unknown`, so the dialog keeps the key, but its message ("could not confirm") is broader than "nothing was sent".
-- **Late-attempt refusal delay.** A refusal of a later attempt is reported only after the key settles. This can wait until the admission window passes, at most about 2 min.
-- **A lost commit acknowledgement** still answers `INSERTION_PERSISTENCE_FAILED` as a definite failure (the handler finished and its run cannot commit later). The slide may in fact have landed; the next load shows it, and revision preconditions protect the next save. LOW, unchanged.
-- **By-id read refused by the TE.** The TE's own `404 INSERTION_NOT_FOUND` or `403` on a known id ends the hold as `unknown`. This is unchanged; the reason is that this tab can no longer write the Stage.
+- **Late-attempt refusal delay.** A refusal of a later attempt is reported only after the key settles. This can wait until the admission window plus the 30 s margin passes, at most about 2.5 min.
+- **A lost commit acknowledgement** still answers `INSERTION_PERSISTENCE_FAILED` as a definite failure (review M3; pre-existing). The handler finished and its run cannot commit later, so the release itself is safe. The slide may in fact have landed; the next load shows it, and revision preconditions protect the next save.
+- **By-id read refused by the TE.** The TE's own `404 INSERTION_NOT_FOUND`, or a `403` with a TE envelope, on a known id ends the hold as `unknown` (review L2; pre-existing). T2 does not check the grant, so the run may still commit. This tab's writes are refused once its grant is read-only, and the revision preconditions guard what lands later.
+- **A duplicated POST below `fetch`** (review L5): a first-attempt refusal is trusted as the only request. Browsers do not silently resend a POST that received an answer.
 - **Pending gates:** CI on the branch, staging acceptance A-1..A-28, the PG contract suite, and a Codex re-review. Nothing was deployed, no TE was restarted, no live database was queried and no provider was called.

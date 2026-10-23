@@ -25,7 +25,7 @@
 | F61 count | Three `saveToStorage` callers are fire-and-forget (`setGenerationComplete`, the `loadFromStorage` self-heal, server-restore hydration); `app/generation-preview/page.tsx` awaits. The four callers are **not** claimed to be every document writer | F61, §25 |
 | As built — API | The POST body is `{ insertion: Status, replayed }`; the two status GETs return `Status` itself, where `Status = { insertionId, status, errorCode, newSceneId, resultSceneRev, scene, revTransitions, requestedAt, completedAt, leaseRemainingMs }`. The content-units read also returns `positions` (one per gap, with `allowedStages`) and `stages` (labels), and per-unit `suggestedPosition`; `lineageStatus` uses the persistence values (`own_attempt` / `predecessor_attempt` / `unavailable`) | §8.3, §15 |
 | As built — client run deadline (reviews 3–4) | *Superseded by the network-hold fix below.* POST retries and polling shared one wall-clock deadline, extended to the server-reported lease plus grace | §5.1 step 8 |
-| Network-hold fix (post-implementation review, Findings 1–2) | A server-enforced admission deadline (`admitBy` from the gate's `serverNow`, checked in T1 after the Stage lock with a post-lock clock; service clamp arrival + 5 min; new `409 INSERTION_ADMISSION_CLOSED`); the by-key read under `stage_meta FOR SHARE` with `serverNow` on its 404; T2's lease re-checked in `'after'`; the client's retry budget separated from its safe release (window + longest lease + grace, monotonic); bodies read and validated inside each attempt | §5.1 step 8, §11.3, §11.4, §15, §16 |
+| Network-hold fix (post-implementation review, Findings 1–2) | A server-enforced admission deadline (`admitBy` from the gate's `serverNow`, checked in T1 after the Stage lock with a post-lock clock; service clamp arrival + 5 min; new `409 INSERTION_ADMISSION_CLOSED`); the by-key read under `stage_meta FOR SHARE` with `serverNow` on its 404; T2's lease re-checked in `'after'`; the client's retry budget separated from its safe release (window + longest lease + grace, monotonic); bodies read and validated inside each attempt. After the independent review: a 30 s clock margin on "no row", one last read past the release bound, READ COMMITTED pinned in the key read, `admitBy` required | §5.1 step 8, §11.3, §11.4, §15, §16 |
 | As built — modules | Shared Stage-mutex helpers live in `stage-generation-mutex.ts` (so neither store's T1 imports the other's); §10.8 lives in `insertion-skill-validation.ts`; `INSERTION_PERSISTENCE_FAILED` (503) is added for a commit that could not be recorded | §16, §17 |
 
 ## What changed from v3 (v3.1)
@@ -430,7 +430,7 @@ The full list of mutation entry points is [UNVERIFIED → W4a inventory]. Two sa
 8. **Admit, then settle (network-hold fix, `fc4973fa`).** The v3.2 single run deadline was measured before the first POST. A retry accepted near that deadline could start a lease that outlived the hold. The protocol is now:
    - **8a. Admission clock.** After the baseline, the editor reads the server clock from the gate (`serverNow`, 30 s timeout). With no clock, nothing is sent; the outcome is `unknown` and the key is kept. Every POST of this run carries `admitBy = serverNow + 2 min` (`INSERTION_ADMISSION_WINDOW_MS`).
      - **Server enforcement.** T1 takes `stage_meta FOR UPDATE`, reads its clock *after* the lock, answers a replay first, then refuses `now > admitBy` with `409 INSERTION_ADMISSION_CLOSED` (audited). The lease starts at that same post-lock time, so any admitted run's lease ends by `admitBy + lease`.
-     - **Service clamp.** The effective deadline is `min(admitBy, arrival + 5 min)` (`SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS`). Every request therefore has a server-enforced admission deadline.
+     - **Service clamp.** The effective deadline is `min(admitBy, arrival + 5 min)` (`SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS`). Every request therefore has a server-enforced admission deadline. `admitBy` is required (`400` without it).
      - **Digest.** `admitBy` is transport only and is not in the digest. A later run of the same request (same key, new deadline) replays.
    - **8b. Two separate bounds**, counted on a monotonic clock (`performance.now()`) from the arrival of the gate's answer:
      - *Retry budget*, `retryUntil = +2 min`: a POST may still start the run until then. After it, a POST could only replay.
@@ -444,16 +444,16 @@ The full list of mutation entry points is [UNVERIFIED → W4a inventory]. Two sa
        - a 2xx that is not a status envelope;
        - a 5xx, 408 or 429 without a TE envelope;
        - the TE's own `INTERNAL_ERROR`.
-     - Any other coded TE error, or a code-less 4xx status line, is a **refusal of that request**.
-     - After an ambiguous attempt, the editor reads the key (`GET …/scene-insertions?key=`). This read creates nothing. It runs under `stage_meta FOR SHARE` and reads the clock after the lock, so it waits for a T1 in progress and sees its row. Its 404 carries `details.serverNow`.
-     - The key is settled when the TE names the row, or when it reports none with `serverNow > admitBy`. In that case no attempt of this run can ever start (`failed INSERTION_ADMISSION_CLOSED`, or the earlier refusal).
+     - Any other coded TE error, or a code-less 4xx status line whatever its body, is a **refusal of that request**.
+     - After an ambiguous attempt, the editor reads the key (`GET …/scene-insertions?key=`). This read creates nothing. It pins READ COMMITTED, runs under `stage_meta FOR SHARE` and reads the clock after the lock, so it waits for a T1 in progress and sees its row. Its 404 carries `details.serverNow`.
+     - The key is settled when the TE names the row, or when it reports none with `serverNow > admitBy + 30 s` (a margin for a stepped-back TE clock). In that case no attempt of this run can ever start (`failed INSERTION_ADMISSION_CLOSED`, or the earlier refusal).
      - Some refusals are definite at once:
        - a refusal of the *only* request sent;
-       - `INSERTION_ADMISSION_CLOSED` (decided under the lock);
        - `IDEMPOTENCY_KEY_REUSED`.
-     - A refusal of a *later* attempt waits for the key to settle, because an earlier attempt may still be in transit or queued on the lock.
-   - **8d. A known row is settled by its id only**, never by another POST. It is polled while holding until it is terminal or `releaseAt` passes. A malformed read is transient. A plain 404 is transient. The TE's own 404 `INSERTION_NOT_FOUND`, or a 403 with a TE envelope, ends polling as `unknown`, because this tab cannot write the Stage either way.
-   - `unknown` is therefore returned only when nothing was sent, past `releaseAt`, or after the TE refused the read itself.
+     - A refusal of a *later* attempt waits for the key to settle, because an earlier attempt may still be in transit or queued on the lock. This includes a later `INSERTION_ADMISSION_CLOSED`, which settles through the margin.
+   - **8d. A known row is settled by its id only**, never by another POST. It is polled while holding until it is terminal. A malformed read is transient. A plain 404 is transient. The TE's own 404 `INSERTION_NOT_FOUND`, or a 403 with a TE envelope, ends polling as `unknown`, because this tab cannot write the Stage either way.
+   - **Past `releaseAt`**, one last read is made. By key, it queues behind any T2 still holding `stage_meta`. By id, its lazy reclaim waits for the row lock, which T2 holds until COMMIT, and settles an expired lease. The outcome is `unknown` only when that read fails.
+   - `unknown` is therefore returned only when nothing was sent, when the last read past `releaseAt` failed, or after the TE refused the read itself.
 9. **Apply the outcome**, still holding. On success, fetch first, then decide and apply synchronously (V3-1):
    - **(a) Fetch.** `const serverData = await loadStageData(stageId)`. This is the existing revision → document → revision sandwich (`stage-storage.ts:100-136,515-523`), and it changes no store state. **This is the last `await` before application.** No branch is chosen before it, and no dirty key captured before it is used.
    - **(b) Decide and apply in one synchronous step:** `applyInsertionResult(handle, serverData, baseline, { newSceneId, revTransitions })` (API 9). It re-checks the Stage and operation identity, re-reads the local scenes, recomputes `documentDirtSince(stageId, baseline.mark)` **at that moment**, and then:
@@ -965,13 +965,13 @@ JSON repair is a local parser and adds no model calls (F60). Nothing in this bud
   "instruction": "", "reason": "Unit 12 has no slide", "idempotencyKey": "…",
   "admitBy": 1792700120000 }
 ```
-- `admitBy` (optional; the editor always sends it): server time after which T1 refuses to start a run for this request (`409 INSERTION_ADMISSION_CLOSED`). The service enforces at most arrival + 5 min. It is not part of the request digest.
+- `admitBy` (required): server time after which T1 refuses to start a run for this request (`409 INSERTION_ADMISSION_CLOSED`). The service enforces at most arrival + 5 min. It is not part of the request digest.
 - `200 { insertion: Status, replayed }` — inserted, or the replay of a success.
 - `202 { insertion: Status (status "running"), replayed: true }`.
 - `Status` (as built, v3.2) = `{ insertionId, status, errorCode, newSceneId, resultSceneRev, scene, revTransitions, requestedAt, completedAt, leaseRemainingMs }`; `scene.order` is the new Scene's position; `leaseRemainingMs` is the time left on a running row's lease (`null` once terminal).
 - Errors: `{ error: { code, message, details? } }` (§16).
 
-**Status** `GET …/scene-insertions?key=` and `GET …/scene-insertions/[insertionId]` return `Status` (write grant; tenant + version + Stage scoped; a mismatch is `404 INSERTION_NOT_FOUND`). The by-key read runs under `stage_meta FOR SHARE`, and its `404` carries `details.serverNow` (read after the lock). No row with `serverNow > admitBy` means no run under that key exists or can start.
+**Status** `GET …/scene-insertions?key=` and `GET …/scene-insertions/[insertionId]` return `Status` (write grant; tenant + version + Stage scoped; a mismatch is `404 INSERTION_NOT_FOUND`). The by-key read runs under `stage_meta FOR SHARE` at READ COMMITTED, and its `404` carries `details.serverNow` (read after the lock). The editor trusts "no row" only when `serverNow > admitBy + 30 s`; then no run under that key exists or can start.
 
 **Units** `GET /api/stages/[id]/content-units` (§8.3), as built: `{ lineageStatus, units: [{ …coverage, suggestedPosition }], positions: [{ afterSceneId, beforeSceneId, allowedStages }], stages: [{ key, flowIndex, label }] }` — one `positions` entry per gap, so the dialog shows the §9.2 stage rule without another round trip.
 
