@@ -152,8 +152,9 @@ export interface SceneInsertionRequest extends InsertionAnchors {
   idempotencyKey: string;
   /**
    * The editor's admission deadline, in server time (its read of the gate's
-   * `serverNow` plus its window). Transport only: not part of the digest, so
-   * a later run of the same request (same key, new deadline) still replays.
+   * `serverNow` plus its window); required by the parser. Transport only: not
+   * part of the digest, so a later run of the same request (same key, new
+   * deadline) still replays. Optional here for direct service callers.
    */
   admitBy?: number;
 }
@@ -245,12 +246,11 @@ export function parseSceneInsertionRequest(
   if (afterSceneId !== null && afterSceneId === beforeSceneId) {
     throw invalid('beforeSceneId', 'format');
   }
+  // Required: an editor without an admission deadline could release its hold
+  // while a run it cannot see starts (§5.1 step 8).
   const admitBy = body.admitBy;
-  if (
-    admitBy !== undefined &&
-    admitBy !== null &&
-    (typeof admitBy !== 'number' || !Number.isSafeInteger(admitBy) || admitBy <= 0)
-  ) {
+  if (admitBy === undefined || admitBy === null) throw invalid('admitBy', 'required');
+  if (typeof admitBy !== 'number' || !Number.isSafeInteger(admitBy) || admitBy <= 0) {
     throw invalid('admitBy', 'format');
   }
   return {
@@ -261,7 +261,7 @@ export function parseSceneInsertionRequest(
     instruction,
     reason,
     idempotencyKey: key,
-    ...(typeof admitBy === 'number' ? { admitBy } : {}),
+    admitBy,
   };
 }
 

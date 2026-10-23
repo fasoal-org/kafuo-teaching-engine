@@ -17,6 +17,7 @@ vi.mock('@/lib/utils/stage-storage', () => ({
 
 import {
   INSERTION_ADMISSION_WINDOW_MS,
+  INSERTION_CLOCK_MARGIN_MS,
   INSERTION_MAX_LEASE_MS,
   INSERTION_RELEASE_GRACE_MS,
   runSceneInsertion,
@@ -468,8 +469,9 @@ describe('scene insertion client — result application (step 9)', () => {
       { fetchImpl: impl, clock: time.clock, sleep: time.sleep },
     );
     expect(outcome).toMatchObject({ kind: 'failed', code: 'INSERTION_ADMISSION_CLOSED' });
-    // Retries stopped at the window; the release waited for the server's word.
-    expect(time.now()).toBeGreaterThan(INSERTION_ADMISSION_WINDOW_MS);
+    // Retries stopped at the window; the release waited for the server's word,
+    // a clock margin past the deadline.
+    expect(time.now()).toBeGreaterThan(INSERTION_ADMISSION_WINDOW_MS + INSERTION_CLOCK_MARGIN_MS);
     expect(time.heldAtPause.every(Boolean)).toBe(true);
     const lastPost = calls.map((call) => call.method).lastIndexOf('POST');
     expect(calls.slice(lastPost + 1).every((call) => call.method === 'GET')).toBe(true);
@@ -811,7 +813,7 @@ describe('scene insertion client — admission and settling (step 8)', () => {
     expect(time.heldAtPause.every(Boolean)).toBe(true);
   });
 
-  it('INSERTION_ADMISSION_CLOSED is definite on any attempt (decided under the Stage lock)', async () => {
+  it('a LATER attempt’s INSERTION_ADMISSION_CLOSED still waits for the key, past the clock margin', async () => {
     const time = fakeTime();
     let attempts = 0;
     const { impl } = fetchRouter({
@@ -823,10 +825,125 @@ describe('scene insertion client — admission and settling (step 8)', () => {
           { status: 409 },
         );
       },
+      key: () => absentByKey(time.serverNow()),
     });
     const outcome = await run(impl, time);
     expect(outcome).toMatchObject({ kind: 'failed', code: 'INSERTION_ADMISSION_CLOSED' });
     expect(attempts).toBe(2);
+    // Trusted only once the server's clock is a margin past the deadline.
+    expect(time.serverNow()).toBeGreaterThan(
+      SERVER_NOW + INSERTION_ADMISSION_WINDOW_MS + INSERTION_CLOCK_MARGIN_MS,
+    );
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('IDEMPOTENCY_KEY_REUSED is definite on any attempt (ours can never start under that key)', async () => {
+    const time = fakeTime();
+    let attempts = 0;
+    const { impl } = fetchRouter({
+      post: () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('connection reset');
+        return Response.json(
+          { error: { code: 'IDEMPOTENCY_KEY_REUSED', message: 'another request' } },
+          { status: 409 },
+        );
+      },
+    });
+    expect(await run(impl, time)).toMatchObject({
+      kind: 'failed',
+      code: 'IDEMPOTENCY_KEY_REUSED',
+    });
+    expect(attempts).toBe(2);
+  });
+
+  it('a code-less 4xx status line on the only POST is its refusal — no long hold', async () => {
+    const time = fakeTime();
+    const { impl, calls } = fetchRouter({
+      post: () => new Response('Not found', { status: 404 }),
+    });
+    expect(await run(impl, time)).toMatchObject({ kind: 'failed', status: 404, code: 'NOT_FOUND' });
+    expect(posts(calls)).toHaveLength(1);
+    expect(time.now()).toBe(0);
+  });
+
+  it.each([408, 429])(
+    'a code-less %i is a gateway’s: ambiguous, the same body is re-sent',
+    async (code) => {
+      const time = fakeTime();
+      const bodies: string[] = [];
+      const { impl } = fetchRouter({
+        post: (init) => {
+          bodies.push(String(init?.body));
+          return bodies.length === 1
+            ? new Response('slow down', { status: code })
+            : Response.json({ insertion: succeeded });
+        },
+      });
+      expect(await run(impl, time)).toMatchObject({ kind: 'success' });
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]).toBe(bodies[1]);
+    },
+  );
+
+  it('a by-key 404 without a server clock never settles the key', async () => {
+    const time = fakeTime();
+    const { impl } = fetchRouter({
+      post: () => {
+        throw new TypeError('offline');
+      },
+      key: () =>
+        Response.json({ error: { code: 'INSERTION_NOT_FOUND', message: 'no' } }, { status: 404 }),
+    });
+    expect(await run(impl, time)).toEqual({ kind: 'unknown', insertionId: null });
+    expect(time.now()).toBeGreaterThanOrEqual(
+      INSERTION_ADMISSION_WINDOW_MS + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS,
+    );
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('past the release bound, one last read still settles: by key (a run that committed late)…', async () => {
+    const time = fakeTime();
+    const releaseAt =
+      INSERTION_ADMISSION_WINDOW_MS + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS;
+    const { impl } = fetchRouter({
+      post: () => {
+        throw new TypeError('offline');
+      },
+      key: () => {
+        if (time.now() < releaseAt) throw new TypeError('offline');
+        return Response.json(succeeded);
+      },
+    });
+    expect(await run(impl, time)).toMatchObject({ kind: 'success', applied: 'applied' });
+  });
+
+  it('…and by id (the lazy reclaim settles an expired lease as a failure)', async () => {
+    const time = fakeTime();
+    const releaseAt =
+      INSERTION_ADMISSION_WINDOW_MS + INSERTION_MAX_LEASE_MS + INSERTION_RELEASE_GRACE_MS;
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: runningStatus, replayed: true }, { status: 202 }),
+      status: () =>
+        time.now() < releaseAt
+          ? Response.json(runningStatus)
+          : Response.json({ ...runningStatus, status: 'failed', errorCode: 'LEASE_EXPIRED' }),
+    });
+    expect(await run(impl, time)).toMatchObject({ kind: 'failed', code: 'LEASE_EXPIRED' });
+    expect(time.heldAtPause.every(Boolean)).toBe(true);
+  });
+
+  it('a TE refusal of the status read itself (403 READ_ONLY_GRANT) ends polling as unknown', async () => {
+    const time = fakeTime();
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: runningStatus, replayed: true }, { status: 202 }),
+      status: () =>
+        Response.json(
+          { error: { code: 'READ_ONLY_GRANT', message: 'read only' } },
+          { status: 403 },
+        ),
+    });
+    expect(await run(impl, time)).toEqual({ kind: 'unknown', insertionId: 'tpsi_1' });
   });
 
   it('no server clock: nothing is sent, the Stage is released, the key is kept (unknown)', async () => {

@@ -201,6 +201,12 @@ export const INSERTION_ADMISSION_WINDOW_MS = 2 * 60 * 1000;
 export const INSERTION_MAX_LEASE_MS = 1080 * 1000;
 /** Past the last possible lease end: the commit statement itself, and clock rate. */
 export const INSERTION_RELEASE_GRACE_MS = 2 * 60 * 1000;
+/**
+ * An absent key proves "no run can start" only this far past `admitBy`
+ * (server time): slack for a TE clock that was stepped back or differs
+ * between the read and a T1 still queued on the lock.
+ */
+export const INSERTION_CLOCK_MARGIN_MS = 30 * 1000;
 /** One POST attempt (it waits for the whole run); the server ignores a disconnect. */
 const POST_ATTEMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -305,12 +311,10 @@ async function postOnce(
       ),
     };
   }
-  if (
-    json === undefined ||
-    envelope ||
-    response.status >= 500 ||
-    AMBIGUOUS_CLIENT_STATUSES.has(response.status)
-  ) {
+  // The TE's INTERNAL_ERROR, or no TE envelope on a gateway-like status (its
+  // body unreadable or not): ambiguous. Any other 4xx status line, whatever
+  // its body, answered this request without a run.
+  if (envelope || response.status >= 500 || AMBIGUOUS_CLIENT_STATUSES.has(response.status)) {
     return { kind: 'ambiguous' };
   }
   return {
@@ -551,7 +555,10 @@ export async function runSceneInsertion(
     // 8b. Learn the row. POST (same key, same body) while it could start the
     // run; after an ambiguous answer read the key, which creates nothing. The
     // key is settled when the TE names its row, or reports none under the
-    // Stage lock past `admitBy` — then no attempt of this run can start.
+    // Stage lock past `admitBy` (plus a clock margin) — then no attempt of
+    // this run can start. Past `releaseAt` one last read is made: it queues
+    // behind any T2 still holding the lock; only when it fails is the
+    // outcome `unknown`.
     let status: SceneInsertionStatus | null = null;
     let refusal: SceneInsertionRequestError | null = null;
     let sent = 0;
@@ -565,28 +572,28 @@ export async function runSceneInsertion(
           break;
         }
         if (answer.kind === 'refused') {
-          // Definite when it was the only request sent, or when it proves no
-          // attempt can start (the deadline passed under the lock, or the key
-          // belongs to another request). Otherwise an earlier attempt may
-          // still be on its way or waiting for the lock: settle the key first.
-          const { code } = answer.error;
-          if (
-            sent === 1 ||
-            code === 'INSERTION_ADMISSION_CLOSED' ||
-            code === 'IDEMPOTENCY_KEY_REUSED'
-          ) {
+          // Definite when it was the only request sent, or when the key
+          // belongs to another request (ours can never start under it).
+          // Otherwise an earlier attempt may still be on its way or queued on
+          // the lock — even after a later attempt's ADMISSION_CLOSED, if the
+          // clocks differ: settle the key first.
+          if (sent === 1 || answer.error.code === 'IDEMPOTENCY_KEY_REUSED') {
             return failedFrom(answer.error);
           }
           refusal = answer.error;
         }
       }
-      if (clock() >= releaseAt) return { kind: 'unknown', insertionId: null };
+      const last = clock() >= releaseAt;
       const read = await readByKey(stageId, body.idempotencyKey, fetchImpl);
       if (read.kind === 'status') {
         status = read.status;
         break;
       }
-      if (read.kind === 'absent' && read.serverNow !== null && read.serverNow > admitBy) {
+      if (
+        read.kind === 'absent' &&
+        read.serverNow !== null &&
+        read.serverNow > admitBy + INSERTION_CLOCK_MARGIN_MS
+      ) {
         return failedFrom(
           refusal ??
             new SceneInsertionRequestError(
@@ -596,18 +603,24 @@ export async function runSceneInsertion(
             ),
         );
       }
+      if (last) return { kind: 'unknown', insertionId: null };
     }
     if (status === null) return { kind: 'unknown', insertionId: null };
 
     // 8c. A known row is settled by its id only — never another POST — still
     // holding, until it is terminal or can no longer commit. Every read error
-    // is transient except the TE's own refusal of the read.
+    // is transient except the TE's own refusal of the read. Past `releaseAt`
+    // one last read: its lazy reclaim waits for the row lock (held by a T2
+    // until COMMIT) and settles an expired lease; `unknown` only when it fails.
     while (status.status === 'running') {
-      if (clock() >= releaseAt) return { kind: 'unknown', insertionId: status.insertionId };
-      await sleep(step * 2);
+      const last = clock() >= releaseAt;
+      if (!last) await sleep(step * 2);
       const read = await readById(stageId, status.insertionId, fetchImpl);
       if (read.kind === 'status') status = read.status;
       else if (read.kind === 'gone') return { kind: 'unknown', insertionId: status.insertionId };
+      if (last && status.status === 'running') {
+        return { kind: 'unknown', insertionId: status.insertionId };
+      }
     }
     const { insertionId } = status;
     if (status.status === 'failed') {

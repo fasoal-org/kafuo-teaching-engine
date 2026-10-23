@@ -488,6 +488,8 @@ describe('reviewer-generated slide insertion routes', () => {
     instruction: 'use a sliding box example',
     reason: REASON,
     idempotencyKey: `key-${randomUUID()}`,
+    // The editor's admission deadline (server time); required.
+    admitBy: Date.now() + 120_000,
     ...overrides,
   });
 
@@ -1184,13 +1186,17 @@ describe('reviewer-generated slide insertion routes', () => {
     expect(mocks.insert).toHaveBeenCalledOnce();
   });
 
-  it('refuses a malformed `admitBy` before anything else', async () => {
+  it.each([
+    ['a malformed', 'soon'],
+    ['a missing', undefined],
+  ])('refuses %s `admitBy` before anything else', async (_label, admitBy) => {
     const seeded = await seed();
-    const response = await post(seeded, body({ admitBy: 'soon' }));
+    const response = await post(seeded, body({ admitBy }));
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
       'INVALID_REQUEST',
     );
+    expect(await insertionRows(seeded.stageId)).toHaveLength(0);
   });
 
   it('the by-key read: no row → the TE’s 404 with `serverNow` read after the Stage lock; a row → its status', async () => {

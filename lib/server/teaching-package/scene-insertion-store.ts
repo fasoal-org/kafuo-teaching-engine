@@ -995,6 +995,9 @@ export async function readSceneInsertionByKeyUnderStageLock(
 ): Promise<{ row: SceneInsertion | null; serverNow: number }> {
   const withTransaction = nodePostgresTransaction(pool);
   return withTransaction(async (tx) => {
+    // READ COMMITTED, whatever the database default: the SELECT after the
+    // lock must see a T1 that committed while this read waited for it.
+    await tx.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await tx.query('SELECT 1 FROM stage_meta WHERE stage_id = $1 FOR SHARE', [input.stageId]);
     const serverNow = clock();
     const found = await readSceneInsertionByKey(tx, input.versionId, input.idempotencyKey);
