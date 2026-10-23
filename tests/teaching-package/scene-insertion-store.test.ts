@@ -29,8 +29,11 @@ import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
-  query(text: string, params?: unknown[]) {
-    return this.db.query(text, params);
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    params?: unknown[],
+  ) {
+    return this.db.query<Row>(text, params);
   }
   async connect() {
     return {
