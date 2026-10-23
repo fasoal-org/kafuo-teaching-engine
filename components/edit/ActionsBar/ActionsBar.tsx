@@ -51,7 +51,7 @@ import {
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils/cn';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { flushStageSave, useStageStore } from '@/lib/store/stage';
+import { flushStageSave, isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
@@ -1129,7 +1129,10 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   // Reads the latest actions from the store at each step so a concurrent edit
   // isn't clobbered, and stamps by id (index-stale-safe).
   const regenerateAllAudio = useCallback(async () => {
-    if (regenAll) return;
+    // No new paid TTS call starts while an AI slide insertion holds the Stage
+    // (plan §5.1); a line already synthesized is still stamped below.
+    const insertionHolds = () => isStageEditingLocked(useStageStore.getState().stage?.id);
+    if (regenAll || insertionHolds()) return;
     const latest = () => useStageStore.getState().scenes.find((s) => s.id === sceneId);
     let speeches = (latest()?.actions ?? []).filter(
       (a) => a.type === 'speech' && ((a as { text?: string }).text ?? '').trim(),
@@ -1164,6 +1167,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     setRegeneratingIds(new Set(speeches.map((a) => a.id).filter(Boolean) as string[]));
     try {
       for (const queued of speeches) {
+        if (insertionHolds()) break;
         if (!queued.id) continue;
         try {
           const liveAction = latest()?.actions?.find(

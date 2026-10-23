@@ -37,7 +37,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Check, ChevronDown, GripHorizontal, MousePointerClick } from 'lucide-react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useElementRefsForSession, useElementRefsStore } from '@/lib/store/element-refs';
-import { useStageStore } from '@/lib/store/stage';
+import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import { useWorkbenchStore } from '@/lib/workbench/session-store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { setElementIdById } from '@/components/edit/ActionsBar/actions-edit';
@@ -200,7 +200,8 @@ export function ElementPickLayer() {
         return;
       }
       const sc = stageState.scenes.find((s) => s.id === pt.sceneId);
-      if (sc) {
+      // Refused while an AI slide insertion holds the Stage (plan §5.1).
+      if (sc && !isStageEditingLocked(pt.stageId)) {
         useStageStore.getState().updateScene(pt.sceneId, {
           actions: setElementIdById(sc.actions ?? [], pt.actionId, elementId),
         });

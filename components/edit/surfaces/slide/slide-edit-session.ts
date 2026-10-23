@@ -30,8 +30,17 @@ import {
 import { commitSlideEdit } from '@/lib/edit/scene-edit-bridge';
 import { migrateSlideContent } from '@/lib/edit/slide-schema';
 import type { SlideEditHistory } from '@/lib/edit/slide-ops';
-import { useStageStore } from '@/lib/store/stage';
+import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import type { SlideContent } from '@/lib/types/stage';
+
+/**
+ * An AI slide insertion holds the Stage-wide editing lock
+ * (reviewer-generated-slide-for-lesson-part-plan §5.1): every history move —
+ * canvas gestures, toolbar ops, both editors' keyboard shortcuts, undo, redo,
+ * and auto-height normalization — is refused, leaving history and the stage
+ * store untouched (no dirt).
+ */
+const editingLocked = () => isStageEditingLocked(useStageStore.getState().stage?.id);
 
 interface SlideEditSessionState {
   sceneId: string | null;
@@ -84,7 +93,7 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
 
   const replace = (history: EditorHistory) => {
     const { history: prev } = get();
-    if (history === prev) return;
+    if (history === prev || editingLocked()) return;
     writeThrough(history.present);
     set({ history });
   };
@@ -153,6 +162,7 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
         // the redo branch pointed at, so replaying those stale entries
         // would discard this normalization. Leaving them would let a later
         // redo silently revert to pre-undo content (canvas/store divergence).
+        if (editingLocked()) return;
         writeThrough(next);
         set({ history: { ...history, present: next, future: [] } });
         return;
