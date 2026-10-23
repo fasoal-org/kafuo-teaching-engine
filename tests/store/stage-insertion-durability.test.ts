@@ -16,7 +16,9 @@ import {
   bindStageSceneRevs,
   clearStageSceneRevs,
   sceneRev,
+  stageSceneRevs,
 } from '@/lib/persistence/scene-revision-registry';
+import { revisionConflicts } from '@/lib/server/teaching-package/revision-precondition-fence';
 import {
   applyInsertionResult,
   beginStageInsertion,
@@ -390,6 +392,14 @@ describe('applyInsertionResult (API 9, V3-1)', () => {
     // pending entry stays so the next save writes the edit on top.
     expect(sceneRev(STAGE, 's2')).toBe(12);
     expect(documentDirtSince(STAGE, baseline.mark)).toEqual(['scene:s2']);
+    // A-25: the next per-Scene save passes the server's precondition as is.
+    expect(
+      revisionConflicts(
+        { kind: 'scene', stageId: STAGE, sceneId: 's2', method: 'PUT' },
+        { s2: sceneRev(STAGE, 's2')! },
+        new Map([['s2', 12]]),
+      ),
+    ).toEqual([]);
     handle.release();
   });
 
@@ -459,6 +469,14 @@ describe('the local-wins merge over the union of Scene ids (V3.1-1)', () => {
     expect(titles()).toContain('edited here');
     expect(sceneRev(STAGE, 's3')).toBe(3);
     expect(documentDirtSince(STAGE, baseline.mark)).toEqual(['scene:s3']);
+    // The kept expectation makes the server refuse the save (Scene gone), not re-create it.
+    expect(
+      revisionConflicts(
+        { kind: 'scene', stageId: STAGE, sceneId: 's3', method: 'PUT' },
+        { s3: sceneRev(STAGE, 's3')! },
+        new Map(Object.entries(server.sceneRevs)),
+      ),
+    ).toEqual([{ id: 's3', currentRev: null }]);
     handle.release();
 
     // The next save carries the OLD expectation for a Scene that is gone: the
@@ -522,6 +540,14 @@ describe('the local-wins merge over the union of Scene ids (V3.1-1)', () => {
     ]);
     expect(documentDirtSince(STAGE, baseline.mark)).toContain('structure');
     expect(useStageStore.getState().currentSceneId).toBe(NEW);
+    // A-25: the next WHOLE-document save passes the server's precondition.
+    expect(
+      revisionConflicts(
+        { kind: 'document', stageId: STAGE },
+        stageSceneRevs(STAGE)!,
+        new Map(Object.entries(server.sceneRevs)),
+      ),
+    ).toEqual([]);
     handle.release();
   });
 
@@ -568,6 +594,15 @@ describe('the local-wins merge over the union of Scene ids (V3.1-1)', () => {
     // save deletes exactly what this tab saw. x9: no expectation → 409 recovery.
     expect(sceneRev(STAGE, 's3')).toBe(13);
     expect(sceneRev(STAGE, 'x9')).toBeUndefined();
+    // The next whole save would delete s3 cleanly; only x9 (created
+    // elsewhere) is refused, so the existing 409 recovery pulls it in.
+    expect(
+      revisionConflicts(
+        { kind: 'document', stageId: STAGE },
+        stageSceneRevs(STAGE)!,
+        new Map(Object.entries(server.sceneRevs)),
+      ),
+    ).toEqual([{ id: 'x9', currentRev: 30 }]);
     handle.release();
   });
 });

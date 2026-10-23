@@ -534,3 +534,48 @@ describe('GenerateSlideForPartDialog — modal while running', () => {
     expect(text()).toContain('بعد الشريحة 1 — Intro');
   });
 });
+
+describe('GenerateSlideForPartDialog — refreshed data', () => {
+  it('a chosen position that vanished from a refreshed read falls back, so select and state agree', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const props = (data: ContentUnitsResponse) =>
+      createElement(GenerateSlideForPartDialog, {
+        open: true,
+        onOpenChange: vi.fn(),
+        stageId: 'stage-1',
+        data,
+        scenes: SCENES,
+        initialUnitIds: ['cu_2'],
+        localGenerationRunning: false,
+        gateRunning: [],
+        run: vi.fn() as never,
+      });
+    act(() => root.render(props(DATA)));
+    choosePosition('s2|s3');
+    expect(byTestId<HTMLSelectElement>('insertion-position')!.value).toBe('s2|s3');
+    // The refresh after a settled run no longer offers that gap.
+    const refreshed: ContentUnitsResponse = {
+      ...DATA,
+      positions: DATA.positions.filter((option) => option.afterSceneId !== 's2'),
+    };
+    act(() => root.render(props(refreshed)));
+    type('insertion-reason', VALID_REASON);
+    expect(byTestId<HTMLSelectElement>('insertion-position')!.value).toBe('s1|s2');
+    expect(byTestId('insertion-stage-fixed')!.textContent).toBe('Explain');
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('a failed lesson-parts read shows an error instead of loading forever', () => {
+    mount({
+      data: null,
+      loadFailed: true,
+      fixedPosition: { afterSceneId: 's1', beforeSceneId: 's2' },
+    });
+    expect(byTestId('insertion-load-failed')).not.toBeNull();
+    expect(byTestId('insertion-loading')).toBeNull();
+    expect(text()).toContain('The lesson parts could not be loaded');
+  });
+});

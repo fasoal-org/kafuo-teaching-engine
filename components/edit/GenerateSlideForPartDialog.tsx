@@ -71,6 +71,7 @@ const KNOWN_ERROR_CODES = new Set([
   'INSERTION_SKILLS_INVALID',
   'INSERTION_VISUAL_NOT_APPROVED',
   'INSERTION_STAGE_BUSY',
+  'INSERTION_PERSISTENCE_FAILED',
   'INSERTION_LEASE_LOST',
   'INSERTION_NOT_FOUND',
   'SCENE_INSERTION_IN_PROGRESS',
@@ -184,6 +185,8 @@ export interface GenerateSlideForPartDialogProps {
   readonly stageId: string;
   /** The lesson parts, coverage and positions (null while loading). */
   readonly data: ContentUnitsResponse | null;
+  /** The lesson-parts read failed (with no earlier answer, `data` stays null). */
+  readonly loadFailed?: boolean;
   readonly scenes: readonly InsertionSceneRef[];
   /** Panel entry: the unit(s) to pre-fill. */
   readonly initialUnitIds?: readonly string[];
@@ -207,6 +210,7 @@ export function GenerateSlideForPartDialog({
   onOpenChange,
   stageId,
   data,
+  loadFailed = false,
   scenes,
   initialUnitIds,
   fixedPosition,
@@ -277,9 +281,16 @@ export function GenerateSlideForPartDialog({
       ? positionKey(suggested)
       : null;
   const lastOption = positionOptions[positionOptions.length - 1];
+  // A choice that vanished from a refreshed read (the slides around it changed)
+  // falls back like no choice at all, so the select and the state never disagree.
+  const chosenKey =
+    chosenPositionKey !== null &&
+    positionOptions.some((option) => positionKey(option) === chosenPositionKey)
+      ? chosenPositionKey
+      : null;
   const effectivePositionKey = fixedPosition
     ? positionKey(fixedPosition)
-    : (chosenPositionKey ?? suggestedKey ?? (lastOption ? positionKey(lastOption) : null));
+    : (chosenKey ?? suggestedKey ?? (lastOption ? positionKey(lastOption) : null));
   const selectedOption =
     effectivePositionKey === null
       ? null
@@ -478,7 +489,15 @@ export function GenerateSlideForPartDialog({
             void submit();
           }}
         >
-          {data === null ? (
+          {data === null && loadFailed ? (
+            <p
+              className="text-sm text-destructive"
+              data-testid="insertion-load-failed"
+              role="alert"
+            >
+              {t('edit.slideInsertion.panelLoadFailed')}
+            </p>
+          ) : data === null ? (
             <p
               className="flex items-center gap-2 text-sm text-muted-foreground"
               data-testid="insertion-loading"

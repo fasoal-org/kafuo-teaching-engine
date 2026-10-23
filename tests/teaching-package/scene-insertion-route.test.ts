@@ -615,6 +615,39 @@ describe('reviewer-generated slide insertion routes', () => {
     expect((await get('byId', seeded, status.insertionId)).status).toBe(200);
   });
 
+  it('a retry whose earlier run lost its lease answers INSERTION_LEASE_LOST before any new-run check', async () => {
+    const seeded = await seed();
+    const request = body({ idempotencyKey: 'key-expired-1' });
+    const { sceneInsertionRequestDigest } =
+      await import('@/lib/server/teaching-package/scene-insertion');
+    const { idempotencyKey: _key, ...rest } = request;
+    const now = Date.now();
+    await pool.query(
+      `INSERT INTO teaching_package_scene_insertions
+         (id, tenant_id, version_id, stage_id, new_scene_id, new_outline_id, unit_ids, teaching_stage,
+          idempotency_key, request_digest, reason, actor_ref, status, attempt_token, lease_expires_at,
+          requested_at)
+       VALUES ('tpsi_expired', $1, $2, $3, 'n', 'ins_n', '["cu_3"]'::jsonb,
+               '{"key":"explain","flowIndex":1}'::jsonb, 'key-expired-1', $4, 'r', 'a', 'running', 't',
+               $5, $6)`,
+      [
+        TENANT,
+        seeded.versionId,
+        seeded.stageId,
+        sceneInsertionRequestDigest(rest as never),
+        now - 1,
+        now - 1_000_000,
+      ],
+    );
+    const response = await post(seeded, request);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      'INSERTION_LEASE_LOST',
+    );
+    expect(mocks.prompts).toHaveLength(0);
+    expect(await events(seeded.versionId)).toEqual([]);
+  });
+
   it('a different body with the same key is IDEMPOTENCY_KEY_REUSED', async () => {
     const seeded = await seed();
     expect((await post(seeded, body({ idempotencyKey: 'key-reuse-1' }))).status).toBe(200);

@@ -149,6 +149,17 @@ function systemPrompt(): string {
   ].join('\n');
 }
 
+/**
+ * The reviewer's instruction, unable to close (or reopen) its own wrapper:
+ * the delimiter markers are removed, so the text cannot pose as prompt.
+ */
+export function untrustedText(value: string): string {
+  return value
+    .replace(/<<<\s*INSTRUCTION/gi, '')
+    .replace(/INSTRUCTION\s*>>>/gi, '')
+    .trim();
+}
+
 function userPrompt(input: PlanInsertedSlideInput): string {
   const policy = scenePolicyFor(input.flowEntry);
   const lines = [
@@ -182,8 +193,9 @@ function userPrompt(input: PlanInsertedSlideInput): string {
     lines.push(`- ${visual.id}${visual.description ? `: ${visual.description}` : ''}`);
   }
   lines.push('', 'Source content units:', renderPlannerUnits(input.units));
-  if (input.instruction.trim()) {
-    lines.push('', '<<<INSTRUCTION', input.instruction.trim(), 'INSTRUCTION>>>');
+  const instruction = untrustedText(input.instruction);
+  if (instruction) {
+    lines.push('', '<<<INSTRUCTION', instruction, 'INSTRUCTION>>>');
   }
   return lines.join('\n');
 }

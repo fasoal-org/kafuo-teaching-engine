@@ -170,7 +170,17 @@ export interface SceneInsertionRequest extends InsertionPosition {
   idempotencyKey: string;
 }
 
-/** POST, retried with the SAME key only when the transport itself failed. */
+/** Gateway answers that carry no server error code: the run may still be going. */
+const GATEWAY_STATUSES = new Set([408, 502, 503, 504]);
+
+/**
+ * POST, retried with the SAME key only when the transport itself failed — or
+ * when a gateway answered for the server (a proxy timeout, no error code): the
+ * first POST waits for the whole run, so the server may still be generating,
+ * and the same key replays it (`202` running, or the stored outcome). When
+ * those retries run out the error is thrown as a transport failure, so the
+ * caller reports `unknown` (keep the key), never a definite failure.
+ */
 export async function postSceneInsertion(
   stageId: string,
   body: SceneInsertionRequest,
@@ -192,7 +202,14 @@ export async function postSceneInsertion(
       lastError = error;
       continue;
     }
-    if (!response.ok) throw await errorFrom(response);
+    if (!response.ok) {
+      const error = await errorFrom(response);
+      if (GATEWAY_STATUSES.has(response.status) && error.code === 'HTTP_ERROR') {
+        lastError = new Error(`the gateway answered HTTP ${response.status}`);
+        continue;
+      }
+      throw error;
+    }
     const parsed = (await response.json()) as { insertion: SceneInsertionStatus };
     return { status: response.status === 202 ? 202 : 200, insertion: parsed.insertion };
   }
@@ -261,6 +278,11 @@ export interface RunSceneInsertionDeps {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 600 polls × 2 s = 20 min: longer than the server's default 900 s lease plus margin. */
+const DEFAULT_MAX_POLLS = 600;
+/** The result fetch, tried this many times before `saved-not-shown`. */
+const FETCH_ATTEMPTS = 3;
+
 export async function runSceneInsertion(
   input: RunSceneInsertionInput,
   deps: RunSceneInsertionDeps = {},
@@ -326,14 +348,21 @@ export async function runSceneInsertion(
       // The request may or may not have reached the server: the same key replays it.
       return { kind: 'unknown', insertionId: null };
     }
-    try {
-      for (let poll = 0; status === null || status.status === 'running'; poll += 1) {
-        if (poll >= (deps.maxPolls ?? 300)) return { kind: 'unknown', insertionId };
-        if (status !== null) await delay(deps.pollIntervalMs ?? 2000);
+    // Poll until the row is terminal, still holding: a run the server may yet
+    // commit must never release the hold early (the status read reclaims an
+    // expired lease, so a terminal answer always comes). Transport and
+    // gateway errors are retried; the budget outlasts the 900 s lease.
+    for (let poll = 0; status === null || status.status === 'running'; poll += 1) {
+      if (poll >= (deps.maxPolls ?? DEFAULT_MAX_POLLS)) return { kind: 'unknown', insertionId };
+      if (poll > 0) await delay(deps.pollIntervalMs ?? 2000);
+      try {
         status = await fetchInsertionStatus(stageId, insertionId, fetchImpl);
+      } catch (error) {
+        // A definite answer from the TE (e.g. INSERTION_NOT_FOUND) ends polling.
+        if (error instanceof SceneInsertionRequestError && error.code !== 'HTTP_ERROR') {
+          return { kind: 'unknown', insertionId };
+        }
       }
-    } catch {
-      return { kind: 'unknown', insertionId };
     }
     if (status.status === 'failed') {
       return {
@@ -344,12 +373,16 @@ export async function runSceneInsertion(
       };
     }
 
-    // 9a. Fetch — the LAST await before the application.
-    let serverData: Awaited<ReturnType<typeof loadStageData>>;
-    try {
-      serverData = await (deps.loadStage ?? loadStageData)(stageId);
-    } catch {
-      serverData = null;
+    // 9a. Fetch — the LAST await before the application. Retried while still
+    // holding: giving up leaves lock-bypassing dirt on pre-shift revisions.
+    let serverData: Awaited<ReturnType<typeof loadStageData>> = null;
+    for (let attempt = 0; attempt < FETCH_ATTEMPTS && !serverData; attempt += 1) {
+      if (attempt > 0) await delay(deps.pollIntervalMs ?? 2000);
+      try {
+        serverData = await (deps.loadStage ?? loadStageData)(stageId);
+      } catch {
+        serverData = null;
+      }
     }
     const saved = { insertionId, sceneId: status.newSceneId };
     if (!serverData) return { kind: 'saved-not-shown', ...saved, reason: 'fetch-error' };

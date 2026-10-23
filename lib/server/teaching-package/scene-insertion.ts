@@ -642,7 +642,9 @@ export async function insertGeneratedSlide(
     if (prior.status !== 'running' || prior.leaseExpiresAt > clock()) {
       return replayResponse(prior, clock());
     }
-    // An expired running row: T1 reclaims it and answers the replay.
+    // An expired running row is a lost lease (a later T1 or status read
+    // records it): answer it as its replay would, before any new-run check.
+    throw storedInsertionFailureError({ ...prior, status: 'failed', errorCode: 'LEASE_EXPIRED' });
   }
 
   // New-run checks — no writes; a refusal here is audited (version resolved).
@@ -746,7 +748,9 @@ export async function insertGeneratedSlide(
   // T1 — authoritative, under the Stage mutex.
   const recheck = (live: LiveStageData): SceneInsertionRefusal | null => {
     try {
-      checkPositionAndUnits(request, live.scenes, live.outline, context.units, flow, false);
+      // `changed`: the new-run checks just passed on the same request, so a
+      // refusal here means the live data moved since (409, not 422).
+      checkPositionAndUnits(request, live.scenes, live.outline, context.units, flow, true);
       return null;
     } catch (error) {
       if (error instanceof TeachingPackageError) {
@@ -894,8 +898,14 @@ export async function insertGeneratedSlide(
     candidate = generated.scene;
   } catch (error) {
     if (error instanceof TeachingPackageError) return failAndThrow(error);
-    await fail('SCENE_CONTENT_GENERATION_FAILED');
-    throw error;
+    // The live answer and a later replay of the stored row share one code.
+    log.error(`slide insertion ${row.id} generation failed`, error);
+    return failAndThrow(
+      new TeachingPackageError(
+        'SCENE_CONTENT_GENERATION_FAILED',
+        'the slide could not be generated; nothing was written',
+      ),
+    );
   }
 
   // T2 — sandwich + fenced atomic write; the candidate is reused on a rebuild.

@@ -115,26 +115,91 @@ describe.skipIf(!contractUrl)('slide insertion on PostgreSQL', () => {
       sessionRef: null,
     });
 
-  it('insertion and regeneration started together: exactly one runs, in both orders', async () => {
-    for (const order of ['insertion-first', 'regeneration-first'] as const) {
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * Hold the Stage mutex in a separate transaction so the two T1s queue
+   * behind it in a KNOWN order (first started waits first), then release.
+   */
+  async function inOrder<A, B>(stageId: string, first: () => Promise<A>, second: () => Promise<B>) {
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT 1 FROM stage_meta WHERE stage_id = $1 FOR UPDATE', [stageId]);
+    const a = first();
+    await pause(250);
+    const b = second();
+    await pause(250);
+    await holder.query('COMMIT');
+    holder.release();
+    return Promise.all([a, b]);
+  }
+
+  it('insertion and regeneration started together: exactly the FIRST runs, in both orders', async () => {
+    {
       const { stageId, versionId } = await seed();
-      const [a, b] =
-        order === 'insertion-first'
-          ? await Promise.all([
-              insertionStart(stageId, versionId),
-              regenerationStart(stageId, versionId),
-            ])
-          : await Promise.all([
-              regenerationStart(stageId, versionId),
-              insertionStart(stageId, versionId),
-            ]);
-      const kinds = [a.kind, b.kind].sort();
-      expect(kinds).toEqual(['refused', 'started']);
-      const refused = [a, b].find((outcome) => outcome.kind === 'refused') as {
-        refusal: { code: string };
-      };
-      expect(refused.refusal.code).toBe('STAGE_GENERATION_IN_PROGRESS');
+      const [insertion, regeneration] = await inOrder(
+        stageId,
+        () => insertionStart(stageId, versionId),
+        () => regenerationStart(stageId, versionId),
+      );
+      expect(insertion.kind).toBe('started');
+      expect(regeneration).toMatchObject({
+        kind: 'refused',
+        refusal: { code: 'STAGE_GENERATION_IN_PROGRESS' },
+      });
     }
+    {
+      const { stageId, versionId } = await seed();
+      const [regeneration, insertion] = await inOrder(
+        stageId,
+        () => regenerationStart(stageId, versionId),
+        () => insertionStart(stageId, versionId),
+      );
+      expect(regeneration.kind).toBe('started');
+      expect(insertion).toMatchObject({
+        kind: 'refused',
+        refusal: { code: 'STAGE_GENERATION_IN_PROGRESS' },
+      });
+    }
+  });
+
+  it('two insertion starts on one Stage: one runs, the other is SCENE_INSERTION_IN_PROGRESS', async () => {
+    const { stageId, versionId } = await seed();
+    const [a, b] = await Promise.all([
+      insertionStart(stageId, versionId),
+      insertionStart(stageId, versionId),
+    ]);
+    expect([a.kind, b.kind].sort()).toEqual(['refused', 'started']);
+    const refused = [a, b].find((outcome) => outcome.kind === 'refused') as {
+      refusal: { code: string };
+    };
+    expect(refused.refusal.code).toBe('SCENE_INSERTION_IN_PROGRESS');
+  });
+
+  it('the same key sent twice at once: one starts, the other answers the replay', async () => {
+    const { stageId, versionId } = await seed();
+    const key = `k-${randomUUID()}`;
+    const start = () =>
+      startSceneInsertion(queryable(), {
+        tenantId: 'tenant-pg',
+        versionId,
+        stageId,
+        newSceneId: `new-${randomUUID()}`,
+        newOutlineId: `ins_${randomUUID()}`,
+        unitIds: ['cu_1'],
+        afterSceneId: 'scene-1',
+        beforeSceneId: 'scene-2',
+        teachingStage: { key: 'explain', flowIndex: 1 },
+        idempotencyKey: key,
+        requestDigest: 'same',
+        instruction: '',
+        reason: 'reason',
+        actorRef: 'actor',
+        sessionRef: null,
+        recheck: () => null,
+      });
+    const [a, b] = await Promise.all([start(), start()]);
+    expect([a.kind, b.kind].sort()).toEqual(['replay', 'started']);
   });
 
   it('a commit racing the T2 write: the fence sees the moved revision and the rebuild keeps it', async () => {

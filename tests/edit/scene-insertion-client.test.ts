@@ -321,15 +321,103 @@ describe('scene insertion client — result application (step 9)', () => {
     expect(loadStageData).not.toHaveBeenCalled();
   });
 
-  it('a fetch error after success → saved-not-shown, local state untouched', async () => {
+  it('a fetch error after success is retried while holding; persistent → saved-not-shown, untouched', async () => {
     const { impl } = fetchRouter({});
     loadStageData.mockRejectedValueOnce(new Error('offline'));
+    const retried = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(retried).toMatchObject({ kind: 'success', applied: 'applied' });
+
+    useStageStore.setState({ scenes: [scene('s1', 'one', 1), scene('s2', 'two', 2)] });
+    bindStageSceneRevs(STAGE, { s1: 1, s2: 2 });
+    loadStageData
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'));
+    const outcome = await runSceneInsertion(
+      {
+        stageId: STAGE,
+        request: { ...request, idempotencyKey: 'insert-key-2' },
+        localGenerationRunning: false,
+      },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'saved-not-shown', reason: 'fetch-error' });
+    expect(titles()).toEqual(['one', 'two']);
+  });
+
+  it('a gateway timeout on the POST is retried with the SAME key, and the replay is polled', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    const bodies: string[] = [];
+    let posts = 0;
+    const { impl } = fetchRouter({
+      post: (init) => {
+        bodies.push(String(init?.body));
+        posts += 1;
+        // The proxy cut the first, long request (no TE error envelope).
+        return posts === 1
+          ? new Response('<html>504 Gateway Time-out</html>', { status: 504 })
+          : Response.json({ insertion: running, replayed: true }, { status: 202 });
+      },
+      status: () => Response.json(succeeded),
+    });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
+  });
+
+  it('a TE error with a code on a 503 is a definite failure (not retried)', async () => {
+    let posts = 0;
+    const { impl } = fetchRouter({
+      post: () => {
+        posts += 1;
+        return Response.json(
+          { error: { code: 'TEACHING_MODEL_UNAVAILABLE', message: 'both routes failed' } },
+          { status: 503 },
+        );
+      },
+    });
     const outcome = await runSceneInsertion(
       { stageId: STAGE, request, localGenerationRunning: false },
       { fetchImpl: impl },
     );
-    expect(outcome).toMatchObject({ kind: 'saved-not-shown', reason: 'fetch-error' });
-    expect(titles()).toEqual(['one', 'two']);
+    expect(outcome).toMatchObject({ kind: 'failed', code: 'TEACHING_MODEL_UNAVAILABLE' });
+    expect(posts).toBe(1);
+  });
+
+  it('gateway answers on every POST attempt → unknown (keep the key), never failed', async () => {
+    const { impl } = fetchRouter({ post: () => new Response('bad gateway', { status: 502 }) });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl },
+    );
+    expect(outcome).toEqual({ kind: 'unknown', insertionId: null });
+  });
+
+  it('a transient poll error keeps polling while holding', async () => {
+    const running = { ...succeeded, status: 'running' as const, revTransitions: null };
+    let polls = 0;
+    const { impl } = fetchRouter({
+      post: () => Response.json({ insertion: running, replayed: true }, { status: 202 }),
+      status: () => {
+        polls += 1;
+        if (polls === 1) throw new TypeError('network down');
+        if (polls === 2) return new Response('gateway', { status: 504 });
+        return Response.json(succeeded);
+      },
+    });
+    const outcome = await runSceneInsertion(
+      { stageId: STAGE, request, localGenerationRunning: false },
+      { fetchImpl: impl, pollIntervalMs: 1 },
+    );
+    expect(outcome).toMatchObject({ kind: 'success' });
+    expect(polls).toBe(3);
   });
 });
 

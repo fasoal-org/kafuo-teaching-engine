@@ -823,6 +823,9 @@ export async function commitSceneInsertion(
     // 4. The fenced write.
     let moved = false;
     for (let attempt = 0; ; attempt += 1) {
+      // Only the attempt that COMMITS may report a completion: an attempt
+      // that ran its 'after' phase and then rolled back must leave nothing.
+      state.completed = undefined;
       try {
         await store.saveDocument(finalDoc);
         break;
@@ -843,13 +846,16 @@ export async function commitSceneInsertion(
     }
     // 5. A moved revision rebuilds from the new state.
     if (moved) continue;
-    if (!state.completed) {
+    // Set by the fence's 'after' phase of the committed attempt (the reset
+    // above narrows the field for the compiler, hence the explicit read).
+    const completed = state.completed as InsertionCompletion | undefined;
+    if (!completed) {
       throw new TeachingPackageError(
         'INSERTION_PERSISTENCE_FAILED',
         'the inserted slide could not be recorded',
       );
     }
-    return { ...state.completed, builds };
+    return { ...completed, builds };
   }
   throw new TeachingPackageError(
     'INSERTION_STAGE_BUSY',

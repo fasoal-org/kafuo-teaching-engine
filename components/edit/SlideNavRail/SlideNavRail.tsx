@@ -119,10 +119,14 @@ export function SlideNavRail() {
   const contentUnits =
     contentUnitsState && contentUnitsState.stageId === stageId ? contentUnitsState : null;
   // The open insertion dialog: units pre-filled (panel) or position fixed ("+").
-  const [inserting, setInserting] = useState<{
+  // Keyed by Stage: the rail outlives a Stage switch, and a dialog opened for
+  // one Stage must never render (or resend its request) for the next.
+  const [insertingState, setInserting] = useState<{
+    stageId: string;
     unitIds?: string[];
     position?: InsertionPosition;
   } | null>(null);
+  const inserting = insertingState && insertingState.stageId === stageId ? insertingState : null;
   const [insertionRunning, setInsertionRunning] = useState(false);
   // True while an insertion holds the Stage-wide editing lock (plan §5.1).
   const editingLocked = useStageEditingLocked(stageId);
@@ -176,11 +180,11 @@ export function SlideNavRail() {
           : null;
   const openInsertion = useCallback(
     (entry: { unitIds?: string[]; position?: InsertionPosition }) => {
-      if (refuseWhileInserting()) return;
-      setInserting(entry);
+      if (!stageId || refuseWhileInserting()) return;
+      setInserting({ ...entry, stageId });
       void refreshInsertion();
     },
-    [refreshInsertion, refuseWhileInserting],
+    [refreshInsertion, refuseWhileInserting, stageId],
   );
   const sceneRefs = useMemo(
     () => scenes.map((scene) => ({ id: scene.id, title: scene.title })),
@@ -738,7 +742,9 @@ export function SlideNavRail() {
       ) : null}
       {stageId && inserting ? (
         <GenerateSlideForPartDialog
+          key={stageId}
           open
+          loadFailed={contentUnits?.failed ?? false}
           onOpenChange={(open) => {
             if (!open) setInserting(null);
           }}
