@@ -439,8 +439,11 @@ export type SceneInsertionOutcome =
   /** The server refused or failed, and no run of this request can still commit: nothing changed. */
   | { kind: 'failed'; status: number; code: string; message: string; details?: unknown }
   /**
-   * The outcome could not be read — returned only once no run of this request
-   * can still commit, or when nothing was sent: keep the key; a retry replays.
+   * The outcome could not be read: keep the key; a retry replays. Returned
+   * when nothing was sent, once no run of this request can still commit (the
+   * last read past the release bound failed), or when the TE refused the
+   * status read itself (its scoped 404, or a 403: this tab's own writes to
+   * the Stage are refused then, though the run may still commit).
    */
   | { kind: 'unknown'; insertionId: string | null };
 
@@ -605,7 +608,6 @@ export async function runSceneInsertion(
       }
       if (last) return { kind: 'unknown', insertionId: null };
     }
-    if (status === null) return { kind: 'unknown', insertionId: null };
 
     // 8c. A known row is settled by its id only — never another POST — still
     // holding, until it is terminal or can no longer commit. Every read error

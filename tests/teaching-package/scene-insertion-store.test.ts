@@ -302,6 +302,42 @@ describe('scene insertion store', () => {
     expect(document!.scenes.map((scene) => scene.id)).toEqual(['s1', 's2']);
   });
 
+  it('the by-key read pins READ COMMITTED as its first statement, whatever the default', async () => {
+    await pool.query("SET default_transaction_isolation = 'repeatable read'");
+    const statements: string[] = [];
+    let isolation: string | undefined;
+    const original = pool.connect.bind(pool);
+    pool.connect = async () => {
+      const client = await original();
+      return {
+        ...client,
+        query: async (text: string, params?: unknown[]) => {
+          statements.push(text);
+          const result = await client.query(text, params);
+          // The level in force when the Stage lock is taken.
+          if (/FOR SHARE/.test(text)) {
+            const shown = await client.query('SHOW transaction_isolation');
+            isolation = (shown.rows[0] as { transaction_isolation: string }).transaction_isolation;
+          }
+          return result;
+        },
+      };
+    };
+    try {
+      await readSceneInsertionByKeyUnderStageLock(tx(), {
+        stageId: STAGE,
+        versionId: 'tpv-isx',
+        idempotencyKey: 'never-sent',
+      });
+    } finally {
+      pool.connect = original;
+      await pool.query("SET default_transaction_isolation = 'read committed'");
+    }
+    expect(statements[0]).toMatch(/^BEGIN/i);
+    expect(statements[1]).toBe('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    expect(isolation).toBe('read committed');
+  });
+
   it('the by-key read takes the Stage lock first, then the clock; it reclaims an expired row', async () => {
     let now = 20_000;
     const restore = onStatement(/FROM stage_meta WHERE stage_id = \$1 FOR SHARE/, () => {
