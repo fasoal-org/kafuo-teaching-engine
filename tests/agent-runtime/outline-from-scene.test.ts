@@ -37,8 +37,22 @@ function slide(id: string, order: number, outlineId?: string): Scene {
 
 const snapshot = {
   outlines: [
-    { id: 'o1', order: 1, title: 'one', type: 'slide', description: 'brief one', keyPoints: ['k1'] },
-    { id: 'o2', order: 2, title: 'two', type: 'slide', description: 'brief two', keyPoints: ['k2'] },
+    {
+      id: 'o1',
+      order: 1,
+      title: 'one',
+      type: 'slide',
+      description: 'brief one',
+      keyPoints: ['k1'],
+    },
+    {
+      id: 'o2',
+      order: 2,
+      title: 'two',
+      type: 'slide',
+      description: 'brief two',
+      keyPoints: ['k2'],
+    },
   ],
   createdAt: 1,
   updatedAt: 1,

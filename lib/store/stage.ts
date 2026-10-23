@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import {
   makeScene,
@@ -22,7 +23,7 @@ import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/doc
 import { hydratePBLScenesFromRuntime } from '@/lib/pbl/v2/runtime/hydration';
 import type { ChatStorageSnapshot } from '@/lib/utils/chat-storage';
 import type { DocumentProducer } from '@/lib/document-store/persistence-types';
-import type { PendingChange, StaleDroppedSave } from '@/lib/utils/stage-storage';
+import type { PendingChange, StaleDroppedSave, StageStoreData } from '@/lib/utils/stage-storage';
 import { collectStageAssetRefs } from '@/lib/media/collect-stage-asset-refs';
 import { reconcileSceneMediaAllocations } from '@/lib/media/reconcile-scene-media';
 import {
@@ -33,6 +34,7 @@ import {
   bindStageSceneRevs,
   clearStageSceneRevs,
   setSceneRev,
+  stageSceneRevs,
 } from '@/lib/persistence/scene-revision-registry';
 import {
   isStageDeleted,
@@ -73,6 +75,50 @@ let flushInFlight: FlushRound | null = null;
  */
 const regenerationBarriers = new Map<string, number>();
 const regenerationLocks = new Set<string>();
+
+/**
+ * Reviewer-generated slide insertion (reviewer-generated-slide plan §5.1).
+ *
+ * - `directDocumentSaves`: every running direct aggregate save
+ *   (`saveToStorage`), registered synchronously before its first await and
+ *   removed when it settles, so a Stage-wide durability proof can see it.
+ * - `insertionWriteHolds`: Stages whose insertion has called `holdWrites()`;
+ *   while set, a new `saveToStorage` defers into full-aggregate dirt instead
+ *   of writing (the flush scheduler is held by `regenerationBarriers`).
+ * - `stageEditingLocks`: the Stage-wide editing lock the editor's mutation
+ *   entry points honour while an insertion prepares and runs.
+ * - `currentInsertions`: the Stage's current insertion operation; a newer one
+ *   supersedes it.
+ */
+const directDocumentSaves = new Map<string, Set<Promise<boolean>>>();
+const insertionWriteHolds = new Map<string, number>();
+const stageEditingLocks = new Map<string, number>();
+const stageEditingLockListeners = new Set<() => void>();
+const currentInsertions = new Map<string, string>();
+let insertionOperationCounter = 0;
+
+/** The pending-change kinds that write the document (`currentScene` / `chats` do not). */
+export const DOCUMENT_CHANGE_KINDS: ReadonlySet<PendingChange['kind']> = new Set<
+  PendingChange['kind']
+>(['scene', 'structure', 'stage', 'outline']);
+
+/** Register a running direct aggregate save until it settles (plan §5.1 API 2). */
+function trackDirectDocumentSave(stageId: string, save: Promise<boolean>): void {
+  let saves = directDocumentSaves.get(stageId);
+  if (!saves) {
+    saves = new Set();
+    directDocumentSaves.set(stageId, saves);
+  }
+  const registered = saves;
+  registered.add(save);
+  const unregister = () => {
+    registered.delete(save);
+    if (registered.size === 0 && directDocumentSaves.get(stageId) === registered) {
+      directDocumentSaves.delete(stageId);
+    }
+  };
+  save.then(unregister, unregister);
+}
 
 function regenerationLockKey(stageId: string, sceneId: string): string {
   return `${stageId}\u0000${sceneId}`;
@@ -422,7 +468,16 @@ export function restorePendingStageChanges(
 ): void {
   const state = useStageStore.getState();
   if (state.stage?.id !== stageId) return;
-  const fullAggregateRemark: PendingChange[] = [
+  markPendingChanges(stageId, ...changes, ...fullAggregateChanges(state));
+}
+
+/**
+ * Every logical unit of the aggregate, as change descriptors: the re-mark
+ * that recaptures the CURRENT store state on the next flush. Shared by the
+ * failed-deletion restore and the insertion-hold deferral of `saveToStorage`.
+ */
+function fullAggregateChanges(state: Pick<StageState, 'scenes'>): PendingChange[] {
+  return [
     { kind: 'structure' },
     { kind: 'stage' },
     { kind: 'outline' },
@@ -430,7 +485,6 @@ export function restorePendingStageChanges(
     { kind: 'chats' },
     ...state.scenes.map((scene): PendingChange => ({ kind: 'scene', sceneId: scene.id })),
   ];
-  markPendingChanges(stageId, ...changes, ...fullAggregateRemark);
 }
 
 /** The empty store shape shared by every reset path (epoch bump included). */
@@ -1118,12 +1172,12 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   // Storage methods. Returns true on a verified write so callers that gate on
   // durability (e.g. setGenerationComplete) can avoid recording state that
   // outruns the scene data.
-  saveToStorage: async () => {
+  saveToStorage: () => {
     const { stage, scenes, currentSceneId, chats, chatSnapshot, outlines, generationComplete } =
       get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
-      return false;
+      return Promise.resolve(false);
     }
     // The aggregate save bypasses the pending map entirely, so the scheduler
     // gate above cannot see it. Both of its load-time callers — the
@@ -1132,83 +1186,99 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     // Preview's load, and each would otherwise be a refused document write.
     if (!mayWriteStageDocument(stage.id)) {
       log.info(`Skipping save for ${stage.id}: this classroom is not writable by this viewer`);
-      return false;
+      return Promise.resolve(false);
+    }
+    // An AI slide insertion holds this Stage's writes (plan §5.1 API 5): no
+    // direct write may start until it releases. The aggregate is re-marked
+    // instead, so the normal flush writes the CURRENT state after the release.
+    if (insertionWriteHolds.has(stage.id)) {
+      markPendingChanges(stage.id, ...fullAggregateChanges(get()));
+      log.info(`Deferred the aggregate save of ${stage.id}: a slide insertion holds its writes`);
+      return Promise.resolve(false);
     }
 
-    // Epoch captured with the state read above: a deletion during the PBL
-    // preparation await below permanently invalidates this write.
-    const capturedEpoch = stageDeletionEpoch(stage.id);
-    const pendingAtStart = new Map(pendingChanges);
-    try {
-      const persistedScenes = await preparePBLScenesForDocumentPersistence(stage.id, scenes);
-      const { saveStageData } = await import('@/lib/utils/stage-storage');
-      const result = await saveStageData(
-        stage.id,
-        {
-          stage,
-          scenes: persistedScenes,
-          currentSceneId,
-          chats,
-          chatSnapshot,
-          outline: {
-            outlines,
-            generationComplete,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+    const stageId = stage.id;
+    const save = (async (): Promise<boolean> => {
+      // Epoch captured with the state read above: a deletion during the PBL
+      // preparation await below permanently invalidates this write.
+      const capturedEpoch = stageDeletionEpoch(stage.id);
+      const pendingAtStart = new Map(pendingChanges);
+      try {
+        const persistedScenes = await preparePBLScenesForDocumentPersistence(stage.id, scenes);
+        const { saveStageData } = await import('@/lib/utils/stage-storage');
+        const result = await saveStageData(
+          stage.id,
+          {
+            stage,
+            scenes: persistedScenes,
+            currentSceneId,
+            chats,
+            chatSnapshot,
+            outline: {
+              outlines,
+              generationComplete,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
           },
-        },
-        capturedEpoch,
-      );
+          capturedEpoch,
+        );
 
-      // An epoch-stale drop persisted nothing: skip every piece of success
-      // bookkeeping. The chatSnapshot must not rebind to a snapshot that
-      // never landed, and the pending map must keep its dirt (the deletion
-      // path owns its discard/restore). Report the write as not durable.
-      if (result === 'stale-dropped') {
-        log.info(`Save dropped by deletion fence for stage ${stage.id}; nothing persisted`);
-        return false;
-      }
-
-      const failedKeys = new Set((result?.failedChanges ?? []).map(pendingChangeKey));
-      if (
-        failedKeys.has('chats') &&
-        pendingStageId === stage.id &&
-        !pendingChanges.has('chats') &&
-        get().stage?.id === stage.id &&
-        get().chats === chats
-      ) {
-        markPendingChanges(stage.id, { kind: 'chats' });
-      }
-      // Bind future saves to the exact chat snapshot this successful write
-      // represented. Keep the restore marker unchanged: a stale no-op after a
-      // restore must remain stale until the editor reloads.
-      if (!failedKeys.has('chats') && get().stage?.id === stage.id && get().chats === chats) {
-        set({
-          chatSnapshot: {
-            sessions: structuredClone(chats),
-            restoreMarker: chatSnapshot.restoreMarker,
-          },
-        });
-      }
-      if (pendingStageId === stage.id) {
-        for (const [key, entry] of pendingAtStart) {
-          if (!failedKeys.has(key) && pendingChanges.get(key)?.revision === entry.revision) {
-            pendingChanges.delete(key);
-          }
+        // An epoch-stale drop persisted nothing: skip every piece of success
+        // bookkeeping. The chatSnapshot must not rebind to a snapshot that
+        // never landed, and the pending map must keep its dirt (the deletion
+        // path owns its discard/restore). Report the write as not durable.
+        if (result === 'stale-dropped') {
+          log.info(`Save dropped by deletion fence for stage ${stage.id}; nothing persisted`);
+          return false;
         }
-        if (pendingChanges.size === 0) cancelScheduledSave();
-        else schedulePendingSave();
-      }
 
-      return true;
-    } catch (error) {
-      if (isTerminalGrantDocumentRefusal(error)) {
-        noteGrantReadOnlyRefusal(stage.id);
+        const failedKeys = new Set((result?.failedChanges ?? []).map(pendingChangeKey));
+        if (
+          failedKeys.has('chats') &&
+          pendingStageId === stage.id &&
+          !pendingChanges.has('chats') &&
+          get().stage?.id === stage.id &&
+          get().chats === chats
+        ) {
+          markPendingChanges(stage.id, { kind: 'chats' });
+        }
+        // Bind future saves to the exact chat snapshot this successful write
+        // represented. Keep the restore marker unchanged: a stale no-op after a
+        // restore must remain stale until the editor reloads.
+        if (!failedKeys.has('chats') && get().stage?.id === stage.id && get().chats === chats) {
+          set({
+            chatSnapshot: {
+              sessions: structuredClone(chats),
+              restoreMarker: chatSnapshot.restoreMarker,
+            },
+          });
+        }
+        if (pendingStageId === stage.id) {
+          for (const [key, entry] of pendingAtStart) {
+            if (!failedKeys.has(key) && pendingChanges.get(key)?.revision === entry.revision) {
+              pendingChanges.delete(key);
+            }
+          }
+          if (pendingChanges.size === 0) cancelScheduledSave();
+          else schedulePendingSave();
+        }
+
+        return true;
+      } catch (error) {
+        if (isTerminalGrantDocumentRefusal(error)) {
+          noteGrantReadOnlyRefusal(stage.id);
+          return false;
+        }
+        log.error('Failed to save to storage:', error);
         return false;
       }
-      log.error('Failed to save to storage:', error);
-      return false;
-    }
+    })();
+    // Registered in the same synchronous turn as the call, before anything
+    // else can run: a Stage-wide durability proof sees this write from its
+    // first await until it settles (plan §5.1 API 2).
+    trackDirectDocumentSave(stageId, save);
+    return save;
   },
 
   loadFromStorage: async (stageId: string, loadToken?: StageSceneLoadToken) => {
@@ -1722,6 +1792,396 @@ export function beginSceneRegeneration(stageId: string, sceneId: string): SceneR
 
 export function isSceneRegenerationLocked(stageId: string, sceneId: string): boolean {
   return regenerationLocks.has(regenerationLockKey(stageId, sceneId));
+}
+
+/** True while a slide or audio regeneration, or an insertion, holds the Stage's autosave. */
+export function isStageWritesHeld(stageId: string): boolean {
+  return regenerationBarriers.has(stageId);
+}
+
+// ==================== Reviewer-generated slide insertion (plan §5.1) ====================
+//
+// The no-write invariant is scoped to the insertion handle while it is
+// CURRENT (V3.1-2): from the re-prove until `release()`, this tab starts no
+// flush round for the Stage (the barrier) and no direct aggregate save (the
+// deferral). Navigation is the documented exception: `setStage` claims a new
+// load token BEFORE its departing-stage `persistDirtySnapshot`, so the handle
+// is already not current when that write starts, and the late result is
+// discarded as `'stale'`. That departure write keeps its existing semantics
+// (attempted, retried once, a revision conflict is logged and dropped — never
+// a durability barrier); the server's T2 sandwich/fence rebuild (before the
+// commit) and the revision preconditions (after it) guard what it can touch.
+// The same holds for the other writers outside the scheduler and
+// `saveToStorage` (media-reference persistence, stage rename, delete and
+// restore in `lib/utils/database.ts`): they are not part of this invariant.
+
+/**
+ * Stage-wide durability: no flush round in flight, no registered direct
+ * aggregate save, a writable viewer, and no pending change of a document kind
+ * (`currentScene` / `chats` never block). Unlike `isSceneDurable`, another
+ * Scene's pending entry makes it false. Only this check is proof — a resolved
+ * drain is not (`flushStageSave` resolves even when its round failed).
+ */
+export function isStageDocumentDurable(stageId: string): boolean {
+  if (flushInFlight?.stageId === stageId) return false;
+  if ((directDocumentSaves.get(stageId)?.size ?? 0) > 0) return false;
+  if (stageDocumentWriteAccess(stageId) !== 'writable') return false;
+  return pendingStageDocumentKeys(stageId).length === 0;
+}
+
+/** The Stage's pending document-kind keys (what a "not saved yet" refusal names). */
+export function pendingStageDocumentKeys(stageId: string): string[] {
+  if (pendingStageId !== stageId) return [];
+  return [...pendingChanges].flatMap(([key, { change }]) =>
+    DOCUMENT_CHANGE_KINDS.has(change.kind) ? [key] : [],
+  );
+}
+
+/** True while a direct aggregate save of the Stage is running (diagnostics, tests). */
+export function hasDirectDocumentSave(stageId: string): boolean {
+  return (directDocumentSaves.get(stageId)?.size ?? 0) > 0;
+}
+
+/**
+ * Await this tab's tracked document writes of the Stage: the registered direct
+ * aggregate saves, then the scheduler flush — at most two rounds, stopping as
+ * soon as the Stage is durable. Proves nothing: the caller must check
+ * `isStageDocumentDurable` afterwards.
+ */
+export async function drainStageDocumentWrites(stageId: string): Promise<void> {
+  for (let round = 0; round < 2; round += 1) {
+    if (isStageDocumentDurable(stageId)) return;
+    await Promise.allSettled([...(directDocumentSaves.get(stageId) ?? [])]);
+    await flushStageSave().catch(() => {});
+  }
+}
+
+/** The current pending-change revision: every later mark has a higher one. */
+export function pendingDocumentRevisionMark(): number {
+  return pendingRevision;
+}
+
+/** Document-kind keys of the Stage marked after `mark`, computed at call time. */
+export function documentDirtSince(stageId: string, mark: number): string[] {
+  if (pendingStageId !== stageId) return [];
+  return [...pendingChanges].flatMap(([key, { change, revision }]) =>
+    revision > mark && DOCUMENT_CHANGE_KINDS.has(change.kind) ? [key] : [],
+  );
+}
+
+/** Read the scene-load token without claiming one. */
+export function peekStageSceneLoadToken(): StageSceneLoadToken {
+  return latestStageSceneLoadToken;
+}
+
+function notifyStageEditingLockListeners(): void {
+  for (const listener of stageEditingLockListeners) listener();
+}
+
+function subscribeStageEditingLocks(listener: () => void): () => void {
+  stageEditingLockListeners.add(listener);
+  return () => stageEditingLockListeners.delete(listener);
+}
+
+/** True while an insertion holds the Stage's editing lock: mutation entry points refuse. */
+export function isStageEditingLocked(stageId: string | null | undefined): boolean {
+  return Boolean(stageId) && (stageEditingLocks.get(stageId!) ?? 0) > 0;
+}
+
+/** React view of {@link isStageEditingLocked}. */
+export function useStageEditingLocked(stageId: string | null | undefined): boolean {
+  return useSyncExternalStore(
+    subscribeStageEditingLocks,
+    () => isStageEditingLocked(stageId),
+    () => false,
+  );
+}
+
+/** What the Stage looked like when it was proven durable (plan §5.1 step 7). */
+export interface StageInsertionBaseline {
+  /** `pendingRevision` at that moment: later dirt arrived during the run. */
+  mark: number;
+  /** The Scene ids the tab held. */
+  sceneIds: ReadonlySet<string>;
+  /** The revision each was bound to (durable, so exactly the server's then). */
+  revs: Readonly<Record<string, number>>;
+}
+
+export interface StageInsertionHandle {
+  readonly stageId: string;
+  /** Unique per run; a newer insertion on the Stage supersedes this one. */
+  readonly operationId: string;
+  /** The Stage-wide editing lock (taken at once; read by `isStageEditingLocked`). */
+  lock(): void;
+  /** Hold the Stage's flush rounds and defer its direct saves (call AFTER the prove). */
+  holdWrites(): void;
+  /** The mark and baseline (call right after the re-prove). */
+  captureBaseline(): StageInsertionBaseline;
+  /** Not released, still the Stage's insertion, same Stage, no navigation/reload since. */
+  isCurrent(): boolean;
+  /** Lift the lock, the hold and the deferral, then schedule whatever was held. */
+  release(): void;
+}
+
+/**
+ * Start one insertion's client protocol for a Stage. Records the scene-load
+ * token now: any later `setStage` / `loadFromStorage` / `clearStore` (or a
+ * classroom loader) claims a new one, which makes the handle not current.
+ */
+export function beginStageInsertion(stageId: string): StageInsertionHandle {
+  insertionOperationCounter += 1;
+  const operationId = `insertion-${insertionOperationCounter}`;
+  currentInsertions.set(stageId, operationId);
+  const loadToken = latestStageSceneLoadToken;
+  let locked = false;
+  let holding = false;
+  let released = false;
+  return {
+    stageId,
+    operationId,
+    lock() {
+      if (locked || released) return;
+      locked = true;
+      stageEditingLocks.set(stageId, (stageEditingLocks.get(stageId) ?? 0) + 1);
+      notifyStageEditingLockListeners();
+    },
+    holdWrites() {
+      if (holding || released) return;
+      holding = true;
+      regenerationBarriers.set(stageId, (regenerationBarriers.get(stageId) ?? 0) + 1);
+      insertionWriteHolds.set(stageId, (insertionWriteHolds.get(stageId) ?? 0) + 1);
+      if (typeof window !== 'undefined') window.addEventListener('beforeunload', warnBeforeUnload);
+    },
+    captureBaseline() {
+      const state = useStageStore.getState();
+      return {
+        mark: pendingRevision,
+        sceneIds: new Set(state.stage?.id === stageId ? state.scenes.map((scene) => scene.id) : []),
+        revs: stageSceneRevs(stageId) ?? {},
+      };
+    },
+    isCurrent() {
+      return (
+        !released &&
+        currentInsertions.get(stageId) === operationId &&
+        useStageStore.getState().stage?.id === stageId &&
+        latestStageSceneLoadToken === loadToken
+      );
+    },
+    release() {
+      if (released) return;
+      released = true;
+      if (currentInsertions.get(stageId) === operationId) currentInsertions.delete(stageId);
+      if (locked) {
+        const remaining = (stageEditingLocks.get(stageId) ?? 1) - 1;
+        if (remaining > 0) stageEditingLocks.set(stageId, remaining);
+        else stageEditingLocks.delete(stageId);
+        notifyStageEditingLockListeners();
+      }
+      if (holding) {
+        const holds = (insertionWriteHolds.get(stageId) ?? 1) - 1;
+        if (holds > 0) insertionWriteHolds.set(stageId, holds);
+        else insertionWriteHolds.delete(stageId);
+        const barriers = (regenerationBarriers.get(stageId) ?? 1) - 1;
+        if (barriers > 0) regenerationBarriers.set(stageId, barriers);
+        else regenerationBarriers.delete(stageId);
+        if (typeof window !== 'undefined' && regenerationBarriers.size === 0) {
+          window.removeEventListener('beforeunload', warnBeforeUnload);
+        }
+      }
+      if (pendingStageId && pendingChanges.size > 0) schedulePendingSave();
+    },
+  };
+}
+
+/** The insertion's own result, as the server recorded it. */
+export interface InsertionResultInput {
+  newSceneId: string;
+  /**
+   * Per Scene the insertion's write rewrote: its revision in the snapshot the
+   * write was built from (`before`) and right after the write (`after`).
+   */
+  revTransitions: Readonly<Record<string, { before: number; after: number }>>;
+}
+
+export type InsertionApplyOutcome = 'applied' | 'merged' | 'stale' | 'unbound';
+
+interface InsertionMerge {
+  scenes: Scene[];
+  /** Per-Scene revision bindings to apply (`null` = forget the Scene). */
+  bindings: Map<string, number | null>;
+}
+
+/**
+ * The local-wins merge over the UNION of local and server Scene ids
+ * (plan §5.1 step 9, V3.1-1). Pure: the caller applies it synchronously.
+ *
+ * A Scene's server revision is bound only when the merged Scene carries the
+ * server's content, or when nobody but the insertion touched it since the
+ * baseline (its bound revision is the write's `before` and the server's is
+ * the write's `after`) — revision lineage, not byte comparison, because the
+ * storage layer may legitimately normalize a Scene's stored bytes.
+ */
+function mergeInsertionScenes(
+  local: readonly Scene[],
+  server: readonly Scene[],
+  revs: Readonly<Record<string, number>>,
+  baseline: StageInsertionBaseline,
+  input: InsertionResultInput,
+  dirty: readonly string[],
+): InsertionMerge {
+  const dirtySceneIds = new Set(
+    dirty.flatMap((key) => (key.startsWith('scene:') ? [key.slice('scene:'.length)] : [])),
+  );
+  const structureDirty = dirty.includes('structure');
+  const localById = new Map(local.map((scene) => [scene.id, scene]));
+  const serverById = new Map(server.map((scene) => [scene.id, scene]));
+  const bindings = new Map<string, number | null>();
+  const bindServer = (id: string) => {
+    if (revs[id] !== undefined) bindings.set(id, revs[id]!);
+  };
+  const onlyInsertionTouched = (id: string): boolean => {
+    const transition = input.revTransitions[id];
+    return (
+      transition !== undefined &&
+      baseline.revs[id] === transition.before &&
+      revs[id] === transition.after
+    );
+  };
+  // On both sides: a dirty Scene keeps its local content (its pending entry
+  // stays, so the next save writes it on top); a clean one takes the server's.
+  const resolveShared = (localScene: Scene, serverScene: Scene): Scene => {
+    if (!dirtySceneIds.has(localScene.id)) {
+      bindServer(serverScene.id);
+      return serverScene;
+    }
+    // Rebound only when the insertion's shift was the sole server change;
+    // otherwise the old expectation stays and the next save meets the
+    // existing 409 path (a genuine concurrent edit is never overwritten).
+    if (onlyInsertionTouched(localScene.id)) bindServer(localScene.id);
+    return { ...localScene, order: serverScene.order };
+  };
+  // Local only — absent from the fetched snapshot.
+  const resolveLocalOnly = (localScene: Scene): Scene | null => {
+    // Deleted elsewhere while edited here: kept, with its pending entry and
+    // its OLD expected revision, so the next save is refused by the
+    // precondition (409) and the existing conflict path replaces it with its
+    // notice — never dropped silently, never re-created by a binding removal.
+    if (dirtySceneIds.has(localScene.id)) return localScene;
+    // Deleted elsewhere and clean here: removed, and its binding with it.
+    if (baseline.sceneIds.has(localScene.id)) {
+      bindings.set(localScene.id, null);
+      return null;
+    }
+    // Created here after the mark (with structure dirt): kept, unbound.
+    return localScene;
+  };
+
+  const merged: Scene[] = [];
+  if (!structureDirty) {
+    for (const serverScene of server) {
+      const localScene = localById.get(serverScene.id);
+      if (localScene) {
+        merged.push(resolveShared(localScene, serverScene));
+      } else {
+        // The new Scene, or one created elsewhere (nothing was deleted here:
+        // a deletion marks `structure`).
+        bindServer(serverScene.id);
+        merged.push(serverScene);
+      }
+    }
+    for (const localScene of local) {
+      if (serverById.has(localScene.id)) continue;
+      const kept = resolveLocalOnly(localScene);
+      if (kept) merged.push(kept);
+    }
+    return { scenes: sortedByOrder(merged), bindings };
+  }
+
+  // Structure dirt: the local list (its order, its deletions, its creations)
+  // wins; the new Scene is placed next to its server neighbours.
+  for (const localScene of local) {
+    const serverScene = serverById.get(localScene.id);
+    const kept = serverScene
+      ? resolveShared(localScene, serverScene)
+      : resolveLocalOnly(localScene);
+    if (kept) merged.push(kept);
+  }
+  for (const serverScene of server) {
+    if (localById.has(serverScene.id) || serverScene.id === input.newSceneId) continue;
+    if (baseline.sceneIds.has(serverScene.id)) {
+      // Deleted here during the run: it stays deleted. Its expectation moves
+      // to the server revision only when nobody else touched it, so the next
+      // whole save deletes exactly what this tab saw.
+      if (onlyInsertionTouched(serverScene.id)) bindServer(serverScene.id);
+    }
+    // Created elsewhere: not added and not bound — the next whole save meets
+    // the existing 409 recovery, which pulls it in.
+  }
+  const fresh = serverById.get(input.newSceneId);
+  if (fresh) {
+    const at = server.findIndex((scene) => scene.id === input.newSceneId);
+    const previousAt = at > 0 ? merged.findIndex((scene) => scene.id === server[at - 1]!.id) : -1;
+    const nextAt =
+      at >= 0 && at + 1 < server.length
+        ? merged.findIndex((scene) => scene.id === server[at + 1]!.id)
+        : -1;
+    const insertAt =
+      previousAt >= 0
+        ? previousAt + 1
+        : nextAt >= 0
+          ? nextAt
+          : Math.min(Math.max(at, 0), merged.length);
+    merged.splice(insertAt, 0, fresh);
+    bindServer(fresh.id);
+  }
+  return {
+    scenes: merged.map((scene, index) =>
+      scene.order === index + 1 ? scene : { ...scene, order: index + 1 },
+    ),
+    bindings,
+  };
+}
+
+/**
+ * Apply an insertion's fetched result (plan §5.1 API 9, V3-1). SYNCHRONOUS:
+ * nothing awaits between the checks below and the state and revision writes,
+ * so no mutation can land in between. In order: the handle must be current
+ * (else `'stale'`, nothing changes); the snapshot must carry the revisions
+ * its read sandwich proved (else `'unbound'`, nothing changes — the next
+ * save's 409 recovery delivers the new Scene); then the Stage's document dirt
+ * is recomputed NOW. None → clean apply (server Scenes + whole binding).
+ * Some → the local-wins merge over the union of local and server ids. Pending
+ * entries are never touched: local dirt stays queued for the next save.
+ */
+export function applyInsertionResult(
+  handle: StageInsertionHandle,
+  serverData: Pick<StageStoreData, 'scenes' | 'sceneRevs'>,
+  baseline: StageInsertionBaseline,
+  input: InsertionResultInput,
+): InsertionApplyOutcome {
+  if (!handle.isCurrent()) return 'stale';
+  const revs = serverData.sceneRevs;
+  if (!revs) return 'unbound';
+  const { stageId } = handle;
+  const state = useStageStore.getState();
+  const serverScenes = sortedByOrder(serverData.scenes.map(migrateScene));
+  const dirty = documentDirtSince(stageId, baseline.mark);
+  const select = (scenes: readonly Scene[]) =>
+    scenes.some((scene) => scene.id === input.newSceneId)
+      ? input.newSceneId
+      : scenes.some((scene) => scene.id === state.currentSceneId)
+        ? state.currentSceneId
+        : (scenes[0]?.id ?? null);
+  if (dirty.length === 0) {
+    useStageStore.setState({ scenes: serverScenes, currentSceneId: select(serverScenes) });
+    bindStageSceneRevs(stageId, revs);
+    return 'applied';
+  }
+  const merge = mergeInsertionScenes(state.scenes, serverScenes, revs, baseline, input, dirty);
+  useStageStore.setState({ scenes: merge.scenes, currentSceneId: select(merge.scenes) });
+  for (const [sceneId, rev] of merge.bindings) setSceneRev(stageId, sceneId, rev);
+  return 'merged';
 }
 
 if (typeof window !== 'undefined') {
