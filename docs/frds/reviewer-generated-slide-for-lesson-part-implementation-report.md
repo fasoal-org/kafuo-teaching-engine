@@ -358,8 +358,8 @@ Mapped statically first. The table is read only by `middleware.ts`; its tests ar
 | `pnpm exec vitest run …` | Result |
 |---|---|
 | `tests/middleware/editor-grant-exemption.test.ts tests/middleware/access-code-gate.test.ts tests/middleware/access-gate-w1-b2a.test.ts` | 59 passed |
-| `tests/teaching-package/scene-insertion-route.test.ts` | 36 passed |
-| **Total** | **95 passed, 0 failed** |
+| `tests/teaching-package/scene-insertion-route.test.ts` | 38 passed (after the review's test additions in `6e6f7698`, §10.4) |
+| **Total** | **97 passed, 0 failed** |
 
 What the tests prove:
 - **Middleware**, with `ACCESS_CODE` set:
@@ -378,10 +378,32 @@ What the tests prove:
   - a read grant sees gate `read` and parts 200, and gets 403 on i3–i5;
   - a preview grant, read or write, sees gate `read`, and gets 403 on the parts and on i3–i5;
   - a learner grant gets the middleware's 401 body on the gate and the parts, and 403 on i3–i5, with no row and no model call;
-  - a forged grant, an empty one, another Stage's grant, an other-tenant grant, an other-version grant and a stale-version grant are each a plain 404 on all five, with no row and no model call.
+  - a forged grant, an empty one, another Stage's grant, an other-tenant grant, an other-version grant and a stale-version grant are each a plain 404 on all five, with no row and no model call;
+  - an expired signed grant is a plain 404 on all five (`6e6f7698`);
+  - the learner's 401 body is byte-for-byte the middleware's on both the gate and the parts, and it comes before the version read (a stale learner grant gets 401 too) (`6e6f7698`);
+  - a learner holding a valid access cookie gets the gate as read-only, while the parts stay 403 (`6e6f7698`).
 - **Static:**
   - `pnpm exec eslint` and `pnpm exec prettier --check` on the three touched files: clean.
   - `pnpm exec tsc --noEmit --incremental false`: 75, the unchanged baseline.
+
+### 10.4 Independent security review
+
+A read-only reviewer sub-agent reviewed `5496c380`. It reran the 4 test files (59 + 36) and read the handlers, the grant resolver and the matching code. It confirmed:
+- every handler checks the signed grant first, before any database read, body parse, write or model call;
+- the POST row is in the same-origin set;
+- the patterns are anchored, case-sensitive and limited to the id charset; a `.rsc`-suffixed insertion id gets 404 after the grant check;
+- no `Access-Control-Allow-*` header exists, so same-site ports cannot read GET answers;
+- the closed-mode 503 and the `PERSISTENCE_DEV_TOKEN` rule are unchanged.
+
+Verdict: safe as written. **No BLOCKER, MAJOR or MEDIUM.**
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| LOW-1 — the by-id status read reclaims an expired lease *before* its tenant/version/Stage scope check (`readSceneInsertionStatus` → `reclaimExpiredSceneInsertions(tx, { id })`). A write-grant holder could mark another Stage's already-expired insertion `LEASE_EXPIRED` (and write its audit event) before getting the 404. Pre-existing; the exemption only widens who can reach it. Ids carry 72 random bits; the effect equals the owner's own next read; the regeneration by-id read has the same pattern | LOW | **Not changed here** (outside this focused fix). Follow-up: scope the reclaim (`AND stage_id = … AND version_id = …`), or read and scope the row before reclaiming |
+| LOW-2 — on i3–i5 a learner now gets 403 (or 404 when stale) instead of the middleware's 401 | LOW | Matches the existing write-only rows (restore POST, regeneration status rows 5 and 9). D-O1-5's "keep the 401" covers the readable GET rows, which i1 and i2 keep. **Owner to confirm** |
+| LOW-3 — test gaps | LOW | **Closed** in `6e6f7698`: expired grant; learner 401 bodies on both GET rows and before the version read; learner with the access cookie. Still untested: a `.rsc` id on i5, and a direct test that the grant check precedes the body parse. Both are shown by reading; the latter is also covered indirectly (no row, no model call) |
+
+Out of scope (pre-existing, every POST row): a browser holding the access cookie skips the same-origin check.
 
 ### 10.3 Remaining gates (UNVERIFIED)
 
