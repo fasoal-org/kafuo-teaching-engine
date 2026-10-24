@@ -61,6 +61,12 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   ['PUT', '/api/persistence/documents/:id/scenes/:id'], // 15
   ['DELETE', '/api/persistence/documents/:id/scenes/:id'], // 16
   ['GET', '/api/stage-meta/:id'], // x10 (D-O1-2, owner 19 Oct 2026)
+  // Reviewer-generated slide insertion (owner, 24 Oct 2026).
+  ['GET', '/api/stages/:id/scene-insertion'], // i1 gate
+  ['GET', '/api/stages/:id/content-units'], // i2 lesson parts
+  ['POST', '/api/stages/:id/scene-insertions'], // i3 start (same-origin only)
+  ['GET', '/api/stages/:id/scene-insertions'], // i4 status by `?key=`
+  ['GET', '/api/stages/:id/scene-insertions/:id'], // i5 status by insertion id
 ];
 
 /** The handler file behind each reviewed Stage path (`app/api/…`). */
@@ -78,6 +84,10 @@ const STAGE_ROUTE_FILES: Readonly<Record<string, string>> = {
   '/api/stages/:id/scenes/:id/narration-audio':
     'stages/[id]/scenes/[sceneId]/narration-audio/route.ts',
   '/api/stage-meta/:id': 'stage-meta/[stageId]/route.ts',
+  '/api/stages/:id/scene-insertion': 'stages/[id]/scene-insertion/route.ts',
+  '/api/stages/:id/content-units': 'stages/[id]/content-units/route.ts',
+  '/api/stages/:id/scene-insertions': 'stages/[id]/scene-insertions/route.ts',
+  '/api/stages/:id/scene-insertions/:id': 'stages/[id]/scene-insertions/[insertionId]/route.ts',
 };
 const PERSISTENCE_ROUTE_FILE = 'persistence/[...path]/route.ts';
 
@@ -264,6 +274,29 @@ const LOOK_ALIKES: ReadonlyArray<readonly [string, string]> = [
   // A query string carries no route.
   ['POST', `/api/stages/${S}/publish?next=/teaching-skills`],
   ['GET', `/api/stages/${S}?path=/teaching-skills`],
+  // The slide insertion rows (i1-i5): neighbours, extra or missing segments,
+  // encoded separators, dot segments, case and off-charset ids.
+  ['GET', `/api/stages/${S}/scene-insertion/`],
+  ['GET', `/api/stages/${S}/scene-insertion/x`],
+  ['GET', `/api/stages/${S}/scene-insertionx`],
+  ['GET', `/api/stages/${S}/content-units/`],
+  ['GET', `/api/stages/${S}/content-units/${CHILD}`],
+  ['GET', `/api/stages/${S}/content-unit`],
+  ['POST', `/api/stages/${S}/scene-insertions/`],
+  ['POST', `/api/stages/${S}/scene-insertions/${CHILD}`],
+  ['POST', `/api/stages/${S}/scene-insertionsx`],
+  ['GET', `/api/stages/${S}/scene-insertions/${CHILD}/`],
+  ['GET', `/api/stages/${S}/scene-insertions/${CHILD}/x`],
+  ['GET', `/api/stages/${S}/scene-insertions//`],
+  ['GET', `/api/stages/${S}/scene-insertions/${CHILD}%2Fx`],
+  ['GET', `/api/stages/${S}/scene-insertions/..%2F${CHILD}`],
+  ['GET', '/api/stages/stage.abc/scene-insertions/tpsi_1'],
+  ['GET', `/api/stages/${S}/scene-insertions/tpsi.1`],
+  ['GET', `/api/stages/${S}/Scene-Insertions`],
+  ['POST', `/api/stages/${S}/SCENE-INSERTIONS`],
+  ['GET', `/api/stages/${S}/Content-Units`],
+  ['GET', `/api/stagesx/${S}/scene-insertion`],
+  ['POST', `/api/stages/${S}/publish?next=/scene-insertions`],
 ];
 
 /**
@@ -323,6 +356,52 @@ describe('editor-grant exemption (O1)', () => {
       expect(await outcome('GET', `/api/classroom-media/${S}/media/figure.png?exp=1&sig=s`)).toBe(
         'passed',
       );
+    });
+
+    it('lets the slide insertion rows through with only a grant cookie (i1-i5)', async () => {
+      const reads: ReadonlyArray<readonly [string, string]> = [
+        ['GET', `/api/stages/${S}/scene-insertion`],
+        ['GET', `/api/stages/${S}/content-units`],
+        // The collection GET with its key query string, and by insertion id.
+        ['GET', `/api/stages/${S}/scene-insertions?key=insert-AbC_9-z`],
+        ['GET', `/api/stages/${S}/scene-insertions/tpsi_Q1w-2e_3R`],
+      ];
+      for (const [method, path] of reads) {
+        expect(await outcome(method, path, GRANT), `${method} ${path}`).toBe('passed');
+        // Fetch headers do not matter for GET rows.
+        expect(
+          await outcome(method, path, GRANT, { 'sec-fetch-site': 'cross-site' }),
+          `${method} ${path} cross-site`,
+        ).toBe('passed');
+        expect(await outcome(method, path), `${method} ${path} no cookie`).toBe(401);
+        expect(
+          await outcome(method, path, 'teaching_package_learner_key=tp:abc'),
+          `${method} ${path} learner key only`,
+        ).toBe(401);
+      }
+      // The start: same-origin only, like the other paid POST rows.
+      const start = `/api/stages/${S}/scene-insertions`;
+      expect(await outcome('POST', start, GRANT, SAME_ORIGIN)).toBe('passed');
+      expect(await outcome('POST', start, GRANT, { origin: 'http://te.test' })).toBe('passed');
+      for (const [label, headers] of NOT_SAME_ORIGIN) {
+        expect(await outcome('POST', start, GRANT, headers), label).toBe(401);
+      }
+      expect(await outcome('POST', start, undefined, SAME_ORIGIN)).toBe(401);
+      // Methods the table does not list on these paths.
+      for (const [method, path] of [
+        ['POST', `/api/stages/${S}/scene-insertion`],
+        ['POST', `/api/stages/${S}/content-units`],
+        ['PUT', start],
+        ['DELETE', start],
+        ['PATCH', start],
+        ['HEAD', start],
+        ['OPTIONS', start],
+        ['POST', `/api/stages/${S}/scene-insertions/tpsi_1`],
+        ['DELETE', `/api/stages/${S}/scene-insertions/tpsi_1`],
+        ['HEAD', `/api/stages/${S}/scene-insertions/tpsi_1`],
+      ] as const) {
+        expect(await outcome(method, path, GRANT), `${method} ${path}`).toBe(401);
+      }
     });
 
     it('ignores the query string', async () => {
@@ -399,12 +478,13 @@ describe('editor-grant exemption (O1)', () => {
       }
     });
 
-    describe('CSRF on the POST rows 6, 8 and 10 (D-O1-R8)', () => {
-      it('applies to exactly rows 6, 8 and 10', () => {
+    describe('CSRF on the POST rows 6, 8, 10 and i3 (D-O1-R8)', () => {
+      it('applies to exactly rows 6, 8, 10 and i3', () => {
         expect(POST_ROWS.map(([, path]) => path)).toEqual([
           `/api/stages/${S}/scene-regenerations/${CHILD}/restore`,
           `/api/stages/${S}/scenes/${CHILD}/regenerate`,
           `/api/stages/${S}/scenes/${CHILD}/narration-audio`,
+          `/api/stages/${S}/scene-insertions`,
         ]);
       });
 
@@ -649,6 +729,30 @@ describe('editor-grant exemption table (structural pin)', () => {
         expect(source, label).toMatch(/GRANT_READ_ONLY/);
       }
     }
+  });
+
+  it('pins the slide insertion handlers’ own checks (i1-i5)', () => {
+    const source = (file: string) => readFileSync(join(API_DIR, file), 'utf8');
+    // The gate and the lesson parts: the grant for this Stage, read-only, and
+    // the learner's 401 without the access cookie; the parts refuse learner
+    // and preview grants.
+    for (const file of [
+      'stages/[id]/scene-insertion/route.ts',
+      'stages/[id]/content-units/route.ts',
+    ]) {
+      expect(source(file), file).toMatch(/learnerRefusalWithoutAccessCode\(/);
+      expect(source(file), file).toMatch(/resolveRegenerationGrant\([^)]*requireWrite: false/);
+    }
+    expect(source('stages/[id]/content-units/route.ts')).toMatch(
+      /purpose === 'learner' \|\| grant\.purpose === 'preview'/,
+    );
+    // The start and both status reads need a write editing grant.
+    const collection = source('stages/[id]/scene-insertions/route.ts');
+    expect(collection.match(/requireWrite: true/g)).toHaveLength(2);
+    expect(collection).not.toMatch(/requireWrite: false/);
+    expect(source('stages/[id]/scene-insertions/[insertionId]/route.ts')).toMatch(
+      /requireWrite: true/,
+    );
   });
 
   it('keeps the middleware Edge-safe (no Node or grant-crypto imports)', () => {

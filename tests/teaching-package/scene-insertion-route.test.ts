@@ -719,6 +719,130 @@ describe('reviewer-generated slide insertion routes', () => {
     expect(insertionStatusBody(row!, now + 700_000).leaseRemainingMs).toBe(0);
   });
 
+  // ------------------------- ACCESS_CODE on, grant cookie only (the O1 rows i1-i5)
+
+  /**
+   * The middleware lets a grant-only request reach these five handlers
+   * (`EDITOR_GRANT_EXEMPT_ROUTES`, presence only); each handler then decides.
+   * Called directly here, with `ACCESS_CODE` set and no access cookie.
+   */
+  describe('with ACCESS_CODE set and no access cookie', () => {
+    beforeEach(() => {
+      vi.stubEnv('ACCESS_CODE', 'insertion-access-code');
+    });
+
+    const grantFor = (
+      seeded: Seed,
+      overrides: {
+        capability?: 'read' | 'write';
+        purpose?: 'edit' | 'preview' | 'learner';
+        tenantId?: string;
+        versionId?: string;
+      } = {},
+    ) => {
+      const { token } = buildEditorGrantPayload({
+        tenantId: overrides.tenantId ?? TENANT,
+        versionId: overrides.versionId ?? seeded.versionId,
+        stageId: seeded.stageId,
+        capability: overrides.capability ?? 'write',
+        ...(overrides.purpose ? { purpose: overrides.purpose } : {}),
+      });
+      return `teaching_package_grant=${encodeURIComponent(
+        grantCookieValueForRedeem(new Headers(), token, seeded.stageId),
+      )}`;
+    };
+
+    /** The five rows with one cookie: [gate, units, start, by key, by id] statuses. */
+    async function statuses(seeded: Seed, cookie: string, insertionId = 'tpsi_none') {
+      const as = { ...seeded, cookie };
+      return [
+        (await get('gate', as)).status,
+        (await get('units', as)).status,
+        (await post(seeded, body({ idempotencyKey: `key-${randomUUID()}` }), cookie)).status,
+        (await get('byKey', as, 'key-never-sent')).status,
+        (await get('byId', as, insertionId)).status,
+      ];
+    }
+
+    it('a write editing grant reaches all five: gate, lesson parts, start, status by key and by id', async () => {
+      const seeded = await seed();
+      const cookie = grantFor(seeded, { purpose: 'edit' });
+      const as = { ...seeded, cookie };
+      const gate = await get('gate', as);
+      expect(gate.status).toBe(200);
+      expect(await gate.json()).toMatchObject({ capability: 'write', editable: true });
+      expect((await get('units', as)).status).toBe(200);
+      const started = await post(seeded, body({ idempotencyKey: 'key-grant-only-1' }), cookie);
+      expect(started.status).toBe(200);
+      const { insertion } = (await started.json()) as { insertion: { insertionId: string } };
+      const byKey = await get('byKey', as, 'key-grant-only-1');
+      expect(byKey.status).toBe(200);
+      expect(((await byKey.json()) as { status: string }).status).toBe('succeeded');
+      expect((await get('byId', as, insertion.insertionId)).status).toBe(200);
+      // The legacy write grant (no purpose) is an editing grant too.
+      expect((await get('gate', { ...seeded, cookie: grantFor(seeded) })).status).toBe(200);
+    });
+
+    it('a read grant sees the read-only gate and the parts; every insertion row is 403', async () => {
+      const seeded = await seed();
+      const cookie = grantFor(seeded, { capability: 'read', purpose: 'edit' });
+      const gate = await get('gate', { ...seeded, cookie });
+      expect(await gate.json()).toMatchObject({ capability: 'read', running: [] });
+      expect(await statuses(seeded, cookie)).toEqual([200, 200, 403, 403, 403]);
+      expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+    });
+
+    it('a preview grant, read or write, sees only the read-only gate', async () => {
+      const seeded = await seed();
+      for (const capability of ['read', 'write'] as const) {
+        const cookie = grantFor(seeded, { capability, purpose: 'preview' });
+        const gate = await get('gate', { ...seeded, cookie });
+        expect(await gate.json(), capability).toMatchObject({ capability: 'read' });
+        expect(await statuses(seeded, cookie), capability).toEqual([200, 403, 403, 403, 403]);
+      }
+      expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+    });
+
+    it('a learner grant gets the middleware’s 401 on the gate and the parts, 403 on the rest', async () => {
+      const seeded = await seed();
+      const cookie = grantFor(seeded, { capability: 'read', purpose: 'learner' });
+      expect(await statuses(seeded, cookie)).toEqual([401, 401, 403, 403, 403]);
+      const gate = await get('gate', { ...seeded, cookie });
+      expect(await gate.json()).toMatchObject({ error: 'Access code required' });
+      expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+      expect(mocks.prompts).toHaveLength(0);
+    });
+
+    it('a forged, other-Stage, other-tenant or stale grant is a plain 404 on all five', async () => {
+      const seeded = await seed();
+      const other = await seed();
+      // A real insertion of `seeded`, so the by-id row exists.
+      const made = await post(seeded, body({ idempotencyKey: 'key-grant-only-2' }));
+      const { insertion } = (await made.json()) as { insertion: { insertionId: string } };
+      const forged = `teaching_package_grant=${encodeURIComponent(JSON.stringify(['forged.token']))}`;
+      const cookies: ReadonlyArray<readonly [string, string]> = [
+        ['forged', forged],
+        ['empty', 'teaching_package_grant='],
+        // Valid for ANOTHER Stage: nothing for this path's Stage.
+        ['other Stage', other.cookie],
+        // Signed, but its tenant does not own the version.
+        ['other tenant', grantFor(seeded, { tenantId: 'tenant-other' })],
+        // Signed, but its version does not name this Stage (or is gone).
+        ['other version', grantFor(seeded, { versionId: other.versionId })],
+        ['stale version', grantFor(seeded, { versionId: 'tpv-gone' })],
+      ];
+      for (const [label, cookie] of cookies) {
+        expect(await statuses(seeded, cookie, insertion.insertionId), label).toEqual([
+          404, 404, 404, 404, 404,
+        ]);
+      }
+      // Only the one insertion made above; nothing reached a model since.
+      expect(await insertionRows(seeded.stageId)).toHaveLength(1);
+      expect(await insertionRows(other.stageId)).toHaveLength(0);
+      expect(mocks.insert).toHaveBeenCalledOnce();
+    });
+  });
+
   // -------------------------------------------------------------- refusals
 
   it.each([
