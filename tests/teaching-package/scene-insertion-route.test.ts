@@ -738,6 +738,8 @@ describe('reviewer-generated slide insertion routes', () => {
         purpose?: 'edit' | 'preview' | 'learner';
         tenantId?: string;
         versionId?: string;
+        /** Issue time; far enough in the past and the signed grant has expired. */
+        now?: number;
       } = {},
     ) => {
       const { token } = buildEditorGrantPayload({
@@ -746,6 +748,7 @@ describe('reviewer-generated slide insertion routes', () => {
         stageId: seeded.stageId,
         capability: overrides.capability ?? 'write',
         ...(overrides.purpose ? { purpose: overrides.purpose } : {}),
+        ...(overrides.now !== undefined ? { now: overrides.now } : {}),
       });
       return `teaching_package_grant=${encodeURIComponent(
         grantCookieValueForRedeem(new Headers(), token, seeded.stageId),
@@ -807,8 +810,41 @@ describe('reviewer-generated slide insertion routes', () => {
       const seeded = await seed();
       const cookie = grantFor(seeded, { capability: 'read', purpose: 'learner' });
       expect(await statuses(seeded, cookie)).toEqual([401, 401, 403, 403, 403]);
+      for (const route of ['gate', 'units'] as const) {
+        const answer = await get(route, { ...seeded, cookie });
+        expect(await answer.json(), route).toEqual({
+          success: false,
+          errorCode: 'INVALID_REQUEST',
+          error: 'Access code required',
+        });
+      }
+      // Decided before the version is read: a stale learner grant gets the same 401.
+      const stale = grantFor(seeded, {
+        capability: 'read',
+        purpose: 'learner',
+        versionId: 'tpv-gone',
+      });
+      expect((await get('gate', { ...seeded, cookie: stale })).status).toBe(401);
+      expect((await get('units', { ...seeded, cookie: stale })).status).toBe(401);
+      expect(await insertionRows(seeded.stageId)).toHaveLength(0);
+      expect(mocks.prompts).toHaveLength(0);
+    });
+
+    it('a learner WITH a valid access cookie keeps the read-only gate; the parts stay refused', async () => {
+      const seeded = await seed();
+      const { createAccessToken } = await import('@/lib/server/access-token');
+      const learner = grantFor(seeded, { capability: 'read', purpose: 'learner' });
+      const cookie = `openmaic_access=${createAccessToken('insertion-access-code')}; ${learner}`;
       const gate = await get('gate', { ...seeded, cookie });
-      expect(await gate.json()).toMatchObject({ error: 'Access code required' });
+      expect(gate.status).toBe(200);
+      expect(await gate.json()).toMatchObject({ capability: 'read', running: [] });
+      expect((await get('units', { ...seeded, cookie })).status).toBe(403);
+    });
+
+    it('an expired (signed) grant is a plain 404 on all five', async () => {
+      const seeded = await seed();
+      const expired = grantFor(seeded, { purpose: 'edit', now: Date.now() - 30 * 24 * 3_600_000 });
+      expect(await statuses(seeded, expired)).toEqual([404, 404, 404, 404, 404]);
       expect(await insertionRows(seeded.stageId)).toHaveLength(0);
       expect(mocks.prompts).toHaveLength(0);
     });
