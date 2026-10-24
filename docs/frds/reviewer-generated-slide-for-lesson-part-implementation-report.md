@@ -7,7 +7,7 @@
 | Review report | `reviewer-generated-slide-for-lesson-part-plan-review.md` — kept unchanged as historical evidence |
 | Branch | `codex/reviewer-generated-slide-for-lesson-part`, from `origin/staging` at `eae05f4c` |
 | Scope | W0–W5, B-1..B-4, E-1..E-3 (authorized by the owner for this task) |
-| Status | Implemented; focused tests pass; independent review done (§7); network-hold fix on `codex/fix-scene-insertion-network-hold` (§9); grant-only access behind `ACCESS_CODE` (§10); **not runtime-verified** (§8, §9.5, §10.3) |
+| Status | Implemented; focused tests pass; independent review done (§7); network-hold fix on `codex/fix-scene-insertion-network-hold` (§9); grant-only access behind `ACCESS_CODE` (§10); **not runtime-verified** (§8, §9.5, §10.4) |
 
 ## 1. What was built
 
@@ -358,7 +358,7 @@ Mapped statically first. The table is read only by `middleware.ts`; its tests ar
 | `pnpm exec vitest run …` | Result |
 |---|---|
 | `tests/middleware/editor-grant-exemption.test.ts tests/middleware/access-code-gate.test.ts tests/middleware/access-gate-w1-b2a.test.ts` | 59 passed |
-| `tests/teaching-package/scene-insertion-route.test.ts` | 38 passed (after the review's test additions in `6e6f7698`, §10.4) |
+| `tests/teaching-package/scene-insertion-route.test.ts` | 38 passed (after the review's test additions in `6e6f7698`, §10.3) |
 | **Total** | **97 passed, 0 failed** |
 
 What the tests prove:
@@ -386,7 +386,7 @@ What the tests prove:
   - `pnpm exec eslint` and `pnpm exec prettier --check` on the three touched files: clean.
   - `pnpm exec tsc --noEmit --incremental false`: 75, the unchanged baseline.
 
-### 10.4 Independent security review
+### 10.3 Independent security review
 
 A read-only reviewer sub-agent reviewed `5496c380`. It reran the 4 test files (59 + 36) and read the handlers, the grant resolver and the matching code. It confirmed:
 - every handler checks the signed grant first, before any database read, body parse, write or model call;
@@ -405,7 +405,7 @@ Verdict: safe as written. **No BLOCKER, MAJOR or MEDIUM.**
 
 Out of scope (pre-existing, every POST row): a browser holding the access cookie skips the same-origin check.
 
-### 10.3 Remaining gates (UNVERIFIED)
+### 10.4 Remaining gates (UNVERIFIED)
 
 - **End to end on staging.** A grant-only editor (teacher handoff) on staging with `ACCESS_CODE` on: the gate shows "Generate with AI", and a run completes. This is part of A-1..A-28, not run.
 - **Middleware and handler together.** These are tested separately (the middleware returns `next`; the handlers are called directly). They are not tested together through a running server.
