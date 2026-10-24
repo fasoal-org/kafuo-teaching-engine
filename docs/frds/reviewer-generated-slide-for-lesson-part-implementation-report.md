@@ -7,7 +7,7 @@
 | Review report | `reviewer-generated-slide-for-lesson-part-plan-review.md` — kept unchanged as historical evidence |
 | Branch | `codex/reviewer-generated-slide-for-lesson-part`, from `origin/staging` at `eae05f4c` |
 | Scope | W0–W5, B-1..B-4, E-1..E-3 (authorized by the owner for this task) |
-| Status | Implemented; focused tests pass; independent review done (§7); network-hold fix on `codex/fix-scene-insertion-network-hold` (§9); **not runtime-verified** (§8, §9.5) |
+| Status | Implemented; focused tests pass; independent review done (§7); network-hold fix on `codex/fix-scene-insertion-network-hold` (§9); grant-only access behind `ACCESS_CODE` (§10); **not runtime-verified** (§8, §9.5, §10.3) |
 
 ## 1. What was built
 
@@ -311,7 +311,80 @@ The hardening commit `8ea82415` rewrote the 8b/8c loops (margin, last read, late
 - **A lost commit acknowledgement** still answers `INSERTION_PERSISTENCE_FAILED` as a definite failure (review M3; pre-existing). The handler finished and its run cannot commit later, so the release itself is safe. The slide may in fact have landed; the next load shows it, and revision preconditions protect the next save.
 - **By-id read refused by the TE.** The TE's own `404 INSERTION_NOT_FOUND`, or a `403` with a TE envelope, on a known id ends the hold as `unknown` (review L2; pre-existing). T2 does not check the grant, so the run may still commit. This tab's writes are refused once its grant is read-only, and the revision preconditions guard what lands later.
 - **A duplicated POST below `fetch`** (review L5, re-review L-2): a first-attempt refusal is trusted as the only request. `sent` counts `fetch` calls, not transmissions. A silent browser resend on a reset reused connection, together with a grant that expired in between (the plain 404), could hide a first transmission that started a run. Very unlikely; accepted.
-- **Access-code exemption (found by the re-review; implementation gap, not this fix).** `scene-insertion`, `scene-insertions` and `content-units` are not in `EDITOR_GRANT_EXEMPT_ROUTES`. With `ACCESS_CODE` on (as on staging) and no access cookie, a grant-only editor's gate read gets a 401, so nothing is ever sent. This fails safe, but it blocks the feature for those editors. Follow-up before staging acceptance.
+- **Access-code exemption (found by the re-review; implementation gap).** The insertion routes were missing from `EDITOR_GRANT_EXEMPT_ROUTES`. **Fixed in §10** (`5496c380`).
 - **A silently hanging first POST.** One POST attempt may take 5 min, because it waits for the whole generation, and the admission window is 2 min. A first POST that hangs without ever reaching the TE is not retried inside the window. After its timeout, the key settles as `failed INSERTION_ADMISSION_CLOSED` (nothing started; try again) instead of recovering. This is safe and inherent to the window. Under the old 20 min budget the same case could recover.
 - **Merge target.** `codex/fix-scene-insertion-network-hold` contains every implementation commit. Merge **this** branch, never `codex/reviewer-generated-slide-for-lesson-part` alone, which still has both findings. This fix adds **no schema change**: E-1..E-3 are as before, and a merge to `staging` still deploys the TE and runs them at boot, so it needs the owner's yes.
 - **Pending gates:** CI on the branch, staging acceptance A-1..A-28, the PG contract suite, and a Codex re-review. Nothing was deployed, no TE was restarted, no live database was queried and no provider was called.
+
+## 10. Grant-only editors behind `ACCESS_CODE` (O1 exemption rows i1–i5)
+
+| Attribute | Value |
+|---|---|
+| Branch | `codex/fix-scene-insertion-network-hold`, on top of `91efffdd`; `origin/staging` still `eae05f4c`, nothing to incorporate |
+| Code commit | `5496c380` |
+| Finding | Major. `EDITOR_GRANT_EXEMPT_ROUTES` omitted the feature's routes. With `ACCESS_CODE` on, a valid editor grant and no `openmaic_access` cookie, the middleware answered 401 before any handler ran. The gate looked unavailable and the feature stayed hidden |
+
+### 10.1 What changed
+
+`lib/config/access-code-allowlist.ts` gains five exact rows, in the table's `:id` convention (one `[A-Za-z0-9_-]+` segment, anchored, exact method):
+
+| # | Method | Path | Handler | Its own checks (before any read or write) |
+|---|---|---|---|---|
+| i1 | GET | `/api/stages/:id/scene-insertion` | `stages/[id]/scene-insertion/route.ts` | learner 401 without the access cookie (`learnerRefusalWithoutAccessCode`); `resolveRegenerationGrant` (`requireWrite: false`); read-only, and `running` is listed for write editing grants only |
+| i2 | GET | `/api/stages/:id/content-units` | `stages/[id]/content-units/route.ts` | learner 401 without the access cookie; `resolveRegenerationGrant` (read); learner and preview grants refused (403); unit text never sent |
+| i3 | POST | `/api/stages/:id/scene-insertions` | `stages/[id]/scene-insertions/route.ts` | `resolveRegenerationGrant` (`requireWrite: true`) before the body is parsed |
+| i4 | GET | `/api/stages/:id/scene-insertions` (`?key=`) | same file | `requireWrite: true`; the key read is scoped to the grant's tenant, version and Stage |
+| i5 | GET | `/api/stages/:id/scene-insertions/:id` | `stages/[id]/scene-insertions/[insertionId]/route.ts` | `requireWrite: true`; the id read is scoped to the grant's tenant, version and Stage |
+
+`resolveRegenerationGrant` takes these steps in order:
+1. A signed, unexpired grant for the path's Stage, else a plain 404.
+2. The grant's version must exist in the grant's tenant and still name this Stage, else 404.
+3. For writes, `capability === 'write'` on an editing grant (not learner, not preview), else `403 READ_ONLY_GRANT`.
+
+Preserved unchanged:
+- **The POST is same-origin only** (`SAME_ORIGIN_ONLY_METHODS`, D-O1-R8). It needs `Sec-Fetch-Site: same-origin`, or a matching `Origin` when that header is absent. Same-site, cross-site and `none` are refused.
+- **Middleware order.** The closed-mode 503 and the access cookie come before the table.
+- **Presence-only checks** in the middleware. The `PERSISTENCE_DEV_TOKEN` rule and every existing row are unchanged.
+- **No wildcard, no HEAD/OPTIONS row**, and no other route was opened.
+
+i5's last segment is the insertion id, the same shape as row 5. A `.rsc`-suffixed id reaches the handler only after its grant check for the Stage, and the scoped lookup then answers 404.
+
+**Reviewed inventory.** The workspace inventory (`Zakrly-App/docs/frds/roles/roles-module-phase-1-o1-route-inventory-review.md`) gains an addendum, §7, with these rows and their evidence. That folder is not a git repository, so the addendum exists only in the local workspace.
+
+### 10.2 Validation
+
+Mapped statically first. The table is read only by `middleware.ts`; its tests are `tests/middleware/*` and the handlers' `tests/teaching-package/scene-insertion-route.test.ts`. Sized with `pnpm exec vitest list` (95 tests in 4 files); no full suite was run.
+
+| `pnpm exec vitest run …` | Result |
+|---|---|
+| `tests/middleware/editor-grant-exemption.test.ts tests/middleware/access-code-gate.test.ts tests/middleware/access-gate-w1-b2a.test.ts` | 59 passed |
+| `tests/teaching-package/scene-insertion-route.test.ts` | 36 passed |
+| **Total** | **95 passed, 0 failed** |
+
+What the tests prove:
+- **Middleware**, with `ACCESS_CODE` set:
+  - the pinned table and the route-file map include i1–i5;
+  - each row passes with only a grant cookie, including `?key=` on i4 and an insertion id on i5;
+  - every row answers 401 without a grant cookie, or with an empty one, or with only the learner-key cookie;
+  - i3 joins the CSRF set: same-origin, or a matching `Origin`, passes; same-site, cross-site, `none`, an empty header, no headers, and same-site or cross-site next to a matching Origin all answer 401;
+  - un-listed methods (POST on i1/i2/i5; PUT, DELETE, PATCH, HEAD, OPTIONS) answer 401;
+  - 21 new look-alikes answer 401: trailing slashes, extra or empty segments, `%2F`, `..%2F`, a dot id, case variants, prefix and suffix neighbours, and a query that names a route;
+  - closed mode still answers 503;
+  - every other `app/api` route file stays blocked with only a grant cookie;
+  - a structural pin checks each handler's own checks.
+  - **Regression check:** the new middleware test, run against the committed (HEAD) allowlist, fails with `expected 401 to be 'passed'`.
+- **Handlers**, with `ACCESS_CODE` set and no access cookie:
+  - a write editing grant (and a legacy write grant) reaches all five: gate `write`, parts 200, start 200, status by key and by id 200;
+  - a read grant sees gate `read` and parts 200, and gets 403 on i3–i5;
+  - a preview grant, read or write, sees gate `read`, and gets 403 on the parts and on i3–i5;
+  - a learner grant gets the middleware's 401 body on the gate and the parts, and 403 on i3–i5, with no row and no model call;
+  - a forged grant, an empty one, another Stage's grant, an other-tenant grant, an other-version grant and a stale-version grant are each a plain 404 on all five, with no row and no model call.
+- **Static:**
+  - `pnpm exec eslint` and `pnpm exec prettier --check` on the three touched files: clean.
+  - `pnpm exec tsc --noEmit --incremental false`: 75, the unchanged baseline.
+
+### 10.3 Remaining gates (UNVERIFIED)
+
+- **End to end on staging.** A grant-only editor (teacher handoff) on staging with `ACCESS_CODE` on: the gate shows "Generate with AI", and a run completes. This is part of A-1..A-28, not run.
+- **Middleware and handler together.** These are tested separately (the middleware returns `next`; the handlers are called directly). They are not tested together through a running server.
+- **Unchanged from §9.5:** the PG contract suite, CI on the branch, and a Codex re-review (now including `5496c380`). Nothing was deployed, no TE was restarted, no live database was queried and no provider was called.
