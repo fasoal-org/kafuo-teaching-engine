@@ -37,6 +37,7 @@ import {
   type QuestionModelPort,
   type QuestionSetGenerationRequest,
 } from '@/lib/server/teaching-package/question-generation';
+import { QUESTION_SYSTEM_PROMPT } from '@/lib/server/teaching-package/question-generation-prompt';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { AppScene } from '@/lib/types/stage';
@@ -718,6 +719,97 @@ describe('the strict question envelope', () => {
     expect(envelopeViolations({ ...ENVELOPE, learning_outcome_id: 'abc' })).toEqual([
       { path: '$.learning_outcome_id', code: 'invalid_type' },
     ]);
+  });
+
+  describe('math notation (the student app renders math only inside \\( \\) and \\[ \\])', () => {
+    const bareTex = (path: string) => ({ path: `$.slots[0].question${path}`, code: 'bare_tex' });
+
+    it('refuses a TeX command outside \\( \\) or \\[ \\] in learner-visible text', () => {
+      const violations = envelopeViolations(
+        envelopeWith({
+          ...QUESTION,
+          question_text: 'باستخدام العلاقة (P = \\frac{F}{A})، ما مساحة السطح؟',
+          choices: QUESTION.choices.map((choice) =>
+            choice.choice_id === 'B'
+              ? { ...choice, text: '(A = P \\div F = 32500 \\div 520)' }
+              : choice,
+          ),
+          explanation: 'نقسم القوة على الضغط: $\\frac{F}{P}$',
+          diagnostic_hypotheses: QUESTION.diagnostic_hypotheses.map((hypothesis, index) =>
+            index === 2 ? { ...hypothesis, explanation: 'may multiply: P \\times F' } : hypothesis,
+          ),
+        }),
+      );
+      // Path and code only: the offending text is never echoed into logs.
+      expect(violations).toEqual([
+        bareTex('.question_text'),
+        bareTex('.choices[1].text'),
+        bareTex('.explanation'),
+        bareTex('.diagnostic_hypotheses[2].explanation'),
+      ]);
+    });
+
+    it('refuses TeX left open, and TeX whose backslash was eaten as a JSON escape', () => {
+      // An unclosed `\(` does not delimit anything.
+      expect(
+        envelopeViolations(envelopeWith({ ...QUESTION, question_text: '\\( P = \\frac{F}{A}' })),
+      ).toEqual([bareTex('.question_text')]);
+      // `"\frac"` / `"\beta"` with one backslash are valid JSON: a form feed / backspace
+      // plus "rac" / "eta", and no backslash survives the parse.
+      const eaten = envelopeWith({
+        ...QUESTION,
+        question_text: '\\( P = \u000crac{F}{A} \\)',
+        explanation: '\\( \u0008eta \\)',
+      });
+      expect(envelopeViolations(eaten)).toEqual([
+        bareTex('.question_text'),
+        bareTex('.explanation'),
+      ]);
+    });
+
+    it('accepts inline and display math inside delimiters, and plain text', () => {
+      expect(
+        envelopeViolations(
+          envelopeWith({
+            ...QUESTION,
+            question_text: 'باستخدام العلاقة \\( P = \\frac{F}{A} \\)، ما مساحة السطح؟',
+            choices: QUESTION.choices.map((choice) => ({
+              ...choice,
+              text: `\\( A = 32500 \\div 520 \\) ${choice.choice_id}`,
+            })),
+            explanation:
+              'نحسب المساحة:\n\\[ A = \\frac{F}{P} = \\frac{32500}{520} \\]\nإذن 62.5 m²',
+          }),
+        ),
+      ).toEqual([]);
+      expect(
+        envelopeViolations(
+          envelopeWith({
+            ...QUESTION,
+            question_text: 'ما الضغط إذا كانت القوة 520 N والمساحة 2 m²؟',
+            choices: ['260 Pa', '1040 Pa', '522 Pa', '0.004 Pa'].map((text, index) => ({
+              choice_id: QUESTION.choices[index].choice_id,
+              text,
+            })),
+            explanation: 'الضغط = القوة ÷ المساحة = 260 باسكال (50%).',
+          }),
+        ),
+      ).toEqual([]);
+    });
+  });
+});
+
+describe('the question generation prompt', () => {
+  it('requires every piece of math inside \\( \\) or \\[ \\], with JSON-escaped backslashes', () => {
+    expect(QUESTION_SYSTEM_PROMPT).toContain('MATH NOTATION');
+    expect(QUESTION_SYSTEM_PROMPT).toContain(String.raw`\( ... \)`);
+    expect(QUESTION_SYSTEM_PROMPT).toContain(String.raw`\[ ... \]`);
+    // The correct and the wrong example, exactly as the model has to write them in JSON.
+    expect(QUESTION_SYSTEM_PROMPT).toContain(String.raw`"\\( P = \\frac{F}{A} \\)"`);
+    expect(QUESTION_SYSTEM_PROMPT).toContain(String.raw`"(P = \frac{F}{A})"`);
+    // A source-level escape slip would hand the model a form feed instead of `\frac`.
+    expect(QUESTION_SYSTEM_PROMPT).not.toContain('\f');
+    expect(QUESTION_SYSTEM_PROMPT).not.toContain('\b');
   });
 });
 

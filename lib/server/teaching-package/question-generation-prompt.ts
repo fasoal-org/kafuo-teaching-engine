@@ -14,7 +14,7 @@
  * validator and the Question Bank authority.
  */
 
-export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v2.20260924';
+export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v3.20261026';
 export const QUESTION_ENVELOPE_VERSION = 'tqs.v1.strict.20260817';
 
 export const TEACHING_ROLES = ['check_understanding', 're_check', 'mastery_check'] as const;
@@ -28,6 +28,23 @@ const ROLE_DEFINITIONS: Record<TeachingRole, string> = {
   mastery_check:
     'Confirms the student can use the outcome independently, typically by applying it in a situation the teaching supports but did not hand them.',
 };
+
+/**
+ * The student app renders math only inside `\( … \)` / `\[ … \]`; anything else
+ * reaches the student as raw `\frac{F}{A}`. `String.raw` keeps every backslash
+ * the model must see — in a plain literal `\(` would arrive as `(` and `\frac`
+ * as a form feed. `envelopeViolations` refuses an output that breaks this rule.
+ */
+const MATH_NOTATION_RULE = String.raw`MATH NOTATION
+- Put every mathematical expression, formula, equation, variable with an operator, and TeX
+  command inside \( ... \) for inline math, or \[ ... \] for a display line. This applies to
+  question_text, every choice text, explanation, and every hypothesis explanation. Ordinary
+  words stay outside the delimiters.
+- Never write bare TeX (\frac, \times, \div, ...) outside those delimiters, and never use plain
+  parentheses ( ... ) or $ ... $ as math delimiters.
+- The output is JSON, so escape every backslash: \( is written \\( and \frac is written \\frac.
+  Correct: "\\( P = \\frac{F}{A} \\)"
+  Wrong:   "(P = \frac{F}{A})"`;
 
 export const QUESTION_SYSTEM_PROMPT = `You write diagnostic multiple-choice questions for an approved school lesson.
 
@@ -92,6 +109,8 @@ THE THREE ROLES MUST MEASURE DIFFERENTLY
 EVIDENCE
 - Cite one or more anchors (C1, C2, ..., S1, S2, ..., and/or B1, B2, ...) from this message for every
   supported question. Cite only anchors that appear in this message.
+
+${MATH_NOTATION_RULE}
 
 OUTPUT
 Return ONLY a JSON object with exactly this shape (no commentary, no markdown):

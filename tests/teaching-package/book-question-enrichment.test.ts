@@ -28,6 +28,7 @@ import {
   type BookQuestionEnrichmentRequest,
 } from '@/lib/server/teaching-package/book-question-enrichment';
 import {
+  BOOK_ENRICHMENT_SYSTEM_PROMPT,
   enrichmentEnvelopeViolations,
   normalizeEnrichmentEnvelope,
 } from '@/lib/server/teaching-package/book-question-enrichment-prompt';
@@ -222,5 +223,46 @@ describe('book question enrichment from an approved package', () => {
         needsExplanation: true,
       }).some((v) => v.includes('wrong choices')),
     ).toBe(true);
+  });
+
+  it('refuses TeX outside \\( \\) or \\[ \\] in the explanations a student reads', () => {
+    const expected = { wrongChoiceIds: ['B', 'C'], needsExplanation: true };
+    const bare = {
+      ...GOOD,
+      explanation: 'Using (P = \\frac{F}{A}) the larger fraction is 10/15.',
+      diagnostic_hypotheses: [
+        GOOD.diagnostic_hypotheses[0],
+        { ...GOOD.diagnostic_hypotheses[1], explanation: 'Assumes \\frac{2}{3} = \\frac{3}{5}.' },
+      ],
+    };
+    const violations = enrichmentEnvelopeViolations(normalizeEnrichmentEnvelope(bare), expected);
+    expect(violations.filter((v) => v.includes('TeX outside'))).toHaveLength(2);
+
+    const delimited = {
+      ...GOOD,
+      explanation: 'A common denominator gives \\( \\frac{10}{15} > \\frac{9}{15} \\).',
+      diagnostic_hypotheses: [
+        GOOD.diagnostic_hypotheses[0],
+        {
+          ...GOOD.diagnostic_hypotheses[1],
+          explanation: 'Assumes\n\\[ \\frac{2}{3} = \\frac{3}{5} \\]',
+        },
+      ],
+    };
+    expect(enrichmentEnvelopeViolations(normalizeEnrichmentEnvelope(delimited), expected)).toEqual(
+      [],
+    );
+    expect(enrichmentEnvelopeViolations(normalizeEnrichmentEnvelope(GOOD), expected)).toEqual([]);
+  });
+});
+
+describe('the book question enrichment prompt', () => {
+  it('requires every piece of math inside \\( \\) or \\[ \\], with JSON-escaped backslashes', () => {
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).toContain(String.raw`\( ... \)`);
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).toContain(String.raw`\[ ... \]`);
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).toContain(String.raw`"\\( P = \\frac{F}{A} \\)"`);
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).toContain(String.raw`"(P = \frac{F}{A})"`);
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).not.toContain('\f');
+    expect(BOOK_ENRICHMENT_SYSTEM_PROMPT).not.toContain('\b');
   });
 });

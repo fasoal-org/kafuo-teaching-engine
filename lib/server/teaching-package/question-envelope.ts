@@ -12,7 +12,8 @@
  *
  * This mirror exists so the drift is caught where a retry is cheap. Kafuo
  * remains the validator of record; this must never be looser than it on shape,
- * and any change to the Kafuo envelope has to be made here too.
+ * and any change to the Kafuo envelope has to be made here too. It is
+ * deliberately stricter on one point: math notation (see `hasBareTex`).
  */
 import { z } from 'zod';
 
@@ -58,10 +59,52 @@ export interface EnvelopeViolation {
   code: string;
 }
 
-/** Every way `envelope` departs from the strict shape; empty when it conforms. */
+const DELIMITED_MATH = /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g;
+const TEX_COMMAND = /\\[A-Za-z]/;
+
+/**
+ * Whether learner-visible `text` carries TeX the student app cannot render
+ * (owner rule, 26 Oct 2026). The app renders math only inside `\( … \)` and
+ * `\[ … \]`, so a TeX command (`\` + letters) anywhere else — bare, in plain
+ * parentheses, in `$ … $`, or after an unclosed `\(` — reaches the student
+ * as raw `\frac{F}{A}`. A form feed or backspace is TeX the JSON parse already
+ * ate: `"\frac"` / `"\beta"` with one backslash are valid JSON escapes, so no
+ * backslash survives to be seen. Never rewrites; the caller refuses.
+ */
+export function hasBareTex(text: string): boolean {
+  if (text.includes('\f') || text.includes('\b')) return true;
+  return TEX_COMMAND.test(text.replace(DELIMITED_MATH, ' '));
+}
+
+type QuestionEnvelope = z.infer<typeof questionEnvelopeSchema>;
+
+function bareTexViolations(envelope: QuestionEnvelope): EnvelopeViolation[] {
+  const violations: EnvelopeViolation[] = [];
+  envelope.slots.forEach((slot, slotIndex) => {
+    const question = slot.question;
+    if (!question) return;
+    const base = `$.slots[${slotIndex}].question`;
+    // Path and code only — the offending text is never echoed into logs.
+    const check = (path: string, text: string) => {
+      if (hasBareTex(text)) violations.push({ path: `${base}${path}`, code: 'bare_tex' });
+    };
+    check('.question_text', question.question_text);
+    question.choices.forEach((choice, i) => check(`.choices[${i}].text`, choice.text));
+    check('.explanation', question.explanation);
+    question.diagnostic_hypotheses.forEach((hypothesis, i) =>
+      check(`.diagnostic_hypotheses[${i}].explanation`, hypothesis.explanation),
+    );
+  });
+  return violations;
+}
+
+/**
+ * Every way `envelope` departs from the strict shape, plus learner-visible
+ * text with bare TeX; empty when it conforms.
+ */
 export function envelopeViolations(envelope: unknown): EnvelopeViolation[] {
   const result = questionEnvelopeSchema.safeParse(envelope);
-  if (result.success) return [];
+  if (result.success) return bareTexViolations(result.data);
   const violations: EnvelopeViolation[] = [];
   for (const issue of result.error.issues) {
     const base = issue.path

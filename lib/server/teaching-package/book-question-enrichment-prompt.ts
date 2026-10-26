@@ -4,9 +4,10 @@
  * validator of record — the shape check here only buys a retry before the
  * response crosses the service boundary.
  */
+import { hasBareTex } from '@/lib/server/teaching-package/question-envelope';
 
 export const BOOK_ENRICHMENT_ENVELOPE_VERSION = 'bqe.v1';
-export const BOOK_ENRICHMENT_PROMPT_VERSION = 'te-bqe.v1.20260924';
+export const BOOK_ENRICHMENT_PROMPT_VERSION = 'te-bqe.v2.20261026';
 
 const ALLOWED_KEYS = [
   'difficulty',
@@ -26,6 +27,8 @@ export const BOOK_ENRICHMENT_SYSTEM_PROMPT = [
   'measurement_structure is {signature, description, cognitive_level}: a short machine-like signature of what the question measures, different from the signatures already used, and a one-sentence description.',
   'explanation explains why the correct answer is correct, and must be null when the book already printed an explanation.',
   'Never cite pages, figures or chapters. Write in the requested language.',
+  // String.raw keeps the backslashes the model must see (see question-generation-prompt.ts).
+  String.raw`Math notation: put every mathematical expression, formula, equation, variable with an operator and TeX command in an explanation inside \( ... \) for inline math or \[ ... \] for a display line; never write bare TeX (\frac, \times, \div, ...) outside them, and never use plain parentheses ( ... ) or $ ... $ as math delimiters. The output is JSON, so escape every backslash. Correct: "\\( P = \\frac{F}{A} \\)". Wrong: "(P = \frac{F}{A})".`,
 ].join('\n');
 
 export interface BookEnrichmentPromptInput {
@@ -112,6 +115,14 @@ export function enrichmentEnvelopeViolations(
         break;
       }
     }
+    if (
+      hypotheses.some((entry) => {
+        const text = ((entry ?? {}) as Record<string, unknown>).explanation;
+        return typeof text === 'string' && hasBareTex(text);
+      })
+    ) {
+      violations.push('diagnostic_hypotheses explanations have TeX outside \\( \\) or \\[ \\]');
+    }
   }
   const measurement = envelope.measurement_structure as Record<string, unknown> | null;
   if (
@@ -131,6 +142,9 @@ export function enrichmentEnvelopeViolations(
     }
   } else if (explanation !== null && explanation !== undefined && explanation !== '') {
     violations.push('explanation must be null because the book printed one');
+  }
+  if (typeof explanation === 'string' && hasBareTex(explanation)) {
+    violations.push('explanation has TeX outside \\( \\) or \\[ \\]');
   }
   return violations;
 }
