@@ -14,6 +14,7 @@
  * generation (~5 minutes) before anyone found out.
  */
 import { createLogger } from '@/lib/logger';
+import { retainableUnitText } from '@/lib/server/teaching-package/content-units';
 import type { NormalizedLessonManifest } from '@/lib/server/teaching-package/normalized-content-resource';
 import type { SceneOutline } from '@/lib/types/generation';
 
@@ -48,6 +49,68 @@ const asKey = (id: unknown): string => String(id);
 /** The Content Unit ids a model may legitimately cite for this package. */
 export function manifestContentUnitIds(manifest: NormalizedLessonManifest): Set<string> {
   return new Set(manifest.contentUnits.map((unit) => asKey(unit.id)));
+}
+
+/**
+ * Content Unit roles that carry the lesson's own instruction: a plan that
+ * leaves one of them without a teaching slide has dropped a whole section of
+ * the approved textbook. Every other role (checks, practice, summary,
+ * activity, source material, reference, unclassified) may legitimately be
+ * folded into a quiz, a recap or another slide, so none of them is required —
+ * requiring them would fail plans that are pedagogically fine.
+ */
+export const ESSENTIAL_CONTENT_UNIT_ROLES: ReadonlySet<string> = new Set([
+  'CONCEPT_EXPLANATION',
+  'WORKED_EXAMPLE',
+  'PROCEDURE',
+]);
+
+/**
+ * Slide roles that do not teach a section: an introduction, a recap or a
+ * check citing a unit is no evidence the unit itself was taught.
+ */
+const NON_TEACHING_SLIDE_ROLES: ReadonlySet<string> = new Set([
+  'orientation',
+  'summary',
+  'check_understanding',
+  'practice',
+]);
+
+/**
+ * The essential sections of an approved manifest, in source order: units with
+ * an essential role and usable text (the same text rule the prompt projection
+ * uses, so a unit the model never read is never required) that the approved
+ * structure did not exclude block by block.
+ */
+export function essentialContentUnitIds(manifest: NormalizedLessonManifest): string[] {
+  return [...manifest.contentUnits]
+    .sort((a, b) => a.orderIndex - b.orderIndex)
+    .filter((unit) => {
+      if (!ESSENTIAL_CONTENT_UNIT_ROLES.has(unit.role?.toUpperCase())) return false;
+      if (!retainableUnitText(unit)) return false;
+      const blocks = unit.blocks ?? [];
+      return !(blocks.length > 0 && blocks.every((block) => block.disposition === 'excluded'));
+    })
+    .map((unit) => asKey(unit.id));
+}
+
+/**
+ * Essential unit ids no teaching outline cites, in the order given. A quiz
+ * outline, or a slide whose role is introduction/recap/check, does not count.
+ * A slide with no role yet counts: classification is judged by its own gate,
+ * and this check only catches a section the plan never teaches at all.
+ */
+export function findUncoveredContentUnits(
+  outlines: readonly SceneOutline[],
+  essentialIds: readonly string[],
+): string[] {
+  const taught = new Set<string>();
+  for (const outline of outlines) {
+    if (outline.type === 'quiz') continue;
+    if (outline.contentRole && NON_TEACHING_SLIDE_ROLES.has(outline.contentRole)) continue;
+    for (const id of outline.sourceContentUnitIds ?? []) taught.add(asKey(id));
+  }
+  return essentialIds.filter((id) => !taught.has(asKey(id)));
 }
 
 /** Per-outline grounding faults, in outline order. Empty → every outline is grounded. */

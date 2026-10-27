@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import JSZip from 'jszip';
 
+import { MAX_PDF_CONTENT_CHARS } from '@/lib/constants/generation';
 import { fetchBytesSecurely, type SecureBytesOptions } from '@/lib/server/agent-runtime/fetch-url';
 import { ContentResourceAcquisitionError } from '@/lib/server/teaching-package/content-resource';
 import { retainableUnitText, unitMaySkipText } from '@/lib/server/teaching-package/content-units';
@@ -280,7 +281,18 @@ export function adaptNormalizedText(manifest: NormalizedLessonManifest): string 
   }
   if (rendered === 0)
     fail('NORMALIZED_CONTENT_EMPTY', 'normalized content contains no usable authoritative text');
-  return lines.join('\n');
+  const text = lines.join('\n');
+  // The outline prompt keeps only the first MAX_PDF_CONTENT_CHARS of this text
+  // (`@openmaic/generation` outline-generator, same 50,000 limit). Units past
+  // the cut would never reach the model, and section coverage could not be
+  // judged against them, so an over-long lesson fails here — before any model
+  // call — instead of silently planning from a partial source.
+  if (text.length > MAX_PDF_CONTENT_CHARS)
+    fail(
+      'NORMALIZED_CONTENT_TRUNCATED',
+      `normalized content is ${text.length} characters; the outline prompt keeps only ${MAX_PDF_CONTENT_CHARS}`,
+    );
+  return text;
 }
 
 function validateLineage(

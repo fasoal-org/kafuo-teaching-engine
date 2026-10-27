@@ -80,7 +80,10 @@ import { readCheckpointByAttemptId } from '@/lib/persistence/generation-checkpoi
 import { readAttemptById } from '@/lib/persistence/teaching-package';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
-import { manifestContentUnitIds } from '@/lib/server/teaching-package/outline-grounding';
+import {
+  essentialContentUnitIds,
+  manifestContentUnitIds,
+} from '@/lib/server/teaching-package/outline-grounding';
 import {
   appOutlineDiagnostics,
   isGenerationCorrectionRequired,
@@ -450,9 +453,13 @@ async function runKafuoAttempt(
   const contentUnitIds = normalizedSource
     ? [...manifestContentUnitIds(normalizedSource.manifest)]
     : null;
+  const essentialUnitIds = normalizedSource
+    ? essentialContentUnitIds(normalizedSource.manifest)
+    : null;
   const diagnosisContext: OutlineDiagnosisContext = {
     flow: kafuo.teachingFlow,
     contentUnitIds,
+    essentialContentUnitIds: essentialUnitIds,
     sourceImages: approvedVisionImages,
     governed: governedByTeachingSkills,
   };
@@ -468,6 +475,7 @@ async function runKafuoAttempt(
       ? { normalizedPackageId: kafuo.normalizedContentResource.id }
       : {}),
     contentUnitIds,
+    essentialContentUnitIds: essentialUnitIds,
     contentUnits: normalizedSource
       ? normalizedSource.manifest.contentUnits.map((unit) => ({
           id: String(unit.id),

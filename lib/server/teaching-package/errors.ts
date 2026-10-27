@@ -43,6 +43,8 @@ export type TeachingPackageErrorCode =
   | 'NORMALIZED_CONTENT_ASSOCIATION_INVALID'
   | 'NORMALIZED_CONTENT_MEDIA_INVALID'
   | 'NORMALIZED_CONTENT_EMPTY'
+  /** The approved text exceeds what the outline prompt can carry; never planned from a cut. */
+  | 'NORMALIZED_CONTENT_TRUNCATED'
   /**
    * The MODEL's outline response failed Content-Unit grounding: an outline
    * omitted `sourceContentUnitIds`, returned it empty, or cited an id that
@@ -413,6 +415,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NORMALIZED_CONTENT_ASSOCIATION_INVALID: 422,
   NORMALIZED_CONTENT_MEDIA_INVALID: 422,
   NORMALIZED_CONTENT_EMPTY: 422,
+  NORMALIZED_CONTENT_TRUNCATED: 422,
   OUTLINE_CONTENT_UNIT_GROUNDING_INVALID: 422,
   OUTLINE_SCENE_CONFIG_INVALID: 422,
   SCENE_RUNTIME_UNAVAILABLE: 409,

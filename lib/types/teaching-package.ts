@@ -456,6 +456,11 @@ export interface GenerationCheckpointSourceRefs {
   normalizedPackageId?: string;
   /** The exact Content Unit id set the grounding gate used; null = no gate. */
   contentUnitIds: string[] | null;
+  /**
+   * The essential sections the coverage gate requires; absent on checkpoints
+   * paused before the gate existed (no coverage gate on their edits).
+   */
+  essentialContentUnitIds?: string[] | null;
   /** Content Unit choices for a person (id, order, title, role) — no text. */
   contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
   /** Screening verdicts reused on resume instead of screening again. */
