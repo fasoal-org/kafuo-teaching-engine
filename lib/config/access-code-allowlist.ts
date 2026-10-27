@@ -117,6 +117,19 @@ export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string,
   // D-O1-2 (owner, 19 Oct 2026): the handler requires an edit/preview grant
   // for this Stage of its own tenant when the access cookie is absent.
   ['GET', '/api/stage-meta/:id'],
+  // Reviewer-generated slide insertion (owner, 24 Oct 2026). Every handler
+  // runs `resolveRegenerationGrant` first: a signed grant for this Stage
+  // whose version, in the grant's tenant, still names it (else a plain 404).
+  // The gate and the lesson parts also give a learner without the access
+  // cookie the middleware's 401, and the lesson parts refuse learner and
+  // preview grants (403); the three insertion rows need a write editing
+  // grant (`requireWrite: true`, else 403 READ_ONLY_GRANT). The status row's
+  // insertion id is read scoped to the grant's tenant + version + Stage.
+  ['GET', '/api/stages/:id/scene-insertion'],
+  ['GET', '/api/stages/:id/content-units'],
+  ['POST', '/api/stages/:id/scene-insertions'],
+  ['GET', '/api/stages/:id/scene-insertions'],
+  ['GET', '/api/stages/:id/scene-insertions/:id'],
 ];
 
 /** Literal segments are lowercase words; `:id` becomes one `STAGE_ID` segment. */
@@ -136,7 +149,8 @@ const EDITOR_GRANT_EXEMPTIONS = EDITOR_GRANT_EXEMPT_ROUTES.map(([method, path]) 
 
 /**
  * D-O1-R8 (owner, 19 Oct 2026), CSRF: the table's POST rows (6 restore,
- * 8 regenerate, 10 narration-audio) start paid or state-changing work and are
+ * 8 regenerate, 10 narration-audio, and the slide insertion's POST
+ * `scene-insertions`) start paid or state-changing work and are
  * CORS "simple" requests, so a cross-origin page could send them with the
  * `SameSite=Lax` grant cookie and no preflight. On staging the admin, the
  * website and the TE share one host on different ports, so `same-site` is the

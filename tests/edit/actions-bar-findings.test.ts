@@ -27,6 +27,8 @@ const stageState = vi.hoisted(() => ({
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: (selector: (state: typeof stageState) => unknown) => selector(stageState),
   flushStageSave: vi.fn(async () => undefined),
+  isStageEditingLocked: () => false,
+  useStageEditingLocked: () => false,
 }));
 vi.mock('@/lib/hooks/use-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),

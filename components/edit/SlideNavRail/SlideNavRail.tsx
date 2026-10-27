@@ -33,7 +33,21 @@ import {
 } from '@/lib/edit/scene-regeneration-client';
 import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
 import { runNarrationAudioRegeneration } from '@/lib/edit/narration-audio-client';
-import { onStageSaveConflict } from '@/lib/store/stage';
+import {
+  isStageEditingLocked,
+  onStageSaveConflict,
+  useStageEditingLocked,
+} from '@/lib/store/stage';
+import { GenerateSlideForPartDialog } from '@/components/edit/GenerateSlideForPartDialog';
+import { LessonPartsPanel, type LessonPartsMode } from '@/components/edit/LessonPartsPanel';
+import {
+  canInsertScene,
+  fetchContentUnits,
+  fetchInsertionGate,
+  type ContentUnitsResponse,
+  type InsertionGate,
+  type InsertionPosition,
+} from '@/lib/edit/scene-insertion-client';
 
 // Collapsed, the rail is a slim edge handle — just wide enough to hold the
 // expand chevron — rather than a narrow column of page numbers. The point of
@@ -87,9 +101,112 @@ export function SlideNavRail() {
   } | null>(null);
   // A scene's missing narration audio, regenerated on the server (4 Oct 2026).
   const [regeneratingAudio, setRegeneratingAudio] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Reviewer-generated slide for an uncovered lesson part
+  // (reviewer-generated-slide-for-lesson-part-plan §5): the insertion gate and
+  // the lesson parts, both keyed by Stage like the regeneration gate.
+  const [insertionGateState, setInsertionGateState] = useState<{
+    stageId: string;
+    gate: InsertionGate | null;
+  } | null>(null);
+  const insertionGate =
+    insertionGateState && insertionGateState.stageId === stageId ? insertionGateState.gate : null;
+  const [contentUnitsState, setContentUnitsState] = useState<{
+    stageId: string;
+    data: ContentUnitsResponse | null;
+    failed: boolean;
+  } | null>(null);
+  const contentUnits =
+    contentUnitsState && contentUnitsState.stageId === stageId ? contentUnitsState : null;
+  // The open insertion dialog: units pre-filled (panel) or position fixed ("+").
+  // Keyed by Stage: the rail outlives a Stage switch, and a dialog opened for
+  // one Stage must never render (or resend its request) for the next.
+  const [insertingState, setInserting] = useState<{
+    stageId: string;
+    unitIds?: string[];
+    position?: InsertionPosition;
+  } | null>(null);
+  const inserting = insertingState && insertingState.stageId === stageId ? insertingState : null;
+  // A previous Stage's dialog is forgotten on a switch (its run, if any, keeps
+  // its own handle and settles on its own).
+  useEffect(() => {
+    setInserting((current) => (current && current.stageId !== stageId ? null : current));
+  }, [stageId]);
+  // The Stage whose insertion run is in flight here: only THAT Stage's rail
+  // refuses mutations (the lock itself is Stage-scoped too).
+  const [runningInsertionStageId, setRunningInsertionStageId] = useState<string | null>(null);
+  const insertionRunning = runningInsertionStageId !== null && runningInsertionStageId === stageId;
+  // True while an insertion holds the Stage-wide editing lock (plan §5.1).
+  const editingLocked = useStageEditingLocked(stageId);
+  // Same-tab mutual exclusion (plan §11.7): an insertion never starts while a
+  // slide or audio regeneration is open or in flight here, and neither starts
+  // while an insertion runs.
+  const localGenerationRunning = regenerating !== null || regeneratingAudio.size > 0;
+  const insertionBusy = insertionRunning || editingLocked;
+  /** Every rail mutation refuses while an insertion runs (no-op, no dirt). */
+  const refuseWhileInserting = useCallback(() => {
+    if (!insertionRunning && !isStageEditingLocked(stageId)) return false;
+    toast.warning(t('edit.slideInsertion.lockedNotice'));
+    return true;
+  }, [insertionRunning, stageId, t]);
+
+  const insertionRequest = useRef(0);
+  // The Stage on screen now: a callback bound to an earlier Stage (a run that
+  // settles after a switch) must not touch the current Stage's state.
+  const currentStageIdRef = useRef(stageId);
+  currentStageIdRef.current = stageId;
+  // Re-read on Stage change, on every dialog/panel open (the gate's `running`
+  // must be fresh) and after a slide was added (coverage changed).
+  const refreshInsertion = useCallback(async () => {
+    if (!stageId || !isTeachingPackageGrantSession()) return;
+    if (currentStageIdRef.current !== stageId) return;
+    const request = ++insertionRequest.current;
+    const gate = await fetchInsertionGate(stageId).catch(() => null);
+    if (request !== insertionRequest.current) return;
+    setInsertionGateState({ stageId, gate });
+    if (!canInsertScene(gate)) return;
+    try {
+      const data = await fetchContentUnits(stageId);
+      if (request !== insertionRequest.current) return;
+      setContentUnitsState({ stageId, data, failed: false });
+    } catch {
+      if (request !== insertionRequest.current) return;
+      setContentUnitsState((current) => ({
+        stageId,
+        data: current?.stageId === stageId ? current.data : null,
+        failed: true,
+      }));
+    }
+  }, [stageId]);
+  useEffect(() => {
+    void refreshInsertion();
+  }, [refreshInsertion]);
+  // The "+" zones' third choice exists only when the gate allows an insertion.
+  const canGenerateWithAi = canInsertScene(insertionGate);
+  const lessonPartsMode: LessonPartsMode | null =
+    !insertionGate || insertionGate.capability !== 'write' || !insertionGate.editable
+      ? null
+      : insertionGate.supported
+        ? 'units'
+        : insertionGate.unsupportedReason === 'no_content_units'
+          ? 'no-parts'
+          : null;
+  const openInsertion = useCallback(
+    (entry: { unitIds?: string[]; position?: InsertionPosition }) => {
+      if (!stageId || refuseWhileInserting()) return;
+      setInserting({ ...entry, stageId });
+      void refreshInsertion();
+    },
+    [refreshInsertion, refuseWhileInserting, stageId],
+  );
+  const sceneRefs = useMemo(
+    () => scenes.map((scene) => ({ id: scene.id, title: scene.title })),
+    [scenes],
+  );
+
   const regenerateAudio = useCallback(
     async (sceneId: string) => {
-      if (!stageId) return;
+      if (!stageId || refuseWhileInserting()) return;
       setRegeneratingAudio((current) => new Set(current).add(sceneId));
       try {
         const outcome = await runNarrationAudioRegeneration({ stageId, sceneId });
@@ -109,7 +226,7 @@ export function SlideNavRail() {
         });
       }
     },
-    [stageId, t],
+    [refuseWhileInserting, stageId, t],
   );
   useEffect(() => {
     if (!stageId || !isTeachingPackageGrantSession()) return;
@@ -257,6 +374,8 @@ export function SlideNavRail() {
 
   const onReorderIds = useCallback(
     (newOrder: string[]) => {
+      // Fires on every drag step: refuse silently while an insertion runs.
+      if (insertionRunning || isStageEditingLocked(stageId)) return;
       const byId = new Map(scenes.map((s) => [s.id, s] as const));
       const next: Scene[] = newOrder
         .map((id) => byId.get(id))
@@ -265,7 +384,7 @@ export function SlideNavRail() {
       const rebalanced = next.map((s, i) => (s.order === i + 1 ? s : { ...s, order: i + 1 }));
       setScenes(rebalanced);
     },
-    [scenes, setScenes],
+    [insertionRunning, scenes, setScenes, stageId],
   );
 
   const handleActivate = useCallback(
@@ -280,7 +399,7 @@ export function SlideNavRail() {
 
   const handleInsertAt = useCallback(
     (insertIndex: number, type: EditableSceneType) => {
-      if (!stage) return;
+      if (!stage || refuseWhileInserting()) return;
       const title = type === 'slide' ? t('edit.nav.untitledSlide') : t('edit.sceneType.quiz');
       // A scene inserted into a Kafuo package stage inherits its teaching
       // stage from the previous scene (the first scene when inserting at 0),
@@ -293,13 +412,13 @@ export function SlideNavRail() {
       setScenes(insertSceneAtIndex(scenes, scene, insertIndex));
       setCurrentSceneId(scene.id);
     },
-    [scenes, setCurrentSceneId, setScenes, stage, t],
+    [refuseWhileInserting, scenes, setCurrentSceneId, setScenes, stage, t],
   );
 
   const handleDuplicate = useCallback(
     (sceneId: string) => {
       const source = scenes.find((s) => s.id === sceneId);
-      if (!source) return;
+      if (!source || refuseWhileInserting()) return;
       const anchorIndex = scenes.findIndex((s) => s.id === sceneId);
       const newOrder = anchorIndex + 2;
       // Slide scenes get a deep clone with reseeded element IDs; non-slide
@@ -318,13 +437,13 @@ export function SlideNavRail() {
       insertSceneAfter(sceneId, copy);
       setCurrentSceneId(copy.id);
     },
-    [insertSceneAfter, scenes, setCurrentSceneId, t],
+    [insertSceneAfter, refuseWhileInserting, scenes, setCurrentSceneId, t],
   );
 
   const handleDelete = useCallback(
     (sceneId: string) => {
       const source = scenes.find((s) => s.id === sceneId);
-      if (!source) return;
+      if (!source || refuseWhileInserting()) return;
       // Hold deck-empty guard at the rail layer; the store doesn't enforce.
       if (source.type === 'slide' && slideCount <= 1) return;
       if (totalScenes <= 1) return;
@@ -336,7 +455,15 @@ export function SlideNavRail() {
         duration: 5000,
         action: {
           label: t('edit.nav.undo'),
-          onClick: () => {
+          onClick: (event) => {
+            // The toast outlives the modal insertion dialog: refuse the restore
+            // while an insertion holds the Stage, and keep the toast (and its
+            // recycle entry) so the undo stays available afterwards.
+            if (isStageEditingLocked(useStageStore.getState().stage?.id)) {
+              event.preventDefault();
+              toast.warning(t('edit.slideInsertion.lockedNotice'));
+              return;
+            }
             const entry = useDeletedSceneRecycle.getState().consume();
             if (!entry) return;
             // Stage-scope guard: if the user has navigated to a
@@ -369,7 +496,7 @@ export function SlideNavRail() {
         onAutoClose: () => useDeletedSceneRecycle.getState().clear(),
       });
     },
-    [deleteScene, scenes, slideCount, totalScenes, t],
+    [deleteScene, refuseWhileInserting, scenes, slideCount, totalScenes, t],
   );
 
   const canDeleteAny = totalScenes > 1;
@@ -515,6 +642,16 @@ export function SlideNavRail() {
               transition={{ duration: 0.18, ease: CHROME_EASE }}
               className="p-2"
             >
+              {lessonPartsMode ? (
+                <LessonPartsPanel
+                  mode={lessonPartsMode}
+                  data={contentUnits?.data ?? null}
+                  loadFailed={contentUnits?.failed ?? false}
+                  busy={localGenerationRunning || insertionBusy}
+                  onOpen={() => void refreshInsertion()}
+                  onGenerate={(unitId) => openInsertion({ unitIds: [unitId] })}
+                />
+              ) : null}
               <Reorder.Group
                 axis="y"
                 values={scenes.map((s) => s.id)}
@@ -531,6 +668,18 @@ export function SlideNavRail() {
                     slideLabel={t('edit.sceneType.slide')}
                     quizLabel={t('edit.sceneType.quiz')}
                     onInsert={(type) => handleInsertAt(0, type)}
+                    disabled={insertionBusy}
+                    generateLabel={t('edit.slideInsertion.aiChoice')}
+                    generateDisabled={localGenerationRunning || insertionBusy}
+                    generateDisabledHint={t('edit.slideInsertion.busyHint')}
+                    onGenerate={
+                      canGenerateWithAi
+                        ? () =>
+                            openInsertion({
+                              position: { afterSceneId: null, beforeSceneId: scenes[0]!.id },
+                            })
+                        : undefined
+                    }
                   />
                 ) : null}
                 {scenes.map((scene, index) => (
@@ -545,12 +694,14 @@ export function SlideNavRail() {
                       onDelete={() => handleDelete(scene.id)}
                       onRegenerate={
                         canRegenerateScene(regenerationGate, scene)
-                          ? () =>
+                          ? () => {
+                              if (refuseWhileInserting()) return;
                               setRegenerating({
                                 id: scene.id,
                                 title: scene.title,
                                 type: scene.type === 'quiz' ? 'quiz' : 'slide',
-                              })
+                              });
+                            }
                           : undefined
                       }
                       onRegenerateAudio={
@@ -566,6 +717,21 @@ export function SlideNavRail() {
                         slideLabel={t('edit.sceneType.slide')}
                         quizLabel={t('edit.sceneType.quiz')}
                         onInsert={(type) => handleInsertAt(index + 1, type)}
+                        disabled={insertionBusy}
+                        generateLabel={t('edit.slideInsertion.aiChoice')}
+                        generateDisabled={localGenerationRunning || insertionBusy}
+                        generateDisabledHint={t('edit.slideInsertion.busyHint')}
+                        onGenerate={
+                          canGenerateWithAi
+                            ? () =>
+                                openInsertion({
+                                  position: {
+                                    afterSceneId: scene.id,
+                                    beforeSceneId: scenes[index + 1]?.id ?? null,
+                                  },
+                                })
+                            : undefined
+                        }
                       />
                     )}
                   </Fragment>
@@ -585,6 +751,38 @@ export function SlideNavRail() {
           sceneId={regenerating.id}
           sceneTitle={regenerating.title}
           sceneType={regenerating.type}
+        />
+      ) : null}
+      {stageId && inserting ? (
+        <GenerateSlideForPartDialog
+          key={stageId}
+          open
+          loadFailed={contentUnits?.failed ?? false}
+          onOpenChange={(open) => {
+            // Only this Stage's dialog: a run settling after a switch must not
+            // close the next Stage's open dialog.
+            const dialogStageId = stageId;
+            if (!open)
+              setInserting((current) => (current?.stageId === dialogStageId ? null : current));
+          }}
+          stageId={stageId}
+          data={contentUnits?.data ?? null}
+          scenes={sceneRefs}
+          initialUnitIds={inserting.unitIds}
+          fixedPosition={inserting.position}
+          localGenerationRunning={localGenerationRunning}
+          gateRunning={insertionGate?.running}
+          onRunningChange={(running) => {
+            const runStageId = stageId;
+            setRunningInsertionStageId((current) =>
+              running ? runStageId : current === runStageId ? null : current,
+            );
+            // Re-read after every settled run: a success or an "already
+            // covered" refusal changes coverage, and a `busy` retry needs the
+            // gate's current `running` (a frozen `unknown` retry resends its
+            // own body, so the refresh cannot change it).
+            if (!running) void refreshInsertion();
+          }}
         />
       ) : null}
     </aside>

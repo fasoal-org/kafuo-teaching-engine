@@ -1,6 +1,6 @@
 'use client';
 
-import { ListChecks, Plus, Presentation } from 'lucide-react';
+import { ListChecks, Plus, Presentation, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { EditableSceneType } from '@/lib/edit/scene-defaults';
@@ -10,6 +10,17 @@ interface InsertionZoneProps {
   readonly slideLabel: string;
   readonly quizLabel: string;
   readonly onInsert: (type: EditableSceneType) => void;
+  /**
+   * "Generate with AI" (reviewer-generated-slide-for-lesson-part-plan §5
+   * step 2): present only when the insertion gate allows it.
+   */
+  readonly onGenerate?: () => void;
+  readonly generateLabel?: string;
+  /** Another generation runs in this tab (plan §11.7). */
+  readonly generateDisabled?: boolean;
+  readonly generateDisabledHint?: string;
+  /** An AI insertion holds the Stage's editing lock: nothing may be inserted. */
+  readonly disabled?: boolean;
 }
 
 /**
@@ -21,7 +32,17 @@ interface InsertionZoneProps {
  * on its own z-layer with a solid background + soft drop shadow so it
  * clearly floats above any adjacent violet ring.
  */
-export function InsertionZone({ label, slideLabel, quizLabel, onInsert }: InsertionZoneProps) {
+export function InsertionZone({
+  label,
+  slideLabel,
+  quizLabel,
+  onInsert,
+  onGenerate,
+  generateLabel,
+  generateDisabled = false,
+  generateDisabledHint,
+  disabled = false,
+}: InsertionZoneProps) {
   // `z-20` lifts the whole zone above adjacent `Reorder.Item` siblings.
   // Without this, the next-in-DOM-order ThumbItem (which has a `transform`
   // via motion's Reorder, creating its own stacking context) paints on
@@ -36,7 +57,8 @@ export function InsertionZone({ label, slideLabel, quizLabel, onInsert }: Insert
             aria-label={label}
             title={label}
             data-testid="slide-nav-insert"
-            className="absolute inset-0 z-10 outline-none focus-visible:opacity-100"
+            disabled={disabled}
+            className="absolute inset-0 z-10 outline-none focus-visible:opacity-100 disabled:pointer-events-none"
           >
             <span className="sr-only">{label}</span>
             <span
@@ -69,7 +91,7 @@ export function InsertionZone({ label, slideLabel, quizLabel, onInsert }: Insert
           side="right"
           align="center"
           sideOffset={8}
-          className="w-40 p-1.5"
+          className={cn('p-1.5', onGenerate ? 'w-52' : 'w-40')}
           data-testid="scene-type-chooser"
         >
           <SceneTypeChoice
@@ -79,6 +101,32 @@ export function InsertionZone({ label, slideLabel, quizLabel, onInsert }: Insert
             onInsert={onInsert}
           />
           <SceneTypeChoice type="quiz" label={quizLabel} Icon={ListChecks} onInsert={onInsert} />
+          {onGenerate && generateLabel ? (
+            <PopoverClose asChild>
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={generateDisabled}
+                title={generateDisabled ? generateDisabledHint : undefined}
+                data-testid="scene-type-ai"
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
+                  'text-zinc-700 outline-none transition-colors hover:bg-violet-50 hover:text-violet-700',
+                  'focus-visible:bg-violet-50 focus-visible:text-violet-700',
+                  'dark:text-zinc-200 dark:hover:bg-violet-500/10 dark:hover:text-violet-300',
+                  'dark:focus-visible:bg-violet-500/10 dark:focus-visible:text-violet-300',
+                  'disabled:pointer-events-none disabled:opacity-50',
+                )}
+              >
+                <Sparkles
+                  className="h-4 w-4 text-violet-500"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <span>{generateLabel}</span>
+              </button>
+            </PopoverClose>
+          ) : null}
         </PopoverContent>
       </div>
     </Popover>

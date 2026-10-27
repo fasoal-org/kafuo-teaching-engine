@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stage = vi.hoisted(() => ({
   id: 'stage-panel' as string | null,
+  /** An AI slide insertion holds the Stage's editing lock. */
+  locked: false,
   flushStageSave: vi.fn(async () => {}),
   resyncStageScenesFromServer: vi.fn(async () => {}),
 }));
@@ -26,6 +28,8 @@ vi.mock('@/lib/store/stage', () => ({
     selector({ stage: stage.id ? { id: stage.id } : null }),
   flushStageSave: stage.flushStageSave,
   resyncStageScenesFromServer: stage.resyncStageScenesFromServer,
+  isStageEditingLocked: () => stage.locked,
+  useStageEditingLocked: () => stage.locked,
 }));
 
 import { TeachingSkillsPanel } from '@/components/edit/EditDock/TeachingSkillsPanel';
@@ -95,6 +99,9 @@ describe('TeachingSkillsPanel', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     stage.id = 'stage-panel';
+    stage.locked = false;
+    stage.flushStageSave.mockClear();
+    stage.resyncStageScenesFromServer.mockClear();
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -259,6 +266,43 @@ describe('TeachingSkillsPanel', () => {
     expect(stage.resyncStageScenesFromServer).toHaveBeenCalledWith('stage-panel', [
       expect.any(String),
     ]);
+  });
+
+  it('refuses every server write while an AI slide insertion holds the Stage (plan §5.1)', async () => {
+    respond(
+      inspectionResponse(
+        [
+          sceneView({
+            sceneId: 's1',
+            alignment: { state: 'stale', aligned: false, reason: 'material-change' },
+          }),
+        ],
+        true,
+      ),
+    );
+    stage.locked = true;
+    await renderAndWait('s1');
+    const toggle = container.querySelector('[data-testid="teaching-skills-toggle"]')!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('[data-testid="teaching-skills-panel"]')!;
+    const classificationInput = panel.querySelector(
+      '[data-testid="teaching-skills-classification-input"]',
+    ) as HTMLSelectElement;
+    const confirm = panel.querySelector(
+      '[data-testid="teaching-skills-confirm"]',
+    ) as HTMLButtonElement;
+    expect(classificationInput.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
+    // Even a change event that reaches the handler sends nothing.
+    await act(async () => {
+      classificationInput.value = 'non-instructional';
+      classificationInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(fetchMock.mock.calls.some((call) => String(call[1]?.method) === 'PUT')).toBe(false);
+    expect(stage.flushStageSave).not.toHaveBeenCalled();
+    expect(stage.resyncStageScenesFromServer).not.toHaveBeenCalled();
   });
 
   it('attaches above the surface layer: mounted by EditDock, never referenced under surfaces/', () => {

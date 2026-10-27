@@ -20,7 +20,7 @@
  */
 
 import { create } from 'zustand';
-import { useStageStore } from '@/lib/store/stage';
+import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import type { QuizContent } from '@/lib/types/stage';
 import {
   commitQuizContent,
@@ -48,6 +48,14 @@ interface QuizEditSessionState {
   end: () => void;
 }
 
+/**
+ * An AI slide insertion holds the Stage-wide editing lock
+ * (reviewer-generated-slide-for-lesson-part-plan §5.1): every commit, text
+ * edit, undo and redo is refused, leaving history and the stage store
+ * untouched (no dirt).
+ */
+const editingLocked = () => isStageEditingLocked(useStageStore.getState().stage?.id);
+
 export const useQuizEditSession = create<QuizEditSessionState>((set, get) => {
   const writeThrough = (next: QuizContent) => {
     const { sceneId } = get();
@@ -58,7 +66,7 @@ export const useQuizEditSession = create<QuizEditSessionState>((set, get) => {
   /** Adopt a new history, write its present through, and close any text burst. */
   const replace = (history: QuizEditHistory) => {
     const { history: prev } = get();
-    if (history === prev) return;
+    if (history === prev || editingLocked()) return;
     writeThrough(history.present);
     set({ history, coalesceKey: null });
   };
@@ -83,7 +91,7 @@ export const useQuizEditSession = create<QuizEditSessionState>((set, get) => {
     commitText: (next, coalesceKey) => {
       const { history, coalesceKey: activeKey } = get();
       if (!history) return;
-      if (next === history.present) return;
+      if (next === history.present || editingLocked()) return;
       writeThrough(next);
       if (activeKey === coalesceKey) {
         // Continue the current burst: replace present, no new undo step.

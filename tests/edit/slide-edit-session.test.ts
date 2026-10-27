@@ -9,8 +9,12 @@ import type { SlideContent } from '@/lib/types/stage';
 // touch the stage store (it only adopts the existing content as the
 // in-memory baseline).
 const updateScene = vi.fn();
+// The Stage ids whose editing lock an AI slide insertion holds (plan §5.1).
+const lockedStages = new Set<string>();
 vi.mock('@/lib/store/stage', () => ({
-  useStageStore: { getState: () => ({ updateScene }) },
+  useStageStore: { getState: () => ({ updateScene, stage: { id: 'stage-1' } }) },
+  isStageEditingLocked: (stageId: string | null | undefined) =>
+    Boolean(stageId) && lockedStages.has(stageId!),
 }));
 
 // Imported AFTER the mock setup (vi.mock is hoisted by Vitest).
@@ -30,6 +34,48 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
   beforeEach(() => {
     useSlideEditSession.getState().end();
     updateScene.mockClear();
+    lockedStages.clear();
+  });
+
+  it('refuses every history move while an AI insertion holds the Stage (no history change, no write)', () => {
+    useSlideEditSession.getState().seed('scene-1', makeContent());
+    useSlideEditSession.getState().applyOp({
+      type: 'element.update',
+      elementId: 'text-1',
+      patch: { rotate: 30 },
+    });
+    updateScene.mockClear();
+    const before = useSlideEditSession.getState().history;
+    lockedStages.add('stage-1');
+
+    const s = useSlideEditSession.getState();
+    s.applyOp({ type: 'element.update', elementId: 'text-1', patch: { left: 5 } });
+    s.applyTransaction({
+      origin: 'toolbar',
+      history: 'record',
+      operations: [{ type: 'element.update', elementId: 'text-1', patch: { left: 6 } }],
+    });
+    // The renderer editor's shortcuts (Delete, Ctrl+X/V/G/L) arrive here.
+    s.applyTransactionForScene('scene-1', {
+      origin: 'toolbar',
+      history: 'record',
+      operations: [{ type: 'element.delete', elementId: 'text-1' }],
+    });
+    const edited = structuredClone(before!.present);
+    edited.canvas.elements[0].left = 7;
+    s.commitContent(edited, true);
+    s.commitContent(edited, false);
+    s.undo();
+    s.redo();
+
+    expect(useSlideEditSession.getState().history).toBe(before);
+    expect(updateScene).not.toHaveBeenCalled();
+
+    // Released: editing works again.
+    lockedStages.delete('stage-1');
+    useSlideEditSession.getState().undo();
+    expect(rotateOf(useSlideEditSession.getState().history!.present)).toBe(0);
+    expect(updateScene).toHaveBeenCalledTimes(1);
   });
 
   it('seed adopts a baseline without touching the stage store', () => {

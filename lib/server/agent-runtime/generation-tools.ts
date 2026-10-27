@@ -238,10 +238,19 @@ export function withCarriedAssistance<T extends object>(
   return { ...content, assistance };
 }
 
+/**
+ * The Scene's planned outline entry. Id-first (reviewer-generated-slide plan
+ * D-13): a Scene that carries an `outlineId` is matched by that id ONLY — an
+ * order shift (an inserted slide, the editor's "+") must never pair it with
+ * another Scene's entry. The order fallback is kept for legacy Scenes
+ * without an `outlineId`.
+ */
 export function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline {
-  const planned = (snapshot as AppDocumentOutline | undefined)?.outlines?.find(
-    (entry) => entry.id === scene.outlineId || entry.order === scene.order,
-  );
+  const outlines = (snapshot as AppDocumentOutline | undefined)?.outlines;
+  const planned =
+    scene.outlineId !== undefined
+      ? outlines?.find((entry) => entry.id === scene.outlineId)
+      : outlines?.find((entry) => entry.order === scene.order);
   return {
     ...planned,
     id: scene.outlineId ?? scene.id,

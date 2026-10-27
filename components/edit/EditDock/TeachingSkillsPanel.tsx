@@ -31,7 +31,13 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
-import { flushStageSave, resyncStageScenesFromServer, useStageStore } from '@/lib/store/stage';
+import {
+  flushStageSave,
+  isStageEditingLocked,
+  resyncStageScenesFromServer,
+  useStageEditingLocked,
+  useStageStore,
+} from '@/lib/store/stage';
 
 interface SkillRefView {
   skillId: string;
@@ -99,6 +105,9 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
   const [inspection, setInspection] = useState<InspectionResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // An AI slide insertion holds the Stage (plan §5.1): no server write from
+  // here, and no resync that would replace scenes under it.
+  const editingLocked = useStageEditingLocked(stageId);
 
   const load = useCallback(async () => {
     if (!stageId) return;
@@ -132,6 +141,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
   const canConfirm = editable && !scene.alignment.aligned;
 
   const mutate = async (body: Record<string, unknown>, endpoint: 'skills' | 'confirm') => {
+    if (isStageEditingLocked(stageId)) return;
     setBusy(true);
     setError(null);
     try {
@@ -204,7 +214,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                   <select
                     data-testid="teaching-skills-classification-input"
                     value={scene.classification ?? ''}
-                    disabled={busy}
+                    disabled={busy || editingLocked}
                     onChange={(event) =>
                       void applySkills({
                         ...(scene.primary ? { primary: scene.primary } : {}),
@@ -228,7 +238,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                   <select
                     data-testid="teaching-skills-primary-input"
                     value={scene.primary ? refLabel(scene.primary) : ''}
-                    disabled={busy}
+                    disabled={busy || editingLocked}
                     onChange={(event) => {
                       const selected = scene.policy.allowed.find(
                         (ref) => refLabel(ref) === event.target.value,
@@ -345,7 +355,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
             <button
               type="button"
               data-testid="teaching-skills-confirm"
-              disabled={busy}
+              disabled={busy || editingLocked}
               className="mt-2 w-full rounded-lg border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
               onClick={() => void mutate({ confirmations: [{ sceneId }] }, 'confirm')}
             >

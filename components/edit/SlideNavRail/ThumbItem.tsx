@@ -16,7 +16,7 @@ import { sceneHasIssues } from '@/lib/edit/content-validation';
 import { useNearViewport } from '@/lib/hooks/use-near-viewport';
 import type { Scene } from '@/lib/types/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
-import { useStageStore } from '@/lib/store/stage';
+import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { NARRATION_AUDIO_ISSUE_CODE } from '@/lib/edit/narration-audio-client';
 
@@ -78,11 +78,12 @@ function ThumbItemComponent({
 
   const commitRename = useCallback(() => {
     const trimmed = draft.trim();
-    if (trimmed && trimmed !== scene.title) {
+    // Refused (the title stays) while an AI slide insertion holds the Stage.
+    if (trimmed && trimmed !== scene.title && !isStageEditingLocked(scene.stageId)) {
       updateScene(scene.id, { title: trimmed });
     }
     setRenaming(false);
-  }, [draft, scene.id, scene.title, updateScene]);
+  }, [draft, scene.id, scene.stageId, scene.title, updateScene]);
 
   const cancelRename = useCallback(() => {
     // Reset draft to the canonical title so the next rename session

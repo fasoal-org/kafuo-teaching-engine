@@ -54,8 +54,10 @@ const TENANT_CHECK = `tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0)`;
 /**
  * The review-event vocabulary. The `scene_regeneration_*` values record the
  * reviewer-driven single-slide regeneration (single-slide-regeneration-plan
- * §10.3); an existing database is widened by the guarded DO block in
- * `TEACHING_PACKAGE_EVOLUTION`, a fresh one gets this text directly.
+ * §10.3), the `scene_insertion_*` values a reviewer-generated slide for a
+ * lesson part (reviewer-generated-slide plan §12 E-2); an existing database
+ * is widened by the guarded DO blocks in `TEACHING_PACKAGE_EVOLUTION`, a
+ * fresh one gets this text directly.
  */
 const REVIEW_EVENT_TYPES = [
   'created',
@@ -73,6 +75,10 @@ const REVIEW_EVENT_TYPES = [
   'scene_regeneration_failed',
   'scene_regeneration_refused',
   'scene_regeneration_restored',
+  'scene_insertion_started',
+  'scene_insertion_completed',
+  'scene_insertion_failed',
+  'scene_insertion_refused',
 ] as const;
 const REVIEW_EVENT_TYPES_SQL = REVIEW_EVENT_TYPES.map((type) => `'${type}'`).join(',');
 
@@ -395,6 +401,26 @@ BEGIN
 END;
 $$;
 
+-- Reviewer-generated slide insertion (reviewer-generated-slide plan §12 E-2):
+-- the same widening for the scene_insertion_* events, guarded on its own
+-- newest value. The block above is unchanged; on a very old database it
+-- already widens to the full list and this one no-ops. Superset only.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_package_review_events_event_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%scene_insertion_refused%'
+  ) THEN
+    ALTER TABLE teaching_package_review_events
+      DROP CONSTRAINT IF EXISTS teaching_package_review_events_event_type_check;
+    ALTER TABLE teaching_package_review_events
+      ADD CONSTRAINT teaching_package_review_events_event_type_check
+      CHECK (event_type IN (${REVIEW_EVENT_TYPES_SQL}));
+  END IF;
+END;
+$$;
+
 -- Admin-correction pause (slide-classification-admin-correction-plan §3.1):
 -- widen the inline attempt status CHECK of an existing database, guarded on the
 -- constraint's own text so a re-run (or a fresh database) is a no-op.
@@ -511,6 +537,57 @@ CREATE UNIQUE INDEX IF NOT EXISTS tpsr_single_running
   WHERE status = 'running';
 `;
 
+/**
+ * Reviewer-generated slide for an uncovered lesson part (reviewer-generated-
+ * slide plan §11.1, E-1). One row per request: the idempotency record, the
+ * lease of the one running insertion per Stage, the planned outline and
+ * candidate (kept on failure), and the immutable result. `reason` is the
+ * reviewer's audit justification and never enters a prompt.
+ * `scene_rev_transitions` is `{ sceneId: { before, after } }` for every Scene
+ * the commit rewrote: the client binds a revision by this lineage.
+ */
+const SCENE_INSERTION_TABLES = `
+CREATE TABLE IF NOT EXISTS teaching_package_scene_insertions (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  stage_id TEXT NOT NULL,
+  new_scene_id TEXT NOT NULL,
+  new_outline_id TEXT NOT NULL,
+  unit_ids JSONB NOT NULL,
+  after_scene_id TEXT,
+  before_scene_id TEXT,
+  teaching_stage JSONB NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  instruction TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL CHECK (length(btrim(reason)) > 0),
+  actor_ref TEXT NOT NULL CHECK (length(btrim(actor_ref)) > 0),
+  session_ref TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running','succeeded','failed')),
+  attempt_token TEXT NOT NULL,
+  lease_expires_at DOUBLE PRECISION NOT NULL,
+  planned_outline JSONB,
+  outline_repairs JSONB,
+  candidate_scene JSONB,
+  result_scene JSONB,
+  result_scene_rev BIGINT,
+  scene_rev_transitions JSONB,
+  error_code TEXT,
+  register_policy JSONB,
+  model_route JSONB,
+  requested_at DOUBLE PRECISION NOT NULL,
+  completed_at DOUBLE PRECISION
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpsi_version_key_unique
+  ON teaching_package_scene_insertions (version_id, idempotency_key);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpsi_single_running
+  ON teaching_package_scene_insertions (stage_id)
+  WHERE status = 'running';
+`;
+
 /** Canonical indexes — tenant-scoped unique constraints in their ONLY form. */
 const TEACHING_PACKAGE_INDEXES = `
 CREATE UNIQUE INDEX IF NOT EXISTS tpv_tenant_item_version_unique
@@ -598,6 +675,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(SCENE_REGENERATION_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(SCENE_INSERTION_TABLES)) {
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(GENERATION_CHECKPOINT_TABLES)) {
@@ -2168,6 +2248,72 @@ export async function readContentUnitsForVersion(
       const missing = unitIds.some((id) => !resolvedIds.has(id));
       return {
         lineageStatus: missing ? 'partial' : hops === 0 ? 'own_attempt' : 'predecessor_attempt',
+        resolvedAttemptId: hit.id,
+        units,
+      };
+    }
+    currentId = row.predecessor_version_id;
+    hops += 1;
+  }
+  return unavailable;
+}
+
+export interface AllContentUnitsForVersion {
+  /** `own_attempt` / `predecessor_attempt` as above; `unavailable` when no attempt holds units. */
+  lineageStatus: Exclude<ContentUnitLineageStatus, 'partial'>;
+  resolvedAttemptId: string | null;
+  /** Every retained unit of the resolved attempt, in manifest order. */
+  units: ContentUnitRow[];
+}
+
+/**
+ * EVERY retained unit of the attempt a version resolves to (reviewer-
+ * generated-slide plan §8.1). The walk mirrors {@link readContentUnitsForVersion}
+ * exactly — tenant-scoped, cycle-guarded, stopping at the FIRST version with a
+ * producing attempt, which must be `kafuo_normalized` with retained rows, else
+ * `unavailable`; it never falls through to an older attempt. That reader is
+ * unchanged.
+ */
+export async function readAllContentUnitsForVersion(
+  queryable: Queryable,
+  versionId: string,
+  scope: { tenantId: string },
+): Promise<AllContentUnitsForVersion> {
+  const unavailable: AllContentUnitsForVersion = {
+    lineageStatus: 'unavailable',
+    resolvedAttemptId: null,
+    units: [],
+  };
+  const visited = new Set<string>();
+  let currentId: string | null = versionId;
+  let hops = 0;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const versionResult: { rows: Array<Record<string, unknown>> } = await queryable.query(
+      `SELECT current_attempt_id, predecessor_version_id
+         FROM teaching_package_versions
+        WHERE id = $1 AND ${TENANT_SCOPE_PARAM}`,
+      [currentId, scope.tenantId],
+    );
+    const row = versionResult.rows[0] as
+      | { current_attempt_id: string | null; predecessor_version_id: string | null }
+      | undefined;
+    if (!row) return unavailable;
+    if (row.current_attempt_id) {
+      const attempt = await queryable.query<{ id: string; source_kind: string | null }>(
+        `SELECT a.id, c.source_kind
+           FROM teaching_package_generation_attempts a
+           LEFT JOIN teaching_package_source_contexts c
+             ON c.attempt_id = a.id AND c.tenant_id = a.tenant_id
+          WHERE a.id = $1 AND a.tenant_id = $2`,
+        [row.current_attempt_id, scope.tenantId],
+      );
+      const hit = attempt.rows[0];
+      if (!hit || hit.source_kind !== 'kafuo_normalized') return unavailable;
+      const units = await readContentUnitsForAttempt(queryable, hit.id, scope);
+      if (units.length === 0) return unavailable;
+      return {
+        lineageStatus: hops === 0 ? 'own_attempt' : 'predecessor_attempt',
         resolvedAttemptId: hit.id,
         units,
       };

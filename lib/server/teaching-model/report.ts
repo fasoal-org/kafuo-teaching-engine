@@ -39,6 +39,8 @@ const GENERATION = ['package_generation', 'question_generation'] as const;
  * per-attempt numbers. `overall` and `latency` include it by construction.
  */
 const SCENE_REGENERATION = 'scene_regeneration' as const;
+/** Reviewer-generated slide insertion spend: the same rule, its own view (E-4). */
+const SCENE_INSERTION = 'scene_insertion' as const;
 
 export interface TeachingModelReport {
   generatedAt: number;
@@ -57,6 +59,10 @@ export interface TeachingModelReport {
   };
   sceneRegeneration: {
     perRegeneration: AttemptAggregateRow[];
+    perVersion: AttemptAggregateRow[];
+  };
+  sceneInsertion: {
+    perInsertion: AttemptAggregateRow[];
     perVersion: AttemptAggregateRow[];
   };
   fallback: FallbackBreakdownRow[];
@@ -82,6 +88,7 @@ export async function buildTeachingModelReport(
   const conv = { ...filter, capability: [...CONVERSATIONAL] };
   const gen = { ...filter, capability: [...GENERATION] };
   const regen = { ...filter, capability: SCENE_REGENERATION };
+  const insertion = { ...filter, capability: SCENE_INSERTION };
   const [overall, perTurn, perConversation, perStudent, perSubject, perModel] = await Promise.all([
     aggregateAttempts(queryable, { groupBy: [], ...filter }),
     aggregateAttempts(queryable, { groupBy: ['turn_id'], ...conv }),
@@ -93,6 +100,10 @@ export async function buildTeachingModelReport(
   const [regenPerRegeneration, regenPerVersion] = await Promise.all([
     aggregateAttempts(queryable, { groupBy: ['scene_regeneration_id'], ...regen }),
     aggregateAttempts(queryable, { groupBy: ['version_id'], ...regen }),
+  ]);
+  const [insertionPerInsertion, insertionPerVersion] = await Promise.all([
+    aggregateAttempts(queryable, { groupBy: ['scene_insertion_id'], ...insertion }),
+    aggregateAttempts(queryable, { groupBy: ['version_id'], ...insertion }),
   ]);
   const [perVersion, perAttempt, fallback, latency, helpByOrigin, budgetBreaches, incomplete, outbox, unresolved] =
     await Promise.all([
@@ -113,6 +124,7 @@ export async function buildTeachingModelReport(
     conversational: { perTurn, perConversation, perStudent, perSubject, perModel },
     generation: { perVersion, perAttempt },
     sceneRegeneration: { perRegeneration: regenPerRegeneration, perVersion: regenPerVersion },
+    sceneInsertion: { perInsertion: insertionPerInsertion, perVersion: insertionPerVersion },
     fallback,
     latency,
     helpByOrigin,
@@ -201,6 +213,8 @@ export function renderTeachingModelReport(report: TeachingModelReport): string {
     out,
   );
   renderAggregate('Slide regeneration cost per version', report.sceneRegeneration.perVersion, out);
+  renderAggregate('Slide insertion cost per insertion', report.sceneInsertion.perInsertion, out);
+  renderAggregate('Slide insertion cost per version', report.sceneInsertion.perVersion, out);
 
   out.push('## Fallback rate by subject / primary model');
   if (report.fallback.length === 0) out.push('(no rows)');

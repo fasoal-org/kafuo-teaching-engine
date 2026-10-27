@@ -4,8 +4,12 @@ import { addQuestion, updateQuestion } from '@/components/edit/surfaces/quiz/qui
 
 // Mock the canonical stage store so we can assert write-through.
 const updateScene = vi.fn();
+// The Stage ids whose editing lock an AI slide insertion holds (plan §5.1).
+const lockedStages = new Set<string>();
 vi.mock('@/lib/store/stage', () => ({
-  useStageStore: { getState: () => ({ updateScene }) },
+  useStageStore: { getState: () => ({ updateScene, stage: { id: 'stage-1' } }) },
+  isStageEditingLocked: (stageId: string | null | undefined) =>
+    Boolean(stageId) && lockedStages.has(stageId!),
 }));
 
 const { useQuizEditSession } = await import('@/components/edit/surfaces/quiz/quiz-edit-session');
@@ -21,6 +25,29 @@ describe('useQuizEditSession (auto-save to stage store)', () => {
   beforeEach(() => {
     useQuizEditSession.getState().end();
     updateScene.mockClear();
+    lockedStages.clear();
+  });
+
+  it('refuses commits, text edits, undo and redo while an AI insertion holds the Stage', () => {
+    useQuizEditSession.getState().seed('scene-1', makeContent());
+    const s = () => useQuizEditSession.getState();
+    s().commit(addQuestion(s().history!.present, 'single', 'q2'));
+    updateScene.mockClear();
+    const before = s().history;
+    lockedStages.add('stage-1');
+
+    s().commit(addQuestion(s().history!.present, 'single', 'q3'));
+    s().commitText(updateQuestion(s().history!.present, 'q1', { question: 'X' }), 'q1:question');
+    s().undo();
+    s().redo();
+
+    expect(s().history).toBe(before);
+    expect(updateScene).not.toHaveBeenCalled();
+
+    lockedStages.delete('stage-1');
+    s().undo();
+    expect(s().history?.present.questions.map((q) => q.id)).toEqual(['q1']);
+    expect(updateScene).toHaveBeenCalledTimes(1);
   });
 
   it('seed adopts a baseline without touching the stage store', () => {

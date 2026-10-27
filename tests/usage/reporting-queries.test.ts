@@ -334,3 +334,93 @@ describe('teaching-model report — slide regeneration spend', () => {
     ).rejects.toThrow();
   });
 });
+
+/**
+ * Reviewer-generated slide insertion (reviewer-generated-slide plan §12 E-3,
+ * §14.3 E-4): `scene_insertion` rows carry `scene_insertion_id`, are reported
+ * in their own view, and never fold into the producing attempt's numbers.
+ */
+describe('teaching-model report — slide insertion spend', () => {
+  let pool: PGlitePool;
+
+  beforeEach(async () => {
+    seq = 0;
+    const db = new PGlite();
+    await db.waitReady;
+    pool = new PGlitePool(db);
+    await ensureTeachingModelAttemptsSchema(pool);
+    await ensureMeterFinalizeOutboxSchema(pool);
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', generationRun: 1, versionId: 'v-1' }, capability: 'package_generation', stage: 'scene-content:slide', budget: null }));
+    await completeAttempt(pool, 'tma-1', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.05, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneInsertionId: 'tpsi-1' }, capability: 'scene_insertion', stage: 'scene-outlines-stream', budget: null }));
+    await completeAttempt(pool, 'tma-2', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.01, costBasis: 'full', costUnavailableReason: null } }));
+    // A provider fallback is its own row under the same attribution.
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneInsertionId: 'tpsi-1' }, capability: 'scene_insertion', stage: 'scene-content:slide', role: 'fallback', attemptIndex: 2, budget: null }));
+    await completeAttempt(pool, 'tma-3', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.004, costBasis: 'full', costUnavailableReason: null } }));
+  });
+
+  afterEach(async () => {
+    await pool.end();
+  });
+
+  it('keeps per-attempt generation cost unchanged and reports insertion spend per insertion and per version', async () => {
+    const report = await buildTeachingModelReport(pool, { now: NOW });
+    expect(report.generation.perAttempt).toHaveLength(1);
+    expect(report.generation.perAttempt[0]!.cost.usd).toBeCloseTo(0.05, 8);
+    expect(report.sceneRegeneration.perRegeneration).toHaveLength(0);
+    expect(report.sceneInsertion.perInsertion).toHaveLength(1);
+    expect(report.sceneInsertion.perInsertion[0]).toMatchObject({
+      group: { scene_insertion_id: 'tpsi-1' },
+      completeness: { attempts: 2, complete: 2, lowerBound: false },
+    });
+    expect(report.sceneInsertion.perInsertion[0]!.cost.usd).toBeCloseTo(0.014, 8);
+    expect(report.sceneInsertion.perVersion[0]).toMatchObject({ group: { version_id: 'v-1' } });
+    const rows = await pool.query<{ capability: string; scene_insertion_id: string | null }>(
+      `SELECT capability, scene_insertion_id FROM teaching_model_attempts ORDER BY id`,
+    );
+    expect(rows.rows.filter((row) => row.capability === 'scene_insertion').map((row) => row.scene_insertion_id)).toEqual(['tpsi-1', 'tpsi-1']);
+    const text = renderTeachingModelReport(report);
+    expect(text).toContain('## Slide insertion cost per insertion');
+    expect(text).toContain('scene_insertion_id=tpsi-1');
+  });
+
+  it('widens a five-value ledger to six (column added), and a re-boot is a no-op', async () => {
+    await pool.query(`DELETE FROM teaching_model_attempts WHERE capability = 'scene_insertion'`);
+    await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_insertion_id');
+    await pool.query('ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check');
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
+         CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration'))`,
+    );
+    await ensureTeachingModelAttemptsSchema(pool);
+    const def = await pool.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'teaching_model_attempts_capability_check'`,
+    );
+    expect(def.rows[0]!.def).toContain('scene_insertion');
+    expect(def.rows[0]!.def).toContain('scene_regeneration');
+    await ensureTeachingModelAttemptsSchema(pool);
+    const after = await pool.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'teaching_model_attempts_capability_check'`,
+    );
+    expect(after.rows[0]!.def).toBe(def.rows[0]!.def);
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneInsertionId: 'tpsi-2' }, capability: 'scene_insertion', budget: null }));
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneRegenerationId: 'tsr-9' }, capability: 'scene_regeneration', budget: null }));
+  });
+
+  it('widens a pre-regeneration ledger through both blocks (four → five → six values)', async () => {
+    await pool.query(`DELETE FROM teaching_model_attempts WHERE capability = 'scene_insertion'`);
+    await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_insertion_id');
+    await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_regeneration_id');
+    await pool.query('ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check');
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
+         CHECK (capability IN ('package_generation','question_generation','help','free_chat'))`,
+    );
+    await ensureTeachingModelAttemptsSchema(pool);
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneInsertionId: 'tpsi-3' }, capability: 'scene_insertion', budget: null }));
+    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneRegenerationId: 'tsr-3' }, capability: 'scene_regeneration', budget: null }));
+    await expect(
+      insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1' }, capability: 'unknown' as never, budget: null })),
+    ).rejects.toThrow();
+  });
+});

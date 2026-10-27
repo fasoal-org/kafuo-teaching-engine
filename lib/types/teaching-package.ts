@@ -381,7 +381,12 @@ export type ReviewEventType =
   | 'scene_regeneration_completed'
   | 'scene_regeneration_failed'
   | 'scene_regeneration_refused'
-  | 'scene_regeneration_restored';
+  | 'scene_regeneration_restored'
+  // Reviewer-generated slide for a lesson part (reviewer-generated-slide plan §12 E-2).
+  | 'scene_insertion_started'
+  | 'scene_insertion_completed'
+  | 'scene_insertion_failed'
+  | 'scene_insertion_refused';
 
 export interface ReviewEvent {
   id: number;

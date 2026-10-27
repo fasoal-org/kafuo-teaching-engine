@@ -32,6 +32,7 @@ import {
   runSlideRegeneration,
   type RegenerationOutcome,
 } from '@/lib/edit/scene-regeneration-client';
+import { isStageEditingLocked } from '@/lib/store/stage';
 
 type Field = 'instruction' | 'reason';
 
@@ -57,6 +58,8 @@ const KNOWN_ERROR_CODES = new Set([
   'TEACHING_MODEL_UNAVAILABLE',
   'SUBJECT_ROUTE_UNAVAILABLE',
   'READ_ONLY_GRANT',
+  // B-4: an AI slide insertion runs on this Stage (server refusal B-3).
+  'STAGE_GENERATION_IN_PROGRESS',
 ]);
 
 export function fieldError(
@@ -150,7 +153,15 @@ export function RegenerateSlideDialog({
           toast.success(tr('success'), {
             action: {
               label: tr('restoreAction'),
-              onClick: () => {
+              onClick: (event) => {
+                // The toast outlives this dialog: a restore is a server write,
+                // refused while an AI slide insertion holds the Stage (the toast
+                // stays so the restore remains available afterwards).
+                if (isStageEditingLocked(stageId)) {
+                  event.preventDefault();
+                  toast.warning(t('edit.slideInsertion.lockedNotice'));
+                  return;
+                }
                 void restoreSlideRegeneration(stageId, regenerationId).then((restored) => {
                   if (restored.ok) toast.success(tr('restored'));
                   else toast.error(tr('restoreFailed', { code: restored.code }));
