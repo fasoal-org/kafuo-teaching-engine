@@ -10,6 +10,13 @@ Planner's note: {{description}}
 ### What this slide is for
 
 {{roleGuidance}}
+{{/if}}{{#if hasSourceContext}}
+
+### Approved textbook source this slide teaches
+
+{{sourceContextText}}
+
+Explain the slide from this source: the definitions, reasoning and worked-example steps the slide covers must be spoken accurately and in full, in natural speech. Do not read the source out word for word, never mention "source sections", and do not go beyond this slide's key points.
 {{/if}}
 {{courseContext}}
 {{agents}}

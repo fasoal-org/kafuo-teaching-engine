@@ -186,6 +186,8 @@ export {
   buildSlideRoleContext,
 } from './slide-role-guidance.js';
 export type { SlideRoleContext, SlideRoleGuidanceInput } from './slide-role-guidance.js';
+export { buildSceneSourceContext, MAX_SCENE_SOURCE_CHARS } from './source-unit-context.js';
+export type { SceneSourceContext, SourceUnitText } from './source-unit-context.js';
 export {
   SPOKEN_SCRIPT_ASSETS,
   buildSpokenScriptContext,

@@ -34,6 +34,7 @@ type _SceneContentKeys = Assert<
     | 'baselineContent'
     | 'pblLoopFallback'
     | 'correctiveNote'
+    | 'sourceUnits'
     | 'onFailure'
     | 'logger'
   >
@@ -51,6 +52,7 @@ type _SceneActionKeys = Assert<
     | 'spokenLanguagePolicy'
     | 'correctiveContext'
     | 'spokenScript'
+    | 'sourceUnits'
     | 'logger'
   >
 >;

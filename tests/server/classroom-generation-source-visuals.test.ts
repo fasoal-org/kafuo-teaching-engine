@@ -248,6 +248,29 @@ describe('generateClassroom source visuals', () => {
     }
   });
 
+  it('hands the approved Content Unit text to slide content and narration only when supplied', async () => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          { id: 'o1', type: 'slide', title: 'S', description: '', keyPoints: [], order: 1, sourceContentUnitIds: ['10'] },
+        ],
+      },
+    });
+    const sourceUnits = [{ id: '10', title: 'Pressure', text: 'Pressure is force per unit area.' }];
+    await generate({ input: { pdfContent: { text: 'pdf', images: [] }, sourceUnits } });
+    expect(mocks.generateSceneContent.mock.calls[0]![2].sourceUnits).toBe(sourceUnits);
+    expect(mocks.generateSceneActions.mock.calls[0]![3].sourceUnits).toBe(sourceUnits);
+
+    // A caller without units (Workbench, legacy) passes nothing at all.
+    mocks.generateSceneContent.mockClear();
+    mocks.generateSceneActions.mockClear();
+    await generate({ input: { pdfContent: { text: 'pdf', images: [] } } });
+    expect(mocks.generateSceneContent.mock.calls[0]![2]).not.toHaveProperty('sourceUnits');
+    expect(mocks.generateSceneActions.mock.calls[0]![3]).not.toHaveProperty('sourceUnits');
+  });
+
   it('a selected-image materialization failure fails the run (no AI substitution)', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,

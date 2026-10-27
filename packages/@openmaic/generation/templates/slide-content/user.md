@@ -14,6 +14,13 @@
 ### What this slide is for
 
 {{roleGuidance}}
+{{/if}}{{#if hasSourceContext}}
+
+### Approved textbook source this slide teaches
+
+{{sourceContextText}}
+
+This is the authority for what this slide's key points cover. Keep its definitions, explanations, reasoning and worked-example steps accurate and complete on the slide, in concise slide wording; do not paste it as one block, and do not add parts of it that this slide's title and key points do not cover.
 {{/if}}
 
 {{teacherContext}}

@@ -577,6 +577,15 @@ async function runKafuoAttempt(
     // what makes the outline templates render `sourceContentUnitIds` into the
     // scene schema, the field table, and the closing reminders.
     ...(kafuo.normalizedContentResource ? { normalizedGrounding: true } : {}),
+    // The same retained units (same skip rule, same text) the outline prompt
+    // read: each teaching slide's content and narration get the ones it cites.
+    ...(normalizedSource && kafuo.normalizedContentResource
+      ? {
+          sourceUnits: retainableContentUnits({
+            contentUnits: normalizedSource.manifest.contentUnits,
+          }).map((unit) => ({ id: unit.unitId, title: unit.title, text: unit.normalizedText })),
+        }
+      : {}),
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's
     // single governed-mode predicate (plan §7.1.1). The outline contract

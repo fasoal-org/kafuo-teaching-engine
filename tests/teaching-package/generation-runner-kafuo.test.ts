@@ -857,6 +857,35 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(execution.normalizedGrounding).toBe(true);
     });
 
+    it('hands Scene generation the retained Content Units’ own text', async () => {
+      const source = normalizedSourceWithManifest();
+      mocks.acquireNormalizedContentResource.mockResolvedValue({
+        ...source,
+        manifest: {
+          contentUnits: [
+            {
+              id: '2900',
+              orderIndex: 0,
+              role: 'CONCEPT_EXPLANATION',
+              title: 'Pressure',
+              normalizedText: 'Pressure is force per unit area.',
+              blocks: [{ id: '51234' }],
+            },
+          ],
+        },
+      });
+      mockGenerateWithCitations({ sourceContentUnitIds: ['2900'] });
+
+      await startKafuo(normalizedKafuoContext());
+
+      const execution = mocks.generateClassroom.mock.calls[0]![0] as {
+        sourceUnits?: Array<{ id: string; title: string | null; text: string }>;
+      };
+      expect(execution.sourceUnits).toEqual([
+        { id: '2900', title: 'Pressure', text: 'Pressure is force per unit area.' },
+      ]);
+    });
+
     it('leaves the non-normalized PDF path without the grounding contract', async () => {
       mockValidRun();
 
@@ -864,8 +893,10 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
       const execution = mocks.generateClassroom.mock.calls[0]![0] as {
         normalizedGrounding?: boolean;
+        sourceUnits?: unknown;
       };
       expect(execution.normalizedGrounding).toBeUndefined();
+      expect(execution.sourceUnits).toBeUndefined();
     });
 
     it('refuses ids that name nothing in the manifest', async () => {

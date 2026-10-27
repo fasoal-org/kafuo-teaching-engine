@@ -23,6 +23,7 @@ import {
   type PdfImage,
   type SceneActionsFallback,
   type SceneFlowContext,
+  type SourceUnitText,
   type TeachingFlowEntry,
   type WidgetType,
 } from '@openmaic/generation';
@@ -390,6 +391,12 @@ export interface GenerateClassroomInput {
    * behavior are byte-identical to the pre-grounding path.
    */
   normalizedGrounding?: boolean;
+  /**
+   * The approved Content Units' own text (the text the outline prompt read).
+   * Each teaching slide's content and narration prompts receive the units that
+   * slide cites — never the whole lesson. Absent → prompts are byte-identical.
+   */
+  sourceUnits?: readonly SourceUnitText[];
   /**
    * The authority a governed run carries (Module 3/4 W1, TAE-RQ-009/015).
    * Built ONCE by the caller from the Teaching Skills contract marker alone —
@@ -1690,6 +1697,7 @@ export async function generateClassroom(
                   ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
                   : {}),
                 ...(resolvedSkills ? { resolvedSkills } : {}),
+                ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                 ...(outlineAssignedImages && outlineAssignedImages.length > 0
                   ? {
                       assignedImages: outlineAssignedImages,
@@ -1853,6 +1861,7 @@ export async function generateClassroom(
                 // array and never performs the lookup itself.
                 ...(flowContext ? { flowContext } : {}),
                 ...(resolvedSkills ? { resolvedSkills } : {}),
+                ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                 ...(input.governed
                   ? {
                       onFallback: (info: SceneActionsFallback) => {
@@ -2091,6 +2100,7 @@ export async function generateClassroom(
             ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
             ...(spokenScript ? { spokenScript } : {}),
             ...(correctiveContext ? { correctiveContext } : {}),
+            ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
           }),
         registerPolicy,
         { title: scene.title, outlineId: planned.id },

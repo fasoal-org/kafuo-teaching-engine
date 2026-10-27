@@ -87,6 +87,11 @@ import type {
   AICallFn,
 } from './pipeline-types.js';
 import { noopGenerationLogger, type GenerationLogger } from './logger.js';
+import {
+  buildSceneSourceContext,
+  MAX_SCENE_SOURCE_CHARS,
+  type SourceUnitText,
+} from './source-unit-context.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import { generatedSlideLayoutIssue, normalizeGeneratedSlideLayout } from './slide-layout.js';
@@ -208,6 +213,12 @@ export interface SceneContentOptions {
    * slide JSON). Absent → the prompt is byte-for-byte unchanged.
    */
   correctiveNote?: string;
+  /**
+   * Slide only: the approved text of the run's Content Units. The slide's own
+   * cited units (`outline.sourceContentUnitIds`) are rendered as planning
+   * guidance (`buildSceneSourceContext`). Absent → the prompt is unchanged.
+   */
+  sourceUnits?: readonly SourceUnitText[];
   onFailure?: (failure: SceneContentFailure) => void;
   logger?: GenerationLogger;
 }
@@ -262,7 +273,29 @@ export interface SceneActionsOptions {
    * never duplicated. Absent → every Action prompt renders byte-identically.
    */
   spokenScript?: SpokenScriptOptions;
+  /**
+   * Slide only: the same approved Content Unit text the content pass received,
+   * so narration explains what the slide's cited units say. Check and practice
+   * slides never receive it (answer boundary). Absent → the prompt is unchanged.
+   */
+  sourceUnits?: readonly SourceUnitText[];
   logger?: GenerationLogger;
+}
+
+/** Template variables for a slide's approved source text; empty when there is none. */
+function sceneSourceVars(
+  outline: SceneOutline,
+  sourceUnits: readonly SourceUnitText[] | undefined,
+  log: GenerationLogger,
+): Record<string, unknown> {
+  const context = buildSceneSourceContext(outline, sourceUnits);
+  if (!context.hasSourceContext) return {};
+  if (context.clippedUnitIds.length > 0) {
+    log.warn(
+      `Source text for "${outline.title}" exceeds ${MAX_SCENE_SOURCE_CHARS} characters; ${context.clippedUnitIds.length} cited unit(s) shown in part or not at all`,
+    );
+  }
+  return { hasSourceContext: true, sourceContextText: context.sourceContextText };
 }
 
 /** Template variables for the spoken-language policy; empty when there is none. */
@@ -569,6 +602,7 @@ export async function generateSceneContent(
           options.resolvedSkills,
           textDirection,
           options.correctiveNote,
+          sceneSourceVars(outline, options.sourceUnits, log),
         );
       let slide = await generateCanvas();
       if (!slide) return null;
@@ -1077,6 +1111,7 @@ async function generateSlideContent(
   resolvedSkills?: ResolvedSkillDefinition[],
   textDirection?: TextDirection,
   correctiveNote?: string,
+  sourceVars: Record<string, unknown> = {},
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -1194,6 +1229,7 @@ async function generateSlideContent(
     // The classification reaches the model only as resolved guidance prose in
     // the non-display planning channel — never as `key: value` data.
     ...buildSlideRoleContext(guidance),
+    ...sourceVars,
   });
 
   if (!prompts) {
@@ -2251,6 +2287,7 @@ export async function generateSceneActions(
       ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(guidance, options.resolvedSkills),
       ...buildSlideNarrationRoleContext(guidance),
+      ...sceneSourceVars(outline, options.sourceUnits, log),
     });
 
     if (!prompts) {
