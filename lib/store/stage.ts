@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import {
   makeScene,
@@ -93,7 +92,10 @@ const regenerationLocks = new Set<string>();
 const directDocumentSaves = new Map<string, Set<Promise<boolean>>>();
 const insertionWriteHolds = new Map<string, number>();
 const stageEditingLocks = new Map<string, number>();
-const stageEditingLockListeners = new Set<() => void>();
+// Bumped on every lock change so `useStageEditingLocked` re-reads. A zustand store, not
+// React's `useSyncExternalStore`: server API routes import this module, and Next refuses
+// a client-only React hook import in a server module (the build fails).
+const useStageEditingLockVersion = create<{ version: number }>(() => ({ version: 0 }));
 const currentInsertions = new Map<string, string>();
 let insertionOperationCounter = 0;
 
@@ -1875,12 +1877,7 @@ export function peekStageSceneLoadToken(): StageSceneLoadToken {
 }
 
 function notifyStageEditingLockListeners(): void {
-  for (const listener of stageEditingLockListeners) listener();
-}
-
-function subscribeStageEditingLocks(listener: () => void): () => void {
-  stageEditingLockListeners.add(listener);
-  return () => stageEditingLockListeners.delete(listener);
+  useStageEditingLockVersion.setState((state) => ({ version: state.version + 1 }));
 }
 
 /** True while an insertion holds the Stage's editing lock: mutation entry points refuse. */
@@ -1890,11 +1887,7 @@ export function isStageEditingLocked(stageId: string | null | undefined): boolea
 
 /** React view of {@link isStageEditingLocked}. */
 export function useStageEditingLocked(stageId: string | null | undefined): boolean {
-  return useSyncExternalStore(
-    subscribeStageEditingLocks,
-    () => isStageEditingLocked(stageId),
-    () => false,
-  );
+  return useStageEditingLockVersion(() => isStageEditingLocked(stageId));
 }
 
 /** What the Stage looked like when it was proven durable (plan §5.1 step 7). */
