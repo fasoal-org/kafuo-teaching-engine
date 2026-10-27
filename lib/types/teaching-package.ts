@@ -457,10 +457,16 @@ export interface GenerationCheckpointSourceRefs {
   /** The exact Content Unit id set the grounding gate used; null = no gate. */
   contentUnitIds: string[] | null;
   /**
-   * The essential sections the coverage gate requires; absent on checkpoints
-   * paused before the gate existed (no coverage gate on their edits).
+   * The essential sections the Submit coverage gate requires; absent on
+   * checkpoints paused before the gate existed.
    */
   essentialContentUnitIds?: string[] | null;
+  /**
+   * Essential sections the model's plan left without a teaching slide. Sticky:
+   * an admin outline edit can neither clear nor cite one; only a slide
+   * generated for it after generation ("Generate slide") restores it.
+   */
+  coverageGapUnitIds?: string[];
   /** Content Unit choices for a person (id, order, title, role) — no text. */
   contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
   /** Screening verdicts reused on resume instead of screening again. */

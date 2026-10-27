@@ -82,6 +82,7 @@ import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-sc
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
   essentialContentUnitIds,
+  findUncoveredContentUnits,
   manifestContentUnitIds,
 } from '@/lib/server/teaching-package/outline-grounding';
 import {
@@ -456,10 +457,18 @@ async function runKafuoAttempt(
   const essentialUnitIds = normalizedSource
     ? essentialContentUnitIds(normalizedSource.manifest)
     : null;
+  // Essential sections the plan left untaught. They do NOT pause the run: the
+  // package finishes as a draft and Submit refuses it until each one has a
+  // slide generated for it (`assertEssentialSectionsCovered`). Sticky across a
+  // correction pause, so an outline edit can never clear one.
+  const coverageGaps = new Set<string>(resume?.sourceRefs.coverageGapUnitIds ?? []);
+  const recordCoverageGaps = (outlines: SceneOutline[]) => {
+    if (!essentialUnitIds) return;
+    for (const id of findUncoveredContentUnits(outlines, essentialUnitIds)) coverageGaps.add(id);
+  };
   const diagnosisContext: OutlineDiagnosisContext = {
     flow: kafuo.teachingFlow,
     contentUnitIds,
-    essentialContentUnitIds: essentialUnitIds,
     sourceImages: approvedVisionImages,
     governed: governedByTeachingSkills,
   };
@@ -476,6 +485,7 @@ async function runKafuoAttempt(
       : {}),
     contentUnitIds,
     essentialContentUnitIds: essentialUnitIds,
+    coverageGapUnitIds: [...coverageGaps],
     contentUnits: normalizedSource
       ? normalizedSource.manifest.contentUnits.map((unit) => ({
           id: String(unit.id),
@@ -608,6 +618,8 @@ async function runKafuoAttempt(
   const firstRun = resume ? resume.sourceRefs.generationRun : 1;
   const lastRun = resume ? firstRun : MAX_GENERATION_RUNS;
   for (let run = firstRun; run <= lastRun; run += 1) {
+    // A fresh run plans afresh: a discarded run's gaps are not this plan's.
+    if (!resume) coverageGaps.clear();
     if (!resume) await incrementGenerationRuns(pool, attemptId);
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
     const sink = createTeachingPackagePersistenceSink(attemptId);
@@ -661,8 +673,10 @@ async function runKafuoAttempt(
         // admin-correctable: a candidate that fails them pauses the attempt
         // (plan §3.2) instead of failing it, still before any reservation.
         correction: {
-          collectOutlineIssues: (outlines: SceneOutline[]) =>
-            appOutlineDiagnostics(outlines, diagnosisContext),
+          collectOutlineIssues: (outlines: SceneOutline[]) => {
+            recordCoverageGaps(outlines);
+            return appOutlineDiagnostics(outlines, diagnosisContext);
+          },
           ...(resume
             ? {
                 resumeOutlines: {
@@ -845,6 +859,24 @@ async function runKafuoAttempt(
         (scene) => (scene.generationIssues?.length ?? 0) > 0,
       ).length;
       await patchSnapshot(pool, attemptId, (snapshot) => ({ ...snapshot, scenesNeedingReview }));
+
+      // The Submit coverage gate's authority: which sections are essential and
+      // which the plan left untaught. Absent (PDF fallback, older packages) →
+      // no gate, exactly as before.
+      if (essentialUnitIds) {
+        if (coverageGaps.size > 0) {
+          log.warn(
+            `Teaching package attempt ${attemptId} run ${run} left ${coverageGaps.size} essential section(s) untaught; the draft cannot be submitted until each has a slide`,
+          );
+        }
+        await patchSnapshot(pool, attemptId, (snapshot) => ({
+          ...snapshot,
+          sectionCoverage: {
+            essentialContentUnitIds: essentialUnitIds,
+            gapContentUnitIds: [...coverageGaps],
+          },
+        }));
+      }
 
       // Valid Stage → the ONLY binding path.
       await completeGenerationAttempt(pool, attemptId, result.id);

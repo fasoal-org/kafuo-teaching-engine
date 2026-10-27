@@ -32,10 +32,7 @@ import {
 
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
-import {
-  findUncoveredContentUnits,
-  findUngroundedOutlines,
-} from '@/lib/server/teaching-package/outline-grounding';
+import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
 import { findOutlineSkillSelectionIssues } from '@/lib/server/teaching-package/skill-policy';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
@@ -100,11 +97,6 @@ export interface OutlineDiagnosisContext {
   flow: readonly TeachingFlowEntry[];
   /** The exact Content Unit id set the grounding gate uses; `null` = no gate. */
   contentUnitIds: readonly string[] | null;
-  /**
-   * The approved essential sections every plan must teach; `null`/absent = no
-   * coverage gate (a PDF-fallback run, or a checkpoint paused before it existed).
-   */
-  essentialContentUnitIds?: readonly string[] | null;
   /** The approved source visuals offered to the planner (metadata suffices). */
   sourceImages: readonly PdfImage[];
   /** Governed by Teaching Skills: Skill selections are checked. */
@@ -152,21 +144,6 @@ export function appOutlineDiagnostics(
         allowedValues: [...unitIds],
         message: `outline #${entry.index + 1} is not grounded in the approved source: ${entry.reasons.join('; ')}`,
         ...positionLabel(context.flow, outline),
-      });
-    }
-  }
-
-  // Whole-section coverage: an essential unit no teaching outline cites was
-  // dropped from the lesson. A person restores it by citing it from a teaching
-  // slide; until then the candidate cannot resume, so the lesson never completes.
-  if (context.essentialContentUnitIds?.length) {
-    for (const unitId of findUncoveredContentUnits(outlines, context.essentialContentUnitIds)) {
-      diagnostics.push({
-        code: 'COVERAGE_SECTION_MISSING',
-        disposition: 'admin_correctable',
-        field: 'sourceContentUnitIds',
-        allowedValues: [unitId],
-        message: `essential content unit ${unitId} of the approved source is not taught by any teaching slide`,
       });
     }
   }
@@ -246,7 +223,6 @@ export function diagnosisContextFromCheckpoint(
   return {
     flow,
     contentUnitIds: checkpoint.sourceRefs.contentUnitIds,
-    essentialContentUnitIds: checkpoint.sourceRefs.essentialContentUnitIds ?? null,
     sourceImages: checkpoint.sourceRefs.sourceImages.map((image) => ({
       id: image.id,
       src: '',
@@ -420,6 +396,19 @@ function setField(
       const known = context.sourceRefs.contentUnitIds;
       if (known && ids.some((id) => !known.includes(id))) {
         invalid('sourceContentUnitIds may only name Content Units of the approved source');
+      }
+      // A section the plan left untaught is not taught by citing it from a slide
+      // written about something else: it is restored after generation with
+      // "Generate slide", which builds the slide from the section's own text.
+      const gaps = new Set(context.sourceRefs.coverageGapUnitIds ?? []);
+      const added = ids.filter(
+        (id) => gaps.has(id) && !(outline.sourceContentUnitIds ?? []).map(String).includes(id),
+      );
+      if (added.length > 0) {
+        invalid(
+          'an essential section the plan did not teach cannot be attached to an existing slide; generate a slide for it after generation',
+          { unitIds: added },
+        );
       }
       next.sourceContentUnitIds = ids;
       return next;

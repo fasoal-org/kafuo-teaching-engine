@@ -1,16 +1,21 @@
 /**
- * Whole-section coverage: every essential Content Unit of the approved lesson
- * must be cited by at least one teaching outline before Scenes are generated,
- * and an over-long source must never be planned from a silent cut.
+ * Whole-section coverage. A plan that leaves an essential Content Unit
+ * untaught no longer pauses generation: the gap is recorded, the package
+ * finishes as a draft, "Generate slide" restores the section, and Submit (the
+ * only way to approval) refuses while any essential section is untaught. An
+ * over-long source is still never planned from a silent cut.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  computeContentUnitCoverage,
+  findUntaughtEssentialSections,
+  isTeachingSlide,
+  type CoverageGapEvidence,
+} from '@/lib/server/teaching-package/content-unit-coverage';
+import {
   appOutlineDiagnostics,
   applyCorrectionOperations,
-  buildCorrectionView,
-  diagnosisContextFromCheckpoint,
-  type OutlineDiagnosisContext,
 } from '@/lib/server/teaching-package/outline-correction';
 import {
   essentialContentUnitIds,
@@ -20,12 +25,11 @@ import {
   adaptNormalizedText,
   type NormalizedLessonManifest,
 } from '@/lib/server/teaching-package/normalized-content-resource';
+import type { ContentUnitRow } from '@/lib/persistence/teaching-package';
 import type { SceneOutline } from '@/lib/types/generation';
-import type {
-  GenerationAttempt,
-  GenerationCheckpoint,
-  GenerationCheckpointSourceRefs,
-} from '@/lib/types/teaching-package';
+import type { AppScene } from '@/lib/types/stage';
+import type { GenerationCheckpointSourceRefs } from '@/lib/types/teaching-package';
+import { makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -73,7 +77,7 @@ const ESSENTIAL = ['10', '11', '12'];
 let seq = 0;
 const outline = (fields: Partial<SceneOutline>): SceneOutline =>
   ({
-    id: `scene_${++seq}`,
+    id: `outline_${++seq}`,
     type: 'slide',
     title: 'S',
     description: '',
@@ -82,151 +86,163 @@ const outline = (fields: Partial<SceneOutline>): SceneOutline =>
     ...fields,
   }) as SceneOutline;
 
-const context = (essential: readonly string[] | null): OutlineDiagnosisContext => ({
-  flow: [],
-  contentUnitIds: null,
-  essentialContentUnitIds: essential,
-  sourceImages: [],
-  governed: false,
-});
+/** A live slide Scene citing `units`, with an optional slide role. */
+const slide = (id: string, units: string[], contentRole?: string): AppScene => {
+  const base = makeSlideScene(id, 'stage-1', ++seq);
+  return {
+    ...base,
+    sourceContentUnitIds: units,
+    content: { ...base.content, ...(contentRole ? { contentRole } : {}) },
+  } as AppScene;
+};
 
-const coverage = (outlines: SceneOutline[], essential: readonly string[] | null = ESSENTIAL) =>
-  appOutlineDiagnostics(outlines, context(essential)).filter(
-    (diagnostic) => diagnostic.code === 'COVERAGE_SECTION_MISSING',
+const rows = (ids: string[]): ContentUnitRow[] =>
+  ids.map(
+    (id, index) =>
+      ({
+        unitId: id,
+        orderIndex: index,
+        role: 'CONCEPT_EXPLANATION',
+        title: null,
+        textLength: 10,
+      }) as unknown as ContentUnitRow,
   );
-
-const fullPlan = () => [
-  outline({ contentRole: 'orientation', sourceContentUnitIds: ['10'] }),
-  outline({ contentRole: 'explanation', sourceContentUnitIds: ['10'] }),
-  outline({ contentRole: 'worked_example', sourceContentUnitIds: ['11'] }),
-  outline({ contentRole: 'procedure', sourceContentUnitIds: ['12'] }),
-  outline({ type: 'quiz', sourceContentUnitIds: ['22', '23'] }),
-  outline({ contentRole: 'summary', sourceContentUnitIds: ['21'] }),
-];
 
 describe('essential sections of the approved source', () => {
   it('keeps only instructional, text-bearing, non-excluded units', () => {
     expect(essentialContentUnitIds(MANIFEST)).toEqual(ESSENTIAL);
   });
-});
 
-describe('section coverage diagnosis', () => {
-  it('passes when every essential section has a teaching slide', () => {
-    expect(coverage(fullPlan())).toEqual([]);
-  });
-
-  it('detects one omitted essential section', () => {
-    const plan = fullPlan().filter((entry) => entry.contentRole !== 'worked_example');
-    const missing = coverage(plan);
-    expect(missing).toHaveLength(1);
-    expect(missing[0]).toMatchObject({
-      code: 'COVERAGE_SECTION_MISSING',
-      disposition: 'admin_correctable',
-      field: 'sourceContentUnitIds',
-      allowedValues: ['11'],
-    });
-  });
-
-  it('does not accept introduction, summary, check or quiz slides as teaching evidence', () => {
+  it('detects a section the generated plan left untaught (the recorded gap)', () => {
     const plan = [
+      outline({ contentRole: 'orientation', sourceContentUnitIds: ['11'] }),
       outline({ contentRole: 'explanation', sourceContentUnitIds: ['10'] }),
       outline({ contentRole: 'procedure', sourceContentUnitIds: ['12'] }),
-      outline({ contentRole: 'orientation', sourceContentUnitIds: ['11'] }),
-      outline({ contentRole: 'summary', sourceContentUnitIds: ['11'] }),
-      outline({ contentRole: 'check_understanding', sourceContentUnitIds: ['11'] }),
       outline({ type: 'quiz', sourceContentUnitIds: ['11'] }),
     ];
     expect(findUncoveredContentUnits(plan, ESSENTIAL)).toEqual(['11']);
   });
+});
 
-  it('never fails on excluded, optional or non-instructional material', () => {
-    // Nothing cites REFERENCE/SUMMARY/practice/unclassified/excluded/figure-only units.
-    const plan = [
-      outline({ contentRole: 'explanation', sourceContentUnitIds: ['10', '11', '12'] }),
-    ];
-    expect(coverage(plan, essentialContentUnitIds(MANIFEST))).toEqual([]);
-  });
-
-  it('accepts numeric ids the model copies from the projection', () => {
-    const plan = [
-      outline({
-        contentRole: 'explanation',
-        sourceContentUnitIds: [10, 11, 12] as unknown as string[],
-      }),
-    ];
-    expect(coverage(plan)).toEqual([]);
-  });
-
-  it('runs no gate without an essential set (PDF fallback, pre-existing checkpoints)', () => {
-    expect(coverage([outline({ sourceContentUnitIds: ['10'] })], null)).toEqual([]);
-    const legacyRefs = {
-      contentUnitIds: ['10'],
+describe('a missing section does not block generation', () => {
+  it('raises no admin-correctable finding, so the run is not paused', () => {
+    const plan = [outline({ contentRole: 'explanation', sourceContentUnitIds: ['10'] })];
+    const diagnostics = appOutlineDiagnostics(plan, {
+      flow: [],
+      contentUnitIds: MANIFEST.contentUnits.map((entry) => entry.id),
       sourceImages: [],
-    } as unknown as GenerationCheckpointSourceRefs;
-    expect(
-      diagnosisContextFromCheckpoint({ sourceRefs: legacyRefs }, [], false).essentialContentUnitIds,
-    ).toBeNull();
+      governed: false,
+    });
+    expect(diagnostics).toEqual([]);
   });
 });
 
-describe('recovery through the existing admin correction', () => {
+describe('Submit coverage gate', () => {
+  const allTaught = () => [
+    slide('s-intro', ['10'], 'orientation'),
+    slide('s-10', ['10'], 'explanation'),
+    slide('s-11', ['11'], 'worked_example'),
+    slide('s-12', ['12'], 'procedure'),
+  ];
+
+  it('passes when every essential section has a teaching slide', () => {
+    expect(findUntaughtEssentialSections(ESSENTIAL, allTaught(), null)).toEqual([]);
+  });
+
+  it('refuses a section taught only by an introduction, recap or check slide', () => {
+    const scenes = [
+      slide('s-10', ['10'], 'explanation'),
+      slide('s-12', ['12'], 'procedure'),
+      slide('s-o', ['11'], 'orientation'),
+      slide('s-s', ['11'], 'summary'),
+      slide('s-c', ['11'], 'check_understanding'),
+    ];
+    expect(findUntaughtEssentialSections(ESSENTIAL, scenes, null)).toEqual(['11']);
+  });
+
+  it('re-evaluates after a deletion: the only teaching slide removed → refused again', () => {
+    const scenes = allTaught().filter((scene) => scene.id !== 's-12');
+    expect(findUntaughtEssentialSections(ESSENTIAL, scenes, null)).toEqual(['12']);
+  });
+
+  describe('a section the plan left untaught (gap 11)', () => {
+    const base = [slide('s-10', ['10'], 'explanation'), slide('s-12', ['12'], 'procedure')];
+    const gapsWith = (inserted: Record<string, string[]>): CoverageGapEvidence => ({
+      gapUnitIds: new Set(['11']),
+      insertedSlideUnits: new Map(Object.entries(inserted)),
+    });
+
+    it('is refused while missing', () => {
+      expect(findUntaughtEssentialSections(ESSENTIAL, base, null, gapsWith({}))).toEqual(['11']);
+    });
+
+    it('is NOT restored by citing it from an unrelated teaching slide', () => {
+      const cited = [
+        slide('s-10', ['10', '11'], 'explanation'),
+        slide('s-12', ['12'], 'procedure'),
+      ];
+      expect(findUntaughtEssentialSections(ESSENTIAL, cited, null, gapsWith({}))).toEqual(['11']);
+      // The lesson parts panel agrees, so "Generate slide" stays offered for it.
+      const panel = computeContentUnitCoverage(rows(ESSENTIAL), cited, null, gapsWith({}));
+      expect(panel.find((entry) => entry.id === '11')?.covered).toBe(false);
+    });
+
+    it('is restored by the slide "Generate slide" built for it', () => {
+      const recovered = [...base, slide('s-ins', ['11'], 'explanation')];
+      const gaps = gapsWith({ 's-ins': ['11'] });
+      expect(findUntaughtEssentialSections(ESSENTIAL, recovered, null, gaps)).toEqual([]);
+      const panel = computeContentUnitCoverage(rows(ESSENTIAL), recovered, null, gaps);
+      expect(panel.find((entry) => entry.id === '11')?.coveredBySlideIds).toEqual(['s-ins']);
+    });
+
+    it('is refused again if the generated slide is deleted', () => {
+      expect(
+        findUntaughtEssentialSections(ESSENTIAL, base, null, gapsWith({ 's-ins': ['11'] })),
+      ).toEqual(['11']);
+    });
+  });
+
+  it('counts only slides as teaching (quiz and other Scene types do not)', () => {
+    const quiz = { ...slide('q', ['11']), type: 'quiz' } as AppScene;
+    expect(isTeachingSlide(quiz)).toBe(false);
+    expect(isTeachingSlide(slide('s', ['11']))).toBe(true);
+  });
+});
+
+describe('outline correction cannot claim a gap by citation', () => {
   const sourceRefs = {
     contentUnitIds: MANIFEST.contentUnits.map((entry) => entry.id),
-    essentialContentUnitIds: ESSENTIAL,
+    coverageGapUnitIds: ['11'],
     contentUnits: [],
     sourceImages: [],
   } as unknown as GenerationCheckpointSourceRefs;
+  const context = { phase: 'outline' as const, flow: [], sourceRefs, pendingOutlineIds: null };
 
-  it('a correction citing the missing section from a teaching slide clears the finding', () => {
-    const plan = fullPlan().filter((entry) => entry.contentRole !== 'worked_example');
-    const checkpointContext = diagnosisContextFromCheckpoint({ sourceRefs }, [], false);
-    expect(appOutlineDiagnostics(plan, checkpointContext)).toHaveLength(1);
-
-    const explanation = plan.find((entry) => entry.contentRole === 'explanation')!;
-    const corrected = applyCorrectionOperations(
-      plan,
-      [
-        {
-          op: 'set',
-          outlineId: explanation.id,
-          field: 'sourceContentUnitIds',
-          value: ['10', '11'],
-        },
-      ],
-      { phase: 'outline', flow: [], sourceRefs, pendingOutlineIds: null },
-    );
-    expect(appOutlineDiagnostics(corrected, checkpointContext)).toEqual([]);
+  it('refuses attaching a recorded gap section to an existing slide', () => {
+    const plan = [
+      outline({ id: 'o-10', contentRole: 'explanation', sourceContentUnitIds: ['10'] }),
+    ];
+    expect(() =>
+      applyCorrectionOperations(
+        plan,
+        [{ op: 'set', outlineId: 'o-10', field: 'sourceContentUnitIds', value: ['10', '11'] }],
+        context,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST' }));
   });
 
-  it('a section that stays missing keeps the attempt from resuming', () => {
-    const plan = fullPlan().filter((entry) => entry.contentRole !== 'worked_example');
-    const diagnostics = appOutlineDiagnostics(
+  it('still allows ordinary grounding fixes', () => {
+    const plan = [outline({ id: 'o-x', sourceContentUnitIds: [] })];
+    const corrected = applyCorrectionOperations(
       plan,
-      diagnosisContextFromCheckpoint({ sourceRefs }, [], false),
+      [{ op: 'set', outlineId: 'o-x', field: 'sourceContentUnitIds', value: ['10'] }],
+      context,
     );
-    const checkpoint = {
-      phase: 'outline',
-      state: 'awaiting',
-      revision: 1,
-      pausedAt: 0,
-      updatedAt: 0,
-      pendingOutlineIds: null,
-      outlines: plan,
-      diagnostics,
-      repairs: [],
-      editLog: [],
-      sourceRefs,
-    } as unknown as GenerationCheckpoint;
-    const attempt = {
-      id: 'attempt-1',
-      status: 'awaiting_admin_correction',
-      teachingModel: null,
-    } as unknown as GenerationAttempt;
-    expect(buildCorrectionView(attempt, checkpoint, []).canResume).toBe(false);
+    expect(corrected[0]?.sourceContentUnitIds).toEqual(['10']);
   });
 });
 
-describe('source truncation', () => {
+describe('source truncation stays a hard failure', () => {
   it('fails acquisition instead of planning from a cut source', () => {
     const long = {
       contentUnits: [unit('10', 0, 'CONCEPT_EXPLANATION', { normalizedText: 'x'.repeat(50_001) })],

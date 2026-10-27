@@ -37,7 +37,7 @@ import {
   stampGenerationAlignmentBaselines,
   buildSceneAlignmentBaseline,
 } from '@/lib/server/teaching-package/alignment';
-import { submitForReview } from '@/lib/server/teaching-package/lifecycle';
+import { approve, submitForReview } from '@/lib/server/teaching-package/lifecycle';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
@@ -206,6 +206,7 @@ describe('W17 submit gate', () => {
     contract?: string | null;
     flow?: TeachingFlowEntry[] | null;
     scenes?: (stageId: string) => AppScene[];
+    sectionCoverage?: { essentialContentUnitIds: string[]; gapContentUnitIds: string[] };
   }
 
   async function seedVersion(options: SeedOptions = {}): Promise<{
@@ -255,6 +256,7 @@ describe('W17 submit gate', () => {
         pdfContentSummary: null,
         requestedAt: 1,
         ...(seededFlow ? { teachingFlow: seededFlow } : {}),
+        ...(options.sectionCoverage ? { sectionCoverage: options.sectionCoverage } : {}),
       },
       now: 1,
     });
@@ -266,6 +268,84 @@ describe('W17 submit gate', () => {
 
   const statusOf = async (versionId: string) =>
     (await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status;
+
+  // ---- essential-section coverage gate ----
+
+  describe('essential-section coverage', () => {
+    // s1 teaches u1; s2 cites u2 — a section the generated plan left untaught.
+    const citingScenes = (stageId: string) =>
+      governedScenes(stageId).map((scene) => ({
+        ...scene,
+        sourceContentUnitIds: scene.id === 's1' ? ['u1'] : ['u2'],
+      }));
+    const coverage = { essentialContentUnitIds: ['u1', 'u2'], gapContentUnitIds: ['u2'] };
+
+    async function recordInsertedSlide(versionId: string, stageId: string, sceneId: string) {
+      await pool.query(
+        `INSERT INTO teaching_package_scene_insertions
+           (id, tenant_id, version_id, stage_id, new_scene_id, new_outline_id, unit_ids,
+            teaching_stage, idempotency_key, request_digest, reason, actor_ref, status,
+            attempt_token, lease_expires_at, requested_at)
+         VALUES ($1, 'tenant-test', $2, $3, $4, 'o-ins', '["u2"]'::jsonb, '{}'::jsonb,
+                 'k1', 'd', 'restore section', 'reviewer-1', 'succeeded', 't', 0, 1)`,
+        [nextId('tpsi'), versionId, stageId, sceneId],
+      );
+    }
+
+    it('refuses Submit while a gap section is only cited by an unrelated slide', async () => {
+      const { versionId } = await seedVersion({
+        contract: null,
+        scenes: citingScenes,
+        sectionCoverage: coverage,
+      });
+      const error = await expectTpError(submit(versionId), 'ESSENTIAL_SECTION_UNCOVERED', 422);
+      expect(error.details).toEqual({ unitIds: ['u2'] });
+      expect(await statusOf(versionId)).toBe('draft');
+    });
+
+    it('admits Submit, then approval, once "Generate slide" built the slide for it', async () => {
+      const { versionId, stageId } = await seedVersion({
+        contract: null,
+        scenes: citingScenes,
+        sectionCoverage: coverage,
+      });
+      await recordInsertedSlide(versionId, stageId, 's2');
+      expect((await submit(versionId)).status).toBe('in_review');
+      const approved = await approve(txPool(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
+      expect(approved.status).toBe('approved');
+    });
+
+    it('refuses Submit again once the slide "Generate slide" built is deleted', async () => {
+      // The insertion row survives as history; its Scene is no longer live.
+      const { versionId, stageId } = await seedVersion({
+        contract: null,
+        scenes: citingScenes,
+        sectionCoverage: coverage,
+      });
+      await recordInsertedSlide(versionId, stageId, 's-deleted');
+      const error = await expectTpError(submit(versionId), 'ESSENTIAL_SECTION_UNCOVERED', 422);
+      expect(error.details).toEqual({ unitIds: ['u2'] });
+    });
+
+    it('refuses Submit when an essential section has no slide at all', async () => {
+      const { versionId } = await seedVersion({
+        contract: null,
+        scenes: citingScenes,
+        sectionCoverage: { essentialContentUnitIds: ['u1', 'u2', 'u3'], gapContentUnitIds: [] },
+      });
+      const error = await expectTpError(submit(versionId), 'ESSENTIAL_SECTION_UNCOVERED', 422);
+      expect(error.details).toEqual({ unitIds: ['u3'] });
+    });
+
+    it('keeps packages generated before the gate unchanged (no recorded coverage)', async () => {
+      const { versionId } = await seedVersion({ contract: null, scenes: citingScenes });
+      expect((await submit(versionId)).status).toBe('in_review');
+    });
+  });
 
   // ---- check 10: alignment is a recomputation, not a lookup ----
 

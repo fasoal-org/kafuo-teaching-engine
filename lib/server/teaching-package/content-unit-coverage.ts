@@ -23,6 +23,7 @@ import type { AppDocumentOutline } from '@/lib/document-store/persistence-types'
 import type { ContentUnitRow } from '@/lib/persistence/teaching-package';
 import { outlineFromScene } from '@/lib/server/agent-runtime/generation-tools';
 import { NON_INSTRUCTIONAL_UNIT_ROLES } from '@/lib/server/teaching-package/content-units';
+import { NON_TEACHING_SLIDE_ROLES } from '@/lib/server/teaching-package/outline-grounding';
 import type { TeachingFlowEntry, TeachingStageRef } from '@/lib/types/teaching-package';
 import type { AppScene, Scene } from '@/lib/types/stage';
 
@@ -79,21 +80,72 @@ export function orderedScenes<T extends Pick<AppScene, 'id' | 'order'>>(scenes: 
   return [...scenes].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
-export function computeContentUnitCoverage(
-  units: readonly ContentUnitRow[],
+/**
+ * A slide that teaches what it cites. An introduction, recap or check slide
+ * citing a unit is no evidence the unit was taught — the same rule the
+ * generation-time coverage check applies to outlines.
+ */
+export function isTeachingSlide(scene: Pick<AppScene, 'type' | 'content'>): boolean {
+  if (scene.type !== 'slide') return false;
+  const role = (scene.content as { contentRole?: unknown } | undefined)?.contentRole;
+  return !(typeof role === 'string' && NON_TEACHING_SLIDE_ROLES.has(role));
+}
+
+/**
+ * Sections the generated plan left untaught (`gapUnitIds`) and the slides
+ * "Generate slide" built (`insertedSlideUnits`: Scene id → its lesson parts).
+ * A gap section counts as taught only by a slide generated for it: a citation
+ * added to a slide written about something else is not evidence it was taught.
+ */
+export interface CoverageGapEvidence {
+  gapUnitIds: ReadonlySet<string>;
+  insertedSlideUnits: ReadonlyMap<string, readonly string[]>;
+}
+
+/** Unit id → the Scenes that teach it, and → the Scenes that only cite it. */
+function citationsByUnit(
   scenes: readonly AppScene[],
   outline: OutlineRecord,
-): UnitCoverage[] {
+  gaps?: CoverageGapEvidence,
+): { slidesByUnit: Map<string, string[]>; othersByUnit: Map<string, string[]> } {
   const slidesByUnit = new Map<string, string[]>();
   const othersByUnit = new Map<string, string[]>();
   for (const scene of orderedScenes(scenes)) {
-    const target = scene.type === 'slide' ? slidesByUnit : othersByUnit;
+    const teaching = isTeachingSlide(scene);
+    const generatedFor = gaps?.insertedSlideUnits.get(scene.id) ?? [];
     for (const unitId of new Set(citedContentUnitIds(scene, outline))) {
+      const counts = teaching && (!gaps?.gapUnitIds.has(unitId) || generatedFor.includes(unitId));
+      const target = counts ? slidesByUnit : othersByUnit;
       const list = target.get(unitId) ?? [];
       list.push(scene.id);
       target.set(unitId, list);
     }
   }
+  return { slidesByUnit, othersByUnit };
+}
+
+/**
+ * The essential sections no live slide teaches, in the order given — the
+ * Submit coverage gate. Same rule as {@link computeContentUnitCoverage}, so a
+ * section the editor shows as uncovered is exactly a section Submit refuses.
+ */
+export function findUntaughtEssentialSections(
+  essentialUnitIds: readonly string[],
+  scenes: readonly AppScene[],
+  outline: OutlineRecord,
+  gaps?: CoverageGapEvidence,
+): string[] {
+  const { slidesByUnit } = citationsByUnit(scenes, outline, gaps);
+  return essentialUnitIds.filter((id) => !slidesByUnit.has(id));
+}
+
+export function computeContentUnitCoverage(
+  units: readonly ContentUnitRow[],
+  scenes: readonly AppScene[],
+  outline: OutlineRecord,
+  gaps?: CoverageGapEvidence,
+): UnitCoverage[] {
+  const { slidesByUnit, othersByUnit } = citationsByUnit(scenes, outline, gaps);
   return [...units]
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .map((unit) => {

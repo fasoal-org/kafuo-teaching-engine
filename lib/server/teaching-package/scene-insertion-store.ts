@@ -248,6 +248,25 @@ export async function readSceneInsertionByKey(
   return result.rows[0] ? rowToInsertion(result.rows[0]) : null;
 }
 
+/**
+ * The slides "Generate slide" built for a version, by Scene id → the lesson
+ * parts each was generated from. Only these may restore a section the plan
+ * left untaught (the coverage gate's evidence; never writes).
+ */
+export async function readInsertedSlideUnits(
+  queryable: Queryable,
+  versionId: string,
+): Promise<Map<string, string[]>> {
+  const result = await queryable.query<Pick<RawInsertionRow, 'new_scene_id' | 'unit_ids'>>(
+    `SELECT new_scene_id, unit_ids FROM teaching_package_scene_insertions
+      WHERE version_id = $1 AND status = 'succeeded'`,
+    [versionId],
+  );
+  return new Map(
+    result.rows.map((row) => [row.new_scene_id, (json<string[]>(row.unit_ids) ?? []).map(String)]),
+  );
+}
+
 /** Running insertions of a Stage whose lease is still valid (the gate's read; never writes). */
 export async function listRunningSceneInsertions(
   queryable: Queryable,

@@ -61,6 +61,7 @@ import {
   resolveInsertionPosition,
   shiftScenesForInsertion,
   suggestInsertionPosition,
+  type CoverageGapEvidence,
   type InsertionAnchors,
   type UnitCoverage,
 } from '@/lib/server/teaching-package/content-unit-coverage';
@@ -101,6 +102,7 @@ import {
   failSceneInsertion,
   listRunningSceneInsertions,
   newSceneInsertionId,
+  readInsertedSlideUnits,
   readSceneInsertionByKey,
   readSceneInsertionByKeyUnderStageLock,
   readSceneInsertionStatus,
@@ -112,6 +114,7 @@ import {
   type SceneInsertionRefusal,
 } from '@/lib/server/teaching-package/scene-insertion-store';
 import { listRunningSceneRegenerations } from '@/lib/server/teaching-package/scene-regeneration-store';
+import { readSectionCoverageForVersion } from '@/lib/server/teaching-package/successor-model';
 import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
 import { resolveMoeBrandProfile } from '@/lib/server/visual-compliance/brand-profile';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
@@ -438,6 +441,21 @@ interface InsertionContext {
   unsupportedReason: UnsupportedReason | null;
   units: ContentUnitRow[];
   lineageStatus: 'own_attempt' | 'predecessor_attempt' | 'unavailable';
+  /** Sections the plan left untaught, and the slides generated for them. */
+  gaps: CoverageGapEvidence | undefined;
+}
+
+/** The coverage-gate evidence of a version (`undefined` → no recorded gaps). */
+async function readCoverageGapEvidence(
+  pool: ConnectableQueryable,
+  versionId: string,
+): Promise<CoverageGapEvidence | undefined> {
+  const record = await readSectionCoverageForVersion(pool, versionId);
+  if (!record || record.gapContentUnitIds.length === 0) return undefined;
+  return {
+    gapUnitIds: new Set(record.gapContentUnitIds),
+    insertedSlideUnits: await readInsertedSlideUnits(pool, versionId),
+  };
 }
 
 async function readInsertionContext(
@@ -468,6 +486,7 @@ async function readInsertionContext(
     unsupportedReason,
     units: units.units,
     lineageStatus: units.lineageStatus,
+    gaps: await readCoverageGapEvidence(pool, version.id),
   };
 }
 
@@ -486,8 +505,9 @@ function checkPositionAndUnits(
   units: readonly ContentUnitRow[],
   flow: readonly TeachingFlowEntry[],
   changed: boolean,
+  gaps?: CoverageGapEvidence,
 ): { at: number; after: AppScene | null; before: AppScene | null } {
-  const coverage = computeContentUnitCoverage(units, scenes, outline);
+  const coverage = computeContentUnitCoverage(units, scenes, outline, gaps);
   const byId = new Map(coverage.map((unit) => [unit.id, unit]));
   for (const unitId of request.unitIds) {
     const unit = byId.get(unitId);
@@ -741,6 +761,7 @@ export async function insertGeneratedSlide(
       context.units,
       flow,
       false,
+      context.gaps,
     );
     exactFlowOrRefuse(
       placeholderProjection(stageDocument.scenes, position.at, {
@@ -795,7 +816,15 @@ export async function insertGeneratedSlide(
     try {
       // `changed`: the new-run checks just passed on the same request, so a
       // refusal here means the live data moved since (409, not 422).
-      checkPositionAndUnits(request, live.scenes, live.outline, context.units, flow, true);
+      checkPositionAndUnits(
+        request,
+        live.scenes,
+        live.outline,
+        context.units,
+        flow,
+        true,
+        context.gaps,
+      );
       return null;
     } catch (error) {
       if (error instanceof TeachingPackageError) {
@@ -980,6 +1009,7 @@ export async function insertGeneratedSlide(
           request,
           planned,
           units: context.units,
+          gaps: context.gaps,
           flow,
           governed: context.governed,
           newSceneId,
@@ -1144,6 +1174,7 @@ function buildFinalDocument(
     /** The normalized planned outline the candidate was generated from. */
     planned: SceneOutline;
     units: readonly ContentUnitRow[];
+    gaps: CoverageGapEvidence | undefined;
     flow: readonly TeachingFlowEntry[];
     governed: boolean;
     newSceneId: string;
@@ -1163,6 +1194,7 @@ function buildFinalDocument(
     input.units,
     input.flow,
     true,
+    input.gaps,
   );
   const placed: AppScene = {
     ...candidate,
@@ -1362,6 +1394,7 @@ export async function readContentUnitsForGrant(
     context.units,
     document.scenes,
     outlineRecord,
+    context.gaps,
   );
   const flow = context.flow ?? [];
   return {

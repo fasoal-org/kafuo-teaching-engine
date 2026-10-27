@@ -69,7 +69,7 @@ export const ESSENTIAL_CONTENT_UNIT_ROLES: ReadonlySet<string> = new Set([
  * Slide roles that do not teach a section: an introduction, a recap or a
  * check citing a unit is no evidence the unit itself was taught.
  */
-const NON_TEACHING_SLIDE_ROLES: ReadonlySet<string> = new Set([
+export const NON_TEACHING_SLIDE_ROLES: ReadonlySet<string> = new Set([
   'orientation',
   'summary',
   'check_understanding',
@@ -95,10 +95,11 @@ export function essentialContentUnitIds(manifest: NormalizedLessonManifest): str
 }
 
 /**
- * Essential unit ids no teaching outline cites, in the order given. A quiz
- * outline, or a slide whose role is introduction/recap/check, does not count.
- * A slide with no role yet counts: classification is judged by its own gate,
- * and this check only catches a section the plan never teaches at all.
+ * Essential unit ids no teaching outline cites, in the order given. Only a
+ * slide counts (the rule `isTeachingSlide` applies to the generated Scenes),
+ * and not one whose role is introduction/recap/check/practice. A slide with no
+ * role yet counts: classification is judged by its own gate, and this check
+ * only catches a section the plan never teaches at all.
  */
 export function findUncoveredContentUnits(
   outlines: readonly SceneOutline[],
@@ -106,7 +107,7 @@ export function findUncoveredContentUnits(
 ): string[] {
   const taught = new Set<string>();
   for (const outline of outlines) {
-    if (outline.type === 'quiz') continue;
+    if (outline.type !== 'slide') continue;
     if (outline.contentRole && NON_TEACHING_SLIDE_ROLES.has(outline.contentRole)) continue;
     for (const id of outline.sourceContentUnitIds ?? []) taught.add(asKey(id));
   }

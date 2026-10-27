@@ -54,6 +54,29 @@ export async function readProducingAttemptTeachingModel(
   tx: Queryable,
   versionId: string,
 ): Promise<TeachingModelLineage | null> {
+  const producing = await readProducingAttemptId(tx, versionId);
+  if (!producing) return null;
+  const attemptResult = await tx.query<Record<string, unknown>>(
+    `SELECT teaching_model_key, teaching_model_version
+       FROM teaching_package_generation_attempts
+      WHERE id = $1`,
+    [producing.attemptId],
+  );
+  const attempt = attemptResult.rows[0] as
+    | { teaching_model_key: string; teaching_model_version: string }
+    | undefined;
+  if (!attempt) return null;
+  return { key: attempt.teaching_model_key, version: attempt.teaching_model_version };
+}
+
+/**
+ * The attempt that produced the version's Stage lineage (`current_attempt_id`,
+ * else the predecessor walk), and whether it is the version's OWN attempt.
+ */
+async function readProducingAttemptId(
+  tx: Queryable,
+  versionId: string,
+): Promise<{ attemptId: string; own: boolean } | null> {
   const visited = new Set<string>();
   let currentId: string | null = versionId;
   while (currentId && !visited.has(currentId)) {
@@ -69,21 +92,40 @@ export async function readProducingAttemptTeachingModel(
       | undefined;
     if (!row) return null;
     if (row.current_attempt_id) {
-      const attemptResult = await tx.query<Record<string, unknown>>(
-        `SELECT teaching_model_key, teaching_model_version
-           FROM teaching_package_generation_attempts
-          WHERE id = $1`,
-        [row.current_attempt_id],
-      );
-      const attempt = attemptResult.rows[0] as
-        | { teaching_model_key: string; teaching_model_version: string }
-        | undefined;
-      if (!attempt) return null;
-      return { key: attempt.teaching_model_key, version: attempt.teaching_model_version };
+      return { attemptId: row.current_attempt_id, own: currentId === versionId };
     }
     currentId = row.predecessor_version_id;
   }
   return null;
+}
+
+/**
+ * The Submit coverage gate's authority, recorded by the producing attempt
+ * (`input_snapshot.sectionCoverage`). `null` for a package generated before the
+ * gate existed or from a PDF fallback: no gate, exactly as before. Gaps apply
+ * only to the version the attempt produced — a successor clones an approved
+ * Stage that already passed this gate, so it answers to essential coverage only.
+ */
+export async function readSectionCoverageForVersion(
+  tx: Queryable,
+  versionId: string,
+): Promise<{ essentialContentUnitIds: string[]; gapContentUnitIds: string[] } | null> {
+  const producing = await readProducingAttemptId(tx, versionId);
+  if (!producing) return null;
+  const result = await tx.query<Record<string, unknown>>(
+    `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+    [producing.attemptId],
+  );
+  const snapshot = result.rows[0]?.input_snapshot as
+    | { sectionCoverage?: { essentialContentUnitIds?: unknown; gapContentUnitIds?: unknown } }
+    | undefined;
+  const record = snapshot?.sectionCoverage;
+  if (!record || !Array.isArray(record.essentialContentUnitIds)) return null;
+  const ids = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+  return {
+    essentialContentUnitIds: ids(record.essentialContentUnitIds),
+    gapContentUnitIds: producing.own ? ids(record.gapContentUnitIds) : [],
+  };
 }
 
 /** A version whose declared model no longer matches its producing attempt's. */

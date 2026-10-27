@@ -50,8 +50,11 @@ import {
   compareSuccessorMaterialScenes,
   isCloneOnlySuccessor,
   readProducingAttemptTeachingModel,
+  readSectionCoverageForVersion,
   teachingModelLineageDrift,
 } from '@/lib/server/teaching-package/successor-model';
+import { findUntaughtEssentialSections } from '@/lib/server/teaching-package/content-unit-coverage';
+import { readInsertedSlideUnits } from '@/lib/server/teaching-package/scene-insertion-store';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { collectStageVisualFindings } from '@/lib/server/visual-compliance/stage-gate';
@@ -360,6 +363,45 @@ async function assertLegacySuccessorCloneOnly(
   );
 }
 
+/**
+ * The essential-section coverage gate. Generation no longer pauses on an
+ * untaught section: the package finishes as a draft, the editor's lesson parts
+ * show the section uncovered, and Submit — the only way to `in_review`, which
+ * `approve` requires at this same Stage revision — refuses until every
+ * essential section has a teaching slide. A section the plan left untaught
+ * counts only once "Generate slide" built a slide for it. Packages generated
+ * before the gate recorded no coverage authority and pass unchanged.
+ */
+async function assertEssentialSectionsCovered(
+  pool: ConnectableQueryable,
+  versionId: string,
+  scenes: readonly AppScene[],
+  outline: unknown,
+): Promise<void> {
+  const record = await readSectionCoverageForVersion(pool, versionId);
+  if (!record || record.essentialContentUnitIds.length === 0) return;
+  const gaps =
+    record.gapContentUnitIds.length > 0
+      ? {
+          gapUnitIds: new Set(record.gapContentUnitIds),
+          insertedSlideUnits: await readInsertedSlideUnits(pool, versionId),
+        }
+      : undefined;
+  const untaught = findUntaughtEssentialSections(
+    record.essentialContentUnitIds,
+    scenes,
+    outline as Parameters<typeof findUntaughtEssentialSections>[2],
+    gaps,
+  );
+  if (untaught.length > 0) {
+    throw new TeachingPackageError(
+      'ESSENTIAL_SECTION_UNCOVERED',
+      `${untaught.length} essential lesson section(s) are not taught by any slide; generate a slide for each from the lesson parts panel before submitting`,
+      { unitIds: untaught },
+    );
+  }
+}
+
 async function prepareSubmitValidation(
   pool: ConnectableQueryable,
   versionId: string,
@@ -457,6 +499,7 @@ async function prepareSubmitValidation(
       { offendingSceneIds: misplacedGames },
     );
   }
+  await assertEssentialSectionsCovered(pool, version.id, document.scenes, document.outline);
   if (legacySuccessor) {
     await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
   }
