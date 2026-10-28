@@ -89,6 +89,28 @@ describe('planInsertedSlide', () => {
     expect(result.outline.assistancePlan?.hint).toBe('think about the surfaces');
   });
 
+  it('attaches the eligible images it could read and keeps each image note', async () => {
+    const plans = [
+      { imageId: 'src-1', shows: 'a box on a ramp', teachingPoint: 'friction opposes motion' },
+    ];
+    const { value, calls, aiCall } = input([practice({ imagePlans: plans })], {
+      eligibleVisuals: [
+        { id: 'src-1', caption: 'Friction on a ramp', figureLabel: '3-2' },
+        { id: 'src-2', description: 'a second box' },
+      ],
+      visionImages: [{ id: 'src-1', src: 'data:image/png;base64,AAAA' }],
+    });
+    const result = await planInsertedSlide(value);
+    expect((aiCall.mock.calls[0] as unknown[] | undefined)?.[2]).toEqual([
+      { id: 'src-1', src: 'data:image/png;base64,AAAA' },
+    ]);
+    expect(calls[0]?.user).toContain(
+      '- src-1 (figure 3-2, caption "Friction on a ramp", attached)',
+    );
+    expect(calls[0]?.user).toContain('- src-2: a second box');
+    expect(result.ok && result.outline.imagePlans).toEqual(plans);
+  });
+
   it('wraps the units and the instruction; the reason is not even a parameter', async () => {
     const { value, calls } = input([practice()]);
     await planInsertedSlide(value);

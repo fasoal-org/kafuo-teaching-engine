@@ -262,6 +262,25 @@ export interface AssistancePlan {
 export interface VisualPlan {
   mode: 'image' | 'native' | 'omitted';
   omissionReason?: string;
+  /**
+   * `native` only: what the planned diagram shows and what the learner must take
+   * from it, so the canvas and the narration teach the same diagram.
+   */
+  diagram?: VisualTeachingNote;
+}
+
+/** What one planned visual shows, and what the learner must notice in it. Planner-only. */
+export interface VisualTeachingNote {
+  shows: string;
+  teachingPoint: string;
+}
+
+/**
+ * The planner's teaching note for ONE selected image: exactly one per id in
+ * `suggestedImageIds`, so a slide with two images carries two notes.
+ */
+export interface ImagePlan extends VisualTeachingNote {
+  imageId: string;
 }
 
 /** A generation-ready description of one course scene. */
@@ -309,6 +328,8 @@ export interface SceneOutline {
   sourceContentUnitIds?: string[];
   sourceBlockIds?: string[];
   suggestedImageIds?: string[];
+  /** Planner-only {@link ImagePlan} per selected image, in `suggestedImageIds` order. */
+  imagePlans?: ImagePlan[];
   mediaGenerations?: MediaGenerationRequest[];
   quizConfig?: {
     questionCount: number;

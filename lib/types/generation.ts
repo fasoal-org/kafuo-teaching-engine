@@ -197,6 +197,8 @@ export interface SceneOutline {
   sourceBlockIds?: string[];
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
+  // Planner-only teaching note per selected image (what it shows, what to notice)
+  imagePlans?: import('@openmaic/generation').ImagePlan[];
   // AI-generated media requests (when PDF images are insufficient)
   mediaGenerations?: MediaGenerationRequest[]; // e.g., [{ type: 'image', prompt: '...', elementId: 'gen_img_1' }]
   // Quiz-specific config

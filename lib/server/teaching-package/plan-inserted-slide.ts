@@ -74,7 +74,17 @@ export interface PlanInsertedSlideInput {
   nextTitle: string | null;
   language: string;
   languageDirective: string;
-  eligibleVisuals: ReadonlyArray<{ id: string; description?: string }>;
+  eligibleVisuals: ReadonlyArray<{
+    id: string;
+    description?: string;
+    caption?: string;
+    figureLabel?: string;
+  }>;
+  /**
+   * The eligible visuals' bytes, attached so the planner SEES what it writes
+   * each note for. A visual whose bytes could not be read is listed but absent.
+   */
+  visionImages?: ReadonlyArray<{ id: string; src: string; width?: number; height?: number }>;
   /** Optional reviewer focus (0–2000 chars). Untrusted. */
   instruction: string;
   /** Server-minted. */
@@ -109,6 +119,7 @@ interface RawPlan {
   visualPlan?: unknown;
   assistancePlan?: unknown;
   suggestedImageIds?: unknown;
+  imagePlans?: unknown;
   teachingSkills?: unknown;
 }
 
@@ -140,7 +151,8 @@ function systemPrompt(): string {
     '- "description": a planner-only brief for the slide designer (never shown to learners);',
     '- "slideType": one of cover, contents, content, transition, end;',
     '- "contentRole" and optional "contentKind": the slide classification the position allows;',
-    '- "visualPlan": { "mode": "image" | "native" | "omitted", "omissionReason"? } — required when the position requires a visual (then "image" or "native"), and for a cover + orientation opening; "omitted" needs a specific reason of 15+ characters;',
+    '- "visualPlan": { "mode": "image" | "native" | "omitted", "omissionReason"? } — required when the position requires a visual (then "image" or "native"), and for a cover + orientation opening; "omitted" needs a specific reason of 15+ characters; a "native" visual also carries "diagram": { "shows", "teachingPoint" } describing the diagram to build from the units;',
+    '- "imagePlans": exactly one entry per id in suggestedImageIds, same order: { "imageId", "shows": what that visual shows — from the attached image when it is attached, otherwise only from its caption and description, never invented — "teachingPoint": what the learner must notice in it } — planner-only;',
     '- "assistancePlan": { "hint"?, "help"?, "explanation"? } — ONLY for contentRole practice or check_understanding; practice + independent REQUIRES hint and explanation;',
     '- "suggestedImageIds": ids from the eligible textbook visuals only (may be empty);',
     '- "teachingSkills": when Skills are listed, { "primary": {skillId, version}, "supporting": [...], "classification": "instructional" | "non-instructional" } using ONLY the listed Skills.',
@@ -193,8 +205,16 @@ function userPrompt(input: PlanInsertedSlideInput): string {
       ? 'Eligible textbook visuals:'
       : 'Eligible textbook visuals: none (use visualPlan "native" when a visual is required).',
   );
+  const attached = new Set((input.visionImages ?? []).map((image) => image.id));
   for (const visual of input.eligibleVisuals) {
-    lines.push(`- ${visual.id}${visual.description ? `: ${visual.description}` : ''}`);
+    const source = [
+      visual.figureLabel ? `figure ${visual.figureLabel}` : '',
+      visual.caption ? `caption "${visual.caption}"` : '',
+      attached.has(visual.id) ? 'attached' : '',
+    ].filter(Boolean);
+    lines.push(
+      `- ${visual.id}${source.length ? ` (${source.join(', ')})` : ''}${visual.description ? `: ${visual.description}` : ''}`,
+    );
   }
   lines.push('', 'Source content units:', renderPlannerUnits(input.units));
   const instruction = untrustedText(input.instruction);
@@ -280,6 +300,9 @@ function shapePlan(
       ? { assistancePlan: raw.assistancePlan }
       : {}),
     ...(suggestedImageIds.length > 0 ? { suggestedImageIds } : {}),
+    ...(suggestedImageIds.length > 0 && Array.isArray(raw.imagePlans)
+      ? { imagePlans: raw.imagePlans }
+      : {}),
     ...(input.allowedSkills && raw.teachingSkills && typeof raw.teachingSkills === 'object'
       ? { teachingSkills: raw.teachingSkills }
       : {}),
@@ -308,7 +331,11 @@ export async function planInsertedSlide(
     calls += 1;
     let answer: string;
     try {
-      answer = await input.aiCall(systemPrompt(), prompt);
+      answer = await input.aiCall(
+        systemPrompt(),
+        prompt,
+        input.visionImages?.length ? [...input.visionImages] : undefined,
+      );
     } catch (error) {
       return {
         ok: false,

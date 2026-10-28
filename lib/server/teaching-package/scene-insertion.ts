@@ -93,6 +93,8 @@ import {
   type PlanCheck,
   type PlannerSkillOption,
 } from '@/lib/server/teaching-package/plan-inserted-slide';
+import { MAX_REPLAN_IMAGES } from '@/lib/server/teaching-package/replan-slide-visuals';
+import { readSourceVisualDataUrl } from '@/lib/server/teaching-package/source-visual-bytes';
 import {
   createInsertionRoute,
   INSERTION_PLANNER_STAGE,
@@ -417,6 +419,7 @@ export interface SceneInsertionDeps {
   verdictStore?: () => Promise<{
     get(profileId: string, checksum: string): Promise<{ verdict: string } | undefined>;
   }>;
+  readVisual?: typeof readSourceVisualDataUrl;
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -582,6 +585,30 @@ function exactFlowOrRefuse(
 interface EligibleVisual {
   entry: SourceVisualManifestEntry;
   image: PdfImage;
+}
+
+/**
+ * The eligible visuals' bytes for the planner (slide image plan D-4), read back
+ * from the stage media directory and checked against the manifest checksum. A
+ * visual that cannot be read is simply not attached.
+ */
+async function plannerVisionImages(
+  eligible: readonly EligibleVisual[],
+  deps: SceneInsertionDeps,
+): Promise<Array<{ id: string; src: string; width?: number; height?: number }>> {
+  const read = deps.readVisual ?? readSourceVisualDataUrl;
+  const images: Array<{ id: string; src: string; width?: number; height?: number }> = [];
+  for (const { entry } of eligible.slice(0, MAX_REPLAN_IMAGES)) {
+    const src = await read(entry.servingPath, { sha256: entry.sha256 });
+    if (!src) continue;
+    images.push({
+      id: entry.id,
+      src,
+      ...(entry.width !== undefined ? { width: entry.width } : {}),
+      ...(entry.height !== undefined ? { height: entry.height } : {}),
+    });
+  }
+  return images;
 }
 
 async function eligibleVisuals(
@@ -934,7 +961,10 @@ export async function insertGeneratedSlide(
       eligibleVisuals: eligible.map((visual) => ({
         id: visual.entry.id,
         ...(visual.entry.description ? { description: visual.entry.description } : {}),
+        ...(visual.entry.caption ? { caption: visual.entry.caption } : {}),
+        ...(visual.entry.figureLabel ? { figureLabel: visual.entry.figureLabel } : {}),
       })),
+      visionImages: await plannerVisionImages(eligible, deps),
       instruction: request.instruction,
       outlineId: newOutlineId,
       order: position.at,

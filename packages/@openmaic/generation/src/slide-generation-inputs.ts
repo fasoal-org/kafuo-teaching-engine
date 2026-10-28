@@ -49,6 +49,7 @@ const PLANNER_GUIDANCE_FIELDS = [
   'sourceContentUnitIds',
   'sourceBlockIds',
   'suggestedImageIds',
+  'imagePlans',
   'mediaGenerations',
 ] as const satisfies readonly (keyof SceneOutline)[];
 

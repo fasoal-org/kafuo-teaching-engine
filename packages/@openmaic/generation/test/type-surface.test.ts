@@ -53,6 +53,7 @@ type _SceneActionKeys = Assert<
     | 'correctiveContext'
     | 'spokenScript'
     | 'sourceUnits'
+    | 'imageNotes'
     | 'logger'
   >
 >;

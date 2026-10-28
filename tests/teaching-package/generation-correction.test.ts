@@ -260,7 +260,10 @@ function visualOutline(extra: Record<string, unknown> = {}): OutlineFixture {
     slideType: 'content',
     contentRole: 'explanation',
     teachingStage: { key: 'outcome_visual_explanations', flowIndex: 1 },
-    visualPlan: { mode: 'native' },
+    visualPlan: {
+      mode: 'native',
+      diagram: { shows: 'two fractions over one denominator', teachingPoint: 'add only the tops' },
+    },
     ...extra,
   };
 }

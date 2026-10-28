@@ -5,7 +5,11 @@ import {
   analyzeOutlines,
   applyOutlineFallbacks,
   blockingOutlineDiagnostics,
+  buildNarrationImageNotes,
+  buildSceneSourceContext,
   formatBlockingOutlineDiagnostics,
+  MAX_VISION_IMAGES,
+  sortDocumentImagesForVision,
   generateSceneOutlinesFromRequirements,
   generateSceneActions,
   generateSceneContent,
@@ -104,6 +108,7 @@ import {
 } from '@/lib/server/teaching-package/source-images';
 import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
 import { GenerationCorrectionRequiredError } from '@/lib/server/teaching-package/outline-correction';
+import { replanSlideVisuals } from '@/lib/server/teaching-package/replan-slide-visuals';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
@@ -294,7 +299,9 @@ export function markNarrationAudioGaps(
         message: `narration audio could not be generated for ${missing} of ${spoken.length} spoken line(s); students will not hear the teacher voice there`,
       },
     ]);
-    log.warn(`Scene "${scene.title}" kept without audio for ${missing}/${spoken.length} spoken line(s); marked for review`);
+    log.warn(
+      `Scene "${scene.title}" kept without audio for ${missing}/${spoken.length} spoken line(s); marked for review`,
+    );
   }
 }
 
@@ -306,6 +313,18 @@ const INVALID_SCENE_OUTPUT_CORRECTION =
 /** Corrective-context prefix for collected (admin-correctable) outline findings. */
 const OUTLINE_CORRECTION_PREFIX = 'OUTLINE_CORRECTION_REQUIRED';
 /** Outline-gate rejections that a corrective re-roll can fix. */
+/**
+ * Outline findings about a slide's visual that the per-slide visual re-plan
+ * fixes (slide image plan D-1): the planner re-chooses the image and writes its
+ * notes, instead of a deterministic image swap.
+ */
+const VISUAL_REPLAN_CODES: ReadonlySet<string> = new Set([
+  'SOURCE_VISUAL_NOT_SELECTED',
+  'VISUAL_TEACHING_NOTE_MISSING',
+  'AI_IMAGE_NOT_ALLOWED',
+  'VISUAL_MODE_MISMATCH',
+  'VISUAL_REQUIRED',
+]);
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
 
@@ -1431,6 +1450,109 @@ export async function generateClassroom(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
 
+  // Slide image plan (D-1/D-4): every image a slide shows comes from its
+  // planner with its own teaching note. A slide whose visual finding the planner
+  // can fix — or whose chosen image the outline call could not see — is
+  // re-planned ALONE with its linked images attached, before any pause for a
+  // person. A resumed checkpoint passes through the same step, so an older
+  // candidate without notes is completed here rather than stuck. A `scenes`
+  // checkpoint already built its slides from its outlines and is never re-planned.
+  if (input.teachingFlow !== undefined && input.teachingFlow.length > 0 && !resumeScenes) {
+    const flow = input.teachingFlow;
+    const analyze = (candidates: SceneOutline[]) =>
+      analyzeOutlines(candidates, {
+        teachingFlow: flow,
+        sourceImages: sourceImages ?? [],
+        ...(input.prohibitedWidgetTypes?.length
+          ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
+          : {}),
+      });
+    const reasonsById = new Map<string, string[]>();
+    // Outlines whose image SELECTION is in question (not only its notes).
+    const reselect = new Set<string>();
+    const addReason = (outlineId: string, reason: string) =>
+      reasonsById.set(outlineId, [...(reasonsById.get(outlineId) ?? []), reason]);
+    for (const diagnostic of outlineBlocking) {
+      if (diagnostic.outlineId && VISUAL_REPLAN_CODES.has(diagnostic.code)) {
+        addReason(diagnostic.outlineId, diagnostic.message);
+        if (diagnostic.code !== 'VISUAL_TEACHING_NOTE_MISSING') reselect.add(diagnostic.outlineId);
+      }
+    }
+    if (!resumeOutlines && hasSourceVisuals) {
+      const seen = new Set(
+        sortDocumentImagesForVision([...sourceImages!])
+          .slice(0, MAX_VISION_IMAGES)
+          .map((image) => image.id),
+      );
+      for (const outline of outlines) {
+        const unseen = (outline.suggestedImageIds ?? []).filter((id) => !seen.has(id));
+        if (outline.type === 'slide' && outline.id && unseen.length > 0) {
+          addReason(
+            outline.id,
+            `the image(s) ${unseen.join(', ')} were not visible when this slide was planned; look at the attached image(s) and write each note from what it shows`,
+          );
+          reselect.add(outline.id);
+        }
+      }
+    }
+    if (reasonsById.size > 0) {
+      const { aiCall: replanAiCall } = await resolveSceneContentCall('slide');
+      let current = outlines;
+      for (const [outlineId, reasons] of reasonsById) {
+        const index = current.findIndex((outline) => outline.id === outlineId);
+        const outline = current[index];
+        if (!outline) continue;
+        // Only the notes are missing (e.g. an administrator chose the images,
+        // D-3): the re-plan keeps exactly the selected images and writes their
+        // notes. Otherwise it re-chooses among the slide's linked images.
+        const selected = outline.suggestedImageIds ?? [];
+        const keepSelection = !reselect.has(outlineId) && selected.length > 0;
+        const unitIds = new Set(outline.sourceContentUnitIds ?? []);
+        const linkedImages = keepSelection
+          ? selected
+              .map((id) => (sourceImages ?? []).find((image) => image.id === id))
+              .filter((image): image is PdfImage => image !== undefined)
+          : sortDocumentImagesForVision(
+              (sourceImages ?? []).filter((image) =>
+                (image.sourceContentUnitIds ?? []).some((id) => unitIds.has(id)),
+              ),
+            );
+        const replanned = await replanSlideVisuals({
+          outline,
+          linkedImages,
+          ...(keepSelection ? { requiredImageIds: selected } : {}),
+          imageSrc: (image) => sourceImageMapping[image.id] ?? image.src,
+          sourceText: buildSceneSourceContext(outline, input.sourceUnits).sourceContextText,
+          languageDirective,
+          reasons,
+          check: (candidate) =>
+            blockingOutlineDiagnostics(
+              analyze(current.map((entry, at) => (at === index ? candidate : entry))),
+            )
+              .filter(
+                (diagnostic) =>
+                  diagnostic.outlineId === outlineId && VISUAL_REPLAN_CODES.has(diagnostic.code),
+              )
+              .map((diagnostic) => diagnostic.message),
+          aiCall: replanAiCall,
+        });
+        assertRouteAvailable();
+        if (replanned.ok) {
+          current = current.map((entry, at) => (at === index ? replanned.outline : entry));
+          log.info(`Slide "${outline.title}" visual re-planned (${replanned.calls} call(s))`);
+        } else {
+          log.warn(
+            `Slide "${outline.title}" visual re-plan failed: ${replanned.messages.join('; ')}`,
+          );
+        }
+      }
+      const analysis = analyze(current);
+      outlines = analysis.outlines;
+      outlineRepairs = [...outlineRepairs, ...analysis.repairs];
+      outlineBlocking = blockingOutlineDiagnostics(analysis);
+    }
+  }
+
   // Module 2 W11: pre-resolve the exact canonical Skill definitions ONCE per
   // run (the `resolvedVisionImages` precedent — bytes settled BEFORE any scene
   // prompt assembly) so the selected Skills govern generated narration,
@@ -1862,6 +1984,15 @@ export async function generateClassroom(
                 ...(flowContext ? { flowContext } : {}),
                 ...(resolvedSkills ? { resolvedSkills } : {}),
                 ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                ...(safeOutline.type === 'slide' && hasSourceVisuals
+                  ? {
+                      imageNotes: buildNarrationImageNotes(
+                        safeOutline,
+                        sourceImages,
+                        sourceServingMapping,
+                      ),
+                    }
+                  : {}),
                 ...(input.governed
                   ? {
                       onFallback: (info: SceneActionsFallback) => {

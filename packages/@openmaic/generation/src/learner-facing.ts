@@ -19,6 +19,8 @@ const INTERNAL_IDENTIFIERS = [
   'keyPoints',
   'teachingSkills',
   'teachingStage',
+  'imagePlans',
+  'teachingPoint',
   'worked_example',
   'check_understanding',
   'source_analysis',

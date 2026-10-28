@@ -20,6 +20,7 @@
 import {
   assertGeneratedSlideScene,
   buildCompleteScene,
+  buildNarrationImageNotes,
   generateSceneActions,
   generateSceneContent,
   type AICallFn,
@@ -184,6 +185,9 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+            ...(assignedImages.length > 0
+              ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
+              : {}),
             onFallback: (info) => {
               fellBack = info;
             },

@@ -25,6 +25,7 @@ import {
   analyzeOutlines,
   blockingOutlineDiagnostics,
   scenePolicyFor,
+  VISUAL_TEACHING_NOTE_MISSING,
   type OutlineDiagnostic,
   type PdfImage,
   type TeachingScenePolicy,
@@ -424,6 +425,12 @@ function setField(
         invalid('suggestedImageIds may only name approved source visuals');
       }
       next.suggestedImageIds = ids;
+      // An image the administrator newly chose has no teaching note yet: only
+      // the notes of images still shown are kept, and the resumed run
+      // re-plans the rest (slide image plan D-3).
+      const kept = (next.imagePlans ?? []).filter((plan) => ids.includes(plan.imageId));
+      if (kept.length > 0) next.imagePlans = kept;
+      else delete next.imagePlans;
       return next;
     }
     case 'visualPlan': {
@@ -439,9 +446,16 @@ function setField(
       if (reason !== undefined && (typeof reason !== 'string' || reason.length > 500)) {
         invalid('visualPlan.omissionReason must be a string of at most 500 characters');
       }
+      // A native diagram keeps its planned note only while it stays native; a
+      // new native plan gets its note when the resumed run re-plans it (D-3).
+      const diagram =
+        record.mode === 'native' && next.visualPlan?.mode === 'native'
+          ? next.visualPlan.diagram
+          : undefined;
       next.visualPlan = {
         mode: record.mode as 'image' | 'native' | 'omitted',
         ...(typeof reason === 'string' ? { omissionReason: reason } : {}),
+        ...(diagram ? { diagram } : {}),
       } as SceneOutline['visualPlan'];
       return next;
     }
@@ -603,11 +617,16 @@ export function buildCorrectionView(
     state: checkpoint.state,
     revision: checkpoint.revision,
     // Mirrors the resume's own gate: outline-level findings block; a `scenes`
-    // finding is resolved by the resume regenerating that Scene.
+    // finding is resolved by the resume regenerating that Scene, and a missing
+    // visual teaching note by the resume re-planning that slide's visual.
     canResume:
       checkpoint.state === 'awaiting' &&
       attempt.status === 'awaiting_admin_correction' &&
-      checkpoint.diagnostics.every((diagnostic) => diagnostic.field === SCENE_REGENERATION_FIELD),
+      checkpoint.diagnostics.every(
+        (diagnostic) =>
+          diagnostic.field === SCENE_REGENERATION_FIELD ||
+          diagnostic.code === VISUAL_TEACHING_NOTE_MISSING,
+      ),
     pausedAt: checkpoint.pausedAt,
     updatedAt: checkpoint.updatedAt,
     pendingOutlineIds: checkpoint.pendingOutlineIds,

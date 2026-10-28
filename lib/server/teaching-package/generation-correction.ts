@@ -45,6 +45,8 @@ import {
   requeueAttemptForResume,
 } from '@/lib/persistence/teaching-package';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
+import { VISUAL_TEACHING_NOTE_MISSING } from '@openmaic/generation';
+
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { assertActorRef, itemLockKey } from '@/lib/server/teaching-package/lifecycle';
 import {
@@ -344,11 +346,18 @@ export async function resumeGenerationAttempt(
       checkpoint.outlines,
       diagnosisContextFromCheckpoint(checkpoint, flow, isGoverned(attempt)),
     );
-    if (diagnosis.blocking.length > 0) {
+    // A missing image / diagram teaching note is the TE's to write, not the
+    // administrator's: the resumed run re-plans that slide's visual itself
+    // (slide image plan D-1/D-3), so it never holds a resume back — an older
+    // checkpoint saved before notes existed resumes like any other.
+    const blocking = diagnosis.blocking.filter(
+      (issue) => issue.code !== VISUAL_TEACHING_NOTE_MISSING,
+    );
+    if (blocking.length > 0) {
       throw new TeachingPackageError(
         'CORRECTION_INCOMPLETE',
-        `${diagnosis.blocking.length} issue(s) still need correction before this attempt can resume`,
-        { blockingIssues: diagnosis.blocking.slice(0, 20) },
+        `${blocking.length} issue(s) still need correction before this attempt can resume`,
+        { blockingIssues: blocking.slice(0, 20) },
       );
     }
     const now = Date.now();

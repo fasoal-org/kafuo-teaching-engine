@@ -17,6 +17,7 @@ export {
   resolveImageIds,
 } from './scene-generator.js';
 export type {
+  NarrationImageNote,
   ResolvedSkillDefinition,
   SceneActionsFallback,
   SceneActionsFallbackCode,
@@ -28,7 +29,7 @@ export type {
   SceneFlowPromptContext,
   SceneSkillPromptContext,
 } from './scene-generator.js';
-export { buildSceneFlowContext } from './scene-generator.js';
+export { buildSceneFlowContext, buildNarrationImageNotes } from './scene-generator.js';
 export { assertGeneratedSlideScene, buildCompleteScene } from './scene-builder.js';
 export type { BuildCompleteSceneOptions } from './scene-builder.js';
 export {
@@ -112,6 +113,7 @@ export type {
 export {
   LEGACY_STAGE_SCENE_POLICIES,
   SOURCE_VISUAL_NORMALIZED,
+  VISUAL_TEACHING_NOTE_MISSING,
   describeScenePolicy,
   flowHasScenePolicies,
   narrowDiagnosticsToPositionPolicy,
@@ -220,7 +222,8 @@ export {
 } from './visual-plan.js';
 export type { MediaRegistry, UnauthorizedMediaReason } from './media-registry.js';
 export { uniquifyMediaElementIds } from './outline-media.js';
-export { partitionImagesForVision } from './outline-formatters.js';
+export { partitionImagesForVision, sortDocumentImagesForVision } from './outline-formatters.js';
+export { MAX_VISION_IMAGES } from './constants.js';
 export type { VisionImagePartition } from './outline-formatters.js';
 export { parseJsonResponse } from './json-repair.js';
 export type { JsonParsingOptions } from './json-repair.js';
@@ -241,6 +244,8 @@ export type {
   PdfImage,
   AssistancePlan,
   VisualPlan,
+  VisualTeachingNote,
+  ImagePlan,
   SceneOutline,
   SceneSkillRef,
   SceneTeachingSkills,

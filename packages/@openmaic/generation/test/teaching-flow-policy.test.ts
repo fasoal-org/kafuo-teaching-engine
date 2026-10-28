@@ -47,7 +47,10 @@ function explanationSlide(patch: Partial<SceneOutline> = {}): SceneOutline {
     description: 'Teach the method',
     keyPoints: ['step one', 'step two'],
     order: 1,
-    visualPlan: { mode: 'native' },
+    visualPlan: {
+      mode: 'native',
+      diagram: { shows: 'the two measuring steps', teachingPoint: 'the order of the steps' },
+    },
     teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
     ...patch,
   };
@@ -100,9 +103,7 @@ describe('analyzeOutlines with position policies', () => {
   });
 
   test('the visual stays mandatory and textbook-grounded for every allowed role', () => {
-    const sourceImages = [
-      { id: 'src-1', src: '', pageNumber: 1, sourceContentUnitIds: ['cu-1'] },
-    ];
+    const sourceImages = [{ id: 'src-1', src: '', pageNumber: 1, sourceContentUnitIds: ['cu-1'] }];
     const analysis = analyzeOutlines(
       [
         explanationSlide({
@@ -114,14 +115,95 @@ describe('analyzeOutlines with position policies', () => {
       ],
       { teachingFlow: v5Flow, sourceImages },
     );
-    // Deterministic completion from the authoritative Content Unit association.
+    // The AI image request is dropped, but the linked image is NEVER swapped in:
+    // the planner re-plans the slide so its notes describe the image it shows.
+    expect(analysis.outlines[0]?.suggestedImageIds).toBeUndefined();
+    expect(analysis.outlines[0]?.mediaGenerations).toBeUndefined();
+    expect(analysis.repairs.map((repair) => repair.code)).toEqual(['SOURCE_VISUAL_NORMALIZED']);
+    expect(analysis.repairs[0]?.message).toMatch(/^AI image requests were removed/);
+    expect(blockingOutlineDiagnostics(analysis).map((finding) => finding.code)).toEqual([
+      'VISUAL_REQUIRED',
+      'SOURCE_VISUAL_NOT_SELECTED',
+    ]);
+    expect(blockingOutlineDiagnostics(analysis)[1]?.allowedValues).toEqual(['src-1']);
+  });
+
+  test("keeps the planner's own linked image with its note, dropping unlinked extras", () => {
+    const sourceImages = [
+      { id: 'src-1', src: '', pageNumber: 1, sourceContentUnitIds: ['cu-1'] },
+      { id: 'src-9', src: '', pageNumber: 9, sourceContentUnitIds: ['cu-9'] },
+    ];
+    const analysis = analyzeOutlines(
+      [
+        explanationSlide({
+          sourceContentUnitIds: ['cu-1'],
+          visualPlan: { mode: 'image' },
+          suggestedImageIds: ['src-9', 'src-1'],
+          imagePlans: [
+            { imageId: 'src-9', shows: 'another lesson', teachingPoint: 'not this one' },
+            { imageId: 'src-1', shows: 'a graduated cylinder', teachingPoint: 'read the meniscus' },
+          ],
+        }),
+      ],
+      { teachingFlow: v5Flow, sourceImages },
+    );
     expect(analysis.outlines[0]).toMatchObject({
       visualPlan: { mode: 'image' },
       suggestedImageIds: ['src-1'],
+      imagePlans: [
+        { imageId: 'src-1', shows: 'a graduated cylinder', teachingPoint: 'read the meniscus' },
+      ],
     });
-    expect(analysis.outlines[0]?.mediaGenerations).toBeUndefined();
-    expect(analysis.repairs.map((repair) => repair.code)).toEqual(['SOURCE_VISUAL_NORMALIZED']);
     expect(blockingOutlineDiagnostics(analysis)).toEqual([]);
+  });
+
+  test('every selected image needs exactly one complete note of its own', () => {
+    const sourceImages = [
+      { id: 'src-1', src: '', pageNumber: 1, sourceContentUnitIds: ['cu-1'] },
+      { id: 'src-2', src: '', pageNumber: 2, sourceContentUnitIds: ['cu-1'] },
+    ];
+    const slide = (imagePlans: SceneOutline['imagePlans']) =>
+      explanationSlide({
+        sourceContentUnitIds: ['cu-1'],
+        visualPlan: { mode: 'image' },
+        suggestedImageIds: ['src-1', 'src-2'],
+        imagePlans,
+      });
+    const both = analyzeOutlines(
+      [
+        slide([
+          { imageId: 'src-1', shows: 'inductive arrows', teachingPoint: 'examples to a rule' },
+          { imageId: 'src-2', shows: 'deductive arrows', teachingPoint: 'a rule to an example' },
+        ]),
+      ],
+      { teachingFlow: v5Flow, sourceImages },
+    );
+    expect(blockingOutlineDiagnostics(both)).toEqual([]);
+
+    const missing = analyzeOutlines(
+      [
+        slide([
+          { imageId: 'src-1', shows: 'inductive arrows', teachingPoint: 'examples to a rule' },
+        ]),
+      ],
+      { teachingFlow: v5Flow, sourceImages },
+    );
+    expect(blockingOutlineDiagnostics(missing)).toEqual([
+      expect.objectContaining({
+        code: 'VISUAL_TEACHING_NOTE_MISSING',
+        field: 'imagePlans',
+        message: expect.stringContaining('missing or incomplete for src-2'),
+      }),
+    ]);
+  });
+
+  test('a native diagram at a textbook-grounded position needs its own note', () => {
+    const analysis = analyzeOutlines([explanationSlide({ visualPlan: { mode: 'native' } })], {
+      teachingFlow: v5Flow,
+    });
+    expect(blockingOutlineDiagnostics(analysis)).toEqual([
+      expect.objectContaining({ code: 'VISUAL_TEACHING_NOTE_MISSING', field: 'visualPlan' }),
+    ]);
   });
 
   test('a role outside the v5 list is admin-correctable, never rewritten', () => {
@@ -157,7 +239,10 @@ describe('analyzeOutlines with position policies', () => {
     const analysis = analyzeOutlines(
       [
         explanationSlide({ id: 'o', teachingStage: { key: 'lesson_opener', flowIndex: 0 } }),
-        explanationSlide({ id: 'c', teachingStage: { key: 'outcome_check_understanding', flowIndex: 1 } }),
+        explanationSlide({
+          id: 'c',
+          teachingStage: { key: 'outcome_check_understanding', flowIndex: 1 },
+        }),
       ],
       { teachingFlow: flow },
     );
@@ -204,8 +289,16 @@ describe('parseTeachingScenePolicy', () => {
   test.each([
     ['an unknown role', { ...V5_EXPLANATIONS, contentRoles: ['lecture'] }, /unknown value/],
     ['an empty scene type list', { ...V5_EXPLANATIONS, sceneTypes: [] }, /non-empty array/],
-    ['a duplicate value', { ...V5_EXPLANATIONS, contentRoles: ['example', 'example'] }, /more than once/],
-    ['a slide field without slides', { sceneTypes: ['quiz'], contentRoles: ['example'], cardinality: 'exactly_one' }, /requires "slide"/],
+    [
+      'a duplicate value',
+      { ...V5_EXPLANATIONS, contentRoles: ['example', 'example'] },
+      /more than once/,
+    ],
+    [
+      'a slide field without slides',
+      { sceneTypes: ['quiz'], contentRoles: ['example'], cardinality: 'exactly_one' },
+      /requires "slide"/,
+    ],
     ['an unknown field', { ...V5_EXPLANATIONS, roles: [] }, /unknown field/],
     ['a bad cardinality', { ...V5_EXPLANATIONS, cardinality: 'many' }, /cardinality/],
   ])('refuses %s', (_label, raw, message) => {

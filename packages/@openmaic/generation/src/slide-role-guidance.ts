@@ -86,7 +86,12 @@ function loadVariant(file: string): string {
 export function buildSlideRoleContext(input: SlideRoleGuidanceInput): SlideRoleContext {
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
-  const visual = VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? ''];
+  const diagram = input.visualPlan?.mode === 'native' ? input.visualPlan.diagram : undefined;
+  const visual =
+    VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? ''] &&
+    (diagram?.shows?.trim() && diagram.teachingPoint?.trim()
+      ? `${VISUAL_PLAN_GUIDANCE.native} The planner's note for this diagram: it shows ${diagram.shows.trim()}; the learner should notice ${diagram.teachingPoint.trim()}.`
+      : VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? '']);
   const sourceGrounding =
     input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
   return {

@@ -114,11 +114,13 @@ The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-onl
 Do **NOT** plan a separate learning-objectives slide: the objectives live on the orientation slide. Plan a separate one only when the user requirement{{#if hasTeachingFlow}} or a Teaching Model Flow position's instructions{{/if}} explicitly demands it — and it is then still `"contentRole": "orientation"`.
 {{#if hasTeachingFlow}}
 The Teaching Model Flow decides which positions exist and their order; classification never changes that. Classify each outline by what it does for the learner inside its flow position — a stage key is context, never a value of `slideType`, `contentRole` or `contentKind`.
+
+Every image a slide shows is taught, so deliver each one with its own teaching note. For every id in a slide's `suggestedImageIds`, add exactly one entry to its `imagePlans`, in the same order: `{ "imageId": "<the id>", "shows": "<what this image actually shows, in the lesson language>", "teachingPoint": "<what the learner must notice in it, and why it is on this slide>" }`. Two images → two entries, each about its own image; never an entry for an image the slide does not show. Write `shows` only from what you can see in the attached image or read in its caption and figure label — never invent content — and make the slide's `keyPoints` consistent with the images it shows. A slide planned with a native diagram instead (`visualPlan.mode` `"native"`) carries `visualPlan.diagram: { "shows": "…", "teachingPoint": "…" }` describing the diagram to build from the source content. These notes are planner-only and never shown to learners.
 {{/if}}{{#if hasLegacyFlowVisualRule}}
 For every outline at Teaching Model Flow stage `outcome_visual_explanations`, the visual is mandatory and textbook-grounded:
 
 - use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
-- otherwise use `visualPlan: { "mode": "native" }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
+- otherwise use `visualPlan: { "mode": "native", "diagram": { "shows": "…", "teachingPoint": "…" } }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
 - never add an AI image request to `mediaGenerations` for this stage, and never use decorative filler as its visual.
 {{/if}}{{#if hasScenePolicies}}
 A flow position that lists a `policy` constrains every outline at that position, and its `contentRole` list is the complete set of purposes allowed there: choose, for each slide, the listed role that matches what the slide does for the learner (an explanation, the steps of a procedure, a worked example, a short example, a learner activity) — never force a different purpose into one role, and never pick a role the position does not list.
@@ -126,6 +128,6 @@ A flow position that lists a `policy` constrains every outline at that position,
 For every outline at a position whose policy says `visual: textbook-grounded`, the visual is mandatory and textbook-grounded, whatever its `contentRole`:
 
 - use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
-- otherwise use `visualPlan: { "mode": "native" }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
+- otherwise use `visualPlan: { "mode": "native", "diagram": { "shows": "…", "teachingPoint": "…" } }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
 - never add an AI image request to `mediaGenerations` at such a position, and never use decorative filler as its visual.
 {{/if}}

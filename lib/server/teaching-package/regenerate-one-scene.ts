@@ -18,6 +18,7 @@
 import {
   assertGeneratedSlideScene,
   buildCompleteScene,
+  buildNarrationImageNotes,
   generateSceneActions,
   generateSceneContent,
   type AICallFn,
@@ -244,6 +245,10 @@ export async function regenerateOneScene(
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
+  // Each lifted book image reaches narration with its own planned note.
+  const imageNotes = hasImageMapping
+    ? buildNarrationImageNotes(outline, assignedImages, imageMapping)
+    : undefined;
   let actions;
   try {
     const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
@@ -266,6 +271,7 @@ export async function regenerateOneScene(
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+            ...(imageNotes ? { imageNotes } : {}),
             onFallback: (info) => {
               fellBack = info;
             },

@@ -30,6 +30,7 @@ import type {
   TeachingFlowEntry,
   TeachingScenePolicy,
   TeachingSceneType,
+  VisualTeachingNote,
   WidgetType,
 } from './outline-types.js';
 
@@ -238,11 +239,14 @@ function positionPolicy(
 
 /**
  * Deterministically complete the textbook-visual carrier of every outline at a
- * `visual: source_grounded` position. Content Unit ↔ image associations are
- * authoritative input, so applying them is not a model guess: a linked source
- * image is selected (`visualPlan: image`), otherwise a native diagram is
- * planned, and AI image requests are dropped. Each change is recorded as a
- * `repaired` diagnostic; validation still enforces the result.
+ * `visual: source_grounded` position, without ever choosing an image for the
+ * planner: the planner's own linked selection is kept (`visualPlan: image`, with
+ * unlinked extras and their notes dropped); a slide with no linked image at all
+ * gets a native diagram; AI image requests are dropped. A slide that has a
+ * linked image but selected none is left as planned, so validation reports
+ * `SOURCE_VISUAL_NOT_SELECTED` and the planner re-plans it — the image a slide
+ * shows is the one its plan and narration were written for. Each change is
+ * recorded as a `repaired` diagnostic; validation still enforces the result.
  */
 export function normalizeSourceGroundedVisuals(
   outlines: readonly SceneOutline[],
@@ -263,26 +267,44 @@ export function normalizeSourceGroundedVisuals(
     );
     const suggested = (outline.suggestedImageIds ?? []).filter((id) => imageById.has(id));
     const selectedGrounded = suggested.filter((id) => grounded.some((image) => image.id === id));
-    const selectedBookImages = selectedGrounded.length
-      ? selectedGrounded
-      : grounded.length
-        ? [grounded[0]!.id]
-        : suggested;
     const nonImageMedia = (outline.mediaGenerations ?? []).filter(
       (request) => request.type !== 'image',
     );
     const {
       mediaGenerations: _discardedMedia,
       suggestedImageIds: _discardedIds,
+      imagePlans: _discardedPlans,
       ...rest
     } = outline;
-
-    const next: SceneOutline = {
-      ...rest,
-      visualPlan: { mode: selectedBookImages.length > 0 ? 'image' : 'native' },
-      ...(selectedBookImages.length > 0 ? { suggestedImageIds: selectedBookImages } : {}),
+    const withoutAiImages: SceneOutline = {
+      ...outline,
       ...(nonImageMedia.length > 0 ? { mediaGenerations: nonImageMedia } : {}),
     };
+    if (nonImageMedia.length === 0) delete withoutAiImages.mediaGenerations;
+
+    let next: SceneOutline;
+    if (grounded.length > 0 && selectedGrounded.length === 0) {
+      // A linked image exists but the planner chose none: never swap one in.
+      next = withoutAiImages;
+    } else {
+      const selectedBookImages = selectedGrounded.length ? selectedGrounded : suggested;
+      const imagePlans = (outline.imagePlans ?? []).filter((plan) =>
+        selectedBookImages.includes(plan.imageId),
+      );
+      const mode = selectedBookImages.length > 0 ? 'image' : 'native';
+      next = {
+        ...rest,
+        visualPlan: {
+          mode,
+          ...(mode === 'native' && outline.visualPlan?.diagram
+            ? { diagram: outline.visualPlan.diagram }
+            : {}),
+        },
+        ...(selectedBookImages.length > 0 ? { suggestedImageIds: selectedBookImages } : {}),
+        ...(imagePlans.length > 0 ? { imagePlans } : {}),
+        ...(nonImageMedia.length > 0 ? { mediaGenerations: nonImageMedia } : {}),
+      };
+    }
 
     const changed =
       outline.visualPlan?.mode !== next.visualPlan?.mode ||
@@ -303,9 +325,11 @@ export function normalizeSourceGroundedVisuals(
             .length,
         },
         message:
-          selectedBookImages.length > 0
-            ? `the textbook visual ${selectedBookImages.join(', ')} linked to this slide's Content Units was selected as its visual; AI image requests were removed`
-            : 'no textbook visual is linked to this slide, so a native diagram built from the source content is planned; AI image requests were removed',
+          next === withoutAiImages
+            ? 'AI image requests were removed; the textbook visual linked to this slide is chosen by its planner'
+            : next.suggestedImageIds?.length
+              ? `the textbook visual ${next.suggestedImageIds.join(', ')} linked to this slide's Content Units was selected as its visual; AI image requests were removed`
+              : 'no textbook visual is linked to this slide, so a native diagram built from the source content is planned; AI image requests were removed',
         ...(entry ? { flowIndex: outline.teachingStage!.flowIndex, stage: entry.stage } : {}),
       });
     }
@@ -415,6 +439,16 @@ export function teachingFlowDiagnostics(
     countByFlowIndex.set(position.flowIndex, (countByFlowIndex.get(position.flowIndex) ?? 0) + 1);
 
     const policy = scenePolicyFor(entry);
+    if (outline.type === 'slide') {
+      diagnostics.push(
+        ...visualTeachingNoteDiagnostics(
+          outline,
+          label,
+          { ...base, flowIndex: position.flowIndex, stage: entry.stage },
+          policy?.visual === 'source_grounded',
+        ),
+      );
+    }
     if (!policy) continue;
     const at = { ...base, flowIndex: position.flowIndex, stage: entry.stage };
 
@@ -513,6 +547,71 @@ export function teachingFlowDiagnostics(
         message: `flow[${flowIndex}] stage ${JSON.stringify(entry.stage)} requires exactly one outline, received ${countByFlowIndex.get(flowIndex) ?? 0}`,
       });
     }
+  }
+  return diagnostics;
+}
+
+/** Diagnostic code: a selected image, or a planned native diagram, has no teaching note. */
+export const VISUAL_TEACHING_NOTE_MISSING = 'VISUAL_TEACHING_NOTE_MISSING';
+
+function isTeachingNote(note: unknown): note is VisualTeachingNote {
+  const candidate = note as Partial<VisualTeachingNote> | null | undefined;
+  return (
+    typeof candidate?.shows === 'string' &&
+    candidate.shows.trim() !== '' &&
+    typeof candidate.teachingPoint === 'string' &&
+    candidate.teachingPoint.trim() !== ''
+  );
+}
+
+/**
+ * The planner delivers every visual with its own teaching note, so the canvas
+ * and the narration explain the visual the slide actually shows: exactly one
+ * complete `imagePlans` entry per selected image (and none for an image the
+ * slide does not show), and — at a textbook-grounded position — a
+ * `visualPlan.diagram` note for a native diagram.
+ */
+function visualTeachingNoteDiagnostics(
+  outline: SceneOutline,
+  label: string,
+  at: Pick<OutlineDiagnostic, 'disposition' | 'outlineIndex' | 'outlineId' | 'flowIndex' | 'stage'>,
+  sourceGrounded: boolean,
+): OutlineDiagnostic[] {
+  const diagnostics: OutlineDiagnostic[] = [];
+  const ids = outline.suggestedImageIds ?? [];
+  const plans: unknown[] = Array.isArray(outline.imagePlans) ? outline.imagePlans : [];
+  const planIds = plans.map((plan) => (plan as { imageId?: unknown } | null)?.imageId);
+  const incomplete = ids.filter((id) => {
+    const matching = plans.filter((_, index) => planIds[index] === id);
+    return matching.length !== 1 || !isTeachingNote(matching[0]);
+  });
+  const orphaned = planIds.filter((id) => typeof id !== 'string' || !ids.includes(id));
+  if (incomplete.length > 0 || orphaned.length > 0) {
+    diagnostics.push({
+      ...at,
+      code: VISUAL_TEACHING_NOTE_MISSING,
+      field: 'imagePlans',
+      allowedValues: [...ids],
+      message: [
+        `${label} must carry exactly one imagePlans entry { imageId, shows, teachingPoint } per selected image`,
+        ...(incomplete.length > 0 ? [`missing or incomplete for ${incomplete.join(', ')}`] : []),
+        ...(orphaned.length > 0
+          ? [`no selected image for ${orphaned.map((id) => String(id)).join(', ')}`]
+          : []),
+      ].join('; '),
+    });
+  }
+  if (
+    sourceGrounded &&
+    outline.visualPlan?.mode === 'native' &&
+    !isTeachingNote(outline.visualPlan.diagram)
+  ) {
+    diagnostics.push({
+      ...at,
+      code: VISUAL_TEACHING_NOTE_MISSING,
+      field: 'visualPlan',
+      message: `${label} plans a native diagram but visualPlan.diagram { shows, teachingPoint } is missing or incomplete`,
+    });
   }
   return diagnostics;
 }

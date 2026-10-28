@@ -46,6 +46,7 @@ import {
 } from './outline-formatters.js';
 import type {
   ImageMapping,
+  ImagePlan,
   PdfImage,
   SceneOutline,
   UserRequirements,
@@ -279,6 +280,12 @@ export interface SceneActionsOptions {
    * slides never receive it (answer boundary). Absent → the prompt is unchanged.
    */
   sourceUnits?: readonly SourceUnitText[];
+  /**
+   * Slide only: what each textbook image on the canvas shows and teaches, keyed
+   * by the image element's `src`, so narration explains every image it can see
+   * named here. Absent → image elements are listed as before.
+   */
+  imageNotes?: Readonly<Record<string, NarrationImageNote>>;
   logger?: GenerationLogger;
 }
 
@@ -1160,6 +1167,10 @@ async function generateSlideContent(
       });
     } else {
       assignedImagesText = sorted.map((img) => formatImageDescription(img)).join('\n');
+    }
+    const notes = formatImageTeachingNotes(guidance.imagePlans, assignedImages);
+    if (notes) {
+      assignedImagesText += `\n\nThe planner's teaching note for each image (planner-only — never print it on the slide; place each image beside the content its note says it teaches):\n${notes}`;
     }
   }
 
@@ -2265,7 +2276,9 @@ export async function generateSceneActions(
 
   if (outline.type === 'slide' && 'elements' in content) {
     // Format element list for AI to select from
-    const elementsText = formatElementsForPrompt(content.elements);
+    const elementsText =
+      formatElementsForPrompt(content.elements, options.imageNotes) +
+      visualNarrationDirective(content.elements, outline, options.imageNotes);
 
     // Typed boundary: narration is built from the visible canvas and the
     // planner guidance only. Neither the hidden `assistancePlan` nor the
@@ -2480,7 +2493,115 @@ function generateDefaultPBLActions(_outline: SceneOutline): Action[] {
  */
 const NARRATION_VISIBLE_TEXT_BUDGET = 6000;
 
-function formatElementsForPrompt(elements: PPTElement[]): string {
+/**
+ * One line per planned image — its id, figure / caption when the source has
+ * them, what it shows and what the learner must notice — in plan order, for the
+ * images the slide was actually given. Empty when there is no note.
+ */
+function formatImageTeachingNotes(
+  plans: readonly ImagePlan[] | undefined,
+  images: readonly Pick<PdfImage, 'id' | 'figureLabel' | 'caption'>[],
+): string {
+  const byId = new Map(images.map((image) => [image.id, image] as const));
+  return (plans ?? [])
+    .filter((plan) => byId.has(plan.imageId))
+    .map((plan) => {
+      const image = byId.get(plan.imageId)!;
+      const source = [
+        image.figureLabel ? `figure ${image.figureLabel}` : '',
+        image.caption ? `caption "${image.caption}"` : '',
+      ].filter(Boolean);
+      return `- ${plan.imageId}${source.length ? ` (${source.join(', ')})` : ''}: shows ${plan.shows.trim()}; the learner should notice ${plan.teachingPoint.trim()}`;
+    })
+    .join('\n');
+}
+
+/**
+ * What narration knows about a source image on the canvas, keyed by the
+ * element's `src` (the serving path after id resolution, or the image id).
+ */
+export interface NarrationImageNote {
+  figureLabel?: string;
+  caption?: string;
+  shows?: string;
+  teachingPoint?: string;
+}
+
+/**
+ * The narration notes for a slide's selected source images: figure / caption
+ * from the source, shows / teachingPoint from the outline's `imagePlans`, keyed
+ * by the image id AND by its serving path (what the element's `src` holds once
+ * ids are resolved).
+ */
+export function buildNarrationImageNotes(
+  outline: Pick<SceneOutline, 'suggestedImageIds' | 'imagePlans'>,
+  sourceImages: readonly Pick<PdfImage, 'id' | 'figureLabel' | 'caption'>[] | undefined,
+  servingMapping: Readonly<Record<string, string>> | undefined,
+): Record<string, NarrationImageNote> {
+  const notes: Record<string, NarrationImageNote> = {};
+  const byId = new Map((sourceImages ?? []).map((image) => [image.id, image] as const));
+  for (const id of outline.suggestedImageIds ?? []) {
+    const image = byId.get(id);
+    const plan = outline.imagePlans?.find((entry) => entry.imageId === id);
+    const note: NarrationImageNote = {
+      ...(image?.figureLabel ? { figureLabel: image.figureLabel } : {}),
+      ...(image?.caption ? { caption: image.caption } : {}),
+      ...(plan?.shows ? { shows: plan.shows } : {}),
+      ...(plan?.teachingPoint ? { teachingPoint: plan.teachingPoint } : {}),
+    };
+    if (Object.keys(note).length === 0) continue;
+    notes[id] = note;
+    const servingPath = servingMapping?.[id];
+    if (servingPath) notes[servingPath] = note;
+  }
+  return notes;
+}
+
+function formatImageElementSummary(note: NarrationImageNote | undefined): string {
+  if (!note) return 'Image element';
+  const parts = [
+    note.figureLabel ? `figure ${note.figureLabel}` : '',
+    note.caption ? `caption "${note.caption}"` : '',
+    note.shows ? `shows: ${note.shows.trim()}` : '',
+    note.teachingPoint ? `the learner should notice: ${note.teachingPoint.trim()}` : '',
+  ].filter(Boolean);
+  return parts.length ? `Textbook image — ${parts.join('; ')}` : 'Image element';
+}
+
+/**
+ * The narration rule for the slide's planned visuals, appended to the element
+ * list: every noted textbook image is explained and pointed to, and a planned
+ * native diagram is explained from its note. Empty when there is nothing noted,
+ * so a slide without notes gets the prompt it always had.
+ */
+function visualNarrationDirective(
+  elements: PPTElement[],
+  outline: SceneOutline,
+  imageNotes: Readonly<Record<string, NarrationImageNote>> | undefined,
+): string {
+  const notedImages = elements.filter((el) => {
+    const src = (el as { src?: unknown }).src;
+    return el.type === 'image' && typeof src === 'string' && imageNotes?.[src]?.shows;
+  });
+  const lines: string[] = [];
+  if (notedImages.length > 0) {
+    lines.push(
+      `Every textbook image above (${notedImages.map((el) => `"${el.id}"`).join(', ')}) is part of what this slide teaches: for EACH one, point the learner to it (spotlight its id) and explain what it shows and what to notice, in the order the slide teaches them. Describe only what its note says the image shows.`,
+    );
+  }
+  const diagram = outline.visualPlan?.mode === 'native' ? outline.visualPlan.diagram : undefined;
+  if (diagram?.shows?.trim() && diagram.teachingPoint?.trim()) {
+    lines.push(
+      `The slide's diagram shows ${diagram.shows.trim()}; explain it and point the learner to what to notice: ${diagram.teachingPoint.trim()}.`,
+    );
+  }
+  return lines.length ? `\n\n${lines.join('\n')}` : '';
+}
+
+function formatElementsForPrompt(
+  elements: PPTElement[],
+  imageNotes?: Readonly<Record<string, NarrationImageNote>>,
+): string {
   let remaining = NARRATION_VISIBLE_TEXT_BUDGET;
   const excerpt = (text: string): string => {
     const full = text.replace(/\s+/g, ' ').trim();
@@ -2501,7 +2622,10 @@ function formatElementsForPrompt(elements: PPTElement[]): string {
       } else if (el.type === 'chart' && 'chartType' in el) {
         summary = `Chart type: ${el.chartType}`;
       } else if (el.type === 'image') {
-        summary = 'Image element';
+        const src = (el as { src?: unknown }).src;
+        summary = formatImageElementSummary(
+          typeof src === 'string' ? imageNotes?.[src] : undefined,
+        );
       } else if (el.type === 'shape' && 'shapeName' in el) {
         summary = `Shape: ${el.shapeName || 'unknown'}`;
       } else if (el.type === 'latex' && 'latex' in el) {
