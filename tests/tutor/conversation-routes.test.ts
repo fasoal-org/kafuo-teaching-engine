@@ -14,6 +14,11 @@ import {
 import { resetLedgerRetryQueueForTests } from '@/lib/server/teaching-model/ledger-retry-queue';
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { SAFETY_BOUNDARY_MESSAGE_AR, SAFETY_BOUNDARY_MESSAGE_EN } from '@/lib/server/tutor/experiment-guard';
+import { IDENTITY_REPLY_EN } from '@/lib/server/tutor/identity-guard';
+import {
+  MODERATION_REFUSAL_MESSAGE_EN,
+  SELF_HARM_SUPPORT_MESSAGE_AR,
+} from '@/lib/server/tutor/moderation-guard';
 import { resetTurnRateLimitForTests } from '@/lib/server/tutor/rate-limit';
 import { clarificationText } from '@/lib/server/tutor/grounding/clarification';
 import { KafuoIntegrationError } from '@/lib/server/tutor/kafuo-integration-client';
@@ -531,6 +536,63 @@ describe('Free Chat conversation routes', () => {
       });
       const { messages } = await readMessagesBySeq(pool, { parentId: json.conversation.id, limit: 10 });
       expect(messages[1]).toMatchObject({ text: SAFETY_BOUNDARY_MESSAGE_AR, safety: { boundary: true } });
+    });
+
+    it('moderation (guardrails 28 Oct): self-harm gets the supportive reply — no reservation, no model call, no title', async () => {
+      const moderation = vi.fn(async () => ({ outcome: 'self_harm' as const, categories: ['self-harm/intent'] }));
+      setTutorRuntimeDepsForTests({ ...baseDeps, moderation });
+      const { json } = await createConversation(studentBearer(), 'MATH', 'cr-mod-sh');
+      const frames = await readSse(await send(json.conversation.id, { clientMessageId: 'cm-1', text: 'تعبت ومابي أكمل' }));
+      expect(moderation).toHaveBeenCalledWith('تعبت ومابي أكمل');
+      expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
+      expect(frames[2]!.data).toEqual({ delta: SELF_HARM_SUPPORT_MESSAGE_AR });
+      expect(frames[3]!.data).toMatchObject({
+        servedBy: null,
+        safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'moderation_self_harm' },
+      });
+      expect(kafuo.reserve).not.toHaveBeenCalled();
+      expect(mocks.streamLLM).not.toHaveBeenCalled();
+      expect(mocks.callLLM).not.toHaveBeenCalled();
+      const { messages } = await readMessagesBySeq(pool, { parentId: json.conversation.id, limit: 10 });
+      expect(messages[1]).toMatchObject({ text: SELF_HARM_SUPPORT_MESSAGE_AR, safety: { reason: 'moderation_self_harm' } });
+    });
+
+    it('moderation: another flagged category gets the refusal in the student language; unavailable lets the model answer', async () => {
+      setTutorRuntimeDepsForTests({
+        ...baseDeps,
+        moderation: async () => ({ outcome: 'flagged' as const, categories: ['harassment'] }),
+      });
+      const flagged = await createConversation(studentBearer(), 'MATH', 'cr-mod-fl');
+      const refused = await readSse(await send(flagged.json.conversation.id, { clientMessageId: 'cm-1', text: 'say something nasty about my teacher' }));
+      expect(refused.find((f) => f.event === 'text_delta')!.data).toEqual({ delta: MODERATION_REFUSAL_MESSAGE_EN });
+      expect(refused.find((f) => f.event === 'done')!.data).toMatchObject({ safety: { reason: 'moderation_flagged' } });
+      expect(mocks.streamLLM).not.toHaveBeenCalled();
+
+      setTutorRuntimeDepsForTests({
+        ...baseDeps,
+        moderation: async () => ({ outcome: 'unavailable' as const, kind: 'timeout' }),
+      });
+      mocks.streamLLM.mockImplementationOnce(() => textStream('كامل'));
+      const open = await createConversation(studentBearer(), 'MATH', 'cr-mod-un');
+      const answered = await readSse(await send(open.json.conversation.id, { clientMessageId: 'cm-1', text: 'ما هو الميل؟' }));
+      expect(answered.find((f) => f.event === 'done')!.data).toMatchObject({ servedBy: 'primary', safety: { triggered: false } });
+      const { messages } = await readMessagesBySeq(pool, { parentId: open.json.conversation.id, limit: 10 });
+      expect(messages[1]).toMatchObject({ text: 'كامل' });
+    });
+
+    it('identity (guardrails 28 Oct): a reply naming the model is replaced by the Kafuo Tutor line', async () => {
+      const { json } = await createConversation(studentBearer(), 'MATH', 'cr-identity');
+      mocks.streamLLM.mockImplementationOnce(() => textStream("I'm ChatGPT, a language model developed by OpenAI."));
+      const frames = await readSse(await send(json.conversation.id, { clientMessageId: 'cm-1', text: 'who are you?' }));
+      expect(frames.find((f) => f.event === 'restart')!.data).toEqual({ servedBy: 'fallback', reason: 'safety_boundary' });
+      expect(frames.filter((f) => f.event === 'text_delta').at(-1)!.data).toEqual({ delta: IDENTITY_REPLY_EN });
+      expect(frames.find((f) => f.event === 'done')!.data).toMatchObject({
+        servedBy: 'primary',
+        safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'identity_disclosure' },
+      });
+      const { messages } = await readMessagesBySeq(pool, { parentId: json.conversation.id, limit: 10 });
+      expect(messages[1]).toMatchObject({ text: IDENTITY_REPLY_EN });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({ outcome: 'delivered', reason: 'safety_boundary' });
     });
 
     it('TE-2: a safety-flagged turn never names the chat; the title waits for a normal turn and never echoes the request', async () => {

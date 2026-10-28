@@ -338,12 +338,23 @@ export function boundaryMessage(
   localeHint: string | null | undefined,
   academicLanguage: string | null | undefined,
 ): string {
-  const language =
+  return replyLanguage(script, localeHint, academicLanguage) === 'en'
+    ? SAFETY_BOUNDARY_MESSAGE_EN
+    : SAFETY_BOUNDARY_MESSAGE_AR;
+}
+
+/** The language of any fixed reply (FC-D13 order): script → locale hint → academic language → Arabic. */
+export function replyLanguage(
+  script: string | null | undefined,
+  localeHint: string | null | undefined,
+  academicLanguage: string | null | undefined,
+): 'ar' | 'en' {
+  return (
     (script === 'ar' || script === 'en' ? script : null) ??
     languageOf(localeHint) ??
     languageOf(academicLanguage) ??
-    'ar';
-  return language === 'en' ? SAFETY_BOUNDARY_MESSAGE_EN : SAFETY_BOUNDARY_MESSAGE_AR;
+    'ar'
+  );
 }
 
 export const SAFETY_BOUNDARY_CODE = 'SAFETY_BOUNDARY' as const;
@@ -376,8 +387,18 @@ export interface SafetyRecord {
   boundary: boolean;
   /** `SAFETY_BOUNDARY` when boundary, else absent. */
   code?: typeof SAFETY_BOUNDARY_CODE;
-  /** Why the boundary was applied: post-check rule or `guard_error`. */
-  reason?: 'quantity_reagent' | 'operational_sequence' | 'guard_error';
+  /**
+   * Why the boundary was applied: post-check rule or `guard_error`; the input
+   * moderation outcome (`moderation-guard.ts`); or a reply that named the model
+   * or provider behind the tutor (`identity-guard.ts`).
+   */
+  reason?:
+    | 'quantity_reagent'
+    | 'operational_sequence'
+    | 'guard_error'
+    | 'moderation_self_harm'
+    | 'moderation_flagged'
+    | 'identity_disclosure';
 }
 
 export function safetyRecord(

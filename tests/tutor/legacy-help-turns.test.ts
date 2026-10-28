@@ -14,6 +14,7 @@ import { renderSceneText } from '@/lib/server/teaching-package/question-generati
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { computeHelpTurnDigest } from '@/lib/server/tutor/canonical-json';
 import { SAFETY_BOUNDARY_MESSAGE_AR } from '@/lib/server/tutor/experiment-guard';
+import { IDENTITY_REPLY_AR } from '@/lib/server/tutor/identity-guard';
 import { countTokens, effectiveCap } from '@/lib/server/tutor/token-budget';
 import { HELP_QUESTION_TEXT } from '@/lib/server/tutor/tutor-rules';
 import type { AppScene } from '@/lib/types/stage';
@@ -298,6 +299,16 @@ describe('POST /api/teaching-model/help-turns', () => {
     expect(await response.json()).toMatchObject({
       text: SAFETY_BOUNDARY_MESSAGE_AR,
       safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'operational_sequence' },
+    });
+  });
+
+  it('identity (guardrails 28 Oct): a reply naming the model is replaced by the Kafuo Tutor line', async () => {
+    mocks.callLLM.mockResolvedValueOnce(ok('أنا ChatGPT، نموذج لغوي من تطوير OpenAI.'));
+    const response = await post(body({ message: { text: 'مين انت؟' } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      text: IDENTITY_REPLY_AR,
+      safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'identity_disclosure' },
     });
   });
 

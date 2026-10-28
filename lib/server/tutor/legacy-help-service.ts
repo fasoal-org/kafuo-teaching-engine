@@ -47,9 +47,11 @@ import {
   guardOrBoundary,
   postCheck,
   preCheck,
+  replyLanguage,
   safetyRecord,
   type SafetyRecord,
 } from '@/lib/server/tutor/experiment-guard';
+import { identityReply, namesProvider } from '@/lib/server/tutor/identity-guard';
 import { readVersionScene, type LearnerSceneDeps } from '@/lib/server/teaching-package/learner-scene';
 import {
   assembleTutorPrompt,
@@ -566,6 +568,13 @@ export async function runLegacyHelpTurn(
       applied: true,
       reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',
     });
+    log.info(JSON.stringify({ event: 'tutor.safety_triggered', turnId: request.turnId, boundary: true, reason: safety.reason }));
+  } else if (namesProvider(text)) {
+    // Layer 3 (guardrails review 28 Oct 2026): a reply naming the model or provider.
+    text = identityReply(
+      replyLanguage(detectScript(request.message), request.localeHint, request.subject.academicLanguage),
+    );
+    safety = safetyRecord(safetyPre, { applied: true, reason: 'identity_disclosure' });
     log.info(JSON.stringify({ event: 'tutor.safety_triggered', turnId: request.turnId, boundary: true, reason: safety.reason }));
   }
 

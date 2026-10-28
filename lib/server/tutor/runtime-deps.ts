@@ -22,6 +22,7 @@ import {
   getKafuoIntegrationClient,
   type KafuoIntegrationClient,
 } from '@/lib/server/tutor/kafuo-integration-client';
+import { getModerationCheck, type ModerationCheck } from '@/lib/server/tutor/moderation-guard';
 
 export interface TutorRuntimeDeps {
   pool: ConnectableQueryable;
@@ -56,6 +57,11 @@ export interface TutorRuntimeDeps {
    * carry the process-wide cache; test deps omit it (no caching).
    */
   refusalCache?: MeterRefusalCache;
+  /**
+   * Input moderation (guardrails review 28 Oct 2026): the process-wide OpenAI check, or
+   * `null` when `TUTOR_MODERATION_ENABLED=false`. Test deps omit it (no check).
+   */
+  moderation?: ModerationCheck | null;
 }
 
 const OVERRIDE_KEY = Symbol.for('openmaic.tutor.runtime-deps-override');
@@ -106,6 +112,7 @@ export async function resolveTutorRuntimeDeps(): Promise<TutorRuntimeDeps> {
     kafuo: getKafuoIntegrationClient(),
     now: Date.now,
     refusalCache: getMeterRefusalCache(),
+    moderation: getModerationCheck(),
     ...(grounding ? { grounding } : {}),
   };
 }

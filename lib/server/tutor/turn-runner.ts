@@ -158,10 +158,17 @@ import {
   guardOrBoundary,
   postCheck,
   preCheck,
+  replyLanguage,
   safetyRecord,
   type GuardPreCheck,
   type SafetyRecord,
 } from '@/lib/server/tutor/experiment-guard';
+import { identityReply, namesProvider } from '@/lib/server/tutor/identity-guard';
+import {
+  moderateTurn,
+  moderationReply,
+  type ModerationCheck,
+} from '@/lib/server/tutor/moderation-guard';
 import {
   isKafuoUnreachableError,
   type KafuoIntegrationClient,
@@ -387,6 +394,12 @@ export interface TurnRunnerDeps {
    * before `prepare` (no embedding / grounding call). Absent = no caching.
    */
   refusalCache?: MeterRefusalCache;
+  /**
+   * Input moderation (guardrails review 28 Oct 2026). The production deps carry the
+   * process-wide OpenAI check (`null` when `TUTOR_MODERATION_ENABLED=false`); test deps
+   * omit it (no check).
+   */
+  moderation?: ModerationCheck | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +589,23 @@ export async function runTutorTurn(plan: TurnPlan, deps: TurnRunnerDeps): Promis
   if (safety.triggered) {
     log.info(
       JSON.stringify({ event: 'tutor.safety_triggered', turnId, categories: safety.categories }),
+    );
+  }
+
+  // --- 2b. input moderation: a fixed reply, before any reservation or model call --
+  const moderation = await moderateTurn(deps.moderation, plan.text, turnId);
+  const moderated = moderationReply(
+    moderation,
+    safety.triggered,
+    replyLanguage(detectScript(plan.text), plan.localeHint, plan.academicLanguage),
+  );
+  if (moderated) {
+    return boundaryWithoutModel(
+      plan,
+      deps,
+      studentMessage,
+      moderated.text,
+      safetyRecord(safety, { applied: true, reason: moderated.reason }),
     );
   }
 
@@ -984,25 +1014,28 @@ function studentBoundary(plan: TurnPlan, academicLanguage?: string | null): stri
   );
 }
 
-/** SAFE-02: the guard itself failed before any model call — the boundary is the reply. */
+/**
+ * A fixed reply before any model call: SAFE-02 (the guard itself failed) or an input
+ * moderation outcome (`safety.reason` says which). No reservation, no ledger row.
+ */
 async function boundaryWithoutModel(
   plan: TurnPlan,
   deps: TurnRunnerDeps,
   studentMessage: TutorMessage,
   boundary: string,
-): Promise<Response> {
-  const now = deps.now ?? Date.now;
-  const nowS = now() / 1000;
-  const newId = deps.idFactory ?? (() => randomUUID());
-  const withTransaction = nodePostgresTransaction(deps.pool);
-  const safety: SafetyRecord = {
+  safety: SafetyRecord = {
     triggered: true,
     category: null,
     categories: [],
     boundary: true,
     code: 'SAFETY_BOUNDARY',
     reason: 'guard_error',
-  };
+  },
+): Promise<Response> {
+  const now = deps.now ?? Date.now;
+  const nowS = now() / 1000;
+  const newId = deps.idFactory ?? (() => randomUUID());
+  const withTransaction = nodePostgresTransaction(deps.pool);
   const tutorMessage = await withTransaction(async (q) => {
     const seq = await plan.store.nextSeq(q, plan.parent.id);
     const inserted = await plan.store.insertTutor(q, {
@@ -1281,11 +1314,25 @@ async function streamTurn(args: StreamTurnArgs): Promise<void> {
       boundary,
     );
     const violated = !post.ok || post.value.violation;
-    if (violated) {
-      text = boundary;
+    // Layer 3 (guardrails review 28 Oct 2026): a reply naming the model or provider.
+    const disclosed = !violated && namesProvider(text);
+    if (violated || disclosed) {
+      text = violated
+        ? boundary
+        : identityReply(
+            replyLanguage(
+              detectScript(plan.text),
+              plan.localeHint,
+              plan.academicLanguage ?? prepared.academic?.academicLanguage ?? null,
+            ),
+          );
       safety = safetyRecord(args.safety, {
         applied: true,
-        reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',
+        reason: disclosed
+          ? 'identity_disclosure'
+          : post.ok
+            ? (post.value.rule ?? 'operational_sequence')
+            : 'guard_error',
       });
       finalizeReason = 'safety_boundary';
       if (firstDeltaAt === null) firstDeltaAt = nowS();
