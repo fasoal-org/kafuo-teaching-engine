@@ -58,7 +58,12 @@ export type SlideContentRole =
   | 'summary';
 
 /** Specializations of the `explanation` role. */
-export type ExplanationContentKind = 'concept' | 'definition' | 'rule' | 'observation';
+export type ExplanationContentKind =
+  | 'concept'
+  | 'definition'
+  | 'rule'
+  | 'observation'
+  | 'comparison';
 
 /** Specializations of the `activity` role. */
 export type ActivityContentKind = 'investigation' | 'source_analysis' | 'reflection' | 'production';
@@ -126,7 +131,7 @@ export const SLIDE_CONTENT_KINDS_BY_ROLE: {
   readonly [R in SlideContentRole]: readonly SlideContentKindOf<R>[];
 } = {
   orientation: [],
-  explanation: ['concept', 'definition', 'rule', 'observation'],
+  explanation: ['concept', 'definition', 'rule', 'observation', 'comparison'],
   example: [],
   worked_example: [],
   procedure: [],
@@ -142,6 +147,7 @@ export const SLIDE_CONTENT_KINDS = [
   'definition',
   'rule',
   'observation',
+  'comparison',
   'investigation',
   'source_analysis',
   'reflection',

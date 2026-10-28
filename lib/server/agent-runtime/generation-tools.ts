@@ -111,7 +111,7 @@ const SceneParams = Type.Object({
       SLIDE_CONTENT_KINDS.map((value) => Type.Literal(value)),
       {
         description:
-          'Slide pages only — REQUIRED with contentRole explanation (concept | definition | rule | observation), activity (investigation | source_analysis | reflection | production) or practice (guided | independent | higher_order); must be omitted for every other role.',
+          'Slide pages only — REQUIRED with contentRole explanation (concept | definition | rule | observation | comparison), activity (investigation | source_analysis | reflection | production) or practice (guided | independent | higher_order); must be omitted for every other role.',
       },
     ),
   ),

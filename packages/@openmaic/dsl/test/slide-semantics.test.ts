@@ -66,7 +66,7 @@ describe('slide content role/kind vocabulary', () => {
   it('pins the agreed kinds per role; all other roles have none', () => {
     expect(SLIDE_CONTENT_KINDS_BY_ROLE).toEqual({
       orientation: [],
-      explanation: ['concept', 'definition', 'rule', 'observation'],
+      explanation: ['concept', 'definition', 'rule', 'observation', 'comparison'],
       example: [],
       worked_example: [],
       procedure: [],
