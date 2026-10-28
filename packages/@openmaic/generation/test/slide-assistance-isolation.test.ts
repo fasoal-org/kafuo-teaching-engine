@@ -157,9 +157,9 @@ describe('planner prose never becomes learner content (T-07)', () => {
 
   it('gives an unclassified (legacy) slide no role guidance, and every approved variant some', () => {
     expect(buildSlideRoleContext({})).toEqual({ hasRoleGuidance: false, roleGuidance: '' });
-    // 17 role / role-kind variants + the generic explanation / activity / practice
+    // 18 role / role-kind variants + the generic explanation / activity / practice
     // guidance used when the optional contentKind is absent.
-    expect(SLIDE_ROLE_VARIANTS).toHaveLength(20);
+    expect(SLIDE_ROLE_VARIANTS).toHaveLength(21);
     for (const variant of SLIDE_ROLE_VARIANTS) {
       const [contentRole, contentKind] = variant.split('-') as [never, never];
       const canvas = buildSlideRoleContext({ slideType: 'content', contentRole, contentKind });
