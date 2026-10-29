@@ -10,8 +10,10 @@ const commonIgnoredInputs = {
   directories: ['docs/', 'test/'],
 };
 
-// Keep this package set in lockstep with publish-packages.yml. The release
-// workflow intentionally publishes only these five owned packages.
+// This package set is OPENMAIC_PACKAGES, which assertPackageListIsComplete
+// cross-checks against the root package.json dependencies. Upstream's
+// publish-packages.yml was removed on 6 Oct 2026 (e0dc7df1); nothing in this
+// fork publishes these packages to npm.
 //
 // KNOWN LIMITATION: this treats "publishable input" as "file under the package
 // directory", which is an under-approximation for all five packages.
