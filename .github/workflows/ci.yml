@@ -6,7 +6,9 @@ on:
     # only ever proves one part merged into the branch, so without a push
     # trigger the accumulated state of the branch that eventually reaches main
     # is never built on its own.
-    branches: [main, integration/kv-asset-server-backend, integration/agent-workbench]
+    # staging: the Kafuo trunk (29 Oct 2026). Every push to it is tested here, and
+    # staging-te.yml deploys only from its "Run workflow" button.
+    branches: [main, staging, integration/kv-asset-server-backend, integration/agent-workbench]
   pull_request:
     branches:
       [

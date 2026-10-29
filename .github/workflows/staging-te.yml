@@ -1,7 +1,9 @@
 # Staging CD for the Teaching Engine. See deploy/staging/README.md.
 #
-#   push to staging (a merge)  -> deploy that commit to the staging server
-#   "Run workflow" button      -> the same, for the staging branch's current commit
+#   "Run workflow" button      -> deploy the staging branch's current commit to the staging server
+#
+# A push to staging deploys nothing; ci.yml tests it. Trunk-based flow (29 Oct 2026): the
+# owner deploys to staging by hand. See docs/frds/trunk-based-staging-flow-plan-2026-10-29.md.
 #
 # No test job here: the image build on the server (next build, with its type check) is the
 # gate, and a failed build leaves the running container untouched. The full suite runs in
@@ -11,8 +13,6 @@
 name: Staging Teaching Engine
 
 on:
-  push:
-    branches: [staging]
   workflow_dispatch:
 
 # One run at a time, and never cancel one halfway.
