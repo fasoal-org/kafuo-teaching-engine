@@ -9,7 +9,7 @@ import {
   type SceneOutline,
   type SceneTeachingSkills,
 } from '@openmaic/generation';
-import { nanoid } from 'nanoid';
+import { randomUUID } from 'node:crypto';
 import { pblOutline, quizOutline, slideOutline, widgetOutline } from './scene-fixtures.js';
 
 const content = {
@@ -96,7 +96,7 @@ describe('buildCompleteScene — Teaching Skills carrier (Module 2 W9)', () => {
       case 'interactive':
         return { html: '<p/>', widgetType: 'diagram', widgetConfig: {} } as never;
       case 'pbl':
-        return { projectV2: { id: nanoid() } } as never;
+        return { projectV2: { id: randomUUID() } } as never;
     }
   }
 

@@ -60,27 +60,19 @@ describe('flow positions that permit a game', () => {
   it('reads policies, the legacy game stage, and unrestricted interactive positions', () => {
     expect(flowGamePositions(V6_FLOW)).toEqual([]);
     expect(
-      flowGamePositions([
-        { stage: 'lesson_introduction', instructions: 'i' },
-        { stage: 'outcome_teaching_cards', instructions: 'c' },
-      ]),
+      flowGamePositions([{ stage: 'lesson_introduction' }, { stage: 'outcome_teaching_cards' }]),
     ).toEqual([]);
     expect(
-      flowGamePositions([
-        { stage: 'lesson_opener', instructions: 'i' },
-        { stage: 'lesson_learning_game', instructions: 'Play.' },
-      ]),
+      flowGamePositions([{ stage: 'lesson_opener' }, { stage: 'lesson_learning_game' }]),
     ).toEqual([{ flowIndex: 1, stage: 'lesson_learning_game' }]);
     expect(
       flowGamePositions([
         {
           stage: 'x',
-          instructions: 'i',
           scenePolicy: { sceneTypes: ['interactive'], cardinality: 'one_or_more' },
         },
         {
           stage: 'y',
-          instructions: 'i',
           scenePolicy: {
             sceneTypes: ['interactive'],
             widgetTypes: ['simulation'],

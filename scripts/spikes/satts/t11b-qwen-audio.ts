@@ -4,7 +4,7 @@ const env = Object.fromEntries(readFileSync('.env.local','utf8').split('\n').fil
 const KEY = env.QWEN_API_KEY; const BASE = 'https://dashscope-intl.aliyuncs.com/api/v1';
 const text = 'في هذا الدرس سنتعرف على ثلاث أفكار رئيسية.';
 async function main(){
-  const tries: [string, any][] = [
+  const tries: [string, { model: string; input: Record<string, unknown> }][] = [
     ['/services/audio/tts/SpeechSynthesizer', { model:'qwen-audio-3.0-tts-flash', input:{ text, voice:'longanfengyue' } }],
     ['/services/audio/tts/SpeechSynthesizer', { model:'qwen-audio-3.0-tts-flash', input:{ text, voice:'loongeva_v3.6' } }],
     ['/services/audio/tts/SpeechSynthesizer', { model:'qwen-audio-3.0-tts-plus', input:{ text, voice:'longanlingxin' } }],

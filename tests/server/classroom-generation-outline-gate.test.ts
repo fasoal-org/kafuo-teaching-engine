@@ -409,7 +409,7 @@ describe('generateClassroom Stage-1 outline gate', () => {
       });
     const { sink, calls } = makeRecordingSink();
 
-    await generateWith({ persistence: sink, input: { teachingFlow: GOVERNED_CONTEXT.flow } });
+    await generateWith({ persistence: sink, input: { teachingFlow: [...GOVERNED_CONTEXT.flow] } });
 
     expect(mocks.generateSceneOutlinesFromRequirements).toHaveBeenCalledTimes(2);
     expect(mocks.generateSceneOutlinesFromRequirements.mock.calls[1]![4]).toMatchObject({

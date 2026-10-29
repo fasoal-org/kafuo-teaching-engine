@@ -22,10 +22,16 @@ const SENTENCES = [
   { nn: '03', label: 'math', msa: '3 على 4 زائد س تربيع، أكبر من أو يساوي، 5.', saudi: 'عندنا 3 على 4 زائد س تربيع، وهذي أكبر من أو تساوي 5.' },
   { nn: '07', label: 'chemistry', msa: 'يتكون جزيء الماء، إتش تو أو، من ذرتي هيدروجين وذرة أكسجين واحدة.', saudi: 'جزيء الماء، إتش تو أو، يتكون من ذرتين هيدروجين وذرة أكسجين وحدة.' },
 ];
+type Sentence = (typeof SENTENCES)[number];
+type LogRow = {
+  s: string; va?: string; v?: string; withInstr?: number; msg?: string; t?: string; task?: string;
+  variant?: string; voice?: string; status?: number; instrUsed?: boolean; file?: string | null;
+};
+type QwenResponse = { output?: { audio?: { url?: string } }; message?: string };
 const VARIANTS = [
-  { id: 'A', name: 'A · MSA + current instructions', text: (s: any) => s.msa, instr: INSTR_A },
-  { id: 'B', name: 'B · MSA + stronger Riyadh instructions', text: (s: any) => s.msa, instr: INSTR_B },
-  { id: 'C', name: 'C · white Saudi dialect wording', text: (s: any) => s.saudi, instr: INSTR_C },
+  { id: 'A', name: 'A · MSA + current instructions', text: (s: Sentence) => s.msa, instr: INSTR_A },
+  { id: 'B', name: 'B · MSA + stronger Riyadh instructions', text: (s: Sentence) => s.msa, instr: INSTR_B },
+  { id: 'C', name: 'C · white Saudi dialect wording', text: (s: Sentence) => s.saudi, instr: INSTR_C },
 ];
 const VOICES = [
   { key: 'plus-lingxin', model: 'qwen-audio-3.0-tts-plus', voice: 'longanlingxin', path: '/services/audio/tts/SpeechSynthesizer' },
@@ -35,15 +41,15 @@ const VOICES = [
 ];
 
 async function call(v: (typeof VOICES)[number], text: string, instr?: string) {
-  const input: any = { text, voice: v.voice, ...(v.lang ? { language_type: v.lang } : {}) };
-  const body: any = { model: v.model, input };
+  const input: Record<string, unknown> = { text, voice: v.voice, ...(v.lang ? { language_type: v.lang } : {}) };
+  const body = { model: v.model, input };
   if (instr) body.input.instructions = instr;
   const r = await fetch(BASE + v.path, { method: 'POST', headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const j: any = await r.json().catch(() => ({}));
+  const j = (await r.json().catch(() => ({}))) as QwenResponse;
   return { status: r.status, url: j?.output?.audio?.url as string | undefined, msg: j?.message as string | undefined };
 }
 
-const log: any[] = [];
+const log: LogRow[] = [];
 async function main() {
   for (const s of SENTENCES) for (const va of VARIANTS) for (const v of VOICES) {
     let res = await call(v, va.text(s), va.instr);
@@ -65,7 +71,7 @@ async function main() {
   writeFileSync(join(OUT, 'index.html'), html(log));
 }
 const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-function html(rows: any[]) {
+function html(rows: LogRow[]) {
   const f = (s: string, va: string, v: string) => rows.find((r) => r.s === s && r.variant === va && r.voice === v && r.file);
   const body = SENTENCES.map((s) => `<h2>${s.nn} · ${s.label}</h2><table><thead><tr><th>Variant</th><th>Text</th>${VOICES.map((v) => `<th>${v.model}<br><small>${v.voice}</small></th>`).join('')}</tr></thead><tbody>${VARIANTS.map((va) => `<tr><th>${va.name}</th><td dir="rtl" lang="ar">${esc(va.text(s))}</td>${VOICES.map((v) => { const r = f(s.nn, va.id, v.key); return `<td>${r ? `<audio controls preload="none" src="${r.file}"></audio>${r.instrUsed ? '' : '<br><small>no instructions accepted</small>'}` : 'failed'}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('\n');
   return `<!doctype html><html><head><meta charset="utf-8"><title>Qwen accent test</title><style>body{font-family:system-ui;margin:16px}table{border-collapse:collapse;margin-bottom:24px}td,th{border:1px solid #ddd;padding:6px}td[lang=ar]{font-size:18px;max-width:380px}audio{width:190px}</style></head><body><h1>Saudi accent test on Qwen (T12)</h1><p>A = MSA + current-style instructions, B = MSA + stronger Riyadh instructions, C = white Saudi dialect wording. Arabic is officially listed only for the qwen-audio-3.0 models; qwen3-tts-instruct-flash is included as a reference.</p>${body}</body></html>`;

@@ -20,16 +20,21 @@ const SENTENCES = [
   { nn: '03', label: 'math', msa: '3 على 4 زائد س تربيع، أكبر من أو يساوي، 5.', saudi: 'عندنا 3 على 4 زائد س تربيع، وهذي أكبر من أو تساوي 5.' },
   { nn: '07', label: 'chemistry', msa: 'يتكون جزيء الماء، إتش تو أو، من ذرتي هيدروجين وذرة أكسجين واحدة.', saudi: 'جزيء الماء، إتش تو أو، يتكون من ذرتين هيدروجين وذرة أكسجين وحدة.' },
 ];
+type Sentence = (typeof SENTENCES)[number];
+type Row = {
+  t: string; task: string; s: string; variant: string; voice: string; status: number;
+  file: string | null; err?: string;
+};
 const VARIANTS = [
-  { id: 'A', name: 'A · MSA text', text: (s: any) => s.msa },
-  { id: 'C', name: 'C · white Saudi dialect text', text: (s: any) => s.saudi },
+  { id: 'A', name: 'A · MSA text', text: (s: Sentence) => s.msa },
+  { id: 'C', name: 'C · white Saudi dialect text', text: (s: Sentence) => s.saudi },
 ];
 const VOICES = ['ar-SA-HamedNeural', 'ar-SA-ZariyahNeural'];
 const xml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 async function main() {
   if (!KEY) throw new Error('TTS_AZURE_API_KEY missing');
-  const rows: any[] = [];
+  const rows: Row[] = [];
   let chars = 0;
   for (const s of SENTENCES) for (const va of VARIANTS) for (const voice of VOICES) {
     const text = va.text(s);

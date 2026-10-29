@@ -25,6 +25,12 @@ const baseOutline: SceneOutline = {
   order: 99,
 };
 
+// Slide image plan (28 Oct 2026): the planner delivers every visual with its own teaching note.
+const DIAGRAM_NOTE = {
+  shows: 'light, water and carbon dioxide entering a leaf',
+  teachingPoint: 'a plant makes its food from light, water and carbon dioxide',
+};
+
 describe('generateSceneOutlinesFromRequirements', () => {
   test('returns enriched outlines from a valid wrapped response', async () => {
     const aiCall: AICallFn = vi.fn(async () =>
@@ -293,6 +299,7 @@ describe('generateSceneOutlinesFromRequirements', () => {
           outlines: [
             {
               ...baseOutline,
+              visualPlan: { mode: 'native', diagram: DIAGRAM_NOTE },
               teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
             },
           ],
@@ -303,7 +310,7 @@ describe('generateSceneOutlinesFromRequirements', () => {
     expect(result.data?.outlines[0]).toMatchObject({ visualPlan: { mode: 'native' } });
   });
 
-  test('deterministically attaches the textbook visual linked to a g5.v3 explanation Content Unit', async () => {
+  test('keeps the planner-selected textbook visual and never swaps one in for a g5.v3 explanation', async () => {
     const flow = [{ stage: 'outcome_visual_explanations', instructions: 'Explain visually.' }];
     const sourceImage = {
       id: 'src-1',
@@ -323,14 +330,32 @@ describe('generateSceneOutlinesFromRequirements', () => {
         ],
       });
 
-    const completed = await generateSceneOutlinesFromRequirements(
+    // A linked image exists but the planner chose none: it is re-asked, never given one.
+    const unselected = await generateSceneOutlinesFromRequirements(
       { requirement: 'Teach photosynthesis' },
       undefined,
       [sourceImage],
-      async () => answer({ visualPlan: { mode: 'native' } }),
+      async () => answer({ visualPlan: { mode: 'native', diagram: DIAGRAM_NOTE } }),
       { teachingFlow: flow },
     );
-    expect(completed).toMatchObject({
+    expect(unselected).toMatchObject({
+      success: false,
+      error: expect.stringContaining('linked to the same Content Unit but did not select it'),
+    });
+
+    const selected = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach photosynthesis' },
+      undefined,
+      [sourceImage],
+      async () =>
+        answer({
+          visualPlan: { mode: 'image' },
+          suggestedImageIds: ['src-1'],
+          imagePlans: [{ imageId: 'src-1', ...DIAGRAM_NOTE }],
+        }),
+      { teachingFlow: flow },
+    );
+    expect(selected).toMatchObject({
       success: true,
       data: {
         outlines: [
@@ -341,15 +366,6 @@ describe('generateSceneOutlinesFromRequirements', () => {
         ],
       },
     });
-
-    const selected = await generateSceneOutlinesFromRequirements(
-      { requirement: 'Teach photosynthesis' },
-      undefined,
-      [sourceImage],
-      async () => answer({ visualPlan: { mode: 'image' }, suggestedImageIds: ['src-1'] }),
-      { teachingFlow: flow },
-    );
-    expect(selected.success).toBe(true);
   });
 
   test('replaces an AI-image request with a source-grounded native visual without a retry', async () => {
@@ -362,7 +378,7 @@ describe('generateSceneOutlinesFromRequirements', () => {
           outlines: [
             {
               ...baseOutline,
-              visualPlan: { mode: 'native' },
+              visualPlan: { mode: 'native', diagram: DIAGRAM_NOTE },
               mediaGenerations: [
                 { type: 'image', elementId: 'gen_img_1', prompt: 'A decorative plant' },
               ],
