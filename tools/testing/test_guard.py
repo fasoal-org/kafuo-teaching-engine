@@ -89,6 +89,28 @@ REMOTE_TEST_WORDS = re.compile(
     r"(?<![\w.-])(pytest|py\.test|vitest|jest|playwright|mocha|ava|nosetests|tox|nox|unittest|run_unit_tests(\.sh)?)(?![\w-])"
     r"|\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(flutter|dart|go|cargo)\s+test\b|\bnode\s+--test\b|\bmake\s+test\b"
 )
+# Trunk-based flow (owner, 29 Oct 2026): at most 3 worktrees per repo. Slot 1 is the repo folder;
+# `git worktree add` may only create slot 2 or 3 (<workspace>/worktrees/<repo>-2|-3), never
+# detached, forced or orphaned. See the workspace CLAUDE.md "Git flow".
+SLOT_REPOS = ('zakrly-backend','zakrly-admin-panel','Zakrly-mobile-app','kafuo-website','OpenMAIC')
+
+def worktree_slot(a, base):
+    a=list(a);paths=[]
+    while a:
+        x=a.pop(0)
+        if x in ['-b','-B','--reason']:
+            if not a:raise Block('Missing git worktree option argument.')
+            a.pop(0)
+        elif x in ['-d','--detach','-f','--force','--orphan']:
+            raise Block('Worktree slots never detach, force or orphan a branch; see the workspace CLAUDE.md Git flow.')
+        elif not x.startswith('-'):paths.append(x)
+    # The same file runs from the workspace root and from each repo copy.
+    root=next((p for p in HERE.parents if all((p/r).is_dir() for r in SLOT_REPOS)),None)
+    if not paths or root is None:raise Block('git worktree add needs a literal slot path inside the workspace.')
+    repo=next((r for r in SLOT_REPOS if base==root/r or root/r in base.parents),None)
+    allowed={root/'worktrees'/f'{r}-{n}' for r in ([repo] if repo else SLOT_REPOS) for n in (2,3)}
+    if (base/paths[0]).resolve() not in allowed:
+        raise Block('Only worktree slots worktrees/<repo>-2 and -3 are allowed (max 3 per repo); see the workspace CLAUDE.md Git flow.')
 
 class Guard:
     def __init__(self):
@@ -147,11 +169,13 @@ class Guard:
             if a[:1]==['config'] and any(x in a for x in ['--get','--get-all','--get-regexp','--list','-l']):return cwd
             if '-c' in a or '--config-env' in a or any(x.startswith('--config-env=') for x in a):
                 raise Block('Git command/config aliases can execute opaque wrappers.')
-            rest=list(a)
+            rest=list(a);base=cwd
             while rest and rest[0] in ['-C','--git-dir','--work-tree']:
+                if rest[0]=='-C' and len(rest)>1:base=(base/rest[1]).resolve()
                 rest=rest[2:]
             safe={'status','diff','log','show','ls-files','rev-parse','branch','fetch','pull','push','add','commit','restore','checkout','switch','worktree','merge','rebase','cherry-pick','remote','tag','check-ignore','stash','reset','init','clean','reflog','describe','help','version','--version'}
             if rest and rest[0] not in safe:raise Block('Unknown Git subcommand/configuration may be an executable alias.')
+            if rest[:2]==['worktree','add']:worktree_slot(rest[2:],base)
             return cwd
         if exe=='cd':
             if len(a)!=1 or a[0].startswith('-'):raise Block('Use cd with one literal directory.')
