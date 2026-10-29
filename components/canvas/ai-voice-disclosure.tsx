@@ -39,7 +39,9 @@ export function AiVoiceDisclosure() {
   const { t } = useI18n();
   const mode = useSettingsStore((state) => state.scientificSpeechMode);
   const voiced = useSceneHasGeneratedNarration();
-  const [dismissed, setDismissed] = useState(() => typeof window === 'undefined' || readDismissed());
+  const [dismissed, setDismissed] = useState(
+    () => typeof window === 'undefined' || readDismissed(),
+  );
 
   if (!isScientificSpeechActive(mode) || !voiced) return null;
 
@@ -66,7 +68,11 @@ export function AiVoiceDisclosure() {
           <span className="block" dir="auto">
             {t('aiVoice.notice')}
           </span>
-          <button type="button" className="mt-1 text-violet-600 dark:text-violet-400" onClick={dismiss}>
+          <button
+            type="button"
+            className="mt-1 text-violet-600 dark:text-violet-400"
+            onClick={dismiss}
+          >
             {t('aiVoice.dismiss')}
           </button>
         </span>

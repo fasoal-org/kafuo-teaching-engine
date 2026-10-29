@@ -5,27 +5,54 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { readSpeechConfig } from '@/lib/server/speech/config';
-import { resolveSpeechContext, SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
+import {
+  resolveSpeechContext,
+  SpeechContextUnavailableError,
+} from '@/lib/server/speech/speech-context';
 import { loadPolicyPack } from '@/lib/speech/scientific/policy';
 
 const policy = loadPolicyPack('ar', { allowProposed: false });
 const on = readSpeechConfig({ SCIENTIFIC_TTS_MODE: 'on', SCIENTIFIC_TTS_SUBJECTS: 'MATH,PHYSICS' });
 
-const resolve = (stage: Record<string, unknown> | null, config = on, lookup?: (id: string) => Promise<string | null>) =>
-  resolveSpeechContext({ originalText: 'x² = 4', stage, stageId: 'stage-1', config, policy, governedSubjectLookup: lookup });
+const resolve = (
+  stage: Record<string, unknown> | null,
+  config = on,
+  lookup?: (id: string) => Promise<string | null>,
+) =>
+  resolveSpeechContext({
+    originalText: 'x² = 4',
+    stage,
+    stageId: 'stage-1',
+    config,
+    policy,
+    governedSubjectLookup: lookup,
+  });
 
 describe('resolveSpeechContext', () => {
   it('uses the Stage subject and language', async () => {
     const { context, stageSubjectCode } = await resolve({ subjectCode: 'MATH', language: 'ar-SA' });
-    expect(context).toMatchObject({ subjectCode: 'MATH', subjectSource: 'stage', language: 'ar-SA', readingMode: 'natural' });
+    expect(context).toMatchObject({
+      subjectCode: 'MATH',
+      subjectSource: 'stage',
+      language: 'ar-SA',
+      readingMode: 'natural',
+    });
     expect(stageSubjectCode).toBe('MATH');
   });
 
   it('non-scientific, non-enabled and non-Arabic resolve to the general path', async () => {
-    expect((await resolve({ subjectCode: 'BIOLOGY', language: 'ar' })).context.subjectCode).toBeNull();
-    expect((await resolve({ subjectCode: 'BIOLOGY', language: 'ar' })).stageSubjectCode).toBe('BIOLOGY');
-    expect((await resolve({ subjectCode: 'CHEMISTRY', language: 'ar' })).context.subjectCode).toBeNull();
-    expect((await resolve({ subjectCode: 'MATH', language: 'en-US' })).context.subjectCode).toBeNull();
+    expect(
+      (await resolve({ subjectCode: 'BIOLOGY', language: 'ar' })).context.subjectCode,
+    ).toBeNull();
+    expect((await resolve({ subjectCode: 'BIOLOGY', language: 'ar' })).stageSubjectCode).toBe(
+      'BIOLOGY',
+    );
+    expect(
+      (await resolve({ subjectCode: 'CHEMISTRY', language: 'ar' })).context.subjectCode,
+    ).toBeNull();
+    expect(
+      (await resolve({ subjectCode: 'MATH', language: 'en-US' })).context.subjectCode,
+    ).toBeNull();
     expect((await resolve({ subjectCode: 'MATH' })).context.subjectCode).toBeNull();
   });
 
@@ -56,15 +83,30 @@ describe('resolveSpeechContext', () => {
   });
 
   it('reading mode: accessible only when the Stage says so (D-4b)', async () => {
-    expect((await resolve({ subjectCode: 'MATH', language: 'ar', speechReadingMode: 'accessible' })).context.readingMode).toBe('accessible');
-    expect((await resolve({ subjectCode: 'MATH', language: 'ar', speechReadingMode: 'bogus' })).context.readingMode).toBe('natural');
+    expect(
+      (await resolve({ subjectCode: 'MATH', language: 'ar', speechReadingMode: 'accessible' }))
+        .context.readingMode,
+    ).toBe('accessible');
+    expect(
+      (await resolve({ subjectCode: 'MATH', language: 'ar', speechReadingMode: 'bogus' })).context
+        .readingMode,
+    ).toBe('natural');
   });
 });
 
 describe('readSpeechConfig', () => {
   it('defaults to off, MATH, scientific-subjects scope, Cartesia Sonic with Reem (D-4 revised)', () => {
     const config = readSpeechConfig({});
-    expect(config).toMatchObject({ mode: 'off', profileScope: 'scientific-subjects', arProvider: 'cartesia-tts', arModel: 'sonic-3.6', arVoice: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72', arConcurrency: 6, batchStartGapMs: 1000, providerBatchConcurrency: { 'cartesia-tts': 2 } });
+    expect(config).toMatchObject({
+      mode: 'off',
+      profileScope: 'scientific-subjects',
+      arProvider: 'cartesia-tts',
+      arModel: 'sonic-3.6',
+      arVoice: '92f27ee5-d8b9-4c0a-a0c2-f401f6ab0a72',
+      arConcurrency: 6,
+      batchStartGapMs: 1000,
+      providerBatchConcurrency: { 'cartesia-tts': 2 },
+    });
     expect([...config.subjects]).toEqual(['MATH']);
     expect(readSpeechConfig({ SCIENTIFIC_TTS_MODE: 'bogus' }).mode).toBe('off');
   });
@@ -78,7 +120,11 @@ describe('readSpeechConfig', () => {
   });
 
   it('Cartesia batch cap: 2 by default (Free plan), TTS_CARTESIA_BATCH_CONCURRENCY overrides', () => {
-    expect(readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '3' }).providerBatchConcurrency).toEqual({ 'cartesia-tts': 3 });
-    expect(readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '0' }).providerBatchConcurrency).toEqual({ 'cartesia-tts': 2 });
+    expect(
+      readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '3' }).providerBatchConcurrency,
+    ).toEqual({ 'cartesia-tts': 3 });
+    expect(
+      readSpeechConfig({ TTS_CARTESIA_BATCH_CONCURRENCY: '0' }).providerBatchConcurrency,
+    ).toEqual({ 'cartesia-tts': 2 });
   });
 });

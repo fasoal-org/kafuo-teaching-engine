@@ -41,10 +41,7 @@ vi.mock('@/lib/utils/chat-storage', () => ({
 }));
 
 import { saveStageData, type StageStoreData } from '@/lib/utils/stage-storage';
-import type {
-  AppDocument,
-  AppDocumentOutline,
-} from '@/lib/document-store/persistence-types';
+import type { AppDocument, AppDocumentOutline } from '@/lib/document-store/persistence-types';
 import type { Scene, Stage } from '@/lib/types/stage';
 import { makeSlideScene } from '../agent-runtime/_stage-fixtures';
 

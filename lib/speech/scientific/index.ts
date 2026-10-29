@@ -64,7 +64,10 @@ function mathGrammar(options: MathParseOptions): SubjectGrammar['render'] {
       matchUnit,
       onAmbiguousUnit: (unit) => ctx.warn('SATTS_W_AMBIGUOUS_UNIT', unit),
     });
-    const writer = verbaliseMath(parsed.node, { ...ctx, writeUnit: (unit, w) => writeUnit(ctx, unit, w) });
+    const writer = verbaliseMath(parsed.node, {
+      ...ctx,
+      writeUnit: (unit, w) => writeUnit(ctx, unit, w),
+    });
     return { writer, maxDepth: parsed.maxDepth, tokens: parsed.tokens.length };
   };
 }
@@ -74,7 +77,10 @@ const GRAMMARS: Readonly<Partial<Record<ScientificSubjectCode, SubjectGrammar>>>
   PHYSICS: {
     hooks: physicsHooks,
     render: (source, candidate, ctx) =>
-      renderPhysics(source, ctx, { arabicLetters: true, leadingBinary: candidate.leadingBinary === true }),
+      renderPhysics(source, ctx, {
+        arabicLetters: true,
+        leadingBinary: candidate.leadingBinary === true,
+      }),
   },
   CHEMISTRY: {
     hooks: chemistryHooks,
@@ -91,7 +97,12 @@ interface RenderedExpression {
   tokens: number;
 }
 
-function generalResult(original: string, warnings: RenderWarning[] = [], path: 'general' | 'scientific' = 'general', policyVersion: string | null = null): SpeechRenderResult {
+function generalResult(
+  original: string,
+  warnings: RenderWarning[] = [],
+  path: 'general' | 'scientific' = 'general',
+  policyVersion: string | null = null,
+): SpeechRenderResult {
   return {
     preparedText: original,
     spans: [
@@ -161,7 +172,9 @@ export function renderScientificSpeech(
   let candidates = detectExpressions(original, subject, grammar.hooks);
   if (candidates.length > MAX_EXPRESSIONS_PER_ACTION) {
     const first = candidates[MAX_EXPRESSIONS_PER_ACTION]!;
-    warnings.push(makeWarning('SATTS_W_BOUND_EXCEEDED', first.start, original.length, 'expression count'));
+    warnings.push(
+      makeWarning('SATTS_W_BOUND_EXCEEDED', first.start, original.length, 'expression count'),
+    );
     candidates = candidates.slice(0, MAX_EXPRESSIONS_PER_ACTION);
   }
 
@@ -217,7 +230,14 @@ export function renderScientificSpeech(
             ? literal('SATTS_W_BOUND_EXCEEDED', 'expansion')
             : local.some((w) => w.code === 'SATTS_W_MISSING_DICTIONARY_ENTRY')
               ? // Parsed, but a wording was unusable and spoken literally.
-                { text, fallback: true, fallbackReason: 'policy', atomic: true, maxDepth: out.maxDepth, tokens: out.tokens }
+                {
+                  text,
+                  fallback: true,
+                  fallbackReason: 'policy',
+                  atomic: true,
+                  maxDepth: out.maxDepth,
+                  tokens: out.tokens,
+                }
               : { text, fallback: false, atomic: true, maxDepth: out.maxDepth, tokens: out.tokens };
       } catch (error) {
         if (error instanceof ParseFault) {
@@ -228,22 +248,31 @@ export function renderScientificSpeech(
                 ? 'SATTS_W_UNKNOWN_COMMAND'
                 : error.kind === 'unknown-element'
                   ? 'SATTS_W_UNKNOWN_ELEMENT'
-                : error.kind === 'bound'
-                  ? 'SATTS_W_BOUND_EXCEEDED'
-                  : 'SATTS_W_MALFORMED_EXPRESSION';
+                  : error.kind === 'bound'
+                    ? 'SATTS_W_BOUND_EXCEEDED'
+                    : 'SATTS_W_MALFORMED_EXPRESSION';
           rendered = literal(code, error.detail);
         } else {
-          rendered = literal('SATTS_W_RENDERER_FAULT', error instanceof Error ? error.name : 'fault');
+          rendered = literal(
+            'SATTS_W_RENDERER_FAULT',
+            error instanceof Error ? error.name : 'fault',
+          );
         }
       }
     }
     if (!rendered.atomic) warn('SATTS_W_BOUND_EXCEEDED', 'prepared expression length');
     // An expression that reads as nothing keeps its source: never silently omitted.
     if (!rendered.text.trim()) {
-      rendered = { ...rendered, text: source.trim(), fallback: true, fallbackReason: rendered.fallbackReason ?? 'notation' };
+      rendered = {
+        ...rendered,
+        text: source.trim(),
+        fallback: true,
+        fallbackReason: rendered.fallbackReason ?? 'notation',
+      };
     }
     // Constructs the audit found misread without a warning (upgrade plan P0 item 5).
-    for (const id of reviewGuards(source, subject, candidate)) warn('SATTS_W_UNVERIFIED_READING', id);
+    for (const id of reviewGuards(source, subject, candidate))
+      warn('SATTS_W_UNVERIFIED_READING', id);
     warnings.push(...local);
     return rendered;
   };
@@ -281,9 +310,11 @@ export function renderScientificSpeech(
     const from = prepared.length;
     const before = prepared[prepared.length - 1];
     let text = rendered.text;
-    if (prepared.length > 0 && !isWhitespace(before) && !NO_SPACE_AFTER.has(before!)) text = ` ${text}`;
+    if (prepared.length > 0 && !isWhitespace(before) && !NO_SPACE_AFTER.has(before!))
+      text = ` ${text}`;
     const after = original[candidate.end];
-    if (after !== undefined && !isWhitespace(after) && !NO_SPACE_BEFORE.has(after)) text = `${text} `;
+    if (after !== undefined && !isWhitespace(after) && !NO_SPACE_BEFORE.has(after))
+      text = `${text} `;
     prepared += text;
     spans.push({
       kind: 'expression',
@@ -312,12 +343,20 @@ export function renderScientificSpeech(
   }
   if (proposedEntriesUsed > 0) {
     warnings.push(
-      makeWarning('SATTS_W_UNPROMOTED_POLICY_ENTRY', 0, original.length, `entries:${proposedEntriesUsed}`),
+      makeWarning(
+        'SATTS_W_UNPROMOTED_POLICY_ENTRY',
+        0,
+        original.length,
+        `entries:${proposedEntriesUsed}`,
+      ),
     );
   }
   const blocking =
     original.trim() !== '' && prepared.trim() === ''
-      ? { code: 'SATTS_E_EMPTY_RESULT' as const, message: 'prepared text is empty for a non-empty narration' }
+      ? {
+          code: 'SATTS_E_EMPTY_RESULT' as const,
+          message: 'prepared text is empty for a non-empty narration',
+        }
       : null;
 
   return {

@@ -146,7 +146,12 @@ describe('meter finalize outbox', () => {
       subjectCode: 'MATH',
       subjectOfferingId: '10',
       subjectName: 'Math',
-      academic: { curriculumName: 'N', curriculumVersionLabel: 'v', gradeLabel: 'g', academicLanguage: 'ar' },
+      academic: {
+        curriculumName: 'N',
+        curriculumVersionLabel: 'v',
+        gradeLabel: 'g',
+        academicLanguage: 'ar',
+      },
       now: NOW_S,
     });
     await insertStudentMessage(pool, {
@@ -160,7 +165,11 @@ describe('meter finalize outbox', () => {
     });
 
     const completeTurn = async (tx: { query: PGlitePool['query'] }, reservationId: string) => {
-      await markMessageCompleted(tx, 'm-1', { now: NOW_S + 3, accountingComplete: true, meterReservationId: reservationId });
+      await markMessageCompleted(tx, 'm-1', {
+        now: NOW_S + 3,
+        accountingComplete: true,
+        meterReservationId: reservationId,
+      });
       await insertTutorMessage(tx, {
         id: `m-2-${reservationId}`,
         parentId: 'conv-1',
@@ -198,15 +207,22 @@ describe('meter finalize outbox', () => {
       next_attempt_at: NOW_S,
       created_at: NOW_S,
       claimed_by: null,
-      payload: { reservationId: 'res-commit', outcome: 'delivered', reason: null, turnId: 'turn-1' },
+      payload: {
+        reservationId: 'res-commit',
+        outcome: 'delivered',
+        reason: null,
+        turnId: 'turn-1',
+      },
     });
-    expect((await readMessage(pool, 'm-1'))).toMatchObject({
+    expect(await readMessage(pool, 'm-1')).toMatchObject({
       status: 'completed',
       meterReservationId: 'res-commit',
       meterFinalized: false,
     });
     // A replayed completion for the same reservation is not a second row.
-    expect(await enqueueFinalize(pool, row({ reservationId: 'res-commit', outcome: 'not_delivered' }))).toBe(false);
+    expect(
+      await enqueueFinalize(pool, row({ reservationId: 'res-commit', outcome: 'not_delivered' })),
+    ).toBe(false);
     expect((await readFinalize(pool, 'res-commit'))!.outcome).toBe('delivered');
   });
 
@@ -217,10 +233,23 @@ describe('meter finalize outbox', () => {
       subjectCode: 'MATH',
       subjectOfferingId: '10',
       subjectName: 'Math',
-      academic: { curriculumName: 'N', curriculumVersionLabel: 'v', gradeLabel: 'g', academicLanguage: 'ar' },
+      academic: {
+        curriculumName: 'N',
+        curriculumVersionLabel: 'v',
+        gradeLabel: 'g',
+        academicLanguage: 'ar',
+      },
       now: NOW_S,
     });
-    await insertStudentMessage(pool, { id: 'm-1', parentId: 'conv-1', seq: 1, clientMessageId: 'cm-1', turnId: 'turn-1', text: 'q', now: NOW_S });
+    await insertStudentMessage(pool, {
+      id: 'm-1',
+      parentId: 'conv-1',
+      seq: 1,
+      clientMessageId: 'cm-1',
+      turnId: 'turn-1',
+      text: 'q',
+      now: NOW_S,
+    });
     await markMessageCompleted(pool, 'm-1', { now: NOW_S, meterReservationId: 'res-1' });
     await enqueueFinalize(pool, row({ reservationId: 'res-1' }));
 
@@ -233,7 +262,12 @@ describe('meter finalize outbox', () => {
     });
     expect(outcome).toBe('delivered');
     expect(kafuo.calls.get('res-1')).toBe(1);
-    expect(kafuo.bodies[0]).toEqual({ reservationId: 'res-1', outcome: 'delivered', reason: null, turnId: 'turn-res-1' });
+    expect(kafuo.bodies[0]).toEqual({
+      reservationId: 'res-1',
+      outcome: 'delivered',
+      reason: null,
+      turnId: 'turn-res-1',
+    });
     expect(await readFinalize(pool, 'res-1')).toMatchObject({
       status: 'delivered',
       attempts: 1,
@@ -244,7 +278,9 @@ describe('meter finalize outbox', () => {
     });
     expect((await readMessage(pool, 'm-1'))!.meterFinalized).toBe(true);
     // Nothing is pending: a second inline call finds nothing to claim.
-    expect(await deliverFinalizeInline(cq(), 'res-1', { client: client(kafuo.fetchImpl) })).toBe('not_claimed');
+    expect(await deliverFinalizeInline(cq(), 'res-1', { client: client(kafuo.fetchImpl) })).toBe(
+      'not_claimed',
+    );
     expect(kafuo.calls.get('res-1')).toBe(1);
   });
 
@@ -254,7 +290,10 @@ describe('meter finalize outbox', () => {
     const { deliverFinalizeInline, runMeterOutboxSweepOnce } = await sweeper();
 
     expect(
-      await deliverFinalizeInline(cq(), 'res-1', { client: client(kafuo.fetchImpl), now: () => NOW_MS }),
+      await deliverFinalizeInline(cq(), 'res-1', {
+        client: client(kafuo.fetchImpl),
+        now: () => NOW_MS,
+      }),
     ).toBe('deferred');
     expect(await readFinalize(pool, 'res-1')).toMatchObject({
       status: 'pending',
@@ -265,20 +304,55 @@ describe('meter finalize outbox', () => {
       claimed_by: null,
     });
     // Not due yet: a sweep now claims nothing.
-    const early = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 1000, workerId: 'host:1:A' });
+    const early = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 1000,
+      workerId: 'host:1:A',
+    });
     expect(early).toEqual({ claimed: 0, delivered: 0 });
     // Due: second failure doubles the backoff.
-    const second = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 5000, workerId: 'host:1:A' });
+    const second = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 5000,
+      workerId: 'host:1:A',
+    });
     expect(second).toEqual({ claimed: 1, delivered: 0 });
-    expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'pending', attempts: 2, next_attempt_at: NOW_S + 5 + 10 });
+    expect(await readFinalize(pool, 'res-1')).toMatchObject({
+      status: 'pending',
+      attempts: 2,
+      next_attempt_at: NOW_S + 5 + 10,
+    });
     // A 5xx is the same as unreachable.
     const five = kafuoStub(() => new Response('oops', { status: 503 }));
-    await runMeterOutboxSweepOnce({ pool: cq(), client: client(five.fetchImpl), now: () => NOW_MS + 15_000, workerId: 'host:1:A' });
-    expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'pending', attempts: 3, next_attempt_at: NOW_S + 15 + 20 });
+    await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(five.fetchImpl),
+      now: () => NOW_MS + 15_000,
+      workerId: 'host:1:A',
+    });
+    expect(await readFinalize(pool, 'res-1')).toMatchObject({
+      status: 'pending',
+      attempts: 3,
+      next_attempt_at: NOW_S + 15 + 20,
+    });
     // The cap: 5 × 2^9 = 2560 > 300.
-    await pool.query(`UPDATE meter_finalize_outbox SET attempts = 9, next_attempt_at = $1 WHERE reservation_id = 'res-1'`, [NOW_S]);
-    await runMeterOutboxSweepOnce({ pool: cq(), client: client(five.fetchImpl), now: () => NOW_MS + 100_000, workerId: 'host:1:A' });
-    expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'pending', attempts: 10, next_attempt_at: NOW_S + 100 + 300 });
+    await pool.query(
+      `UPDATE meter_finalize_outbox SET attempts = 9, next_attempt_at = $1 WHERE reservation_id = 'res-1'`,
+      [NOW_S],
+    );
+    await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(five.fetchImpl),
+      now: () => NOW_MS + 100_000,
+      workerId: 'host:1:A',
+    });
+    expect(await readFinalize(pool, 'res-1')).toMatchObject({
+      status: 'pending',
+      attempts: 10,
+      next_attempt_at: NOW_S + 100 + 300,
+    });
     expect(kafuo.calls.get('res-1')).toBe(2);
     expect(five.calls.get('res-1')).toBe(2);
   });
@@ -306,7 +380,13 @@ describe('meter finalize outbox', () => {
     const kafuo = kafuoStub(ok204);
     const { runMeterOutboxSweepOnce } = await sweeper();
     const run = (workerId: string) =>
-      runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS, workerId, batch: 30 });
+      runMeterOutboxSweepOnce({
+        pool: cq(),
+        client: client(kafuo.fetchImpl),
+        now: () => NOW_MS,
+        workerId,
+        batch: 30,
+      });
     let claimedA = 0;
     let claimedB = 0;
     for (let round = 0; round < 4; round += 1) {
@@ -321,19 +401,37 @@ describe('meter finalize outbox', () => {
       `SELECT count(*)::int AS n FROM meter_finalize_outbox WHERE status = 'delivered'`,
     );
     expect(delivered.rows[0]!.n).toBe(100);
-    expect(await readOutboxStatus(pool, NOW_S)).toMatchObject({ pendingFinalizes: 0, oldestPendingFinalizeAgeS: null });
+    expect(await readOutboxStatus(pool, NOW_S)).toMatchObject({
+      pendingFinalizes: 0,
+      oldestPendingFinalizeAgeS: null,
+    });
   });
 
   it('lease expiry: a row abandoned mid-delivery is re-claimed after 60 s, not before', async () => {
     await enqueueFinalize(pool, row({ reservationId: 'res-1' }));
     // Worker A claims (and then hangs / dies) without recording an outcome.
-    const claimed = await claimDueFinalizes(pool, { workerId: 'host:1:A', batch: 10, leaseUntil: NOW_S + 60, now: NOW_S });
+    const claimed = await claimDueFinalizes(pool, {
+      workerId: 'host:1:A',
+      batch: 10,
+      leaseUntil: NOW_S + 60,
+      now: NOW_S,
+    });
     expect(claimed.map((r) => r.reservation_id)).toEqual(['res-1']);
     const kafuo = kafuoStub(ok204);
     const { runMeterOutboxSweepOnce } = await sweeper();
-    const during = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 59_000, workerId: 'host:2:B' });
+    const during = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 59_000,
+      workerId: 'host:2:B',
+    });
     expect(during).toEqual({ claimed: 0, delivered: 0 });
-    const after = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 61_000, workerId: 'host:2:B' });
+    const after = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 61_000,
+      workerId: 'host:2:B',
+    });
     expect(after).toEqual({ claimed: 1, delivered: 1 });
     expect(kafuo.calls.get('res-1')).toBe(1);
     // A's late outcome write is a no-op against the guarded update.
@@ -346,8 +444,18 @@ describe('meter finalize outbox', () => {
     // Kafuo processed the first call but the response never arrived.
     const kafuo = kafuoStub((_id, n) => (n === 1 ? new TypeError('socket hang up') : ok204()));
     const { deliverFinalizeInline, runMeterOutboxSweepOnce } = await sweeper();
-    expect(await deliverFinalizeInline(cq(), 'res-1', { client: client(kafuo.fetchImpl), now: () => NOW_MS })).toBe('deferred');
-    const redelivered = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 6000, workerId: 'host:1:A' });
+    expect(
+      await deliverFinalizeInline(cq(), 'res-1', {
+        client: client(kafuo.fetchImpl),
+        now: () => NOW_MS,
+      }),
+    ).toBe('deferred');
+    const redelivered = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 6000,
+      workerId: 'host:1:A',
+    });
     expect(redelivered).toEqual({ claimed: 1, delivered: 1 });
     expect(kafuo.calls.get('res-1')).toBe(2);
     expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'delivered', attempts: 2 });
@@ -356,9 +464,16 @@ describe('meter finalize outbox', () => {
   it('409 finalize_conflict marks the row conflict and never retries; 404 is terminal_failed', async () => {
     await enqueueFinalize(pool, row({ reservationId: 'res-conflict' }));
     await enqueueFinalize(pool, row({ reservationId: 'res-unknown' }));
-    const kafuo = kafuoStub((id) => (id === 'res-conflict' ? conflict409() : new Response(null, { status: 404 })));
+    const kafuo = kafuoStub((id) =>
+      id === 'res-conflict' ? conflict409() : new Response(null, { status: 404 }),
+    );
     const { runMeterOutboxSweepOnce } = await sweeper();
-    const first = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS, workerId: 'host:1:A' });
+    const first = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS,
+      workerId: 'host:1:A',
+    });
     expect(first).toEqual({ claimed: 2, delivered: 0 });
     expect(await readFinalize(pool, 'res-conflict')).toMatchObject({
       status: 'conflict',
@@ -366,21 +481,40 @@ describe('meter finalize outbox', () => {
       last_status: 409,
       terminal_failed_at: NOW_S,
     });
-    expect(await readFinalize(pool, 'res-unknown')).toMatchObject({ status: 'terminal_failed', last_status: 404 });
-    const again = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 600_000, workerId: 'host:1:A' });
+    expect(await readFinalize(pool, 'res-unknown')).toMatchObject({
+      status: 'terminal_failed',
+      last_status: 404,
+    });
+    const again = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 600_000,
+      workerId: 'host:1:A',
+    });
     expect(again).toEqual({ claimed: 0, delivered: 0 });
     expect(kafuo.calls.get('res-conflict')).toBe(1);
     expect(kafuo.calls.get('res-unknown')).toBe(1);
-    expect(await readOutboxStatus(pool, NOW_S)).toMatchObject({ conflictFinalizes: 1, terminalFailedFinalizes: 1 });
+    expect(await readOutboxStatus(pool, NOW_S)).toMatchObject({
+      conflictFinalizes: 1,
+      terminalFailedFinalizes: 1,
+    });
   });
 
   it('past the stale window: one last attempt, then terminal_failed', async () => {
     const { MERGE_RESERVATION_STALE_SECONDS, runMeterOutboxSweepOnce } = await sweeper();
     expect(MERGE_RESERVATION_STALE_SECONDS).toBe(3600);
-    await enqueueFinalize(pool, row({ reservationId: 'res-old', now: NOW_S - MERGE_RESERVATION_STALE_SECONDS - 1 }));
+    await enqueueFinalize(
+      pool,
+      row({ reservationId: 'res-old', now: NOW_S - MERGE_RESERVATION_STALE_SECONDS - 1 }),
+    );
     await enqueueFinalize(pool, row({ reservationId: 'res-young', now: NOW_S - 10 }));
     const kafuo = kafuoStub(down);
-    const result = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS, workerId: 'host:1:A' });
+    const result = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS,
+      workerId: 'host:1:A',
+    });
     expect(result).toEqual({ claimed: 2, delivered: 0 });
     expect(kafuo.calls.get('res-old')).toBe(1);
     expect(await readFinalize(pool, 'res-old')).toMatchObject({
@@ -391,9 +525,17 @@ describe('meter finalize outbox', () => {
     });
     expect(await readFinalize(pool, 'res-young')).toMatchObject({ status: 'pending', attempts: 1 });
     // Had Kafuo answered on that last attempt, the old row would have been delivered.
-    await enqueueFinalize(pool, row({ reservationId: 'res-old-2', now: NOW_S - 2 * MERGE_RESERVATION_STALE_SECONDS }));
+    await enqueueFinalize(
+      pool,
+      row({ reservationId: 'res-old-2', now: NOW_S - 2 * MERGE_RESERVATION_STALE_SECONDS }),
+    );
     const up = kafuoStub(ok204);
-    await runMeterOutboxSweepOnce({ pool: cq(), client: client(up.fetchImpl), now: () => NOW_MS, workerId: 'host:1:A' });
+    await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(up.fetchImpl),
+      now: () => NOW_MS,
+      workerId: 'host:1:A',
+    });
     expect((await readFinalize(pool, 'res-old-2'))!.status).toBe('delivered');
   });
 
@@ -412,17 +554,28 @@ describe('meter finalize outbox', () => {
       const at = NOW_S - age;
       if (status === 'delivered') await markFinalizeDelivered(pool, id, at);
       if (status === 'conflict') await markFinalizeConflict(pool, id, { now: at });
-      if (status === 'terminal_failed') await markFinalizeTerminalFailed(pool, id, { now: at, lastStatus: null, lastError: 'x' });
+      if (status === 'terminal_failed')
+        await markFinalizeTerminalFailed(pool, id, { now: at, lastStatus: null, lastError: 'x' });
     }
     expect(await deleteExpiredFinalizes(pool, NOW_S)).toEqual({ deleted: 3 });
     const remaining = await pool.query<{ reservation_id: string }>(
       `SELECT reservation_id FROM meter_finalize_outbox ORDER BY reservation_id`,
     );
-    expect(remaining.rows.map((r) => r.reservation_id)).toEqual(['c-new', 'd-new', 'p-old', 't-new']);
+    expect(remaining.rows.map((r) => r.reservation_id)).toEqual([
+      'c-new',
+      'd-new',
+      'p-old',
+      't-new',
+    ]);
     // The sweep runs retention as part of every pass (Kafuo up, nothing else due).
     const { runMeterOutboxSweepOnce } = await sweeper();
     const kafuo = kafuoStub(ok204);
-    await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 2 * day * 1000, workerId: 'host:1:A' });
+    await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 2 * day * 1000,
+      workerId: 'host:1:A',
+    });
     const later = await pool.query<{ reservation_id: string }>(
       `SELECT reservation_id FROM meter_finalize_outbox ORDER BY reservation_id`,
     );
@@ -434,7 +587,11 @@ describe('meter finalize outbox', () => {
   });
 
   it('health: pending count, oldest pending age and lastMeterSweepAt', async () => {
-    const { readMeterOutboxHealth, resetMeterOutboxSweeperStatusForTests, runMeterOutboxSweepOnce } = await sweeper();
+    const {
+      readMeterOutboxHealth,
+      resetMeterOutboxSweeperStatusForTests,
+      runMeterOutboxSweepOnce,
+    } = await sweeper();
     resetMeterOutboxSweeperStatusForTests();
     await enqueueFinalize(pool, row({ reservationId: 'res-1', now: NOW_S - 120 }));
     await enqueueFinalize(pool, row({ reservationId: 'res-2', now: NOW_S - 30 }));
@@ -444,7 +601,12 @@ describe('meter finalize outbox', () => {
       oldestPendingFinalizeAgeS: 120,
     });
     const kafuo = kafuoStub(ok204);
-    await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS, workerId: 'host:1:A' });
+    await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS,
+      workerId: 'host:1:A',
+    });
     expect(await readMeterOutboxHealth({ pool: cq(), now: () => NOW_MS })).toEqual({
       lastMeterSweepAt: NOW_MS,
       pendingFinalizes: 0,
@@ -454,13 +616,23 @@ describe('meter finalize outbox', () => {
 
   it('SIGTERM lease release: a stopped worker’s rows are claimable immediately', async () => {
     await enqueueFinalize(pool, row({ reservationId: 'res-1' }));
-    await claimDueFinalizes(pool, { workerId: 'host:1:A', batch: 10, leaseUntil: NOW_S + 60, now: NOW_S });
+    await claimDueFinalizes(pool, {
+      workerId: 'host:1:A',
+      batch: 10,
+      leaseUntil: NOW_S + 60,
+      now: NOW_S,
+    });
     expect((await readFinalize(pool, 'res-1'))!.claimed_by).toBe('host:1:A');
     expect(await releaseLeases(pool, 'host:1:A')).toBe(1);
     expect(await releaseLeases(pool, 'host:1:A')).toBe(0);
     const kafuo = kafuoStub(ok204);
     const { runMeterOutboxSweepOnce } = await sweeper();
-    const b = await runMeterOutboxSweepOnce({ pool: cq(), client: client(kafuo.fetchImpl), now: () => NOW_MS + 1000, workerId: 'host:2:B' });
+    const b = await runMeterOutboxSweepOnce({
+      pool: cq(),
+      client: client(kafuo.fetchImpl),
+      now: () => NOW_MS + 1000,
+      workerId: 'host:2:B',
+    });
     expect(b).toEqual({ claimed: 1, delivered: 1 });
   });
 
@@ -472,13 +644,18 @@ describe('meter finalize outbox', () => {
 
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'svc-key');
     vi.stubEnv('DATABASE_URL', 'postgres://pglite/in-memory');
-    vi.stubEnv('KAFUO_INTEGRATION_BASE_URL', 'https://kafuo.test/api/v2/integrations/teaching-engine');
+    vi.stubEnv(
+      'KAFUO_INTEGRATION_BASE_URL',
+      'https://kafuo.test/api/v2/integrations/teaching-engine',
+    );
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_SECRET', 'whsec');
     vi.resetModules();
     // The boot pass runs against the mocked provider with the env client: no
     // network here, so make the row un-due and prove the claim/lease seam alone.
     await enqueueFinalize(pool, row({ reservationId: 'res-1', now: NOW_S }));
-    await pool.query(`UPDATE meter_finalize_outbox SET next_attempt_at = $1`, [Date.now() / 1000 + 3600]);
+    await pool.query(`UPDATE meter_finalize_outbox SET next_attempt_at = $1`, [
+      Date.now() / 1000 + 3600,
+    ]);
     const configured = await import('@/lib/server/teaching-model/meter-outbox-sweeper');
     const registry = await import('@/lib/server/teaching-model/sweep-registry');
     const handle = configured.startMeterOutboxSweeper();
@@ -552,7 +729,12 @@ describe('meter finalize outbox', () => {
         delivered_at: null,
         terminal_failed_at: null,
         created_at: NOW_S,
-        payload: { reservationId: 'res-1', outcome: 'not_delivered', reason: null, turnId: 'turn-res-1' },
+        payload: {
+          reservationId: 'res-1',
+          outcome: 'not_delivered',
+          reason: null,
+          turnId: 'turn-res-1',
+        },
       });
       // And it charges through the normal machinery: `done` upgrades it, the
       // inline delivery delivers it — no second row, no second reservation.
@@ -570,7 +752,10 @@ describe('meter finalize outbox', () => {
         reason: null,
         turnId: 'turn-res-1',
       });
-      expect(await readFinalize(pool, 'res-1')).toMatchObject({ status: 'delivered', outcome: 'delivered' });
+      expect(await readFinalize(pool, 'res-1')).toMatchObject({
+        status: 'delivered',
+        outcome: 'delivered',
+      });
     });
 
     it('inserts a fresh provisional row when retention deleted the original', async () => {
@@ -602,7 +787,12 @@ describe('meter finalize outbox', () => {
         attempts: 0,
         next_attempt_at: NOW_S,
         created_at: NOW_S,
-        payload: { reservationId: 'res-1', outcome: 'not_delivered', reason: null, turnId: 'turn-res-1' },
+        payload: {
+          reservationId: 'res-1',
+          outcome: 'not_delivered',
+          reason: null,
+          turnId: 'turn-res-1',
+        },
       });
     });
 

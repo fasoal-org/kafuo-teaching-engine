@@ -7,10 +7,7 @@ import { createLogger } from '@/lib/logger';
 import { readGatedClassroomMediaAccess } from '@/lib/server/teaching-package/classroom-media-signature';
 import { readEditorGrants } from '@/lib/server/teaching-package/editor-grant';
 import { holdsLessonEditorGrant } from '@/lib/server/teaching-package/editor-grant-tenant-access';
-import {
-  checkLearnerAccessScope,
-  learnerDeliveryError,
-} from '@/lib/server/tutor/learner-access';
+import { checkLearnerAccessScope, learnerDeliveryError } from '@/lib/server/tutor/learner-access';
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { checksumOfFile, isHeldChecksum } from '@/lib/server/visual-compliance/delivery-hold';
 
@@ -104,8 +101,7 @@ export async function GET(
     if (access.scope) {
       const refusal = learnerDeliveryError(await checkLearnerAccessScope(access.scope));
       if (refusal) {
-        const retryAfter = (refusal.details as { retryAfterS?: unknown } | undefined)
-          ?.retryAfterS;
+        const retryAfter = (refusal.details as { retryAfterS?: unknown } | undefined)?.retryAfterS;
         return NextResponse.json(
           {
             error: {

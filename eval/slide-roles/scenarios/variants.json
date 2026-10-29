@@ -267,9 +267,7 @@
       "contentRole": "practice",
       "title": "Try it yourself",
       "description": "Independent practice — task only.",
-      "keyPoints": [
-        "A runner covers 12 km in 1.5 hours. Find the average speed in km/h."
-      ],
+      "keyPoints": ["A runner covers 12 km in 1.5 hours. Find the average speed in km/h."],
       "order": 2,
       "contentKind": "independent",
       "assistancePlan": {
@@ -312,9 +310,7 @@
       "contentRole": "check_understanding",
       "title": "Quick check",
       "description": "Light formative check.",
-      "keyPoints": [
-        "A car travels 150 km in 3 hours. What is its average speed?"
-      ],
+      "keyPoints": ["A car travels 150 km in 3 hours. What is its average speed?"],
       "order": 2,
       "assistancePlan": {
         "hint": "Think about sharing the distance over the time",
@@ -610,9 +606,7 @@
       "contentRole": "practice",
       "title": "جرّب بنفسك",
       "description": "تدريب مستقل — المهمة فقط.",
-      "keyPoints": [
-        "عدّاء يقطع ١٢ كم في ساعة ونصف. أوجد سرعته المتوسطة بوحدة كم/س."
-      ],
+      "keyPoints": ["عدّاء يقطع ١٢ كم في ساعة ونصف. أوجد سرعته المتوسطة بوحدة كم/س."],
       "order": 2,
       "contentKind": "independent",
       "assistancePlan": {
@@ -655,9 +649,7 @@
       "contentRole": "check_understanding",
       "title": "تحقق سريع",
       "description": "تحقق تكويني خفيف.",
-      "keyPoints": [
-        "سيارة تقطع ١٥٠ كم في ٣ ساعات. ما سرعتها المتوسطة؟"
-      ],
+      "keyPoints": ["سيارة تقطع ١٥٠ كم في ٣ ساعات. ما سرعتها المتوسطة؟"],
       "order": 2,
       "assistancePlan": {
         "hint": "فكّر في توزيع المسافة على الزمن",

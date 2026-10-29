@@ -213,8 +213,20 @@ describe('normalized content acquisition', () => {
       const rendered = adaptNormalizedText(
         manifest({
           contentUnits: [
-            { id: 'cu-b', orderIndex: 1, role: 'INSTRUCTIONAL', normalizedText: 'second', blocks: [] },
-            { id: 'cu-a', orderIndex: 0, role: 'INSTRUCTIONAL', normalizedText: 'first', blocks: [] },
+            {
+              id: 'cu-b',
+              orderIndex: 1,
+              role: 'INSTRUCTIONAL',
+              normalizedText: 'second',
+              blocks: [],
+            },
+            {
+              id: 'cu-a',
+              orderIndex: 0,
+              role: 'INSTRUCTIONAL',
+              normalizedText: 'first',
+              blocks: [],
+            },
           ],
         }),
       );
@@ -231,13 +243,25 @@ describe('normalized content acquisition', () => {
         adaptNormalizedText(
           manifest({
             contentUnits: [
-              { id: 'cu-ok', orderIndex: 0, role: 'INSTRUCTIONAL', normalizedText: 'fine', blocks: [] },
+              {
+                id: 'cu-ok',
+                orderIndex: 0,
+                role: 'INSTRUCTIONAL',
+                normalizedText: 'fine',
+                blocks: [],
+              },
               {
                 id: 'cu-bad',
                 orderIndex: 1,
                 role: 'INSTRUCTIONAL',
                 blocks: [
-                  { id: 'b-9', orderIndex: 0, blockType: 'text', text: 'unapproved', disposition: 'included' },
+                  {
+                    id: 'b-9',
+                    orderIndex: 0,
+                    blockType: 'text',
+                    text: 'unapproved',
+                    disposition: 'included',
+                  },
                 ],
               },
             ],
@@ -252,7 +276,13 @@ describe('normalized content acquisition', () => {
       const rendered = adaptNormalizedText(
         manifest({
           contentUnits: [
-            { id: 'cu-text', orderIndex: 0, role: 'INSTRUCTIONAL', normalizedText: 'body', blocks: [] },
+            {
+              id: 'cu-text',
+              orderIndex: 0,
+              role: 'INSTRUCTIONAL',
+              normalizedText: 'body',
+              blocks: [],
+            },
             {
               id: 'cu-figure',
               orderIndex: 1,
@@ -278,7 +308,13 @@ describe('normalized content acquisition', () => {
       const rendered = adaptNormalizedText(
         manifest({
           contentUnits: [
-            { id: 'cu-text', orderIndex: 0, role: 'INSTRUCTIONAL', normalizedText: 'body', blocks: [] },
+            {
+              id: 'cu-text',
+              orderIndex: 0,
+              role: 'INSTRUCTIONAL',
+              normalizedText: 'body',
+              blocks: [],
+            },
             { id: 'cu-ref', orderIndex: 1, role: 'REFERENCE', blocks: [] },
             { id: 'cu-unk', orderIndex: 2, role: 'UNCLASSIFIED', blocks: [] },
           ],

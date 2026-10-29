@@ -133,7 +133,9 @@ describe('validateScene', () => {
   });
   it('accepts an absent or well-formed sourceContentUnitIds binding and flags a malformed one', () => {
     expect(validateScene(ok)).toEqual({ valid: true });
-    expect(validateScene({ ...ok, sourceContentUnitIds: ['2900', '2901'] })).toEqual({ valid: true });
+    expect(validateScene({ ...ok, sourceContentUnitIds: ['2900', '2901'] })).toEqual({
+      valid: true,
+    });
     expect(validateScene({ ...ok, sourceContentUnitIds: [] })).toEqual({ valid: true });
     for (const bad of ['2900', [2900], [''], [null], {}]) {
       expect(errors(validateScene({ ...ok, sourceContentUnitIds: bad }))).toContain(

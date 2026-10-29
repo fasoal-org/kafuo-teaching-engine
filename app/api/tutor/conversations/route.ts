@@ -43,7 +43,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   return withStudentGrant(req, async (request, { grant }) => {
     const body = await readJsonObject(request);
-    if (!body) throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
+    if (!body)
+      throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
     const deps = await resolveTutorRuntimeDeps();
     const { conversation, created } = await createConversation(deps, {
       grant,

@@ -39,9 +39,21 @@ describe('createTutorSseWriter', () => {
     await writer.close();
     expect(writer.closed).toBe(true);
     const frames = parseSseFrames(await readAll(writer.response));
-    expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'restart', 'text_delta', 'done', 'title']);
+    expect(frames.map((f) => f.event)).toEqual([
+      'turn_start',
+      'grounding',
+      'text_delta',
+      'restart',
+      'text_delta',
+      'done',
+      'title',
+    ]);
     expect(frames[3]!.data).toEqual({ servedBy: 'fallback' });
-    expect(frames[5]!.data).toEqual({ messageId: 'm1', servedBy: 'fallback', accountingComplete: true });
+    expect(frames[5]!.data).toEqual({
+      messageId: 'm1',
+      servedBy: 'fallback',
+      accountingComplete: true,
+    });
     expect(frames[6]!.data).toEqual({ title: 'عنوان' });
   });
 
@@ -52,7 +64,9 @@ describe('createTutorSseWriter', () => {
     await writer.close();
     const body = await readAll(writer.response);
     expect(body.split(SSE_HEARTBEAT_FRAME).length - 1).toBeGreaterThanOrEqual(2);
-    expect(parseSseFrames(body)).toEqual([{ event: 'error', data: { code: 'TEACHING_MODEL_UNAVAILABLE', retryable: true } }]);
+    expect(parseSseFrames(body)).toEqual([
+      { event: 'error', data: { code: 'TEACHING_MODEL_UNAVAILABLE', retryable: true } },
+    ]);
   });
 
   it('aborts its signal on client disconnect and ignores later writes', async () => {

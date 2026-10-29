@@ -937,7 +937,8 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
         name: 'Reem',
         language: 'ar',
         gender: 'female',
-        description: 'Arabic (Gulf) voice: clear, assured, helpful (Cartesia library "Reem - Solution Provider")',
+        description:
+          'Arabic (Gulf) voice: clear, assured, helpful (Cartesia library "Reem - Solution Provider")',
       },
     ],
     supportedFormats: ['mp3', 'wav'],

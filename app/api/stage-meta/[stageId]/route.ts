@@ -90,9 +90,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       if (editorWriteCounts) {
         // A write grant counts only for the Stage's own tenant (plan §4.4.5).
         const { stageBelongsToTenant } = await import('@/lib/persistence/teaching-package');
-        const { getServerPersistenceProvider } = await import(
-          '@/lib/persistence/server-provider'
-        );
+        const { getServerPersistenceProvider } = await import('@/lib/persistence/server-provider');
         try {
           const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
           editorWriteCounts = await stageBelongsToTenant(pool, stageId, editorGrant!.tenantId);

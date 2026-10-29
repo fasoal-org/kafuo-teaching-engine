@@ -70,5 +70,7 @@ export function canonicalHelpTurnRequest(body: Record<string, unknown>): string 
 
 /** Lowercase sha256 hex of the canonical UTF-8 bytes. */
 export function computeHelpTurnDigest(body: Record<string, unknown>): string {
-  return createHash('sha256').update(Buffer.from(canonicalHelpTurnRequest(body), 'utf8')).digest('hex');
+  return createHash('sha256')
+    .update(Buffer.from(canonicalHelpTurnRequest(body), 'utf8'))
+    .digest('hex');
 }

@@ -110,9 +110,7 @@ export interface StubOptions {
 
 export type ParsedArgs = { ok: true; options: LoadOptions } | { ok: false; error: string };
 
-const FLAGS = new Set([
-  '--i-understand-this-sends-load',
-]);
+const FLAGS = new Set(['--i-understand-this-sends-load']);
 
 /** Parse and validate; nothing is opened here. */
 export function parseLoadArgs(argv: readonly string[]): ParsedArgs {
@@ -126,7 +124,8 @@ export function parseLoadArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) return { ok: false, error: `${arg} needs a value` };
+    if (value === undefined || value.startsWith('--'))
+      return { ok: false, error: `${arg} needs a value` };
     values.set(arg, value);
     i += 1;
   }
@@ -151,7 +150,8 @@ export function parseLoadArgs(argv: readonly string[]): ParsedArgs {
     const raw = values.get(flag);
     if (raw === undefined) return fallback;
     const value = Number(raw);
-    if (!Number.isFinite(value) || value < min || value > max) return `${flag} must be ${min}..${max}`;
+    if (!Number.isFinite(value) || value < min || value > max)
+      return `${flag} must be ${min}..${max}`;
     return value;
   };
   const numbers = {
@@ -176,7 +176,8 @@ export function parseLoadArgs(argv: readonly string[]): ParsedArgs {
   }
   const n = numbers as Record<keyof typeof numbers, number>;
   const mode = values.get('--mode') ?? 'closed';
-  if (mode !== 'closed' && mode !== 'open') return { ok: false, error: '--mode must be closed or open' };
+  if (mode !== 'closed' && mode !== 'open')
+    return { ok: false, error: '--mode must be closed or open' };
   const stubRequested = values.has('--stub-llm-port');
   if (!stubRequested) {
     for (const flag of [
@@ -292,7 +293,13 @@ export function startStubServer(
   options: StubOptions,
   random: () => number = Math.random,
 ): Promise<{ server: Server; counters: StubCounters }> {
-  const counters: StubCounters = { chat: 0, chatErrors: 0, embeddings: 0, embeddingErrors: 0, other: 0 };
+  const counters: StubCounters = {
+    chat: 0,
+    chatErrors: 0,
+    embeddings: 0,
+    embeddingErrors: 0,
+    other: 0,
+  };
   const fail = (res: ServerResponse) => {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'injected failure', type: 'server_error' } }));
@@ -327,7 +334,11 @@ export function startStubServer(
             created: Math.floor(Date.now() / 1000),
             model,
             choices: [
-              { index: 0, message: { role: 'assistant', content: 'ردّ تجريبي' }, finish_reason: 'stop' },
+              {
+                index: 0,
+                message: { role: 'assistant', content: 'ردّ تجريبي' },
+                finish_reason: 'stop',
+              },
             ],
             usage: stubUsage(options.tokens),
           }),
@@ -393,10 +404,12 @@ const DEFAULT_QUESTIONS = [
 function loadSessions(file: string): Session[] {
   const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown;
   const list = Array.isArray(raw) ? raw : (raw as { sessions?: unknown }).sessions;
-  if (!Array.isArray(list) || list.length === 0) throw new Error('sessions file: expected a non-empty array');
+  if (!Array.isArray(list) || list.length === 0)
+    throw new Error('sessions file: expected a non-empty array');
   return list.map((entry, index) => {
     const e = entry as Record<string, unknown>;
-    if (typeof e.grant !== 'string' || !e.grant) throw new Error(`session ${index}: grant is required`);
+    if (typeof e.grant !== 'string' || !e.grant)
+      throw new Error(`session ${index}: grant is required`);
     const conversationId = typeof e.conversationId === 'string' ? e.conversationId : null;
     const subjectCode = typeof e.subjectCode === 'string' ? e.subjectCode : null;
     if (!conversationId && !subjectCode) {
@@ -410,7 +423,8 @@ function loadQuestions(file: string | null): string[] {
   if (!file) return DEFAULT_QUESTIONS;
   const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown;
   const list = Array.isArray(raw) ? raw : (raw as { questions?: unknown }).questions;
-  if (!Array.isArray(list)) throw new Error('questions file: expected an array or { questions: [...] }');
+  if (!Array.isArray(list))
+    throw new Error('questions file: expected an array or { questions: [...] }');
   const questions = list
     .map((q) => (typeof q === 'string' ? q : (q as { question?: unknown })?.question))
     .filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
@@ -423,7 +437,10 @@ async function ensureConversation(target: string, session: Session, runId: strin
   const res = await fetch(`${target}/api/tutor/conversations`, {
     method: 'POST',
     headers: { authorization: `Bearer ${session.grant}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ subjectCode: session.subjectCode, clientRequestId: `load-${runId}-${session.index}` }),
+    body: JSON.stringify({
+      subjectCode: session.subjectCode,
+      clientRequestId: `load-${runId}-${session.index}`,
+    }),
   });
   const body = (await res.json().catch(() => null)) as { conversation?: { id?: unknown } } | null;
   const id = body?.conversation?.id;
@@ -434,7 +451,10 @@ async function ensureConversation(target: string, session: Session, runId: strin
 }
 
 export async function runTurn(
-  options: Pick<LoadOptions, 'target' | 'requestTimeoutMs' | 'injectClientAbortMs' | 'sourceLabel' | 'scenario'>,
+  options: Pick<
+    LoadOptions,
+    'target' | 'requestTimeoutMs' | 'injectClientAbortMs' | 'sourceLabel' | 'scenario'
+  >,
   session: Session,
   text: string,
 ): Promise<TurnRecord> {
@@ -465,7 +485,8 @@ export async function runTurn(
     if (!res.ok || !type.includes('text/event-stream') || !res.body) {
       const body = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null;
       record.status = 'http_refused';
-      record.errorCode = typeof body?.error?.code === 'string' ? body.error.code : `http_${res.status}`;
+      record.errorCode =
+        typeof body?.error?.code === 'string' ? body.error.code : `http_${res.status}`;
       record.totalMs = null;
       return record;
     }
@@ -494,7 +515,11 @@ export async function runTurn(
 // Load shapes
 // ---------------------------------------------------------------------------
 
-async function runClosed(options: LoadOptions, sessions: Session[], questions: string[]): Promise<TurnRecord[]> {
+async function runClosed(
+  options: LoadOptions,
+  sessions: Session[],
+  questions: string[],
+): Promise<TurnRecord[]> {
   const records: TurnRecord[] = [];
   const active = sessions.slice(0, Math.min(options.concurrency, sessions.length));
   let next = 0;
@@ -554,7 +579,9 @@ export async function main(argv: readonly string[]): Promise<number> {
   let stub: Awaited<ReturnType<typeof startStubServer>> | null = null;
   if (options.stub) {
     stub = await startStubServer(options.stub);
-    console.error(`stub LLM on http://127.0.0.1:${options.stub.port}/v1 (TTFT ${options.stub.ttftMs} ms)`);
+    console.error(
+      `stub LLM on http://127.0.0.1:${options.stub.port}/v1 (TTFT ${options.stub.ttftMs} ms)`,
+    );
   }
   try {
     for (const session of sessions) await ensureConversation(options.target, session, runId);

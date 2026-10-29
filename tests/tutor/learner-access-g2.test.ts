@@ -194,10 +194,18 @@ describe('checkLearnerAccessScope', () => {
   it('without the integration: skipped in development, fail closed in production', async () => {
     const fake = fakeClient({ allowed: false, reason: 'lesson_on_hold' });
     expect(
-      await checkLearnerAccessScope(SCOPE, { client: fake.client, configured: false, production: false }),
+      await checkLearnerAccessScope(SCOPE, {
+        client: fake.client,
+        configured: false,
+        production: false,
+      }),
     ).toEqual({ kind: 'allowed', scope: SCOPE });
     expect(
-      await checkLearnerAccessScope(SCOPE, { client: fake.client, configured: false, production: true }),
+      await checkLearnerAccessScope(SCOPE, {
+        client: fake.client,
+        configured: false,
+        production: true,
+      }),
     ).toEqual({ kind: 'unavailable', reason: 'not_configured' });
     expect(fake.checkLearnerAccess).not.toHaveBeenCalled();
   });
@@ -208,14 +216,21 @@ describe('evaluateLearnerGrantAccess', () => {
 
   beforeEach(async () => {
     pool = await createTutorPool([], { packageSchema: true });
-    await seedVersion(pool, { id: 'tpv-1', stageId: 'stage-1', item: { type: 'section', id: 'li-901' } });
+    await seedVersion(pool, {
+      id: 'tpv-1',
+      stageId: 'stage-1',
+      item: { type: 'section', id: 'li-901' },
+    });
   });
 
   afterEach(async () => {
     await pool.end();
   });
 
-  const grant = (purpose: 'learner' | 'preview' | 'edit', student: LearnerStudentContext | null = STUDENT) => ({
+  const grant = (
+    purpose: 'learner' | 'preview' | 'edit',
+    student: LearnerStudentContext | null = STUDENT,
+  ) => ({
     tenantId: TENANT,
     versionId: 'tpv-1',
     purpose,
@@ -333,7 +348,10 @@ describe('GET /api/tutor/help/sessions re-validates the learner grant', () => {
   beforeEach(async () => {
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'learner-access-g2-svc');
     vi.stubEnv('DATABASE_URL', 'postgres://learner-access-g2');
-    vi.stubEnv('KAFUO_INTEGRATION_BASE_URL', 'https://kafuo.test/api/v2/integrations/teaching-engine');
+    vi.stubEnv(
+      'KAFUO_INTEGRATION_BASE_URL',
+      'https://kafuo.test/api/v2/integrations/teaching-engine',
+    );
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_SECRET', 'whsec-g2');
     pool = await createTutorPool([], { packageSchema: true });
     await seedVersion(pool, {

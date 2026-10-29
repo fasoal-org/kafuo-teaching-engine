@@ -67,7 +67,10 @@ export async function POST(req: NextRequest) {
     const studentRef = parseStudentRef(body.studentRef);
     parsePurposes(body.purposes);
     const academic = parseAcademic(body.academic, { requireCurriculumId: true });
-    if (!Array.isArray(body.allowedSubjects) || body.allowedSubjects.length > MAX_ALLOWED_SUBJECTS) {
+    if (
+      !Array.isArray(body.allowedSubjects) ||
+      body.allowedSubjects.length > MAX_ALLOWED_SUBJECTS
+    ) {
       throw new TeachingPackageError(
         'INVALID_REQUEST',
         `allowedSubjects must be an array of at most ${MAX_ALLOWED_SUBJECTS} subjects`,

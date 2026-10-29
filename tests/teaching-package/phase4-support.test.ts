@@ -45,9 +45,8 @@ describe('aggregate reconciliation read (plan §4.4.4)', () => {
   });
 
   it('returns approved + working versions, latest attempt, and the sequence watermark', async () => {
-    const { insertVersion, insertAttempt, insertWebhookDelivery } = await import(
-      '@/lib/persistence/teaching-package'
-    );
+    const { insertVersion, insertAttempt, insertWebhookDelivery } =
+      await import('@/lib/persistence/teaching-package');
     const agg = { tenantId: 'tenant-agg', learningItem: { type: 'lesson' as const, id: 'li-agg' } };
     for (const stageId of ['stage-none-1', 'stage-none-2']) {
       await pool.query(
@@ -118,12 +117,8 @@ describe('aggregate reconciliation read (plan §4.4.4)', () => {
 
     const { nodePostgresTransaction } = await import('@openmaic/storage/server/reference');
     const withTransaction = nodePostgresTransaction(txPool());
-    const {
-      readApprovedVersion,
-      readActiveVersion,
-      readLatestWebhookSequence,
-      readAttemptById,
-    } = await import('@/lib/persistence/teaching-package');
+    const { readApprovedVersion, readActiveVersion, readLatestWebhookSequence, readAttemptById } =
+      await import('@/lib/persistence/teaching-package');
     const result = await withTransaction(async (tx) => {
       const [approved, working, sequence] = await Promise.all([
         readApprovedVersion(tx, agg),
@@ -165,9 +160,7 @@ describe('safe error descriptors (plan §4.4.6)', () => {
   });
 });
 
-import {
-  validateTeachingEngineIntegrationConfig,
-} from '@/lib/server/teaching-package/safe-error';
+import { validateTeachingEngineIntegrationConfig } from '@/lib/server/teaching-package/safe-error';
 
 describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
   const base = {
@@ -201,17 +194,17 @@ describe('teaching engine integration fail-fast config (plan §4.4.6)', () => {
   });
 
   it('refuses the missing webhook URL, missing secret and shared secret combinations', () => {
-    expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, webhookUrl: '' }),
-    ).toThrow(/TEACHING_ENGINE_WEBHOOK_URL/);
-    expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, webhookSecret: '' }),
-    ).toThrow(/TEACHING_ENGINE_WEBHOOK_SECRET/);
+    expect(() => validateTeachingEngineIntegrationConfig({ ...base, webhookUrl: '' })).toThrow(
+      /TEACHING_ENGINE_WEBHOOK_URL/,
+    );
+    expect(() => validateTeachingEngineIntegrationConfig({ ...base, webhookSecret: '' })).toThrow(
+      /TEACHING_ENGINE_WEBHOOK_SECRET/,
+    );
     expect(() =>
       validateTeachingEngineIntegrationConfig({ ...base, webhookSecret: base.serviceKey }),
     ).toThrow(/must differ/);
-    expect(() =>
-      validateTeachingEngineIntegrationConfig({ ...base, databaseUrl: '' }),
-    ).toThrow(/DATABASE_URL/);
+    expect(() => validateTeachingEngineIntegrationConfig({ ...base, databaseUrl: '' })).toThrow(
+      /DATABASE_URL/,
+    );
   });
 });

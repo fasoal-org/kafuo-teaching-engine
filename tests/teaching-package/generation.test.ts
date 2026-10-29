@@ -956,9 +956,8 @@ describe('teaching package generation', () => {
     });
 
     it('claims a queued attempt for a run exactly once', async () => {
-      const { claimQueuedAttemptForRun, readAttempt } = await import(
-        '@/lib/persistence/teaching-package'
-      );
+      const { claimQueuedAttemptForRun, readAttempt } =
+        await import('@/lib/persistence/teaching-package');
       const { generation } = await freshModules();
       const started = await generation.startGenerationAttempt(txPool(), baseRequest());
 
@@ -976,9 +975,8 @@ describe('teaching package generation', () => {
     it.each(['succeeded', 'failed'] as const)(
       'never admits a %s attempt into a run, and rewrites nothing',
       async (status) => {
-        const { claimQueuedAttemptForRun, readAttempt } = await import(
-          '@/lib/persistence/teaching-package'
-        );
+        const { claimQueuedAttemptForRun, readAttempt } =
+          await import('@/lib/persistence/teaching-package');
         const { generation } = await freshModules();
         const started = await generation.startGenerationAttempt(txPool(), baseRequest());
         await pool.query(
@@ -990,9 +988,7 @@ describe('teaching package generation', () => {
         );
         const before = (await readAttempt(qp(), started.attempt.id, { tenantId: TENANT }))!;
 
-        await expect(
-          claimQueuedAttemptForRun(qp(), started.attempt.id, 999),
-        ).resolves.toBeNull();
+        await expect(claimQueuedAttemptForRun(qp(), started.attempt.id, 999)).resolves.toBeNull();
 
         // Terminal stays terminal: status, timings, stage binding and error
         // information are all untouched.

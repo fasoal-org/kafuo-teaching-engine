@@ -47,8 +47,10 @@ const ACADEMIC = {
   academicLanguage: 'ar',
 };
 
-const AR_SENTENCE = 'الاستنتاج المنطقي من الملاحظات المتكررة يسمى تبريراً استقرائياً، ويُستخدم في الرياضيات لاكتشاف الأنماط. ';
-const EN_SENTENCE = 'Inductive reasoning draws a general rule from repeated observations, and mathematics uses it to discover patterns. ';
+const AR_SENTENCE =
+  'الاستنتاج المنطقي من الملاحظات المتكررة يسمى تبريراً استقرائياً، ويُستخدم في الرياضيات لاكتشاف الأنماط. ';
+const EN_SENTENCE =
+  'Inductive reasoning draws a general rule from repeated observations, and mathematics uses it to discover patterns. ';
 
 function repeat(sentence: string, chars: number): string {
   let out = '';
@@ -59,12 +61,19 @@ function repeat(sentence: string, chars: number): string {
 function syntheticTurns(count: number, sentence: string, chars = 700): HistoryTurnInput[] {
   const turns: HistoryTurnInput[] = [];
   for (let i = 0; i < count; i += 1) {
-    turns.push({ student: `${i}: ${repeat(sentence, 120)}`, tutor: `${i}: ${repeat(sentence, chars)}` });
+    turns.push({
+      student: `${i}: ${repeat(sentence, 120)}`,
+      tutor: `${i}: ${repeat(sentence, chars)}`,
+    });
   }
   return turns;
 }
 
-function syntheticUnits(totalChars: number, sentence: string, unitChars = 2_000): GroundingUnitInput[] {
+function syntheticUnits(
+  totalChars: number,
+  sentence: string,
+  unitChars = 2_000,
+): GroundingUnitInput[] {
   const units: GroundingUnitInput[] = [];
   let remaining = totalChars;
   let i = 0;
@@ -78,7 +87,11 @@ function syntheticUnits(totalChars: number, sentence: string, unitChars = 2_000)
 }
 
 /** Re-count exactly as the executor will, for every counter in the pair. */
-function assertUnderEveryCap(messages: { role: string; content: unknown }[], policy: AssemblePolicy, cap?: number) {
+function assertUnderEveryCap(
+  messages: { role: string; content: unknown }[],
+  policy: AssemblePolicy,
+  cap?: number,
+) {
   for (const target of [policy.primary, policy.fallback]) {
     const estimate = countTokens(messages as never, target.counterKind, target.modelString);
     const limit = Math.min(effectiveCap(target.counterKind), cap ?? Number.POSITIVE_INFINITY);
@@ -92,8 +105,18 @@ describe('block order (EFF-02)', () => {
   it('rules → academic → grounding → summary → history → turn note → newest message, each block a system message', () => {
     const result = assembleTutorPrompt({
       academic: ACADEMIC,
-      grounding: { mode: 'retrieved', lessonTitle: 'قانون حفظ الكتلة', units: [{ title: 'المتفاعلات', text: 'نص الوحدة.' }] },
-      history: { summary: 'ملخص سابق.', turns: [{ student: 'س1', tutor: 'ج1' }, { student: 'س2', tutor: 'ج2' }] },
+      grounding: {
+        mode: 'retrieved',
+        lessonTitle: 'قانون حفظ الكتلة',
+        units: [{ title: 'المتفاعلات', text: 'نص الوحدة.' }],
+      },
+      history: {
+        summary: 'ملخص سابق.',
+        turns: [
+          { student: 'س1', tutor: 'ج1' },
+          { student: 'س2', tutor: 'ج2' },
+        ],
+      },
       message: 'س3',
       policy: MATH_POLICY,
       directives: { responseScript: 'ar' },
@@ -125,7 +148,13 @@ describe('block order (EFF-02)', () => {
 
   it('is byte-stable across turns for the head blocks (rules, academic, grounding)', () => {
     const grounding = { mode: 'reuse' as const, units: [{ title: 'أ', text: 'نص' }] };
-    const turn1 = assembleTutorPrompt({ academic: ACADEMIC, grounding, history: { turns: [] }, message: 'س1', policy: MATH_POLICY });
+    const turn1 = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding,
+      history: { turns: [] },
+      message: 'س1',
+      policy: MATH_POLICY,
+    });
     const turn2 = assembleTutorPrompt({
       academic: ACADEMIC,
       grounding,
@@ -145,15 +174,31 @@ describe('block order (EFF-02)', () => {
       policy: MATH_POLICY,
     });
     const all = result.messages.map((m) => String(m.content)).join('\n');
-    expect(all).not.toMatch(/unitId|contentUnitId|tenant|studentRef|conversationId|turnId|reservation|\bid:/i);
+    expect(all).not.toMatch(
+      /unitId|contentUnitId|tenant|studentRef|conversationId|turnId|reservation|\bid:/i,
+    );
     expect(all).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   });
 
   it('adds the safety directive to the turn note only when triggered', () => {
-    const base = { academic: ACADEMIC, grounding: { mode: 'none' as const }, history: { turns: [] }, message: 'س', policy: MATH_POLICY };
-    const plain = assembleTutorPrompt({ ...base, directives: { responseScript: 'ar', safetyTriggered: false } });
-    const triggered = assembleTutorPrompt({ ...base, directives: { responseScript: 'ar', safetyTriggered: true } });
-    expect(plain.messages.map((m) => String(m.content)).join()).not.toContain(SAFETY_DIRECTIVE_TEXT);
+    const base = {
+      academic: ACADEMIC,
+      grounding: { mode: 'none' as const },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    };
+    const plain = assembleTutorPrompt({
+      ...base,
+      directives: { responseScript: 'ar', safetyTriggered: false },
+    });
+    const triggered = assembleTutorPrompt({
+      ...base,
+      directives: { responseScript: 'ar', safetyTriggered: true },
+    });
+    expect(plain.messages.map((m) => String(m.content)).join()).not.toContain(
+      SAFETY_DIRECTIVE_TEXT,
+    );
     const note = triggered.messages[triggered.messages.length - 2]!;
     expect(note.role).toBe('system');
     expect(String(note.content)).toContain(SAFETY_DIRECTIVE_TEXT);
@@ -162,9 +207,21 @@ describe('block order (EFF-02)', () => {
   });
 
   it('omits the grounding block on mode none and renders the insufficient note', () => {
-    const none = assembleTutorPrompt({ academic: ACADEMIC, grounding: { mode: 'none' }, history: { turns: [] }, message: 'س', policy: MATH_POLICY });
+    const none = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: { mode: 'none' },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
     expect(roles(none.messages)).toEqual(['system', 'system', 'system', 'user']);
-    const insufficient = assembleTutorPrompt({ academic: ACADEMIC, grounding: { mode: 'insufficient' }, history: { turns: [] }, message: 'س', policy: MATH_POLICY });
+    const insufficient = assembleTutorPrompt({
+      academic: ACADEMIC,
+      grounding: { mode: 'insufficient' },
+      history: { turns: [] },
+      message: 'س',
+      policy: MATH_POLICY,
+    });
     expect(String(insufficient.messages[2]!.content)).toContain('No curriculum text is available');
     expect(insufficient.groundingMode).toBe('insufficient');
   });
@@ -304,8 +361,11 @@ describe('reduction ladder order (plan §8.7)', () => {
       policy: MATH_POLICY,
     });
     expect(result.reductions[0]).toBe('clip_older_tutor_messages');
-    const assistants = result.messages.filter((m) => m.role === 'assistant').map((m) => String(m.content));
-    for (const text of assistants.slice(0, -3)) expect(text.length).toBeLessThanOrEqual(TUTOR_CLIP_CHARS + 2);
+    const assistants = result.messages
+      .filter((m) => m.role === 'assistant')
+      .map((m) => String(m.content));
+    for (const text of assistants.slice(0, -3))
+      expect(text.length).toBeLessThanOrEqual(TUTOR_CLIP_CHARS + 2);
   });
 
   it('trims grounding from the least relevant end and never adds units (Help mode)', () => {
@@ -338,7 +398,9 @@ describe('reduction ladder order (plan §8.7)', () => {
     expect(kept.length).toBeLessThan(3);
     expect(kept[0]).toBe('أهم');
     for (const title of kept) expect(units.map((u) => u.title)).toContain(title);
-    expect(String(result.messages[2]!.content)).toContain('Lesson Help anchored to the current Scene');
+    expect(String(result.messages[2]!.content)).toContain(
+      'Lesson Help anchored to the current Scene',
+    );
     expect(String(result.messages[2]!.content)).toContain('Scene / المشهد: المشهد');
     // Past it, grounding is dropped entirely (never widened) and the mode says so.
     const dropped = assembleTutorPrompt(helpInput(chars + 400));
@@ -369,7 +431,9 @@ describe('UNIT_CHAR_CAP pre-cap', () => {
     expect(many.changed).toBe(true);
     expect(many.units.map((u) => u.title)).toEqual(['a']);
 
-    const paragraphs = Array.from({ length: 30 }, (_, i) => `فقرة ${i} ${'ن'.repeat(400)}`).join('\n\n');
+    const paragraphs = Array.from({ length: 30 }, (_, i) => `فقرة ${i} ${'ن'.repeat(400)}`).join(
+      '\n\n',
+    );
     const giant = capUnitChars([{ title: 'g', text: paragraphs }]);
     expect(giant.changed).toBe(true);
     expect(giant.units[0]!.truncated).toBe(true);
@@ -379,14 +443,20 @@ describe('UNIT_CHAR_CAP pre-cap', () => {
 });
 
 describe('discovery-first P7: item headers, grouping, insufficient reasons', () => {
-  const groundingBlock = (result: ReturnType<typeof assembleTutorPrompt>) => String(result.messages[2]!.content);
+  const groundingBlock = (result: ReturnType<typeof assembleTutorPrompt>) =>
+    String(result.messages[2]!.content);
   const SECTION = { key: '612', title: 'المثال المضاد', itemType: 'SECTION' as const };
   const LESSON = { key: '155', title: 'التبرير والبرهان', itemType: 'LESSON' as const };
 
   it('the header reads «Section / القسم» for a SECTION item and «Lesson / الدرس» otherwise', () => {
     const section = assembleTutorPrompt({
       academic: ACADEMIC,
-      grounding: { mode: 'retrieved', lessonTitle: 'المثال المضاد', itemType: 'SECTION', units: [{ title: 'تعريف', text: 'نص', item: SECTION }] },
+      grounding: {
+        mode: 'retrieved',
+        lessonTitle: 'المثال المضاد',
+        itemType: 'SECTION',
+        units: [{ title: 'تعريف', text: 'نص', item: SECTION }],
+      },
       history: { turns: [] },
       message: 'س',
       policy: MATH_POLICY,
@@ -395,7 +465,11 @@ describe('discovery-first P7: item headers, grouping, insufficient reasons', () 
     expect(groundingBlock(section)).not.toContain('Lesson / الدرس');
     const lesson = assembleTutorPrompt({
       academic: ACADEMIC,
-      grounding: { mode: 'retrieved', lessonTitle: 'التبرير والبرهان', units: [{ title: 'تعريف', text: 'نص' }] },
+      grounding: {
+        mode: 'retrieved',
+        lessonTitle: 'التبرير والبرهان',
+        units: [{ title: 'تعريف', text: 'نص' }],
+      },
       history: { turns: [] },
       message: 'س',
       policy: MATH_POLICY,
@@ -455,9 +529,17 @@ describe('discovery-first P7: item headers, grouping, insufficient reasons', () 
   });
 
   it('no_match and index_not_ready add the explicit general-answer note; other reasons keep the unchanged wording', () => {
-    const insufficient = (reason?: Parameters<typeof assembleTutorPrompt>[0]['grounding'] & { mode: 'insufficient' }) =>
+    const insufficient = (
+      reason?: Parameters<typeof assembleTutorPrompt>[0]['grounding'] & { mode: 'insufficient' },
+    ) =>
       groundingBlock(
-        assembleTutorPrompt({ academic: ACADEMIC, grounding: reason ?? { mode: 'insufficient' }, history: { turns: [] }, message: 'س', policy: MATH_POLICY }),
+        assembleTutorPrompt({
+          academic: ACADEMIC,
+          grounding: reason ?? { mode: 'insufficient' },
+          history: { turns: [] },
+          message: 'س',
+          policy: MATH_POLICY,
+        }),
       );
     const plain = insufficient();
     expect(plain).toContain('No curriculum text is available');
@@ -467,7 +549,12 @@ describe('discovery-first P7: item headers, grouping, insufficient reasons', () 
       expect(text.startsWith(plain)).toBe(true);
       expect(text).toContain('general subject knowledge, not the curriculum wording');
     }
-    for (const reason of ['retrieval_unavailable', 'retrieval_busy', 'below_evidence_floor', 'embedding_profile_mismatch'] as const) {
+    for (const reason of [
+      'retrieval_unavailable',
+      'retrieval_busy',
+      'below_evidence_floor',
+      'embedding_profile_mismatch',
+    ] as const) {
       expect(insufficient({ mode: 'insufficient', reason })).toBe(plain);
     }
   });

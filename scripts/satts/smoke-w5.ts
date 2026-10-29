@@ -32,12 +32,20 @@ function readKey(): string {
 
 const CASES: Array<{ id: string; subject: 'MATH' | 'PHYSICS' | 'CHEMISTRY'; text: string }> = [
   { id: 'math', subject: 'MATH', text: 'إذا كان x² + 2x = 5 فإن \\frac{1}{2} من الناتج يساوي 2.5' },
-  { id: 'physics', subject: 'PHYSICS', text: 'السرعة 5 m/s ثابتة، والقانون F = ma يربط القوة بالتسارع.' },
+  {
+    id: 'physics',
+    subject: 'PHYSICS',
+    text: 'السرعة 5 m/s ثابتة، والقانون F = ma يربط القوة بالتسارع.',
+  },
   { id: 'chemistry', subject: 'CHEMISTRY', text: 'التفاعل 2H₂ + O₂ → 2H₂O يطلق طاقة.' },
   {
     id: 'multi-segment',
     subject: 'MATH',
-    text: Array.from({ length: 12 }, (_, i) => `في الخطوة ${i + 1} نحسب \\frac{x+${i}}{y-${i}} ثم نبسطه`).join('، ') + '.',
+    text:
+      Array.from(
+        { length: 12 },
+        (_, i) => `في الخطوة ${i + 1} نحسب \\frac{x+${i}}{y-${i}} ثم نبسطه`,
+      ).join('، ') + '.',
   },
 ];
 
@@ -63,8 +71,13 @@ async function main() {
       allowProposed: true,
     });
     const instrTok = profile.instructions ? tok(profile.instructions) : 0;
-    const estimate = plan.segments.reduce((n, s) => n + estimateUsd(tok(s.text), instrTok, s.text.length / 8), 0);
-    console.log(`[${c.id}] segments=${plan.segments.length} prepared=${JSON.stringify(plan.sentText)} est=$${estimate.toFixed(4)}`);
+    const estimate = plan.segments.reduce(
+      (n, s) => n + estimateUsd(tok(s.text), instrTok, s.text.length / 8),
+      0,
+    );
+    console.log(
+      `[${c.id}] segments=${plan.segments.length} prepared=${JSON.stringify(plan.sentText)} est=$${estimate.toFixed(4)}`,
+    );
     if (dryRun) continue;
     if (calls + plan.segments.length > MAX_CALLS) throw new Error('smoke call cap reached');
     if (spentUsd() + estimate > CAP_USD - 0.5) throw new Error('spend cap would be exceeded');
@@ -79,7 +92,10 @@ async function main() {
       entry: 'preview',
       persist: { kind: 'none' },
       recordUsage: false,
-    }).catch((error: unknown) => ({ outcome: 'failed' as const, error: { code: 'THROWN', message: String(error) } }));
+    }).catch((error: unknown) => ({
+      outcome: 'failed' as const,
+      error: { code: 'THROWN', message: String(error) },
+    }));
     calls += plan.segments.length;
     const ok = outcome.outcome !== 'failed' && 'audio' in outcome && outcome.audio;
     const audioSec = ok ? (outcome.audio!.durationSeconds ?? null) : null;
@@ -97,7 +113,11 @@ async function main() {
       estUsd:
         usage && usage.inputTokens !== undefined
           ? (usage.inputTokens * 0.6 + (usage.outputTokens ?? 0) * 12) / 1e6
-          : estimateUsd(tok(plan.sentText), instrTok * plan.segments.length, audioSec ?? plan.sentText.length / 8),
+          : estimateUsd(
+              tok(plan.sentText),
+              instrTok * plan.segments.length,
+              audioSec ?? plan.sentText.length / 8,
+            ),
     });
     if (ok) writeOut(`w5-smoke/${c.id}.mp3`, outcome.audio!.bytes);
     console.log(

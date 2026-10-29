@@ -6,7 +6,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { sha256Hex } from '@/lib/server/speech/delivery-instructions';
-import { inventoryDocument, planSubjectBackfill, revalidateDocument, type MaintenanceDocument } from '@/lib/server/speech/maintenance';
+import {
+  inventoryDocument,
+  planSubjectBackfill,
+  revalidateDocument,
+  type MaintenanceDocument,
+} from '@/lib/server/speech/maintenance';
 import { renderScientificSpeech } from '@/lib/speech/scientific';
 import { loadPolicyPack, type PolicyPack } from '@/lib/speech/scientific/policy';
 import type { SpeechAudioProvenance } from '@/lib/types/action';
@@ -69,8 +74,20 @@ function document(): MaintenanceDocument {
       {
         id: 'scene-1',
         actions: [
-          { id: 'A', type: 'speech', text: 'نحسب y²', audioId: 'a', audioProvenance: provenanceFor('نحسب y²', base) },
-          { id: 'B', type: 'speech', text: 'نحسب x²', audioId: 'b', audioProvenance: provenanceFor('نحسب x²', base) },
+          {
+            id: 'A',
+            type: 'speech',
+            text: 'نحسب y²',
+            audioId: 'a',
+            audioProvenance: provenanceFor('نحسب y²', base),
+          },
+          {
+            id: 'B',
+            type: 'speech',
+            text: 'نحسب x²',
+            audioId: 'b',
+            audioProvenance: provenanceFor('نحسب x²', base),
+          },
           { id: 'C', type: 'speech', text: 'بلا صوت' },
           { id: 'D', type: 'speech', text: 'صوت قديم x + 1', audioId: 'legacy' },
         ],
@@ -85,7 +102,9 @@ describe('revalidateDocument (AS-007)', () => {
     const before = JSON.stringify(doc);
     const { report } = revalidateDocument(doc, bumped);
     expect(report.stale).toEqual([{ actionId: 'A', reason: 'prepared' }]);
-    expect(report.promotable).toEqual([{ actionId: 'B', from: base.policyVersion, to: 'satts-ar-9.0.0' }]);
+    expect(report.promotable).toEqual([
+      { actionId: 'B', from: base.policyVersion, to: 'satts-ar-9.0.0' },
+    ]);
     expect(report.skipped).toBe(2);
     expect(JSON.stringify(doc)).toBe(before);
   });
@@ -93,10 +112,16 @@ describe('revalidateDocument (AS-007)', () => {
   it('apply rewrites only policyVersion on a copy, never the prepared digest or audio', () => {
     const doc = document();
     const { document: applied } = revalidateDocument(doc, bumped, { apply: true });
-    const b = applied.scenes[0]!.actions![1] as { audioId: string; audioProvenance: SpeechAudioProvenance };
+    const b = applied.scenes[0]!.actions![1] as {
+      audioId: string;
+      audioProvenance: SpeechAudioProvenance;
+    };
     expect(b.audioProvenance.policyVersion).toBe('satts-ar-9.0.0');
     expect(b.audioId).toBe('b');
-    expect((doc.scenes[0]!.actions![1] as { audioProvenance: SpeechAudioProvenance }).audioProvenance.policyVersion).toBe(base.policyVersion);
+    expect(
+      (doc.scenes[0]!.actions![1] as { audioProvenance: SpeechAudioProvenance }).audioProvenance
+        .policyVersion,
+    ).toBe(base.policyVersion);
   });
 });
 
@@ -113,7 +138,11 @@ describe('planSubjectBackfill', () => {
 describe('inventoryDocument (D-7, read-only)', () => {
   it('counts legacy audio and legacy audio with expressions', () => {
     const row = inventoryDocument(document(), 'MATH', base);
-    expect(row).toMatchObject({ speechActions: 4, legacyAudioActions: 1, legacyWithExpressions: 1 });
+    expect(row).toMatchObject({
+      speechActions: 4,
+      legacyAudioActions: 1,
+      legacyWithExpressions: 1,
+    });
     expect(row!.regenerationChars).toBeGreaterThan(0);
     expect(inventoryDocument(document(), 'BIOLOGY', base)).toBeNull();
   });

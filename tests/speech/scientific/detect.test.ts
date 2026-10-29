@@ -71,7 +71,8 @@ describe('expression boundary detection (§9.3)', () => {
   });
 
   it('marks a leading binary operator after a term, never after punctuation', () => {
-    const leading = (text: string) => detectExpressions(text, 'MATH').map((c) => c.leadingBinary === true);
+    const leading = (text: string) =>
+      detectExpressions(text, 'MATH').map((c) => c.leadingBinary === true);
     expect(leading('المجموع وس + 1 هنا')).toEqual([true]);
     expect(leading('الناتج: - 5')).toEqual([false]);
     expect(leading('درجة الحرارة -5')).toEqual([false]);

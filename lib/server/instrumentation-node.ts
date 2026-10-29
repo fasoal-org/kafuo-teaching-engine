@@ -63,9 +63,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // surfaces here as [config] warnings instead of failing at request time.
   // Imported dynamically so the Edge bundle never pulls in the fs/js-yaml
   // backed provider config it reads.
-  const { validateServerConfig, validateSubjectRoutingConfig } = await import(
-    '@/lib/server/config-validation'
-  );
+  const { validateServerConfig, validateSubjectRoutingConfig } =
+    await import('@/lib/server/config-validation');
   validateServerConfig();
   // Kafuo R1 subject routing (plan §7.1): THROWS, unlike the warn-only check
   // above, when routing is enforced, the Teaching Package API is configured
@@ -77,9 +76,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // Kafuo-facing deployment fail-fast (plan §4.4.6): throwing here makes a
   // misconfigured deployment fail to start instead of failing to work.
   {
-    const { validateTeachingEngineIntegrationConfig } = await import(
-      '@/lib/server/teaching-package/safe-error'
-    );
+    const { validateTeachingEngineIntegrationConfig } =
+      await import('@/lib/server/teaching-package/safe-error');
     validateTeachingEngineIntegrationConfig({
       serviceKey: process.env.TEACHING_ENGINE_SERVICE_KEY?.trim() ?? '',
       isProduction: process.env.NODE_ENV === 'production',
@@ -96,9 +94,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // without the reader DSN refuses to start. The reader pool itself is lazy
   // (no connection is opened here).
   {
-    const { validateKafuoGroundingConfig } = await import(
-      '@/lib/server/tutor/grounding/grounding-config'
-    );
+    const { validateKafuoGroundingConfig } =
+      await import('@/lib/server/tutor/grounding/grounding-config');
     validateKafuoGroundingConfig();
   }
 
@@ -112,17 +109,14 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // deployment that legitimately has no Teaching Package integration (the usual
   // development case) sweeps for it. Previously it always started, and swept every
   // 30 s against an empty connection string.
-  const { startWebhookDeliverySchedule } = await import(
-    '@/lib/server/teaching-package/webhook-delivery'
-  );
+  const { startWebhookDeliverySchedule } =
+    await import('@/lib/server/teaching-package/webhook-delivery');
   const webhookSchedule = startWebhookDeliverySchedule();
 
   // Kafuo R1 ledger accounting sweeper (plan §7.7 step 4, §9.4): boot pass +
   // 60 s sweep + 30 s worker heartbeat, in every instance. Same gate as the
   // webhook schedule; `undefined` when the Teaching Package API is off.
-  const { startAccountingSweeper } = await import(
-    '@/lib/server/teaching-model/accounting-sweeper'
-  );
+  const { startAccountingSweeper } = await import('@/lib/server/teaching-model/accounting-sweeper');
   // Retention passes ride the same sweep (P6: legacy_help_turns, 7 days).
   const { registerLegacyHelpRetention } = await import('@/lib/server/tutor/legacy-help-service');
   registerLegacyHelpRetention();
@@ -132,9 +126,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
   // 30 s sweep in every instance, lease-claimed so instances are replaceable.
   // Same gate; registers itself with the sweep registry for the internal
   // sweep route and the health block.
-  const { startMeterOutboxSweeper } = await import(
-    '@/lib/server/teaching-model/meter-outbox-sweeper'
-  );
+  const { startMeterOutboxSweeper } =
+    await import('@/lib/server/teaching-model/meter-outbox-sweeper');
   const meterOutboxSweeper = startMeterOutboxSweeper();
 
   let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
@@ -210,9 +203,7 @@ export async function registerNodeInstrumentation(): Promise<void> {
       // §7.7 step 3), and the sweeper's timers must not fire against a
       // closed pool.
       try {
-        const { drainOnShutdown } = await import(
-          '@/lib/server/teaching-model/ledger-retry-queue'
-        );
+        const { drainOnShutdown } = await import('@/lib/server/teaching-model/ledger-retry-queue');
         await drainOnShutdown();
       } catch (error) {
         console.error('[instrumentation] Ledger retry queue drain failed', error);
@@ -231,9 +222,8 @@ export async function registerNodeInstrumentation(): Promise<void> {
         console.error('[instrumentation] Meter outbox sweeper stop failed', error);
       }
       try {
-        const { closeKafuoGroundingReader } = await import(
-          '@/lib/server/tutor/grounding/pg-grounding-reader'
-        );
+        const { closeKafuoGroundingReader } =
+          await import('@/lib/server/tutor/grounding/pg-grounding-reader');
         await closeKafuoGroundingReader();
       } catch (error) {
         console.error('[instrumentation] Kafuo grounding reader shutdown failed', error);

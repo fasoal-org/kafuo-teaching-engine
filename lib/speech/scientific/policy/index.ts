@@ -181,7 +181,8 @@ export function policyEntries(): readonly ResolvedEntry[] {
  */
 function legacyKeys(entry: ResolvedEntry): string[] {
   if (entry.roles.includes('symbol')) return [`sym:${entry.key}`];
-  if (entry.table === 'operators' && entry.domains?.includes('CHEMISTRY')) return [`chem:${entry.key}`];
+  if (entry.table === 'operators' && entry.domains?.includes('CHEMISTRY'))
+    return [`chem:${entry.key}`];
   if (entry.roles.includes('number')) return [`nom:${entry.key}`, `gen:${entry.key}`];
   if (entry.roles.includes('repeat')) return [`times:${entry.key}`];
   return [entry.key];
@@ -280,14 +281,22 @@ export interface PolicyPack {
    * Role-aware resolution: `(domain, role)` → `(role)` → the token's neutral
    * `symbol` entry → `null` (the caller then speaks the raw token, FR-030).
    */
-  resolve(query: PolicyQuery, mode: 'natural' | 'accessible', reading?: PolicyReading): PolicyLookup | null;
+  resolve(
+    query: PolicyQuery,
+    mode: 'natural' | 'accessible',
+    reading?: PolicyReading,
+  ): PolicyLookup | null;
   /** Compatibility layer: the legacy `(table, key)` lookup. */
   lookup(table: PolicyTableName, key: string, mode: 'natural' | 'accessible'): PolicyLookup | null;
   has(table: PolicyTableName, key: string): boolean;
 }
 
 /** The best entry for a query: subject-specific first, then subject-independent. */
-function bestEntry(role: PolicyRole, token: string, domain: PolicyDomain | null): ResolvedEntry | undefined {
+function bestEntry(
+  role: PolicyRole,
+  token: string,
+  domain: PolicyDomain | null,
+): ResolvedEntry | undefined {
   const entries = entriesFor(role, token);
   return (
     (domain ? entries.find((entry) => entry.domains?.includes(domain)) : undefined) ??
@@ -303,7 +312,11 @@ export function loadPolicyPack(
   const numbersMode = options.numbersMode ?? POLICY_MANIFEST.options.numbersMode;
   const usable = (entry: ResolvedEntry | undefined): entry is ResolvedEntry =>
     entry !== undefined && (entry.status === 'approved' || allowProposed);
-  const text = (entry: ResolvedEntry, mode: 'natural' | 'accessible', reading: PolicyReading): PolicyLookup => ({
+  const text = (
+    entry: ResolvedEntry,
+    mode: 'natural' | 'accessible',
+    reading: PolicyReading,
+  ): PolicyLookup => ({
     text:
       reading === 'literal'
         ? (entry.literal ?? entry.natural)
@@ -321,7 +334,8 @@ export function loadPolicyPack(
       const entry = bestEntry(query.role, query.token, query.domain);
       if (usable(entry)) return text(entry, mode, reading);
       // The neutral symbol name, when the token has one.
-      const neutral = query.role === 'symbol' ? undefined : bestEntry('symbol', query.token, query.domain);
+      const neutral =
+        query.role === 'symbol' ? undefined : bestEntry('symbol', query.token, query.domain);
       if (usable(neutral)) return text(neutral, mode, 'literal');
       return null;
     },
@@ -338,7 +352,6 @@ export function loadPolicyPack(
 
 /** Fields that never change prepared text; excluded from the content hash. */
 const METADATA_FIELDS = new Set(['approvedBy', 'approvedOn', 'source', 'notes', 'description']);
-
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);

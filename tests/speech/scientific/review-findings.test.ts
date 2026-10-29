@@ -10,7 +10,9 @@ import { prepared } from './helpers';
 
 const both = ['natural', 'accessible'] as const;
 const readings = policyEntries().flatMap((e) =>
-  [e.natural, e.accessible, e.literal].filter((t): t is string => t !== undefined).map((text) => ({ e, text })),
+  [e.natural, e.accessible, e.literal]
+    .filter((t): t is string => t !== undefined)
+    .map((text) => ({ e, text })),
 );
 
 describe('dictionary review v2 findings', () => {
@@ -43,7 +45,9 @@ describe('dictionary review v2 findings', () => {
     expect(prepared('$e^x$', 'MATH')).toBe('إي أُس سين');
     expect(prepared('$e$', 'PHYSICS')).toBe('إي');
     // The Arabic letter هـ keeps its own name.
-    expect(prepared('قيمة هـ = 2.718 تقريبًا.', 'MATH')).toBe('قيمة هاء يساوي 2 فاصلة 718 تقريبًا.');
+    expect(prepared('قيمة هـ = 2.718 تقريبًا.', 'MATH')).toBe(
+      'قيمة هاء يساوي 2 فاصلة 718 تقريبًا.',
+    );
   });
 
   it('6: the dictionary holds vocabulary only; the verbaliser composes structure', () => {
@@ -54,7 +58,9 @@ describe('dictionary review v2 findings', () => {
     expect(templates.map((r) => `${r.e.key}: ${r.text}`)).toEqual([]);
     expect(prepared('$(x+1)^2$', 'MATH')).toBe('سين زائد 1، الكل تربيع');
     // The accessible power is composed from «مرفوعة للقوة» and the number word.
-    expect(prepared('$a = 9.8 m/s^2$', 'PHYSICS', 'accessible')).toBe('إيه، يساوي، 9 فاصلة 8 متر لكل ثانية مرفوعة للقوة اثنين');
+    expect(prepared('$a = 9.8 m/s^2$', 'PHYSICS', 'accessible')).toBe(
+      'إيه، يساوي، 9 فاصلة 8 متر لكل ثانية مرفوعة للقوة اثنين',
+    );
     expect(prepared('$x^2$', 'MATH', 'accessible')).toBe('سين مرفوعة للقوة اثنين');
   });
 });

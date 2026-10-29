@@ -20,7 +20,13 @@ describe('renderScientificSpeech contract', () => {
     expect(result.path).toBe('general');
     expect(result.policyVersion).toBeNull();
     expect(result.spans).toEqual([
-      { kind: 'prose', source: { start: 0, end: text.length }, prepared: { start: 0, end: text.length }, atomic: false, fallback: false },
+      {
+        kind: 'prose',
+        source: { start: 0, end: text.length },
+        prepared: { start: 0, end: text.length },
+        atomic: false,
+        fallback: false,
+      },
     ]);
   });
 

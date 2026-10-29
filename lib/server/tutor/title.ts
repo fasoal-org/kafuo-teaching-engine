@@ -69,7 +69,9 @@ export function sanitizeTitle(raw: string): string | null {
   if (!stripped) return null;
   const words = stripped.split(/\s+/).slice(0, TITLE_MAX_WORDS);
   const title = words.join(' ');
-  return title.length > TITLE_MAX_CHARS ? `${title.slice(0, TITLE_MAX_CHARS - 1).trimEnd()}…` : title;
+  return title.length > TITLE_MAX_CHARS
+    ? `${title.slice(0, TITLE_MAX_CHARS - 1).trimEnd()}…`
+    : title;
 }
 
 /**
@@ -191,7 +193,11 @@ export interface TitleOutcome {
 }
 
 function needsTitle(conversation: TutorConversation): boolean {
-  return conversation.title === null || conversation.titleSource === null || conversation.titleSource === 'pending';
+  return (
+    conversation.title === null ||
+    conversation.titleSource === null ||
+    conversation.titleSource === 'pending'
+  );
 }
 
 /**
@@ -202,7 +208,11 @@ function needsTitle(conversation: TutorConversation): boolean {
 export async function ensureConversationTitle(input: EnsureTitleInput): Promise<TitleOutcome> {
   const fresh = (await readConversation(input.pool, input.conversation.id)) ?? input.conversation;
   const association = fresh.lessonAssociation;
-  const unchanged: TitleOutcome = { title: fresh.title, titleSource: fresh.titleSource, changed: false };
+  const unchanged: TitleOutcome = {
+    title: fresh.title,
+    titleSource: fresh.titleSource,
+    changed: false,
+  };
 
   // A confident lesson match names the conversation (possibly replacing a topic).
   if (
@@ -237,7 +247,11 @@ export async function ensureConversationTitle(input: EnsureTitleInput): Promise<
       title = topic ? `${itemTitle} — ${topic}` : `${itemTitle} — ${siblings + 1}`;
       source = 'lesson_suffix';
     }
-    await updateConversationTitle(input.pool, fresh.id, { title, titleSource: source, now: input.now });
+    await updateConversationTitle(input.pool, fresh.id, {
+      title,
+      titleSource: source,
+      now: input.now,
+    });
     return { title, titleSource: source, changed: true };
   }
 
@@ -256,14 +270,23 @@ export async function ensureConversationTitle(input: EnsureTitleInput): Promise<
     executor: input.executor,
   });
   if (topic) {
-    await updateConversationTitle(input.pool, fresh.id, { title: topic, titleSource: 'topic', now: input.now });
+    await updateConversationTitle(input.pool, fresh.id, {
+      title: topic,
+      titleSource: 'topic',
+      now: input.now,
+    });
     return { title: topic, titleSource: 'topic', changed: true };
   }
   // Both routes failed: show keywords; `pending` retries after the next turn,
   // a second failure settles on `fallback`. A row created `pending` with no
   // title yet has never been tried — this is its first failure.
   const keywords = keywordTitle(input.firstTurn.student) ?? fresh.title ?? null;
-  const source: TitleSource = fresh.titleSource === 'pending' && fresh.title !== null ? 'fallback' : 'pending';
-  await updateConversationTitle(input.pool, fresh.id, { title: keywords, titleSource: source, now: input.now });
+  const source: TitleSource =
+    fresh.titleSource === 'pending' && fresh.title !== null ? 'fallback' : 'pending';
+  await updateConversationTitle(input.pool, fresh.id, {
+    title: keywords,
+    titleSource: source,
+    now: input.now,
+  });
   return { title: keywords, titleSource: source, changed: true };
 }

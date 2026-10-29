@@ -1,9 +1,7 @@
 {
   "table": "arabic-letters",
   "description": "Arabic-letter variable names (D-1 Saudi curriculum convention, D-10 renderer safety net). Mathematics and Physics only; the conjunction و is never a variable.",
-  "roles": [
-    "variable"
-  ],
+  "roles": ["variable"],
   "entries": [
     {
       "key": "ا",

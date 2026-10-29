@@ -66,7 +66,8 @@ export function readSpeechConfig(
   return {
     mode,
     subjects,
-    profileScope: env.TTS_AR_PROFILE_SCOPE?.trim() === 'all-arabic' ? 'all-arabic' : 'scientific-subjects',
+    profileScope:
+      env.TTS_AR_PROFILE_SCOPE?.trim() === 'all-arabic' ? 'all-arabic' : 'scientific-subjects',
     arProvider: env.TTS_AR_PROVIDER?.trim() || DEFAULT_AR_PROVIDER,
     arModel: env.TTS_AR_MODEL?.trim() || DEFAULT_AR_MODEL,
     arVoice: env.TTS_AR_VOICE?.trim() || DEFAULT_AR_VOICE,

@@ -16,17 +16,23 @@ import { SCENES_SQL, STAGES_SQL, withReadOnly, type StageRow } from './satts/db-
 async function main() {
   const apply = process.argv.includes('--apply');
   if (apply && !process.argv.includes('--confirm-owner-approval')) {
-    console.error('Refusing --apply without --confirm-owner-approval (no data change without approval).');
+    console.error(
+      'Refusing --apply without --confirm-owner-approval (no data change without approval).',
+    );
     process.exit(2);
   }
   if (apply) {
-    console.error('The apply step writes through the owner-bound store; run it only in an approved maintenance window.');
+    console.error(
+      'The apply step writes through the owner-bound store; run it only in an approved maintenance window.',
+    );
     process.exit(2);
   }
   const policy = loadPolicyPack('ar', { allowProposed: false });
   await withReadOnly(async (query) => {
     for (const stage of await query<StageRow>(STAGES_SQL)) {
-      const scenes = await query<{ id: string; data: { actions?: unknown[] } }>(SCENES_SQL, [stage.id]);
+      const scenes = await query<{ id: string; data: { actions?: unknown[] } }>(SCENES_SQL, [
+        stage.id,
+      ]);
       const document: MaintenanceDocument = {
         stage: { ...stage.data, id: stage.id },
         scenes: scenes.map((scene) => ({ id: scene.id, actions: scene.data?.actions ?? [] })),

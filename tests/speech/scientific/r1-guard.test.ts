@@ -11,7 +11,14 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { chemistryExpression, mathRelation, mulberry32, narration, physicsExpression, type Rng } from './generator';
+import {
+  chemistryExpression,
+  mathRelation,
+  mulberry32,
+  narration,
+  physicsExpression,
+  type Rng,
+} from './generator';
 import { loadAudit, loadGolden } from './helpers';
 import { r1Violations, words } from './r1';
 
@@ -30,12 +37,14 @@ describe('R1 guard: no semantic expansion', () => {
     for (const c of golden) {
       for (const mode of ['natural', 'accessible'] as const) {
         const found = r1Violations(c.original, c.subject, mode);
-        if (found.length > 0) violations[c.id] = [...new Set([...(violations[c.id] ?? []), ...found])].sort();
+        if (found.length > 0)
+          violations[c.id] = [...new Set([...(violations[c.id] ?? []), ...found])].sort();
       }
     }
     for (const c of audit) {
       const found = r1Violations(c.original, c.subject, c.mode);
-      if (found.length > 0) violations[c.id] = [...new Set([...(violations[c.id] ?? []), ...found])].sort();
+      if (found.length > 0)
+        violations[c.id] = [...new Set([...(violations[c.id] ?? []), ...found])].sort();
     }
     expect(violations).toEqual(PENDING);
   });
@@ -44,17 +53,20 @@ describe('R1 guard: no semantic expansion', () => {
     ['MATH', (rng: Rng) => narration(rng, mathRelation), 2101],
     ['PHYSICS', (rng: Rng) => narration(rng, physicsExpression), 2202],
     ['CHEMISTRY', (rng: Rng) => narration(rng, chemistryExpression), 2303],
-  ] as const)('%s: generated narration adds no forbidden meaning (seeded)', (subject, gen, seed) => {
-    const rng = mulberry32(seed);
-    const pendingWords = new Set(Object.values(PENDING).flat());
-    for (let i = 0; i < 200; i += 1) {
-      const text = gen(rng);
-      for (const mode of ['natural', 'accessible'] as const) {
-        const found = r1Violations(text, subject, mode).filter((word) => !pendingWords.has(word));
-        expect(found, `seed ${seed} run ${i} ${mode}: ${JSON.stringify(text)}`).toEqual([]);
+  ] as const)(
+    '%s: generated narration adds no forbidden meaning (seeded)',
+    (subject, gen, seed) => {
+      const rng = mulberry32(seed);
+      const pendingWords = new Set(Object.values(PENDING).flat());
+      for (let i = 0; i < 200; i += 1) {
+        const text = gen(rng);
+        for (const mode of ['natural', 'accessible'] as const) {
+          const found = r1Violations(text, subject, mode).filter((word) => !pendingWords.has(word));
+          expect(found, `seed ${seed} run ${i} ${mode}: ${JSON.stringify(text)}`).toEqual([]);
+        }
       }
-    }
-  });
+    },
+  );
 
   it('the guard itself sees an added name', () => {
     // A reading that invents a name is caught; one that repeats the author's word is not.

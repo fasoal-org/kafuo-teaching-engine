@@ -7,10 +7,7 @@ import {
 } from '@/lib/server/teaching-package/content-resource';
 import type { ParsedPdfContent } from '@/lib/types/pdf';
 
-const PDF_BYTES = Buffer.concat([
-  Buffer.from('%PDF-1.7\n'),
-  Buffer.alloc(64, 0x20),
-]);
+const PDF_BYTES = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(64, 0x20)]);
 
 function okFetch(bytes: Buffer = PDF_BYTES): never {
   return ((input: string | URL, init?: RequestInit) =>
@@ -20,7 +17,9 @@ function okFetch(bytes: Buffer = PDF_BYTES): never {
     })) as never;
 }
 
-function parsedWith(images: Array<{ id: string; src: string; pageNumber: number }> = []): ParsedPdfContent {
+function parsedWith(
+  images: Array<{ id: string; src: string; pageNumber: number }> = [],
+): ParsedPdfContent {
   return {
     text: 'lesson text',
     images: images.map((image) => image.src),
@@ -30,7 +29,14 @@ function parsedWith(images: Array<{ id: string; src: string; pageNumber: number 
 
 function okExtract(parsed: ParsedPdfContent) {
   return (async () => ({
-    metadata: { fileName: 'lesson.pdf', fileSize: PDF_BYTES.length, mimeType: 'application/pdf', pageCount: 3, providerId: 'unpdf', processingTime: 1 },
+    metadata: {
+      fileName: 'lesson.pdf',
+      fileSize: PDF_BYTES.length,
+      mimeType: 'application/pdf',
+      pageCount: 3,
+      providerId: 'unpdf',
+      processingTime: 1,
+    },
     blocks: [{ type: 'text', text: parsed.text, pageNumber: 1 }],
     assets: [],
   })) as never;
@@ -66,7 +72,8 @@ describe('acquireContentResource (Layer A)', () => {
   });
 
   it('retries transient download failures within the policy, then succeeds', async () => {
-    const attempts = vi.fn()
+    const attempts = vi
+      .fn()
       .mockRejectedValueOnce(new Error('network hiccup'))
       .mockResolvedValueOnce(
         new Response(new Uint8Array(PDF_BYTES), {
@@ -100,10 +107,12 @@ describe('acquireContentResource (Layer A)', () => {
 
   it('fails terminally on a checksum mismatch', async () => {
     await expect(
-      acquireContentResource(
-        resource({ checksumSha256: 'deadbeef'.repeat(8) }),
-        { secureFetch: okFetch() as never, extract: okExtract(parsedWith()) as never, maxAttempts: 2, dispatcher: {} as never },
-      ),
+      acquireContentResource(resource({ checksumSha256: 'deadbeef'.repeat(8) }), {
+        secureFetch: okFetch() as never,
+        extract: okExtract(parsedWith()) as never,
+        maxAttempts: 2,
+        dispatcher: {} as never,
+      }),
     ).rejects.toMatchObject({ code: 'CONTENT_RESOURCE_INTEGRITY_MISMATCH', retryable: false });
   });
 
@@ -128,13 +137,11 @@ describe('acquireContentResource (Layer A)', () => {
     ).rejects.toMatchObject({ code: 'PDF_EXTRACTION_FAILED', retryable: true });
     expect(failing).toHaveBeenCalledTimes(2);
 
-    const emptyExtract = vi.fn(
-      (async () => ({
-        metadata: { pageCount: 0 },
-        blocks: [],
-        assets: [],
-      })) as never,
-    );
+    const emptyExtract = vi.fn((async () => ({
+      metadata: { pageCount: 0 },
+      blocks: [],
+      assets: [],
+    })) as never);
     await expect(
       acquireContentResource(resource(), {
         secureFetch: okFetch() as never,
@@ -146,7 +153,9 @@ describe('acquireContentResource (Layer A)', () => {
   });
 
   it('exhausts transient download retries and surfaces a safe message (no URL)', async () => {
-    const failing = vi.fn().mockRejectedValue(new Error('ECONNRESET https://r2.example.test/secret'));
+    const failing = vi
+      .fn()
+      .mockRejectedValue(new Error('ECONNRESET https://r2.example.test/secret'));
     const caught = await acquireContentResource(resource(), {
       secureFetch: failing as never,
       extract: okExtract(parsedWith()) as never,
@@ -163,14 +172,21 @@ describe('acquireContentResource (Layer A)', () => {
 
   it('normalizes extracted source visuals into the vision channel', async () => {
     const png = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
-      0, 0, 0, 3, 0, 0, 0, 2, 8, 6, 0, 0, 0,
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0,
+      3, 0, 0, 0, 2, 8, 6, 0, 0, 0,
     ]);
     const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
     // The real pdf-compat adapter builds pdfImages from the artifact's image
     // assets — exercise that boundary with a genuine asset entry.
     const extract = vi.fn(async () => ({
-      metadata: { fileName: 'lesson.pdf', fileSize: PDF_BYTES.length, mimeType: 'application/pdf', pageCount: 3, providerId: 'unpdf', processingTime: 1 },
+      metadata: {
+        fileName: 'lesson.pdf',
+        fileSize: PDF_BYTES.length,
+        mimeType: 'application/pdf',
+        pageCount: 3,
+        providerId: 'unpdf',
+        processingTime: 1,
+      },
       blocks: [{ type: 'text', text: 'lesson text', pageNumber: 1 }],
       assets: [
         {

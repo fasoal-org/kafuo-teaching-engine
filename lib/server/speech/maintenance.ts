@@ -22,7 +22,9 @@ export interface MaintenanceDocument {
   scenes: Array<{ id: string; actions?: unknown[] }>;
 }
 
-function speechActions(document: MaintenanceDocument): Array<{ sceneId: string; action: SpeechAction }> {
+function speechActions(
+  document: MaintenanceDocument,
+): Array<{ sceneId: string; action: SpeechAction }> {
   return document.scenes.flatMap((scene) =>
     ((scene.actions ?? []) as SpeechAction[])
       .filter((action) => action?.type === 'speech' && typeof action.text === 'string')
@@ -46,10 +48,20 @@ export function revalidateDocument(
   options: { apply?: boolean } = {},
 ): { report: RevalidationReport; document: MaintenanceDocument } {
   const copy: MaintenanceDocument = options.apply ? structuredClone(document) : document;
-  const report: RevalidationReport = { stageId: document.stage.id, promotable: [], stale: [], skipped: 0 };
+  const report: RevalidationReport = {
+    stageId: document.stage.id,
+    promotable: [],
+    stale: [],
+    skipped: 0,
+  };
   for (const { action } of speechActions(copy)) {
     const provenance = sanitizeAudioProvenance(action.audioProvenance);
-    if (!action.audioId || !provenance || provenance.policyVersion === null || !provenance.subjectCode) {
+    if (
+      !action.audioId ||
+      !provenance ||
+      provenance.policyVersion === null ||
+      !provenance.subjectCode
+    ) {
       report.skipped += 1;
       continue;
     }
@@ -73,9 +85,17 @@ export function revalidateDocument(
       policy,
     );
     if (sha256Hex(rendered.preparedText) === provenance.preparedDigest) {
-      report.promotable.push({ actionId: action.id, from: provenance.policyVersion, to: policy.policyVersion });
+      report.promotable.push({
+        actionId: action.id,
+        from: provenance.policyVersion,
+        to: policy.policyVersion,
+      });
       if (options.apply) {
-        action.audioProvenance = { ...provenance, policyVersion: policy.policyVersion, policyStatus: policy.status };
+        action.audioProvenance = {
+          ...provenance,
+          policyVersion: policy.policyVersion,
+          policyStatus: policy.status,
+        };
       }
     } else {
       report.stale.push({ actionId: action.id, reason: 'prepared' });
@@ -97,7 +117,8 @@ export async function planSubjectBackfill(
   for (const stage of stages) {
     if (stage.subjectCode) continue;
     const code = await governedSubject(stage.id);
-    if (code && /^[A-Z_]{2,32}$/.test(code)) proposals.push({ stageId: stage.id, subjectCode: code });
+    if (code && /^[A-Z_]{2,32}$/.test(code))
+      proposals.push({ stageId: stage.id, subjectCode: code });
   }
   return proposals;
 }
@@ -131,7 +152,8 @@ export function inventoryDocument(
     row.speechActions += 1;
     if (!action.audioId || sanitizeAudioProvenance(action.audioProvenance)) continue;
     row.legacyAudioActions += 1;
-    if (detectExpressions(action.text, subjectCode).length === 0 || !isArabicLanguage(language)) continue;
+    if (detectExpressions(action.text, subjectCode).length === 0 || !isArabicLanguage(language))
+      continue;
     row.legacyWithExpressions += 1;
     row.regenerationChars += renderScientificSpeech(
       {

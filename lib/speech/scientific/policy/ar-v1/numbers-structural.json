@@ -1,15 +1,11 @@
 {
   "table": "numbers-structural",
   "description": "Words for small integers in structural roles only: exponents, root indices, subscript indices, chemical coefficients and counts, charge magnitudes (plan §10.1). O-1: every form is in the «اثنين» register.",
-  "roles": [
-    "number"
-  ],
+  "roles": ["number"],
   "entries": [
     {
       "key": "0",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "صفر",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -17,9 +13,7 @@
     },
     {
       "key": "1",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "واحد",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -27,9 +21,7 @@
     },
     {
       "key": "2",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "اثنين",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -37,9 +29,7 @@
     },
     {
       "key": "3",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ثلاثة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -47,9 +37,7 @@
     },
     {
       "key": "4",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "أربعة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -57,9 +45,7 @@
     },
     {
       "key": "5",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "خمسة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -67,9 +53,7 @@
     },
     {
       "key": "6",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ستة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -77,9 +61,7 @@
     },
     {
       "key": "7",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "سبعة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -87,9 +69,7 @@
     },
     {
       "key": "8",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ثمانية",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -97,9 +77,7 @@
     },
     {
       "key": "9",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "تسعة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -107,9 +85,7 @@
     },
     {
       "key": "10",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "عشرة",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -117,9 +93,7 @@
     },
     {
       "key": "11",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "أحد عشر",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -127,9 +101,7 @@
     },
     {
       "key": "12",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "اثني عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -137,9 +109,7 @@
     },
     {
       "key": "13",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ثلاثة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -147,9 +117,7 @@
     },
     {
       "key": "14",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "أربعة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -157,9 +125,7 @@
     },
     {
       "key": "15",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "خمسة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -167,9 +133,7 @@
     },
     {
       "key": "16",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ستة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -177,9 +141,7 @@
     },
     {
       "key": "17",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "سبعة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -187,9 +149,7 @@
     },
     {
       "key": "18",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "ثمانية عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -197,9 +157,7 @@
     },
     {
       "key": "19",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "تسعة عشر",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -207,9 +165,7 @@
     },
     {
       "key": "20",
-      "roles": [
-        "number"
-      ],
+      "roles": ["number"],
       "natural": "عشرين",
       "status": "proposed",
       "source": "Upgrade plan P1 (O-1): «اثنين» register, 30 Sep 2026; pending curriculum reviewer confirmation",
@@ -217,9 +173,7 @@
     },
     {
       "key": "2",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "مرتين",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -227,9 +181,7 @@
     },
     {
       "key": "3",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "ثلاث مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -237,9 +189,7 @@
     },
     {
       "key": "4",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "أربع مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -247,9 +197,7 @@
     },
     {
       "key": "5",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "خمس مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -257,9 +205,7 @@
     },
     {
       "key": "6",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "ست مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -267,9 +213,7 @@
     },
     {
       "key": "7",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "سبع مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -277,9 +221,7 @@
     },
     {
       "key": "8",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "ثماني مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -287,9 +229,7 @@
     },
     {
       "key": "9",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "تسع مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",
@@ -297,9 +237,7 @@
     },
     {
       "key": "10",
-      "roles": [
-        "repeat"
-      ],
+      "roles": ["repeat"],
       "natural": "عشر مرات",
       "status": "proposed",
       "source": "Draft transcription of the common Saudi school convention (D-1, D-2); pending curriculum reviewer transcription from the textbooks",

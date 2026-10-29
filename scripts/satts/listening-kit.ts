@@ -28,22 +28,68 @@ const CAP_USD = 5;
 /** Audit cases to hear (natural mode unless the case is accessible). */
 const CASES = [
   // P5 scope phrasing (O-6)
-  'm-group-squared-n', 'm-sum-squared-n', 'm-nested-pow-n', 'm-pow-of-pow-n', 'm-kB-T-n', 'm-neg-x2-n',
-  'm-sqrt2-x-n', 'm-x-n-plus-1-n', 'm-x-n-plus-1-group-n', 'm-compound-num-n', 'm-frac-then-factor-n',
-  'm-times-whole-squared-n', 'c-complex-outer-n', 'c-complex-inner-n',
+  'm-group-squared-n',
+  'm-sum-squared-n',
+  'm-nested-pow-n',
+  'm-pow-of-pow-n',
+  'm-kB-T-n',
+  'm-neg-x2-n',
+  'm-sqrt2-x-n',
+  'm-x-n-plus-1-n',
+  'm-x-n-plus-1-group-n',
+  'm-compound-num-n',
+  'm-frac-then-factor-n',
+  'm-times-whole-squared-n',
+  'c-complex-outer-n',
+  'c-complex-inner-n',
   // P4 math
-  'm-dydx-slash-n', 'm-a-bc-n', 'm-mixed-frac-n', 'm-mixed-slash-n', 'm-p-of-x-n', 'm-P-of-A-n', 'm-qaf-of-sin-n',
-  'm-x-times-group-n', 'm-times-n', 'm-cdot-n', 'm-ascii-x-n', 'm-given-n', 'm-factorial-n', 'm-sin-bare-n',
+  'm-dydx-slash-n',
+  'm-a-bc-n',
+  'm-mixed-frac-n',
+  'm-mixed-slash-n',
+  'm-p-of-x-n',
+  'm-P-of-A-n',
+  'm-qaf-of-sin-n',
+  'm-x-times-group-n',
+  'm-times-n',
+  'm-cdot-n',
+  'm-ascii-x-n',
+  'm-given-n',
+  'm-factorial-n',
+  'm-sin-bare-n',
   // P6 physics
-  'p-J-per-kgK-n', 'p-m-s-inv-n', 'p-N-m-n', 'p-text-unit-pow-n', 'p-mathrm-unit-n', 'p-glued-s-n', 'p-bare-unit-n',
-  'p-math-cm2-n', 'p-mu-n', 'p-degC-cmd-n', 'p-uncertainty-n',
+  'p-J-per-kgK-n',
+  'p-m-s-inv-n',
+  'p-N-m-n',
+  'p-text-unit-pow-n',
+  'p-mathrm-unit-n',
+  'p-glued-s-n',
+  'p-bare-unit-n',
+  'p-math-cm2-n',
+  'p-mu-n',
+  'p-degC-cmd-n',
+  'p-uncertainty-n',
   // P1/P7 chemistry
-  'c-water-n', 'c-sulfate-n', 'c-count-20-n', 'c-300K-n', 'c-decimal-coeff-n', 'c-hydrate-ascii-n',
-  'c-ascii-charge-n', 'c-bonds-n', 'c-ce-double-bond-n', 'c-gas-arrow-n', 'c-no-space-reaction-n', 'c-electron-n',
+  'c-water-n',
+  'c-sulfate-n',
+  'c-count-20-n',
+  'c-300K-n',
+  'c-decimal-coeff-n',
+  'c-hydrate-ascii-n',
+  'c-ascii-charge-n',
+  'c-bonds-n',
+  'c-ce-double-bond-n',
+  'c-gas-arrow-n',
+  'c-no-space-reaction-n',
+  'c-electron-n',
   // P9 arrow condition (O-10)
   'c-delta-ce-n',
   // accessible samples
-  'm-dydx-slash-a', 'm-half-x-a', 'm-mixed-frac-a', 'm-p-of-x-a', 'c-water-a',
+  'm-dydx-slash-a',
+  'm-half-x-a',
+  'm-mixed-frac-a',
+  'm-p-of-x-a',
+  'c-water-a',
 ];
 
 interface AuditCase {
@@ -61,7 +107,13 @@ function env(): Record<string, string> {
     readFileSync(join(ROOT, '.env.local'), 'utf8')
       .split('\n')
       .filter((line) => /^[A-Z_]+=/.test(line))
-      .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '')]),
+      .map((line) => [
+        line.slice(0, line.indexOf('=')),
+        line
+          .slice(line.indexOf('=') + 1)
+          .trim()
+          .replace(/^["']|["']$/g, ''),
+      ]),
   );
 }
 
@@ -76,7 +128,8 @@ function spent(): number {
   }
 }
 
-const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escape = (text: string) =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
@@ -84,7 +137,10 @@ async function main() {
   const only = process.argv.includes('--only') && onlyArg ? new Set(onlyArg.split(',')) : null;
   for (const id of only ?? []) if (!CASES.includes(id)) throw new Error(`unknown kit case ${id}`);
   const audit = new Map(
-    readFileSync(join(ROOT, 'tests', 'speech', 'scientific', 'golden', 'audit', 'audit-p0.jsonl'), 'utf8')
+    readFileSync(
+      join(ROOT, 'tests', 'speech', 'scientific', 'golden', 'audit', 'audit-p0.jsonl'),
+      'utf8',
+    )
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line) as AuditCase)
@@ -110,9 +166,13 @@ async function main() {
     ).preparedText;
     return { ...c, prepared };
   });
-  const chars = rows.filter((row) => !only || only.has(row.id)).reduce((sum, row) => sum + row.prepared.length, 0);
+  const chars = rows
+    .filter((row) => !only || only.has(row.id))
+    .reduce((sum, row) => sum + row.prepared.length, 0);
   const estimate = chars * USD_PER_CHAR;
-  console.log(`${rows.length} clips, ${chars} characters, ≈ $${estimate.toFixed(3)} (spent so far $${spent().toFixed(3)})`);
+  console.log(
+    `${rows.length} clips, ${chars} characters, ≈ $${estimate.toFixed(3)} (spent so far $${spent().toFixed(3)})`,
+  );
   if (spent() + estimate > CAP_USD) throw new Error('spend cap reached');
   mkdirSync(OUT, { recursive: true });
   const keys = env();
@@ -122,7 +182,14 @@ async function main() {
     const file = `${String(index + 1).padStart(2, '0')}-${row.id}.mp3`;
     if (dryRun || (only && !only.has(row.id))) continue;
     const audio = await generateTTS(
-      { providerId: 'cartesia-tts', apiKey, voice: DEFAULT_AR_VOICE, modelId: DEFAULT_AR_MODEL, language: 'ar-SA', responseFormat: 'mp3' },
+      {
+        providerId: 'cartesia-tts',
+        apiKey,
+        voice: DEFAULT_AR_VOICE,
+        modelId: DEFAULT_AR_MODEL,
+        language: 'ar-SA',
+        responseFormat: 'mp3',
+      },
       row.prepared,
     );
     writeFileSync(join(OUT, file), audio.audio);
@@ -142,7 +209,8 @@ td,th{border:1px solid #ccc;padding:6px;vertical-align:top;font-size:15px}th{bac
 <table><tr><th>#</th><th>المكتوب</th><th>ما يُرسل للصوت</th><th>استمع</th><th>صحيح؟ / ملاحظة</th></tr>
 ${rows
   .map(
-    (row, i) => `<tr><td>${i + 1}<div class="phase">${escape(row.phase)} · ${escape(row.mode)}</div></td><td><code>${escape(row.original)}</code></td><td>${escape(row.prepared)}</td><td><audio controls preload="none" src="${String(i + 1).padStart(2, '0')}-${escape(row.id)}.mp3"></audio></td><td contenteditable="true"></td></tr>`,
+    (row, i) =>
+      `<tr><td>${i + 1}<div class="phase">${escape(row.phase)} · ${escape(row.mode)}</div></td><td><code>${escape(row.original)}</code></td><td>${escape(row.prepared)}</td><td><audio controls preload="none" src="${String(i + 1).padStart(2, '0')}-${escape(row.id)}.mp3"></audio></td><td contenteditable="true"></td></tr>`,
   )
   .join('\n')}
 </table></body></html>`;

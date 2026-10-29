@@ -1,14 +1,8 @@
 {
   "table": "chem-letters",
   "description": "Latin letter names in Arabic script (D-9): chemical element letters and Physics symbols. Counts are Arabic numerals in the «اثنين» register (O-1), read from numbers-structural.",
-  "roles": [
-    "variable",
-    "element"
-  ],
-  "domains": [
-    "PHYSICS",
-    "CHEMISTRY"
-  ],
+  "roles": ["variable", "element"],
+  "domains": ["PHYSICS", "CHEMISTRY"],
   "entries": [
     {
       "key": "A",

@@ -33,7 +33,10 @@ import {
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
-  query<Row extends Record<string, unknown> = Record<string, unknown>>(text: string, params?: unknown[]) {
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    params?: unknown[],
+  ) {
     return this.db.query<Row>(text, params);
   }
   async end() {
@@ -44,7 +47,9 @@ class PGlitePool {
 const NOW = 1_800_000_000;
 let seq = 0;
 
-function started(overrides: Partial<StartedAttemptInput> & { association: StartedAttemptInput['association'] }): StartedAttemptInput {
+function started(
+  overrides: Partial<StartedAttemptInput> & { association: StartedAttemptInput['association'] },
+): StartedAttemptInput {
   seq += 1;
   return {
     id: `tma-${seq}`,
@@ -87,7 +92,12 @@ function completion(overrides: Partial<AttemptCompletionInput> = {}): AttemptCom
       usageUnavailableReason: null,
       usageInconsistent: false,
     },
-    cost: { rateCardVersion: 'v1', costUsd: 0.0012, costBasis: 'full', costUnavailableReason: null },
+    cost: {
+      rateCardVersion: 'v1',
+      costUsd: 0.0012,
+      costBasis: 'full',
+      costUnavailableReason: null,
+    },
     budgetBreach: false,
     ttftMs: 300,
     ttftUnavailableReason: null,
@@ -116,38 +126,248 @@ describe('teaching-model report', () => {
     await insertStartedAttempt(pool, started({ association: turn('t1', 'conv-A') }));
     await completeAttempt(pool, 'tma-1', completion());
     await insertStartedAttempt(pool, started({ association: turn('t2', 'conv-A') }));
-    await completeAttempt(pool, 'tma-2', completion({ outcome: 'unusable_output', fallbackTriggered: true, fallbackReason: 'unusable_output', error: { code: 'unrenderable' }, ttftMs: null, ttftUnavailableReason: 'no_visible_delta', totalMs: 800 }));
-    await insertStartedAttempt(pool, started({ association: turn('t2', 'conv-A'), role: 'fallback', attemptIndex: 2, providerId: 'openai', modelId: 'gpt-5-nano', modelString: 'openai:gpt-5-nano', thinkingLabel: 'minimal', budget: { estimateTokens: 4200, counterKind: 'exact', effectiveCap: 30_080 } }));
-    await completeAttempt(pool, 'tma-3', completion({ primaryFailureMs: 800, totalMs: 1500, ttftMs: 500, cost: { rateCardVersion: 'v1', costUsd: 0.0005, costBasis: 'full', costUnavailableReason: null } }));
+    await completeAttempt(
+      pool,
+      'tma-2',
+      completion({
+        outcome: 'unusable_output',
+        fallbackTriggered: true,
+        fallbackReason: 'unusable_output',
+        error: { code: 'unrenderable' },
+        ttftMs: null,
+        ttftUnavailableReason: 'no_visible_delta',
+        totalMs: 800,
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: turn('t2', 'conv-A'),
+        role: 'fallback',
+        attemptIndex: 2,
+        providerId: 'openai',
+        modelId: 'gpt-5-nano',
+        modelString: 'openai:gpt-5-nano',
+        thinkingLabel: 'minimal',
+        budget: { estimateTokens: 4200, counterKind: 'exact', effectiveCap: 30_080 },
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-3',
+      completion({
+        primaryFailureMs: 800,
+        totalMs: 1500,
+        ttftMs: 500,
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.0005,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
     // Conversation B, student b, CHEMISTRY: primary rate limited → fallback ok.
-    await insertStartedAttempt(pool, started({ association: turn('t3', 'conv-B', 'student-b'), subjectCode: 'CHEMISTRY' }));
-    await completeAttempt(pool, 'tma-4', completion({ outcome: 'rate_limited', fallbackTriggered: true, fallbackReason: 'rate_limited', error: { code: '429', status: 429 }, usage: { ...completion().usage, usageAvailable: false, inputTokensTotal: null, cacheReadTokens: null, freshInputTokens: null, outputTokensTotal: null, reasoningTokens: null, visibleOutputTokens: null, usageUnavailableReason: 'failed_before_response' }, cost: { rateCardVersion: null, costUsd: null, costBasis: null, costUnavailableReason: 'usage_missing' }, ttftMs: null, ttftUnavailableReason: 'failed_before_response' }));
-    await insertStartedAttempt(pool, started({ association: turn('t3', 'conv-B', 'student-b'), subjectCode: 'CHEMISTRY', role: 'fallback', attemptIndex: 2, providerId: 'openai', modelId: 'gpt-5.6-luna', modelString: 'openai:gpt-5.6-luna', thinkingLabel: 'low' }));
+    await insertStartedAttempt(
+      pool,
+      started({ association: turn('t3', 'conv-B', 'student-b'), subjectCode: 'CHEMISTRY' }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-4',
+      completion({
+        outcome: 'rate_limited',
+        fallbackTriggered: true,
+        fallbackReason: 'rate_limited',
+        error: { code: '429', status: 429 },
+        usage: {
+          ...completion().usage,
+          usageAvailable: false,
+          inputTokensTotal: null,
+          cacheReadTokens: null,
+          freshInputTokens: null,
+          outputTokensTotal: null,
+          reasoningTokens: null,
+          visibleOutputTokens: null,
+          usageUnavailableReason: 'failed_before_response',
+        },
+        cost: {
+          rateCardVersion: null,
+          costUsd: null,
+          costBasis: null,
+          costUnavailableReason: 'usage_missing',
+        },
+        ttftMs: null,
+        ttftUnavailableReason: 'failed_before_response',
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: turn('t3', 'conv-B', 'student-b'),
+        subjectCode: 'CHEMISTRY',
+        role: 'fallback',
+        attemptIndex: 2,
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        modelString: 'openai:gpt-5.6-luna',
+        thinkingLabel: 'low',
+      }),
+    );
     await completeAttempt(pool, 'tma-5', completion({ primaryFailureMs: 200 }));
     // Help: one openmaic_runtime, one kafuo_backend (legacy).
-    await insertStartedAttempt(pool, started({ association: { kind: 'turn', turnId: 'h1', helpSessionId: 'hs-1', studentRef: 'student-a' }, capability: 'help', stage: 'help-turn', subjectCode: 'PHYSICS' }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: { kind: 'turn', turnId: 'h1', helpSessionId: 'hs-1', studentRef: 'student-a' },
+        capability: 'help',
+        stage: 'help-turn',
+        subjectCode: 'PHYSICS',
+      }),
+    );
     await completeAttempt(pool, 'tma-6', completion());
-    await insertStartedAttempt(pool, started({ association: { kind: 'turn', turnId: 'kafuo:conv:9:cm', conversationId: 'kafuo:9', studentRef: 'student-c', legacyHelpLinkRef: 'link:1' }, capability: 'help', stage: 'help-turn', subjectCode: 'PHYSICS', origin: 'kafuo_backend' }));
-    await completeAttempt(pool, 'tma-7', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.002, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'turn',
+          turnId: 'kafuo:conv:9:cm',
+          conversationId: 'kafuo:9',
+          studentRef: 'student-c',
+          legacyHelpLinkRef: 'link:1',
+        },
+        capability: 'help',
+        stage: 'help-turn',
+        subjectCode: 'PHYSICS',
+        origin: 'kafuo_backend',
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-7',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.002,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
     // Generation: two attempts of one version, one with a fallback.
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', generationRun: 1, versionId: 'v-1' }, capability: 'package_generation', stage: 'scene-content:slide', budget: null }));
-    await completeAttempt(pool, 'tma-8', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.05, costBasis: 'full', costUnavailableReason: null } }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-2', generationRun: 2, versionId: 'v-1' }, capability: 'package_generation', stage: 'scene-content:slide', budget: null }));
-    await completeAttempt(pool, 'tma-9', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.04, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          generationRun: 1,
+          versionId: 'v-1',
+        },
+        capability: 'package_generation',
+        stage: 'scene-content:slide',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-8',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.05,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-2',
+          generationRun: 2,
+          versionId: 'v-1',
+        },
+        capability: 'package_generation',
+        stage: 'scene-content:slide',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-9',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.04,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
     // Budget breach on a free_chat row.
     await insertStartedAttempt(pool, started({ association: turn('t4', 'conv-A') }));
-    await completeAttempt(pool, 'tma-10', completion({ budgetBreach: true, usage: { ...completion().usage, inputTokensTotal: 33_000, freshInputTokens: 33_000 } }));
+    await completeAttempt(
+      pool,
+      'tma-10',
+      completion({
+        budgetBreach: true,
+        usage: { ...completion().usage, inputTokensTotal: 33_000, freshInputTokens: 33_000 },
+      }),
+    );
     // Incomplete: an old started row whose worker is gone (sweeper marks it); a late completion afterwards.
-    await insertStartedAttempt(pool, started({ association: turn('t5', 'conv-C', 'student-b'), startedAt: NOW - 3600, workerId: 'host:dead' }));
-    await insertStartedAttempt(pool, started({ association: turn('t6', 'conv-C', 'student-b'), startedAt: NOW - 3600, workerId: 'host:dead' }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: turn('t5', 'conv-C', 'student-b'),
+        startedAt: NOW - 3600,
+        workerId: 'host:dead',
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: turn('t6', 'conv-C', 'student-b'),
+        startedAt: NOW - 3600,
+        workerId: 'host:dead',
+      }),
+    );
     await markIncompleteAttempts(pool, { now: NOW, deadlineS: 19 * 60, heartbeatStaleS: 90 });
     await completeAttempt(pool, 'tma-12', completion({ completedAt: NOW - 10 }));
     // Outbox: pending (old), conflict, terminal_failed, delivered.
-    await enqueueFinalize(pool, { reservationId: 'r-pending', tenantId: '1', turnId: 't7', turnAttempt: 1, outcome: 'delivered', now: NOW - 900 });
-    await enqueueFinalize(pool, { reservationId: 'r-conflict', tenantId: '1', turnId: 't8', turnAttempt: 1, outcome: 'not_delivered', reason: 'model_unavailable', now: NOW - 500 });
+    await enqueueFinalize(pool, {
+      reservationId: 'r-pending',
+      tenantId: '1',
+      turnId: 't7',
+      turnAttempt: 1,
+      outcome: 'delivered',
+      now: NOW - 900,
+    });
+    await enqueueFinalize(pool, {
+      reservationId: 'r-conflict',
+      tenantId: '1',
+      turnId: 't8',
+      turnAttempt: 1,
+      outcome: 'not_delivered',
+      reason: 'model_unavailable',
+      now: NOW - 500,
+    });
     await markFinalizeConflict(pool, 'r-conflict', { now: NOW - 400 });
-    await enqueueFinalize(pool, { reservationId: 'r-terminal', tenantId: '1', turnId: 't9', turnAttempt: 2, outcome: 'delivered', now: NOW - 5000 });
-    await markFinalizeTerminalFailed(pool, 'r-terminal', { now: NOW - 100, lastStatus: null, lastError: 'TypeError' });
+    await enqueueFinalize(pool, {
+      reservationId: 'r-terminal',
+      tenantId: '1',
+      turnId: 't9',
+      turnAttempt: 2,
+      outcome: 'delivered',
+      now: NOW - 5000,
+    });
+    await markFinalizeTerminalFailed(pool, 'r-terminal', {
+      now: NOW - 100,
+      lastStatus: null,
+      lastError: 'TypeError',
+    });
   });
 
   afterEach(async () => {
@@ -156,30 +376,61 @@ describe('teaching-model report', () => {
 
   it('aggregates cost per turn / conversation / student / subject / model with an honest completeness line', async () => {
     const report = await buildTeachingModelReport(pool, { now: NOW });
-    expect(report.overall).toMatchObject({ completeness: { attempts: 12, complete: 11, incomplete: 1, started: 0, lateCompleted: 1, lowerBound: true } });
-    expect(completenessLine(report.overall!)).toBe('12 attempts, 11 complete, 1 incomplete, 1 late-completed — sums are LOWER BOUNDS');
+    expect(report.overall).toMatchObject({
+      completeness: {
+        attempts: 12,
+        complete: 11,
+        incomplete: 1,
+        started: 0,
+        lateCompleted: 1,
+        lowerBound: true,
+      },
+    });
+    expect(completenessLine(report.overall!)).toBe(
+      '12 attempts, 11 complete, 1 incomplete, 1 late-completed — sums are LOWER BOUNDS',
+    );
 
-    const byConversation = Object.fromEntries(report.conversational.perConversation.map((r) => [r.group.conversation_id, r]));
+    const byConversation = Object.fromEntries(
+      report.conversational.perConversation.map((r) => [r.group.conversation_id, r]),
+    );
     expect(byConversation['conv-A']!.cost.usd).toBeCloseTo(0.0012 + 0.0012 + 0.0005 + 0.0012, 8);
-    expect(byConversation['conv-A']!.completeness).toMatchObject({ attempts: 4, complete: 4, lowerBound: false });
-    expect(byConversation['conv-C']!.completeness).toMatchObject({ attempts: 2, complete: 1, incomplete: 1, lateCompleted: 1, lowerBound: true });
+    expect(byConversation['conv-A']!.completeness).toMatchObject({
+      attempts: 4,
+      complete: 4,
+      lowerBound: false,
+    });
+    expect(byConversation['conv-C']!.completeness).toMatchObject({
+      attempts: 2,
+      complete: 1,
+      incomplete: 1,
+      lateCompleted: 1,
+      lowerBound: true,
+    });
     expect(byConversation['kafuo:9']!.cost.usd).toBeCloseTo(0.002, 8);
 
-    const byStudent = Object.fromEntries(report.conversational.perStudent.map((r) => [r.group.student_ref, r]));
+    const byStudent = Object.fromEntries(
+      report.conversational.perStudent.map((r) => [r.group.student_ref, r]),
+    );
     expect(byStudent['student-a']!.completeness.attempts).toBe(5);
     expect(byStudent['student-b']!.completeness.attempts).toBe(4);
     expect(byStudent['student-c']!.cost.usd).toBeCloseTo(0.002, 8);
 
-    const bySubject = Object.fromEntries(report.conversational.perSubject.map((r) => [r.group.subject_code, r]));
+    const bySubject = Object.fromEntries(
+      report.conversational.perSubject.map((r) => [r.group.subject_code, r]),
+    );
     expect(Object.keys(bySubject).sort()).toEqual(['CHEMISTRY', 'MATH', 'PHYSICS']);
     expect(bySubject['CHEMISTRY']!.tokens.usageUnavailable).toBe(1);
     expect(bySubject['CHEMISTRY']!.cost.unpriced).toBe(1);
 
-    const byModel = Object.fromEntries(report.conversational.perModel.map((r) => [r.group.model_string, r]));
+    const byModel = Object.fromEntries(
+      report.conversational.perModel.map((r) => [r.group.model_string, r]),
+    );
     expect(byModel['openai:gpt-5-nano']!.completeness.attempts).toBe(1);
     expect(byModel['qwen:qwen3.7-flash']!.outcomes.budgetBreaches).toBe(1);
 
-    const perTurn = Object.fromEntries(report.conversational.perTurn.map((r) => [r.group.turn_id, r]));
+    const perTurn = Object.fromEntries(
+      report.conversational.perTurn.map((r) => [r.group.turn_id, r]),
+    );
     expect(perTurn['t2']!.completeness.attempts).toBe(2);
     expect(perTurn['t2']!.outcomes.fallbackTriggered).toBe(1);
   });
@@ -187,26 +438,59 @@ describe('teaching-model report', () => {
   it('reports generation cost per version and attempt, separate from conversational spend', async () => {
     const report = await buildTeachingModelReport(pool, { now: NOW });
     expect(report.generation.perVersion).toHaveLength(1);
-    expect(report.generation.perVersion[0]).toMatchObject({ group: { version_id: 'v-1' }, completeness: { attempts: 2, complete: 2 } });
+    expect(report.generation.perVersion[0]).toMatchObject({
+      group: { version_id: 'v-1' },
+      completeness: { attempts: 2, complete: 2 },
+    });
     expect(report.generation.perVersion[0]!.cost.usd).toBeCloseTo(0.09, 8);
-    expect(report.generation.perAttempt.map((r) => r.group.generation_attempt_id)).toEqual(['ga-1', 'ga-2']);
-    const conversationalTotal = report.conversational.perSubject.reduce((sum, r) => sum + r.cost.usd, 0);
+    expect(report.generation.perAttempt.map((r) => r.group.generation_attempt_id)).toEqual([
+      'ga-1',
+      'ga-2',
+    ]);
+    const conversationalTotal = report.conversational.perSubject.reduce(
+      (sum, r) => sum + r.cost.usd,
+      0,
+    );
     expect(conversationalTotal).toBeLessThan(0.09);
   });
 
   it('fallback rate by subject and primary model includes unusable_output; latency percentiles by model / role / capability', async () => {
     const fallback = await fallbackBreakdown(pool);
-    const math = fallback.find((r) => r.subjectCode === 'MATH' && r.modelString === 'qwen:qwen3.7-flash')!;
+    const math = fallback.find(
+      (r) => r.subjectCode === 'MATH' && r.modelString === 'qwen:qwen3.7-flash',
+    )!;
     // 5 conversational + 2 generation primary rows on the MATH route; one fell back (unusable output).
-    expect(math).toMatchObject({ primaryAttempts: 7, fallbackTriggered: 1, byReason: { unusable_output: 1 }, fallbackSucceeded: 1, fallbackFailed: 0 });
+    expect(math).toMatchObject({
+      primaryAttempts: 7,
+      fallbackTriggered: 1,
+      byReason: { unusable_output: 1 },
+      fallbackSucceeded: 1,
+      fallbackFailed: 0,
+    });
     expect(math.fallbackRate).toBeCloseTo(1 / 7, 6);
     const chemistry = fallback.find((r) => r.subjectCode === 'CHEMISTRY')!;
-    expect(chemistry).toMatchObject({ primaryAttempts: 1, fallbackTriggered: 1, fallbackRate: 1, byReason: { rate_limited: 1 } });
+    expect(chemistry).toMatchObject({
+      primaryAttempts: 1,
+      fallbackTriggered: 1,
+      fallbackRate: 1,
+      byReason: { rate_limited: 1 },
+    });
 
     const report = await buildTeachingModelReport(pool, { now: NOW });
-    const nanoFallback = report.latency.find((r) => r.group.model_string === 'openai:gpt-5-nano' && r.group.role === 'fallback')!;
-    expect(nanoFallback.latency).toMatchObject({ ttftP50Ms: 500, totalP50Ms: 1500, primaryFailureP50Ms: 800 });
-    const qwenPrimaryChat = report.latency.find((r) => r.group.model_string === 'qwen:qwen3.7-flash' && r.group.role === 'primary' && r.group.capability === 'free_chat')!;
+    const nanoFallback = report.latency.find(
+      (r) => r.group.model_string === 'openai:gpt-5-nano' && r.group.role === 'fallback',
+    )!;
+    expect(nanoFallback.latency).toMatchObject({
+      ttftP50Ms: 500,
+      totalP50Ms: 1500,
+      primaryFailureP50Ms: 800,
+    });
+    const qwenPrimaryChat = report.latency.find(
+      (r) =>
+        r.group.model_string === 'qwen:qwen3.7-flash' &&
+        r.group.role === 'primary' &&
+        r.group.capability === 'free_chat',
+    )!;
     expect(qwenPrimaryChat.latency.ttftP50Ms).toBe(300);
     expect(qwenPrimaryChat.latency.primaryFailureP50Ms).toBeNull();
   });
@@ -216,20 +500,43 @@ describe('teaching-model report', () => {
     const help = Object.fromEntries(report.helpByOrigin.map((r) => [r.group.origin, r]));
     expect(help['openmaic_runtime']!.cost.usd).toBeCloseTo(0.0012, 8);
     expect(help['kafuo_backend']!.cost.usd).toBeCloseTo(0.002, 8);
-    expect(help['kafuo_backend']!.group).toMatchObject({ subject_code: 'PHYSICS', model_string: 'qwen:qwen3.7-flash' });
+    expect(help['kafuo_backend']!.group).toMatchObject({
+      subject_code: 'PHYSICS',
+      model_string: 'qwen:qwen3.7-flash',
+    });
 
     expect(await listBudgetBreaches(pool)).toEqual([
-      expect.objectContaining({ id: 'tma-10', turnId: 't4', conversationId: 'conv-A', budgetEstimateTokens: 5000, budgetCounterKind: 'proxy', budgetEffectiveCap: 25_600, inputTokensTotal: 33_000 }),
+      expect.objectContaining({
+        id: 'tma-10',
+        turnId: 't4',
+        conversationId: 'conv-A',
+        budgetEstimateTokens: 5000,
+        budgetCounterKind: 'proxy',
+        budgetEffectiveCap: 25_600,
+        inputTokensTotal: 33_000,
+      }),
     ]);
     expect(report.budgetBreaches).toHaveLength(1);
 
-    expect(report.outbox).toEqual({ pendingFinalizes: 1, oldestPendingFinalizeAgeS: 900, conflictFinalizes: 1, terminalFailedFinalizes: 1 });
+    expect(report.outbox).toEqual({
+      pendingFinalizes: 1,
+      oldestPendingFinalizeAgeS: 900,
+      conflictFinalizes: 1,
+      terminalFailedFinalizes: 1,
+    });
     expect(report.unresolvedFinalizes.map((r) => [r.reservation_id, r.status])).toEqual([
       ['r-conflict', 'conflict'],
       ['r-terminal', 'terminal_failed'],
     ]);
     expect(report.incomplete).toEqual([
-      expect.objectContaining({ id: 'tma-11', accountingStatus: 'incomplete', incompleteReason: 'process_exit_before_completion', turnId: 't5', conversationId: 'conv-C', workerId: 'host:dead' }),
+      expect.objectContaining({
+        id: 'tma-11',
+        accountingStatus: 'incomplete',
+        incompleteReason: 'process_exit_before_completion',
+        turnId: 't5',
+        conversationId: 'conv-C',
+        workerId: 'host:dead',
+      }),
     ]);
   });
 
@@ -237,14 +544,18 @@ describe('teaching-model report', () => {
     const report = await buildTeachingModelReport(pool, { now: NOW });
     const text = renderTeachingModelReport(report);
     expect(text).toContain('# Teaching model report');
-    expect(text).toContain('12 attempts, 11 complete, 1 incomplete, 1 late-completed — sums are LOWER BOUNDS');
+    expect(text).toContain(
+      '12 attempts, 11 complete, 1 incomplete, 1 late-completed — sums are LOWER BOUNDS',
+    );
     expect(text).toContain('## Conversational cost per turn');
     expect(text).toContain('## Generation cost per version');
     expect(text).toContain('MATH qwen:qwen3.7-flash: 1/7 (14.3 %) [unusable_output=1]');
     expect(text).toContain('## Latency by model / role / capability');
     expect(text).toContain('origin=kafuo_backend');
     expect(text).toContain('## Budget breaches (1)');
-    expect(text).toContain('## Meter finalize outbox: pending 1 (oldest 900 s), conflict 1, terminal_failed 1');
+    expect(text).toContain(
+      '## Meter finalize outbox: pending 1 (oldest 900 s), conflict 1, terminal_failed 1',
+    );
     expect(text).toContain('conflict reservation=r-conflict');
     expect(text).toContain('## Incomplete ledger rows (1)');
     expect(text).toContain('tma-11 incomplete (process_exit_before_completion)');
@@ -275,12 +586,84 @@ describe('teaching-model report — slide regeneration spend', () => {
     pool = new PGlitePool(db);
     await ensureTeachingModelAttemptsSchema(pool);
     await ensureMeterFinalizeOutboxSchema(pool);
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', generationRun: 1, versionId: 'v-1' }, capability: 'package_generation', stage: 'scene-content:slide', budget: null }));
-    await completeAttempt(pool, 'tma-1', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.05, costBasis: 'full', costUnavailableReason: null } }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneRegenerationId: 'tsr-1' }, capability: 'scene_regeneration', stage: 'scene-content:slide', budget: null }));
-    await completeAttempt(pool, 'tma-2', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.015, costBasis: 'full', costUnavailableReason: null } }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneRegenerationId: 'tsr-1' }, capability: 'scene_regeneration', stage: 'scene-actions', budget: null }));
-    await completeAttempt(pool, 'tma-3', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.005, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          generationRun: 1,
+          versionId: 'v-1',
+        },
+        capability: 'package_generation',
+        stage: 'scene-content:slide',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-1',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.05,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          versionId: 'v-1',
+          sceneRegenerationId: 'tsr-1',
+        },
+        capability: 'scene_regeneration',
+        stage: 'scene-content:slide',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-2',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.015,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          versionId: 'v-1',
+          sceneRegenerationId: 'tsr-1',
+        },
+        capability: 'scene_regeneration',
+        stage: 'scene-actions',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-3',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.005,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
   });
 
   afterEach(async () => {
@@ -289,7 +672,9 @@ describe('teaching-model report — slide regeneration spend', () => {
 
   it('keeps per-attempt generation cost unchanged and reports regeneration spend per regeneration and per version', async () => {
     const report = await buildTeachingModelReport(pool, { now: NOW });
-    const perAttempt = Object.fromEntries(report.generation.perAttempt.map((r) => [r.group.generation_attempt_id, r]));
+    const perAttempt = Object.fromEntries(
+      report.generation.perAttempt.map((r) => [r.group.generation_attempt_id, r]),
+    );
     expect(Object.keys(perAttempt)).toEqual(['ga-1']);
     expect(perAttempt['ga-1']!.cost.usd).toBeCloseTo(0.05, 8);
     expect(perAttempt['ga-1']!.completeness.attempts).toBe(1);
@@ -317,7 +702,9 @@ describe('teaching-model report — slide regeneration spend', () => {
     // Recreate the pre-regeneration shape (old rows only): drop the column and narrow the CHECK.
     await pool.query(`DELETE FROM teaching_model_attempts WHERE capability = 'scene_regeneration'`);
     await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_regeneration_id');
-    await pool.query('ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check');
+    await pool.query(
+      'ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check',
+    );
     await pool.query(
       `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
          CHECK (capability IN ('package_generation','question_generation','help','free_chat'))`,
@@ -328,9 +715,27 @@ describe('teaching-model report — slide regeneration spend', () => {
       `SELECT capability, cost_usd FROM teaching_model_attempts WHERE id = 'tma-1'`,
     );
     expect(old.rows[0]).toMatchObject({ capability: 'package_generation' });
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneRegenerationId: 'tsr-2' }, capability: 'scene_regeneration', budget: null }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          sceneRegenerationId: 'tsr-2',
+        },
+        capability: 'scene_regeneration',
+        budget: null,
+      }),
+    );
     await expect(
-      insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1' }, capability: 'unknown' as never, budget: null })),
+      insertStartedAttempt(
+        pool,
+        started({
+          association: { kind: 'generation', generationAttemptId: 'ga-1' },
+          capability: 'unknown' as never,
+          budget: null,
+        }),
+      ),
     ).rejects.toThrow();
   });
 });
@@ -350,13 +755,87 @@ describe('teaching-model report — slide insertion spend', () => {
     pool = new PGlitePool(db);
     await ensureTeachingModelAttemptsSchema(pool);
     await ensureMeterFinalizeOutboxSchema(pool);
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', generationRun: 1, versionId: 'v-1' }, capability: 'package_generation', stage: 'scene-content:slide', budget: null }));
-    await completeAttempt(pool, 'tma-1', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.05, costBasis: 'full', costUnavailableReason: null } }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneInsertionId: 'tpsi-1' }, capability: 'scene_insertion', stage: 'scene-outlines-stream', budget: null }));
-    await completeAttempt(pool, 'tma-2', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.01, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          generationRun: 1,
+          versionId: 'v-1',
+        },
+        capability: 'package_generation',
+        stage: 'scene-content:slide',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-1',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.05,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          versionId: 'v-1',
+          sceneInsertionId: 'tpsi-1',
+        },
+        capability: 'scene_insertion',
+        stage: 'scene-outlines-stream',
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-2',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.01,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
     // A provider fallback is its own row under the same attribution.
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', versionId: 'v-1', sceneInsertionId: 'tpsi-1' }, capability: 'scene_insertion', stage: 'scene-content:slide', role: 'fallback', attemptIndex: 2, budget: null }));
-    await completeAttempt(pool, 'tma-3', completion({ cost: { rateCardVersion: 'v1', costUsd: 0.004, costBasis: 'full', costUnavailableReason: null } }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          versionId: 'v-1',
+          sceneInsertionId: 'tpsi-1',
+        },
+        capability: 'scene_insertion',
+        stage: 'scene-content:slide',
+        role: 'fallback',
+        attemptIndex: 2,
+        budget: null,
+      }),
+    );
+    await completeAttempt(
+      pool,
+      'tma-3',
+      completion({
+        cost: {
+          rateCardVersion: 'v1',
+          costUsd: 0.004,
+          costBasis: 'full',
+          costUnavailableReason: null,
+        },
+      }),
+    );
   });
 
   afterEach(async () => {
@@ -378,7 +857,11 @@ describe('teaching-model report — slide insertion spend', () => {
     const rows = await pool.query<{ capability: string; scene_insertion_id: string | null }>(
       `SELECT capability, scene_insertion_id FROM teaching_model_attempts ORDER BY id`,
     );
-    expect(rows.rows.filter((row) => row.capability === 'scene_insertion').map((row) => row.scene_insertion_id)).toEqual(['tpsi-1', 'tpsi-1']);
+    expect(
+      rows.rows
+        .filter((row) => row.capability === 'scene_insertion')
+        .map((row) => row.scene_insertion_id),
+    ).toEqual(['tpsi-1', 'tpsi-1']);
     const text = renderTeachingModelReport(report);
     expect(text).toContain('## Slide insertion cost per insertion');
     expect(text).toContain('scene_insertion_id=tpsi-1');
@@ -387,7 +870,9 @@ describe('teaching-model report — slide insertion spend', () => {
   it('widens a five-value ledger to six (column added), and a re-boot is a no-op', async () => {
     await pool.query(`DELETE FROM teaching_model_attempts WHERE capability = 'scene_insertion'`);
     await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_insertion_id');
-    await pool.query('ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check');
+    await pool.query(
+      'ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check',
+    );
     await pool.query(
       `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
          CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration'))`,
@@ -403,24 +888,77 @@ describe('teaching-model report — slide insertion spend', () => {
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'teaching_model_attempts_capability_check'`,
     );
     expect(after.rows[0]!.def).toBe(def.rows[0]!.def);
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneInsertionId: 'tpsi-2' }, capability: 'scene_insertion', budget: null }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneRegenerationId: 'tsr-9' }, capability: 'scene_regeneration', budget: null }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          sceneInsertionId: 'tpsi-2',
+        },
+        capability: 'scene_insertion',
+        budget: null,
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          sceneRegenerationId: 'tsr-9',
+        },
+        capability: 'scene_regeneration',
+        budget: null,
+      }),
+    );
   });
 
   it('widens a pre-regeneration ledger through both blocks (four → five → six values)', async () => {
     await pool.query(`DELETE FROM teaching_model_attempts WHERE capability = 'scene_insertion'`);
     await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_insertion_id');
     await pool.query('ALTER TABLE teaching_model_attempts DROP COLUMN scene_regeneration_id');
-    await pool.query('ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check');
+    await pool.query(
+      'ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check',
+    );
     await pool.query(
       `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
          CHECK (capability IN ('package_generation','question_generation','help','free_chat'))`,
     );
     await ensureTeachingModelAttemptsSchema(pool);
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneInsertionId: 'tpsi-3' }, capability: 'scene_insertion', budget: null }));
-    await insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1', sceneRegenerationId: 'tsr-3' }, capability: 'scene_regeneration', budget: null }));
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          sceneInsertionId: 'tpsi-3',
+        },
+        capability: 'scene_insertion',
+        budget: null,
+      }),
+    );
+    await insertStartedAttempt(
+      pool,
+      started({
+        association: {
+          kind: 'generation',
+          generationAttemptId: 'ga-1',
+          sceneRegenerationId: 'tsr-3',
+        },
+        capability: 'scene_regeneration',
+        budget: null,
+      }),
+    );
     await expect(
-      insertStartedAttempt(pool, started({ association: { kind: 'generation', generationAttemptId: 'ga-1' }, capability: 'unknown' as never, budget: null })),
+      insertStartedAttempt(
+        pool,
+        started({
+          association: { kind: 'generation', generationAttemptId: 'ga-1' },
+          capability: 'unknown' as never,
+          budget: null,
+        }),
+      ),
     ).rejects.toThrow();
   });
 });

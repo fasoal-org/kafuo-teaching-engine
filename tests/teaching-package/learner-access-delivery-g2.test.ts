@@ -100,7 +100,10 @@ class PGlitePool {
 }
 
 function configureIntegration() {
-  vi.stubEnv('KAFUO_INTEGRATION_BASE_URL', 'https://kafuo.test/api/v2/integrations/teaching-engine');
+  vi.stubEnv(
+    'KAFUO_INTEGRATION_BASE_URL',
+    'https://kafuo.test/api/v2/integrations/teaching-engine',
+  );
   vi.stubEnv('TEACHING_ENGINE_WEBHOOK_SECRET', 'whsec-g2');
 }
 
@@ -157,7 +160,10 @@ describe('learner Stage document reads', () => {
     await pool.end();
   });
 
-  function grantCookie(purpose: 'learner' | 'preview', student: LearnerStudentContext | null = STUDENT) {
+  function grantCookie(
+    purpose: 'learner' | 'preview',
+    student: LearnerStudentContext | null = STUDENT,
+  ) {
     const { token } = buildEditorGrantPayload({
       tenantId: TENANT,
       versionId: 'tpv-g2',
@@ -184,7 +190,12 @@ describe('learner Stage document reads', () => {
     const response = await readDocument(grantCookie('learner'));
     expect(response.status).toBe(200);
     expect(kafuo.calls).toEqual([
-      { tenantId: TENANT, studentRef: STUDENT_REF, learningItemId: 'li-g2', learningItemType: 'lesson' },
+      {
+        tenantId: TENANT,
+        studentRef: STUDENT_REF,
+        learningItemId: 'li-g2',
+        learningItemType: 'lesson',
+      },
     ]);
   });
 

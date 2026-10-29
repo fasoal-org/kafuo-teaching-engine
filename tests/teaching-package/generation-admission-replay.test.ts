@@ -122,9 +122,7 @@ describe('attempt admission reports creation vs replay', () => {
   it('reports a race-recovered attempt as a replay, not a creation', async () => {
     // The pre-check misses (the competitor has not committed yet), the insert
     // loses the unique index, and the recovery read finds the winner.
-    mocks.readAttemptByRequestId
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(racedAttempt());
+    mocks.readAttemptByRequestId.mockResolvedValueOnce(null).mockResolvedValueOnce(racedAttempt());
     mocks.insertAttempt.mockRejectedValue(uniqueViolation());
 
     const result = await startGenerationAttempt(pool, request());

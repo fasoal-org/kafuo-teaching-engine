@@ -51,14 +51,23 @@ const MAX_SCOPE_PARAM_CHARS = 1024;
 
 function encodeScope(scope: MediaAccessScope): string {
   return Buffer.from(
-    JSON.stringify([scope.tenantId, scope.studentRef, scope.learningItemType, scope.learningItemId]),
+    JSON.stringify([
+      scope.tenantId,
+      scope.studentRef,
+      scope.learningItemType,
+      scope.learningItemId,
+    ]),
     'utf8',
   ).toString('base64url');
 }
 
 /** The scope a v2 link carries, or null for a malformed one. */
 export function decodeMediaAccessScope(param: string): MediaAccessScope | null {
-  if (param.length === 0 || param.length > MAX_SCOPE_PARAM_CHARS || !/^[A-Za-z0-9_-]+$/.test(param)) {
+  if (
+    param.length === 0 ||
+    param.length > MAX_SCOPE_PARAM_CHARS ||
+    !/^[A-Za-z0-9_-]+$/.test(param)
+  ) {
     return null;
   }
   try {
@@ -187,7 +196,13 @@ export function verifyClassroomMediaSignature(
   if (scoped && decodeMediaAccessScope(scopeParam) === null) return false;
   const expSeconds = Number(exp);
   if (expSeconds * 1000 < nowMs) return false;
-  const expected = signature(key, classroomId, segments, expSeconds, scoped ? scopeParam : undefined);
+  const expected = signature(
+    key,
+    classroomId,
+    segments,
+    expSeconds,
+    scoped ? scopeParam : undefined,
+  );
   const left = createHash('sha256').update(sig).digest();
   const right = createHash('sha256').update(expected).digest();
   return timingSafeEqual(left, right);

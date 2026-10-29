@@ -156,7 +156,10 @@ describe('node instrumentation', () => {
 
     vi.resetModules();
     mockInstrumentationSeams();
-    vi.stubEnv('KAFUO_GROUNDING_DATABASE_URL', 'postgres://kafuo_grounding_reader:x@127.0.0.1:1/none');
+    vi.stubEnv(
+      'KAFUO_GROUNDING_DATABASE_URL',
+      'postgres://kafuo_grounding_reader:x@127.0.0.1:1/none',
+    );
     const again = await import('@/lib/server/instrumentation-node');
     await expect(again.registerNodeInstrumentation()).resolves.toBeUndefined();
   });
@@ -388,10 +391,7 @@ describe('instrumentation runtime boundary', () => {
     // would warn again ("A Node.js API is used (process.once ...)") however
     // correct the runtime guard is.
     const { readFile } = await import('node:fs/promises');
-    const source = await readFile(
-      new URL('../../instrumentation.ts', import.meta.url),
-      'utf8',
-    );
+    const source = await readFile(new URL('../../instrumentation.ts', import.meta.url), 'utf8');
 
     for (const nodeOnlyApi of ['process.once', 'process.on(', 'process.exit', 'process.kill']) {
       expect(source).not.toContain(nodeOnlyApi);

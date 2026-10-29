@@ -107,7 +107,10 @@ describe('teaching package lifecycle', () => {
       predecessorId = unique('tpv-pred');
       await insertVersion(qp(), {
         id: predecessorId,
-        aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: unique('li-lc') } },
+        aggregate: {
+          tenantId: 'tenant-test',
+          learningItem: { type: 'lesson', id: unique('li-lc') },
+        },
         version: 1,
         status: 'approved',
         currentStageId: predStageId,
@@ -147,9 +150,7 @@ describe('teaching package lifecycle', () => {
     // The exact-flow submit gate loads stage documents through the
     // owner-scoped store; point the server persistence provider at this
     // test's PGlite pool (same seam generation.test.ts uses).
-    const { getServerPersistenceProvider } = await import(
-      '@/lib/persistence/server-provider'
-    );
+    const { getServerPersistenceProvider } = await import('@/lib/persistence/server-provider');
     vi.stubEnv('DATABASE_URL', `postgres://lifecycle-${(counter += 1)}`);
     await getServerPersistenceProvider(process.env.DATABASE_URL!, () => pool as never);
   });
@@ -324,10 +325,16 @@ describe('teaching package lifecycle', () => {
     });
 
     it('blocks submission when a scene sequence violates the recorded flow', async () => {
-      const versionId = await seedFlowBackedVersion((stageId) => [
-        { ...makeSlideScene('s1', stageId, 1), teachingStage: { key: 'lesson_introduction', flowIndex: 0 } },
-        { ...makeSlideScene('s2', stageId, 2) }, // missing position 1
-      ] as AppScene[]);
+      const versionId = await seedFlowBackedVersion(
+        (stageId) =>
+          [
+            {
+              ...makeSlideScene('s1', stageId, 1),
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            { ...makeSlideScene('s2', stageId, 2) }, // missing position 1
+          ] as AppScene[],
+      );
       await expectTeachingPackageError(
         submitForReview(tx(), {
           tenantId: 'tenant-test',
@@ -340,11 +347,23 @@ describe('teaching package lifecycle', () => {
     });
 
     it('admits submission when the scene sequence covers the flow exactly', async () => {
-      const versionId = await seedFlowBackedVersion((stageId) => [
-        { ...makeSlideScene('s1', stageId, 1), teachingStage: { key: 'lesson_introduction', flowIndex: 0 } },
-        { ...makeSlideScene('s2', stageId, 2), teachingStage: { key: 'lesson_introduction', flowIndex: 0 } },
-        { ...makeSlideScene('s3', stageId, 3), teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 } },
-      ] as AppScene[]);
+      const versionId = await seedFlowBackedVersion(
+        (stageId) =>
+          [
+            {
+              ...makeSlideScene('s1', stageId, 1),
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            {
+              ...makeSlideScene('s2', stageId, 2),
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            {
+              ...makeSlideScene('s3', stageId, 3),
+              teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+            },
+          ] as AppScene[],
+      );
       const updated = await submitForReview(tx(), {
         tenantId: 'tenant-test',
         versionId,
@@ -394,18 +413,28 @@ describe('teaching package lifecycle', () => {
     }
 
     it('re-proves the flow once when the stage moves between validation and the lock', async () => {
-      const versionId = await seedFlowBackedVersion((stageId) => [
-        { ...makeSlideScene('s1', stageId, 1), teachingStage: { key: 'lesson_introduction', flowIndex: 0 } },
-        { ...makeSlideScene('s2', stageId, 2), teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 } },
-      ] as AppScene[]);
+      const versionId = await seedFlowBackedVersion(
+        (stageId) =>
+          [
+            {
+              ...makeSlideScene('s1', stageId, 1),
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            {
+              ...makeSlideScene('s2', stageId, 2),
+              teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+            },
+          ] as AppScene[],
+      );
       const stageId = (await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!
         .currentStageId;
 
       // Drift exactly once: the first attempt's proof is stale, the retry's is not.
-      const updated = await submitForReview(
-        poolBumpingStageRevOnRead(pool, stageId, 1),
-        { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' },
-      );
+      const updated = await submitForReview(poolBumpingStageRevOnRead(pool, stageId, 1), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
 
       expect(updated.status).toBe('in_review');
       // The captured revision is the one the SECOND proof was verified against, so
@@ -418,10 +447,19 @@ describe('teaching package lifecycle', () => {
     });
 
     it('refuses with STALE_STATE when the stage keeps moving', async () => {
-      const versionId = await seedFlowBackedVersion((stageId) => [
-        { ...makeSlideScene('s1', stageId, 1), teachingStage: { key: 'lesson_introduction', flowIndex: 0 } },
-        { ...makeSlideScene('s2', stageId, 2), teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 } },
-      ] as AppScene[]);
+      const versionId = await seedFlowBackedVersion(
+        (stageId) =>
+          [
+            {
+              ...makeSlideScene('s1', stageId, 1),
+              teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+            },
+            {
+              ...makeSlideScene('s2', stageId, 2),
+              teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+            },
+          ] as AppScene[],
+      );
       const stageId = (await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!
         .currentStageId;
 
@@ -500,7 +538,11 @@ describe('teaching package lifecycle', () => {
 
     it('resubmits a rejected version as the same version', async () => {
       const { versionId } = await seedVersion({ status: 'rejected' });
-      const updated = await submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
+      const updated = await submitForReview(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'actor-1',
+      });
       expect(updated.status).toBe('in_review');
       const events = await listReviewEvents(qp(), versionId);
       expect(events[0]).toMatchObject({ eventType: 'resubmitted', fromStatus: 'rejected' });
@@ -515,7 +557,9 @@ describe('teaching package lifecycle', () => {
           'INVALID_TRANSITION',
           409,
         );
-        expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(status);
+        expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+          status,
+        );
         expect(await listReviewEvents(qp(), versionId)).toHaveLength(0);
       },
     );
@@ -526,7 +570,11 @@ describe('teaching package lifecycle', () => {
       const { versionId } = await seedVersion({ status: 'draft' });
       await submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
 
-      const updated = await startReviewEdit(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-2' });
+      const updated = await startReviewEdit(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'actor-2',
+      });
       expect(updated.status).toBe('draft');
       expect(updated.submittedStageRev).toBeNull();
       const events = await listReviewEvents(qp(), versionId);
@@ -575,12 +623,19 @@ describe('teaching package lifecycle', () => {
       const eventsBefore = await listReviewEvents(qp(), versionId);
 
       await expectTeachingPackageError(
-        reject(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1', reason: reason as string }),
+        reject(tx(), {
+          tenantId: 'tenant-test',
+          versionId,
+          actorRef: 'reviewer-1',
+          reason: reason as string,
+        }),
         'REASON_REQUIRED',
         400,
       );
       // The row is untouched and no event was appended.
-      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe('in_review');
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'in_review',
+      );
       expect(await listReviewEvents(qp(), versionId)).toHaveLength(eventsBefore.length);
     });
 
@@ -589,7 +644,12 @@ describe('teaching package lifecycle', () => {
       async (status) => {
         const { versionId } = await seedVersion({ status });
         await expectTeachingPackageError(
-          reject(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1', reason: 'nope' }),
+          reject(tx(), {
+            tenantId: 'tenant-test',
+            versionId,
+            actorRef: 'reviewer-1',
+            reason: 'nope',
+          }),
           'INVALID_TRANSITION',
           409,
         );
@@ -610,7 +670,9 @@ describe('teaching package lifecycle', () => {
         'STALE_STATE',
         409,
       );
-      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe('draft');
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'draft',
+      );
     });
 
     it('requires a non-empty actor reference', async () => {
@@ -628,7 +690,11 @@ describe('teaching package lifecycle', () => {
       const { versionId } = await seedVersion({ status: 'draft' });
       await submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
 
-      const updated = await approve(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' });
+      const updated = await approve(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
       expect(updated.status).toBe('approved');
       expect(updated.approvedAt).not.toBeNull();
       const events = await listReviewEvents(qp(), versionId);
@@ -668,7 +734,9 @@ describe('teaching package lifecycle', () => {
         'STAGE_CHANGED_SINCE_SUBMISSION',
         409,
       );
-      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe('in_review');
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'in_review',
+      );
     });
 
     it('approves after a pre-submission edit (revision matches)', async () => {
@@ -683,7 +751,11 @@ describe('teaching package lifecycle', () => {
       await store.putScene(stageId, makeSlideScene('scene-2', stageId, 2));
       await submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
 
-      const updated = await approve(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' });
+      const updated = await approve(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
       expect(updated.status).toBe('approved');
     });
 
@@ -724,7 +796,11 @@ describe('teaching package lifecycle', () => {
     it('demotes the predecessor and promotes the successor as one outcome', async () => {
       const { v1, v2 } = await seedSupersessionPair();
 
-      const updated = await approve(tx(), { tenantId: 'tenant-test', versionId: v2, actorRef: 'reviewer-1' });
+      const updated = await approve(tx(), {
+        tenantId: 'tenant-test',
+        versionId: v2,
+        actorRef: 'reviewer-1',
+      });
       expect(updated.status).toBe('approved');
       const demoted = await readVersion(qp(), v1, { tenantId: 'tenant-test' });
       expect(demoted).toMatchObject({
@@ -753,9 +829,9 @@ describe('teaching package lifecycle', () => {
           (params ?? []).includes('superseded'),
       );
 
-      await expect(approve(failing, { tenantId: 'tenant-test', versionId: v2, actorRef: 'reviewer-1' })).rejects.toThrow(
-        'injected statement failure',
-      );
+      await expect(
+        approve(failing, { tenantId: 'tenant-test', versionId: v2, actorRef: 'reviewer-1' }),
+      ).rejects.toThrow('injected statement failure');
       expect((await readVersion(qp(), v1, { tenantId: 'tenant-test' }))!.status).toBe('approved');
       expect((await readVersion(qp(), v2, { tenantId: 'tenant-test' }))!.status).toBe('in_review');
       expect((await listReviewEvents(qp(), v1)).at(-1)?.eventType).not.toBe('superseded');
@@ -766,7 +842,11 @@ describe('teaching package lifecycle', () => {
   describe('discardSuccessor', () => {
     it('discards a never-approved draft successor', async () => {
       const { versionId } = await seedVersion({ status: 'draft', withPredecessor: true });
-      const updated = await discardSuccessor(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
+      const updated = await discardSuccessor(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'actor-1',
+      });
       expect(updated.status).toBe('discarded');
       expect(updated.discardedAt).not.toBeNull();
       expect((await listReviewEvents(qp(), versionId)).at(-1)).toMatchObject({
@@ -777,9 +857,18 @@ describe('teaching package lifecycle', () => {
     it('discards a rejected successor and keeps its rejection history', async () => {
       const { versionId } = await seedVersion({ status: 'draft', withPredecessor: true });
       await submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
-      await reject(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1', reason: 'not good enough' });
+      await reject(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+        reason: 'not good enough',
+      });
 
-      const updated = await discardSuccessor(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'actor-1' });
+      const updated = await discardSuccessor(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'actor-1',
+      });
       expect(updated.status).toBe('discarded');
       expect((await listReviewEvents(qp(), versionId)).map((e) => e.eventType)).toEqual([
         'submitted_for_review',
@@ -797,7 +886,9 @@ describe('teaching package lifecycle', () => {
         'INVALID_TRANSITION',
         409,
       );
-      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe('in_review');
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'in_review',
+      );
     });
 
     it('refuses to discard version 1 (not a successor)', async () => {
@@ -826,7 +917,11 @@ describe('teaching package lifecycle', () => {
 
   it('answers NOT_FOUND for an unknown version', async () => {
     await expectTeachingPackageError(
-      submitForReview(tx(), { tenantId: 'tenant-test', versionId: 'tpv-absent', actorRef: 'actor-1' }),
+      submitForReview(tx(), {
+        tenantId: 'tenant-test',
+        versionId: 'tpv-absent',
+        actorRef: 'actor-1',
+      }),
       'NOT_FOUND',
       404,
     );

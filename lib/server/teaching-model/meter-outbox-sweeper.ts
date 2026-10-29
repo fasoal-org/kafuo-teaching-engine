@@ -142,7 +142,12 @@ async function deliverClaimedRow(
     if (result.status === 'conflict') {
       await markFinalizeConflict(pool, row.reservation_id, { now: nowS });
       log.warn(
-        JSON.stringify({ event: 'meter.late_delivery_report', ...base, outcome: row.outcome, ageS }),
+        JSON.stringify({
+          event: 'meter.late_delivery_report',
+          ...base,
+          outcome: row.outcome,
+          ageS,
+        }),
       );
       return 'conflict';
     }
@@ -153,7 +158,12 @@ async function deliverClaimedRow(
       lastError: 'reservation unknown to Kafuo',
     });
     log.error(
-      JSON.stringify({ event: 'meter.finalize_terminal_failed', ...base, reason: 'not_found', ageS }),
+      JSON.stringify({
+        event: 'meter.finalize_terminal_failed',
+        ...base,
+        reason: 'not_found',
+        ageS,
+      }),
     );
     return 'terminal_failed';
   } catch (error) {
@@ -229,7 +239,9 @@ export async function deliverFinalizeInline(
  * the internal sweep route (via the registry) and for tests; the timer calls
  * exactly this.
  */
-export async function runMeterOutboxSweepOnce(options?: MeterSweepOptions): Promise<MeterSweepResult> {
+export async function runMeterOutboxSweepOnce(
+  options?: MeterSweepOptions,
+): Promise<MeterSweepResult> {
   const pool = await poolFor(options);
   const now = options?.now ?? Date.now;
   const workerId = options?.workerId ?? currentWorkerId();
@@ -271,7 +283,9 @@ export async function runMeterOutboxSweepOnce(options?: MeterSweepOptions): Prom
 }
 
 /** Health block (plan §9.1): last sweep time plus the outbox's pending shape. */
-export async function readMeterOutboxHealth(options?: MeterSweepOptions): Promise<MeterOutboxHealth> {
+export async function readMeterOutboxHealth(
+  options?: MeterSweepOptions,
+): Promise<MeterOutboxHealth> {
   const pool = await poolFor(options);
   const nowS = (options?.now ?? Date.now)() / 1000;
   const outbox = await readOutboxStatus(pool, nowS);
@@ -338,7 +352,11 @@ export function startMeterOutboxSweeper(): MeterOutboxSweeperHandle | undefined 
         const released = await releaseLeases(pool, currentWorkerId());
         if (released > 0) {
           log.info(
-            JSON.stringify({ event: 'meter.leases_released', workerId: currentWorkerId(), released }),
+            JSON.stringify({
+              event: 'meter.leases_released',
+              workerId: currentWorkerId(),
+              released,
+            }),
           );
         }
       } catch (error) {

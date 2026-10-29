@@ -83,7 +83,9 @@ describe('preCheck: every hazard category, Arabic and English', () => {
   });
 
   it('is robust to tashkeel and letter variants', () => {
-    expect(preCheck('أَخْلِطُ الكُلُورَ مَعَ الأمُونِيَا').categories).toContain('chemicals_fumes_mixing');
+    expect(preCheck('أَخْلِطُ الكُلُورَ مَعَ الأمُونِيَا').categories).toContain(
+      'chemicals_fumes_mixing',
+    );
   });
 });
 
@@ -92,7 +94,11 @@ describe('postCheck: operational hazard instructions', () => {
     const safe = `القوة تساوي الكتلة مضروبة في التسارع. مثال: كتلة 2 كجم وتسارع 3 م/ث² تعطي قوة 6 نيوتن.
 هل تريد مثالاً آخر؟`;
     expect(postCheck(safe)).toEqual({ violation: false, rule: null });
-    expect(postCheck('Photosynthesis converts light energy into chemical energy. Mix in plenty of practice questions!')).toEqual({
+    expect(
+      postCheck(
+        'Photosynthesis converts light energy into chemical energy. Mix in plenty of practice questions!',
+      ),
+    ).toEqual({
       violation: false,
       rule: null,
     });
@@ -106,8 +112,14 @@ describe('postCheck: operational hazard instructions', () => {
   });
 
   it('flags quantities next to hazardous reagents (ar + en)', () => {
-    expect(postCheck('خذ 50 مل من حمض الهيدروكلوريك وأضفه ببطء.')).toEqual({ violation: true, rule: 'quantity_reagent' });
-    expect(postCheck('Take 100 ml of bleach and pour it in.')).toEqual({ violation: true, rule: 'quantity_reagent' });
+    expect(postCheck('خذ 50 مل من حمض الهيدروكلوريك وأضفه ببطء.')).toEqual({
+      violation: true,
+      rule: 'quantity_reagent',
+    });
+    expect(postCheck('Take 100 ml of bleach and pour it in.')).toEqual({
+      violation: true,
+      rule: 'quantity_reagent',
+    });
   });
 
   it('flags a step sequence with ignition / mixing verbs and a hazard term (ar + en)', () => {
@@ -144,54 +156,84 @@ describe('postCheck step-line rule (FC-D12)', () => {
   });
 
   it('a weak verb (أضف) without a quantity or a container is not an operational step', () => {
-    expect(postCheck('- أضف إلكترونات الكلور السبعة حول رمزه.\n- أضف إلكترون الهيدروجين فتتكون رابطة تساهمية.')).toEqual(PASS);
+    expect(
+      postCheck(
+        '- أضف إلكترونات الكلور السبعة حول رمزه.\n- أضف إلكترون الهيدروجين فتتكون رابطة تساهمية.',
+      ),
+    ).toEqual(PASS);
   });
 
   it('word edges: «يصبح» is not «صب», «كلوريد» is not «كلور»', () => {
-    expect(postCheck('- كلوريد الصوديوم: ملح الطعام.\n- يصبح محلوله موصلاً للكهرباء.')).toEqual(PASS);
-    expect(postCheck('1. سخّن الماء في الكأس على الموقد الكهربائي.\n2. أذب فيه كلوريد البوتاسيوم ولاحظ ذوبانه.')).toEqual(PASS);
+    expect(postCheck('- كلوريد الصوديوم: ملح الطعام.\n- يصبح محلوله موصلاً للكهرباء.')).toEqual(
+      PASS,
+    );
+    expect(
+      postCheck(
+        '1. سخّن الماء في الكأس على الموقد الكهربائي.\n2. أذب فيه كلوريد البوتاسيوم ولاحظ ذوبانه.',
+      ),
+    ).toEqual(PASS);
   });
 
   it('word edges: «قلب» (heart) is not the verb, «إنجاز» is not «جاز», «الحمض النووي» is not an acid', () => {
-    expect(postCheck('1. ينقل الدم الأمونيا إلى الكبد.\n2. قلب الإنسان يضخ الدم إلى الجسم.')).toEqual(PASS);
-    expect(postCheck('1. اكتب إنجازات العالم لافوازييه.\n2. امزج بين الملاحظة والتجربة في تقريرك.')).toEqual(PASS);
     expect(
-      postCheck('1. اهرس الفراولة داخل كيس.\n2. امزج الماء والملح وسائل الصابون ثم صبّه على الفراولة.\n3. يظهر الحمض النووي كخيوط بيضاء.'),
+      postCheck('1. ينقل الدم الأمونيا إلى الكبد.\n2. قلب الإنسان يضخ الدم إلى الجسم.'),
+    ).toEqual(PASS);
+    expect(
+      postCheck('1. اكتب إنجازات العالم لافوازييه.\n2. امزج بين الملاحظة والتجربة في تقريرك.'),
+    ).toEqual(PASS);
+    expect(
+      postCheck(
+        '1. اهرس الفراولة داخل كيس.\n2. امزج الماء والملح وسائل الصابون ثم صبّه على الفراولة.\n3. يظهر الحمض النووي كخيوط بيضاء.',
+      ),
     ).toEqual(PASS);
   });
 
   it('blocks pronoun steps: «ضع الكحول في الكوب» then «أشعله بعود كبريت»', () => {
     expect(postCheck('1. ضع الكحول في الكوب\n2. أشعله بعود كبريت')).toEqual(SEQUENCE);
     expect(postCheck('1. ضع الكحول في الكوب.\n2. وأشعلها بعود كبريت.')).toEqual(SEQUENCE);
-    expect(postCheck('1. Pour the alcohol into a dish.\n2. Light it with a match.')).toEqual(SEQUENCE);
+    expect(postCheck('1. Pour the alcohol into a dish.\n2. Light it with a match.')).toEqual(
+      SEQUENCE,
+    );
   });
 
   it('blocks a weak verb with a quantity or a container on the same step line', () => {
     expect(postCheck('1. أضف 20 مل من الحمض إلى الكوب').violation).toBe(true);
     expect(postCheck('1. ضع الكحول في الطبق.\n2. أضف الماء إلى الكوب وقلّبه.')).toEqual(SEQUENCE);
     expect(postCheck('1. ضع الكحول في الطبق.\n2. أضف 3 قطرات من الماء.')).toEqual(SEQUENCE);
-    expect(postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.')).toEqual(SEQUENCE);
+    expect(postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.')).toEqual(
+      SEQUENCE,
+    );
   });
 
   it('blocks with the hazard on one step line and the strong verb on another', () => {
     expect(postCheck('- خذ قليلاً من البنزين.\n- اسكبه على الورق.')).toEqual(SEQUENCE);
-    expect(postCheck('- Take the ammonia from the cupboard.\n- Mix the liquids together.')).toEqual(SEQUENCE);
+    expect(postCheck('- Take the ammonia from the cupboard.\n- Mix the liquids together.')).toEqual(
+      SEQUENCE,
+    );
   });
 
   // D1 option (a): the step-line rule alone lets a hazard named only in the
   // intro + pronoun pour/mix steps through; a pre-flagged request keeps
   // today's broad rule, which blocks it.
-  const INTRO_HAZARD_PRONOUN_EN = "We'll use concentrated sulfuric acid.\n1. Pour it into the beaker.\n2. Mix it with water slowly.";
-  const INTRO_HAZARD_PRONOUN_AR = 'سنستخدم حمض الكبريتيك المركز.\n1. اسكبه في الكأس.\n2. اخلطه مع الماء ببطء.';
+  const INTRO_HAZARD_PRONOUN_EN =
+    "We'll use concentrated sulfuric acid.\n1. Pour it into the beaker.\n2. Mix it with water slowly.";
+  const INTRO_HAZARD_PRONOUN_AR =
+    'سنستخدم حمض الكبريتيك المركز.\n1. اسكبه في الكأس.\n2. اخلطه مع الماء ببطء.';
 
-  it('a pre-flagged request keeps today\'s broad rule: intro hazard + pronoun pour/mix steps block (D1 option a)', () => {
+  it("a pre-flagged request keeps today's broad rule: intro hazard + pronoun pour/mix steps block (D1 option a)", () => {
     expect(postCheck(INTRO_HAZARD_PRONOUN_EN, { preTriggered: true })).toEqual(SEQUENCE);
     expect(postCheck(INTRO_HAZARD_PRONOUN_AR, { preTriggered: true })).toEqual(SEQUENCE);
   });
 
   it('a pre-flagged request still gets every step-line block', () => {
-    expect(postCheck('1. ضع الكحول في الكوب\n2. أشعله بعود كبريت', { preTriggered: true })).toEqual(SEQUENCE);
-    expect(postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.', { preTriggered: true })).toEqual(SEQUENCE);
+    expect(postCheck('1. ضع الكحول في الكوب\n2. أشعله بعود كبريت', { preTriggered: true })).toEqual(
+      SEQUENCE,
+    );
+    expect(
+      postCheck('1. Put the bleach in a bowl.\n2. Add water to the cup and stir.', {
+        preTriggered: true,
+      }),
+    ).toEqual(SEQUENCE);
   });
 
   it('known residual (D1 option a): without a pre-flag, intro hazard + pronoun steps pass', () => {
@@ -201,13 +243,18 @@ describe('postCheck step-line rule (FC-D12)', () => {
   });
 
   it('the FC-D12 answer passes when the request was not flagged (the FC-D12 question «اشرحلي الرابطة التساهمية…» is not)', () => {
-    expect(preCheck('اشرحلي الرابطة التساهمية بالتفصيل مع أمثلة كثيرة ومعادلات').triggered).toBe(false);
+    expect(preCheck('اشرحلي الرابطة التساهمية بالتفصيل مع أمثلة كثيرة ومعادلات').triggered).toBe(
+      false,
+    );
     expect(postCheck(FC_D12_COVALENT, { preTriggered: false })).toEqual(PASS);
   });
 
   it('known residual (D-D1): quantity_reagent still fires on stoichiometry («20 جم من هيدروكسيد الصوديوم»)', () => {
     // Unchanged on purpose — this documents today's behaviour, it is not the desired end state.
-    expect(postCheck('احسب عدد مولات 20 جم من هيدروكسيد الصوديوم.')).toEqual({ violation: true, rule: 'quantity_reagent' });
+    expect(postCheck('احسب عدد مولات 20 جم من هيدروكسيد الصوديوم.')).toEqual({
+      violation: true,
+      rule: 'quantity_reagent',
+    });
   });
 });
 

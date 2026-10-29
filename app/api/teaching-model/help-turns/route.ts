@@ -43,7 +43,8 @@ export async function POST(req: NextRequest) {
   try {
     authenticateServiceRequest(req);
     const body = await readJsonObject(req);
-    if (!body) throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
+    if (!body)
+      throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
     const result = await runLegacyHelpTurn(body, await resolveDeps());
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {

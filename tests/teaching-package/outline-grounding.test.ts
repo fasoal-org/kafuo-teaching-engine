@@ -25,8 +25,20 @@ vi.mock('@/lib/logger', () => ({
 /** Ids are strings in the manifest, exactly as Kafuo exports them (`str(...)`). */
 const MANIFEST = {
   contentUnits: [
-    { id: '2900', orderIndex: 0, role: 'INSTRUCTIONAL', normalizedText: 'a', blocks: [{ id: '51061' }] },
-    { id: '2901', orderIndex: 1, role: 'INSTRUCTIONAL', normalizedText: 'b', blocks: [{ id: '51062' }] },
+    {
+      id: '2900',
+      orderIndex: 0,
+      role: 'INSTRUCTIONAL',
+      normalizedText: 'a',
+      blocks: [{ id: '51061' }],
+    },
+    {
+      id: '2901',
+      orderIndex: 1,
+      role: 'INSTRUCTIONAL',
+      normalizedText: 'b',
+      blocks: [{ id: '51062' }],
+    },
   ],
 } as unknown as NormalizedLessonManifest;
 

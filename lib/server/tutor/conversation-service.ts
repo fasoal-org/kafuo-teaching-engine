@@ -62,7 +62,10 @@ import {
 } from '@/lib/persistence/tutor-runtime';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
-import { resolveSubjectModelPolicy, type ResolvedSubjectPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import {
+  resolveSubjectModelPolicy,
+  type ResolvedSubjectPolicy,
+} from '@/lib/server/teaching-model/resolve-policy';
 import { isSubjectCode } from '@/lib/server/teaching-model/subject-policy';
 import { compactConversation, isCompactionEnabled } from '@/lib/server/tutor/compaction';
 import {
@@ -71,7 +74,10 @@ import {
   groundingKeywords,
   type ContextAssessment,
 } from '@/lib/server/tutor/context-assessment';
-import { clarificationText, matchClarificationReply } from '@/lib/server/tutor/grounding/clarification';
+import {
+  clarificationText,
+  matchClarificationReply,
+} from '@/lib/server/tutor/grounding/clarification';
 import {
   accessLost,
   retrieveDirect,
@@ -168,7 +174,10 @@ export function toWireConversation(c: TutorConversation): WireConversation {
     status: c.status,
     // The internal learning item id stays internal (BR-03): only the title and confidence go out.
     lessonAssociation: c.lessonAssociation
-      ? { lessonTitle: associationTitle(c.lessonAssociation), confidence: c.lessonAssociation.confidence }
+      ? {
+          lessonTitle: associationTitle(c.lessonAssociation),
+          confidence: c.lessonAssociation.confidence,
+        }
       : null,
     messageCount: c.messageCount,
     lastMessageAt: c.lastMessageAt,
@@ -229,20 +238,34 @@ export async function createConversation(
   }
   if (
     input.clientRequestId !== undefined &&
-    (typeof input.clientRequestId !== 'string' || input.clientRequestId.length === 0 || input.clientRequestId.length > 128)
+    (typeof input.clientRequestId !== 'string' ||
+      input.clientRequestId.length === 0 ||
+      input.clientRequestId.length > 128)
   ) {
-    throw new TeachingPackageError('INVALID_REQUEST', 'clientRequestId must be a string of at most 128 chars');
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'clientRequestId must be a string of at most 128 chars',
+    );
   }
   if (!grant.entitlements.freeChat) {
-    throw new TeachingPackageError('SUBJECT_NOT_ALLOWED', 'Free Chat is not enabled for this student');
+    throw new TeachingPackageError(
+      'SUBJECT_NOT_ALLOWED',
+      'Free Chat is not enabled for this student',
+    );
   }
   const subject = grant.allowedSubjects.find((s) => s.code === input.subjectCode);
   if (!subject) {
-    throw new TeachingPackageError('SUBJECT_NOT_ALLOWED', `subject ${input.subjectCode} is not in the student grant`);
+    throw new TeachingPackageError(
+      'SUBJECT_NOT_ALLOWED',
+      `subject ${input.subjectCode} is not in the student grant`,
+    );
   }
   // `code === null` (no routing key upstream) reads exactly like an unrouted code.
   if (subject.code === null || !isSubjectCode(subject.code)) {
-    throw new TeachingPackageError('SUBJECT_ROUTE_UNAVAILABLE', `subject ${subject.code ?? '(none)'} has no approved route`);
+    throw new TeachingPackageError(
+      'SUBJECT_ROUTE_UNAVAILABLE',
+      `subject ${subject.code ?? '(none)'} has no approved route`,
+    );
   }
   // Resolvable now, or the first turn would fail after creation.
   await resolveSubjectModelPolicy(subject.code);
@@ -279,7 +302,10 @@ export async function createConversation(
     : null;
   if (!existing) throw new Error('conversation insert returned nothing and no replay row exists');
   if (existing.subjectCode !== subject.code) {
-    throw new TeachingPackageError('IDEMPOTENCY_CONFLICT', 'clientRequestId was used for another subject');
+    throw new TeachingPackageError(
+      'IDEMPOTENCY_CONFLICT',
+      'clientRequestId was used for another subject',
+    );
   }
   return { conversation: existing, created: false };
 }
@@ -290,7 +316,8 @@ export async function listConversations(
   options: { status?: string | null; cursor?: string | null; limit?: number | null },
 ): Promise<{ items: WireConversation[]; nextCursor: string | null }> {
   const status: ConversationStatus = options.status === 'archived' ? 'archived' : 'active';
-  const limit = options.limit && Number.isFinite(options.limit) ? options.limit : DEFAULT_LIST_LIMIT;
+  const limit =
+    options.limit && Number.isFinite(options.limit) ? options.limit : DEFAULT_LIST_LIMIT;
   const page = await listConversationsByStudent(deps.pool, {
     ...owner(grant),
     status,
@@ -373,16 +400,29 @@ function launchBackground(task: Promise<unknown>): void {
   void task.finally(() => set.delete(task));
 }
 
-export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInput): Promise<Response> {
+export async function sendMessage(
+  deps: TutorRuntimeDeps,
+  input: SendMessageInput,
+): Promise<Response> {
   const { grant } = input;
-  if (typeof input.clientMessageId !== 'string' || input.clientMessageId.length === 0 || input.clientMessageId.length > 128) {
-    throw new TeachingPackageError('INVALID_REQUEST', 'clientMessageId must be a string of at most 128 chars');
+  if (
+    typeof input.clientMessageId !== 'string' ||
+    input.clientMessageId.length === 0 ||
+    input.clientMessageId.length > 128
+  ) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'clientMessageId must be a string of at most 128 chars',
+    );
   }
   if (typeof input.text !== 'string' || input.text.trim().length === 0) {
     throw new TeachingPackageError('INVALID_REQUEST', 'text must be a non-empty string');
   }
   if (input.text.length > MAX_MESSAGE_CHARS) {
-    throw new TeachingPackageError('REQUEST_TOO_LARGE', `text must be at most ${MAX_MESSAGE_CHARS} characters`);
+    throw new TeachingPackageError(
+      'REQUEST_TOO_LARGE',
+      `text must be at most ${MAX_MESSAGE_CHARS} characters`,
+    );
   }
   const localeHint =
     typeof input.localeHint === 'string' && input.localeHint.length <= 16 ? input.localeHint : null;
@@ -390,10 +430,16 @@ export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInpu
 
   const conversation = await requireOwned(deps, grant, input.conversationId);
   if (conversation.status !== 'active') {
-    throw new TeachingPackageError('INVALID_TRANSITION', 'the conversation is archived; unarchive it first');
+    throw new TeachingPackageError(
+      'INVALID_TRANSITION',
+      'the conversation is archived; unarchive it first',
+    );
   }
   // Resume re-validates the pinned subject under the CURRENT grant (send only).
-  if (!grant.entitlements.freeChat || !grant.allowedSubjects.some((s) => s.code === conversation.subjectCode)) {
+  if (
+    !grant.entitlements.freeChat ||
+    !grant.allowedSubjects.some((s) => s.code === conversation.subjectCode)
+  ) {
     throw new TeachingPackageError(
       'SUBJECT_NO_LONGER_AVAILABLE',
       `subject ${conversation.subjectCode} is no longer available to this student`,
@@ -405,12 +451,21 @@ export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInpu
   const proxyRatio = proxyTarget
     ? await resolveProxyRatio(proxyTarget.modelString, deps.executor?.proxyRatioReader)
     : null;
-  const executorOptions = { queryable: deps.pool, now: deps.now, workerId: deps.workerId, ...(deps.executor ?? {}) };
+  const executorOptions = {
+    queryable: deps.pool,
+    now: deps.now,
+    workerId: deps.workerId,
+    ...(deps.executor ?? {}),
+  };
 
   return runTutorTurn(
     {
       store: CONVERSATION_TURN_STORE,
-      parent: { id: conversation.id, tenantId: conversation.tenantId, studentRef: conversation.studentRef },
+      parent: {
+        id: conversation.id,
+        tenantId: conversation.tenantId,
+        studentRef: conversation.studentRef,
+      },
       policy,
       capability: 'free_chat',
       stage: 'free-chat-turn',
@@ -421,7 +476,8 @@ export async function sendMessage(deps: TutorRuntimeDeps, input: SendMessageInpu
       meterScope: { conversationId: conversation.id },
       requestSignal: input.requestSignal,
       prepare: (ctx) => prepareFreeChatTurn(deps, conversation, academic, ctx),
-      afterCommit: (info) => afterFreeChatTurn(deps, conversation, policy, academic, proxyRatio, executorOptions, info),
+      afterCommit: (info) =>
+        afterFreeChatTurn(deps, conversation, policy, academic, proxyRatio, executorOptions, info),
     },
     deps,
   );
@@ -446,7 +502,10 @@ interface FreeChatGrounding {
   /** `tutor_turn_groundings.outcome_reason` (both paths). */
   outcomeReason: string | null;
   nextSnapshot: GroundingSnapshot | null;
-  association: { kind: 'keep' } | { kind: 'set'; value: ConversationAssociation } | { kind: 'clear' };
+  association:
+    | { kind: 'keep' }
+    | { kind: 'set'; value: ConversationAssociation }
+    | { kind: 'clear' };
   auditUnits: TurnGroundingUnit[];
   totalChars: number;
   truncated: boolean;
@@ -491,7 +550,11 @@ function snapshotUnitsToInput(snapshot: GroundingSnapshot) {
       toGroundingUnitInput({
         title: unit.title,
         text: unit.text,
-        item: { key: unit.itemId, title: snapshotItemTitle(snapshot, unit.itemId), itemType: unit.itemType },
+        item: {
+          key: unit.itemId,
+          title: snapshotItemTitle(snapshot, unit.itemId),
+          itemType: unit.itemType,
+        },
       }),
     );
   }
@@ -583,7 +646,8 @@ function httpAccessDenied(error: unknown): 'student_ref_unknown' | 'offering_not
     code?: unknown;
     status?: unknown;
   };
-  if (!(error instanceof KafuoIntegrationError) && record.name !== 'KafuoIntegrationError') return null;
+  if (!(error instanceof KafuoIntegrationError) && record.name !== 'KafuoIntegrationError')
+    return null;
   if (record.code === 'student_ref_unknown' || record.code === 'offering_not_permitted') {
     return record.code;
   }
@@ -803,7 +867,10 @@ function fromDirectResult(
       outcomeReason: 'clarification',
       resolution: result.resolution,
       clarification: {
-        text: clarificationText(ctx.studentMessage.text, result.candidates.map((c) => c.title)),
+        text: clarificationText(
+          ctx.studentMessage.text,
+          result.candidates.map((c) => c.title),
+        ),
         candidates: result.candidates,
       },
     };
@@ -825,8 +892,14 @@ function fromDirectResult(
     schema: 2,
     source: 'direct',
     units,
-    items: result.items.map((item) => ({ itemId: item.itemId, itemType: item.itemType, title: item.title })),
-    keywords: groundingKeywords(result.units.map((unit) => ({ unitTitle: unit.unitTitle, text: unit.text }))),
+    items: result.items.map((item) => ({
+      itemId: item.itemId,
+      itemType: item.itemType,
+      title: item.title,
+    })),
+    keywords: groundingKeywords(
+      result.units.map((unit) => ({ unitTitle: unit.unitTitle, text: unit.text })),
+    ),
     setAtSeq: seq,
     lastUsedSeq: seq,
   };
@@ -848,7 +921,10 @@ function fromDirectResult(
         learningItemType: item.itemType,
         learningItemId: item.itemId,
         title: item.title ?? '',
-        confidence: Math.max(0, Math.min(1, Math.max(...result.units.map((unit) => unit.similarity)))),
+        confidence: Math.max(
+          0,
+          Math.min(1, Math.max(...result.units.map((unit) => unit.similarity))),
+        ),
         associatedAtSeq: seq,
         buildId: result.units[0]?.buildId ?? null,
       };
@@ -926,8 +1002,14 @@ async function groundDirect(
     );
     if (choice) {
       const candidate = pending.candidates[choice.index]!;
-      const question = (await questionText(deps, conversation.id, ctx, pending.questionSeq)) ?? ctx.studentMessage.text;
-      extra.clarificationChoice = { by: choice.by, index: choice.index + 1, itemId: candidate.itemId };
+      const question =
+        (await questionText(deps, conversation.id, ctx, pending.questionSeq)) ??
+        ctx.studentMessage.text;
+      extra.clarificationChoice = {
+        by: choice.by,
+        index: choice.index + 1,
+        itemId: candidate.itemId,
+      };
       const result = await retrieveDirect(
         direct,
         scope,
@@ -961,7 +1043,13 @@ async function groundDirect(
         ? snapshot.units.map((unit) => unit.itemId)
         : [],
     );
-    const probe = await runDiscoveryProbe(direct, scope, ctx.studentMessage.text, currentItems, clock);
+    const probe = await runDiscoveryProbe(
+      direct,
+      scope,
+      ctx.studentMessage.text,
+      currentItems,
+      clock,
+    );
     extra.probe = probe.audit;
     if (probe.upgrade) {
       decision = 'retrieve';
@@ -987,9 +1075,15 @@ async function groundDirect(
         })),
         clock,
       );
-      extra.revalidation = { outcome: check.outcome, valid: check.validCount, total: snapshot.units.length };
+      extra.revalidation = {
+        outcome: check.outcome,
+        valid: check.validCount,
+        total: snapshot.units.length,
+      };
       if (check.outcome === 'valid') {
-        return finish(reuseGrounding('direct', snapshot, conversation.lessonAssociation, seq, true));
+        return finish(
+          reuseGrounding('direct', snapshot, conversation.lessonAssociation, seq, true),
+        );
       }
       if (check.outcome === 'invalid') {
         decision = 'retrieve';
@@ -1006,7 +1100,12 @@ async function groundDirect(
 
   if (decision !== assessment.decision) extra.effectiveDecision = decision;
   if (decision === 'retrieve') {
-    const result = await retrieveDirect(direct, scope, { text: ctx.studentMessage.text, resolved }, clock);
+    const result = await retrieveDirect(
+      direct,
+      scope,
+      { text: ctx.studentMessage.text, resolved },
+      clock,
+    );
     return finish(fromDirectResult(result, conversation, ctx, base));
   }
   return finish(base);
@@ -1042,15 +1141,18 @@ export async function prepareFreeChatTurn(
 
   const summaryThrough = conversation.summaryThroughSeq;
   const summary = conversation.contextSummary;
-  const history = summary && summaryThrough !== null
-    ? {
-        summary,
-        turns: ctx.history.slice(
-          ctx.history.length -
-            ctx.historyMessages.filter((m) => m.role === 'student' && m.status === 'completed' && m.seq > summaryThrough).length,
-        ),
-      }
-    : { turns: ctx.history };
+  const history =
+    summary && summaryThrough !== null
+      ? {
+          summary,
+          turns: ctx.history.slice(
+            ctx.history.length -
+              ctx.historyMessages.filter(
+                (m) => m.role === 'student' && m.status === 'completed' && m.seq > summaryThrough,
+              ).length,
+          ),
+        }
+      : { turns: ctx.history };
 
   const grounded = outcome.grounding.mode === 'reuse' || outcome.grounding.mode === 'retrieved';
   const timings = outcome.timings;
@@ -1109,9 +1211,15 @@ export async function prepareFreeChatTurn(
       // deterministically instead of reusing evidence the student never
       // received. The `kafuo_http` path keeps its existing behaviour.
       if (result.succeeded || outcome.source !== 'direct') {
-        if (outcome.nextSnapshot) await writeGroundingSnapshot(q, conversation.id, outcome.nextSnapshot, nowS);
+        if (outcome.nextSnapshot)
+          await writeGroundingSnapshot(q, conversation.id, outcome.nextSnapshot, nowS);
         if (outcome.association.kind === 'set') {
-          await updateConversationLessonAssociation(q, conversation.id, outcome.association.value, nowS);
+          await updateConversationLessonAssociation(
+            q,
+            conversation.id,
+            outcome.association.value,
+            nowS,
+          );
         } else if (outcome.association.kind === 'clear') {
           await updateConversationLessonAssociation(q, conversation.id, null, nowS);
         }
@@ -1120,7 +1228,11 @@ export async function prepareFreeChatTurn(
         await updateConversationPendingClarification(
           q,
           conversation.id,
-          { candidates: outcome.clarification.candidates, questionSeq: seq, askedAtSeq: result.tutorMessageSeq },
+          {
+            candidates: outcome.clarification.candidates,
+            questionSeq: seq,
+            askedAtSeq: result.tutorMessageSeq,
+          },
           nowS,
         );
       } else if (conversation.pendingClarification && result.succeeded) {
@@ -1195,7 +1307,11 @@ async function firstTurnOf(
   deps: TutorRuntimeDeps,
   conversationId: string,
 ): Promise<{ student: string; tutor: string; safetyFlagged: boolean } | null> {
-  const { messages } = await readMessagesBySeq(deps.pool, { parentId: conversationId, beforeSeq: 4, limit: 3 });
+  const { messages } = await readMessagesBySeq(deps.pool, {
+    parentId: conversationId,
+    beforeSeq: 4,
+    limit: 3,
+  });
   const student = messages.find((m) => m.role === 'student' && m.status === 'completed');
   if (!student) return null;
   const tutor = messages.find((m) => m.role === 'tutor' && m.turnId === student.turnId);

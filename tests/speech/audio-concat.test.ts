@@ -5,7 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { AudioConcatError, inspectMp3, joinAudio, joinMp3, joinWav } from '@/lib/server/speech/audio-concat';
+import {
+  AudioConcatError,
+  inspectMp3,
+  joinAudio,
+  joinMp3,
+  joinWav,
+} from '@/lib/server/speech/audio-concat';
 
 /** One MPEG-2 Layer III frame, 24 kHz mono 128 kbps (the API's measured shape, M6): 384 bytes. */
 function frame(fill = 0, { bitrateIndex = 0xc, xing = false } = {}): Uint8Array {
@@ -63,7 +69,8 @@ describe('WAV fallback join (implemented, unused in V1)', () => {
     const data = new Uint8Array(new Int16Array(samples).buffer);
     const out = new Uint8Array(44 + data.length);
     const view = new DataView(out.buffer);
-    const tag = (at: number, t: string) => [...t].forEach((c, i) => (out[at + i] = c.charCodeAt(0)));
+    const tag = (at: number, t: string) =>
+      [...t].forEach((c, i) => (out[at + i] = c.charCodeAt(0)));
     tag(0, 'RIFF');
     view.setUint32(4, placeholder ? 0xffffffff : out.length - 8, true);
     tag(8, 'WAVE');

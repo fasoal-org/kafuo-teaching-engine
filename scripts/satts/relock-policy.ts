@@ -10,13 +10,30 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { POLICY_MANIFEST, RENDERER_GRAMMAR_VERSION, policyHashInput } from '../../lib/speech/scientific/policy';
+import {
+  POLICY_MANIFEST,
+  RENDERER_GRAMMAR_VERSION,
+  policyHashInput,
+} from '../../lib/speech/scientific/policy';
 
-const path = join(__dirname, '..', '..', 'lib', 'speech', 'scientific', 'policy', 'ar-v1', 'manifest.json');
+const path = join(
+  __dirname,
+  '..',
+  '..',
+  'lib',
+  'speech',
+  'scientific',
+  'policy',
+  'ar-v1',
+  'manifest.json',
+);
 const expected = `sha256:${createHash('sha256').update(policyHashInput(), 'utf8').digest('hex')}`;
 const manifest = JSON.parse(readFileSync(path, 'utf8')) as typeof POLICY_MANIFEST;
 
-if (manifest.contentHash === expected && manifest.rendererGrammarVersion === RENDERER_GRAMMAR_VERSION) {
+if (
+  manifest.contentHash === expected &&
+  manifest.rendererGrammarVersion === RENDERER_GRAMMAR_VERSION
+) {
   console.log(`policy ${manifest.policyVersion} is locked (${expected})`);
 } else if (process.argv.includes('--check')) {
   console.error(`policy lock is stale: expected ${expected}`);

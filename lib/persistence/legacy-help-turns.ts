@@ -148,7 +148,14 @@ export async function beginLegacyHelpTurn(
      ) VALUES ($1, $2, $3, $4, $5, 'generating', '[]'::jsonb, $6, $6)
      ON CONFLICT (turn_id) DO NOTHING
      RETURNING ${COLUMNS}`,
-    [input.turnId, input.tenantId, input.studentRef, input.originConversationRef, input.requestDigest, input.now],
+    [
+      input.turnId,
+      input.tenantId,
+      input.studentRef,
+      input.originConversationRef,
+      input.requestDigest,
+      input.now,
+    ],
   );
   if (result.rows[0]) return { inserted: true, row: mapRow(result.rows[0]) };
   const existing = await readLegacyHelpTurn(queryable, input.turnId);

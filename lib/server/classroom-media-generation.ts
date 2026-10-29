@@ -385,7 +385,9 @@ export async function generateTTSForClassroom(
   if (route) {
     const status = routedProviderStatus(route.providerId);
     if (status.status !== 'ok') {
-      log.warn(`${routedProviderUnavailableMessage(route, status.status)}; skipping TTS generation`);
+      log.warn(
+        `${routedProviderUnavailableMessage(route, status.status)}; skipping TTS generation`,
+      );
       return;
     }
     providerId = route.providerId;

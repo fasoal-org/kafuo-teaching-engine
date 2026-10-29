@@ -30,7 +30,14 @@ describe('percentile / summarize', () => {
   });
 
   it('summarises with n, p50, p95, p99, max and mean', () => {
-    expect(summarize([10, 20, 30, 40, 50])).toEqual({ n: 5, p50: 30, p95: 48, p99: 49.6, max: 50, mean: 30 });
+    expect(summarize([10, 20, 30, 40, 50])).toEqual({
+      n: 5,
+      p50: 30,
+      p95: 48,
+      p99: 49.6,
+      max: 50,
+      mean: 30,
+    });
     expect(summarize([])).toEqual({ n: 0, p50: null, p95: null, p99: null, max: null, mean: null });
   });
 });
@@ -38,7 +45,8 @@ describe('percentile / summarize', () => {
 describe('SseFrameParser', () => {
   it('reassembles frames split anywhere across chunks', () => {
     const parser = new SseFrameParser();
-    const wire = 'event: turn_start\ndata: {"turnId":"t1","turnAttempt":1}\n\nevent: text_delta\ndata: {"delta":"مرحبا"}\n\n';
+    const wire =
+      'event: turn_start\ndata: {"turnId":"t1","turnAttempt":1}\n\nevent: text_delta\ndata: {"delta":"مرحبا"}\n\n';
     const frames = [];
     for (let i = 0; i < wire.length; i += 7) frames.push(...parser.push(wire.slice(i, i + 7)));
     expect(frames).toEqual([
@@ -121,14 +129,29 @@ describe('aggregateTurns', () => {
     errorCode: 'TURN_IN_PROGRESS',
   };
   const turns = [
-    turn([['grounding', { mode: 'retrieved' }, 30], ['text_delta', {}, 400], ['done', {}, 800]]),
-    turn([['grounding', { mode: 'retrieved' }, 50], ['text_delta', {}, 600], ['done', {}, 1000]]),
+    turn([
+      ['grounding', { mode: 'retrieved' }, 30],
+      ['text_delta', {}, 400],
+      ['done', {}, 800],
+    ]),
+    turn([
+      ['grounding', { mode: 'retrieved' }, 50],
+      ['text_delta', {}, 600],
+      ['done', {}, 1000],
+    ]),
     turn([
       ['grounding', { mode: 'insufficient', reason: 'no_match' }, 20],
       ['text_delta', {}, 350],
       ['done', {}, 700],
     ]),
-    turn([['grounding', { mode: 'none' }, 10], ['text_delta', {}, 300], ['done', {}, 500]], 'kafuo_http'),
+    turn(
+      [
+        ['grounding', { mode: 'none' }, 10],
+        ['text_delta', {}, 300],
+        ['done', {}, 500],
+      ],
+      'kafuo_http',
+    ),
     refused,
   ];
 
@@ -148,13 +171,23 @@ describe('aggregateTurns', () => {
 
   it('counts turns that break an expected grounding outcome (failure injection)', () => {
     const agg = aggregateTurns(turns, { expectGroundingMode: 'insufficient' });
-    expect(agg.expectation).toMatchObject({ groundingMode: 'insufficient', streamedTurns: 4, violations: 3 });
+    expect(agg.expectation).toMatchObject({
+      groundingMode: 'insufficient',
+      streamedTurns: 4,
+      violations: 3,
+    });
     expect(agg.expectation?.groundingMs.n).toBe(4);
   });
 });
 
 describe('parseLoadArgs (never runs by default)', () => {
-  const minimal = ['--target', 'http://127.0.0.1:3005', '--i-understand-this-sends-load', '--sessions', 's.json'];
+  const minimal = [
+    '--target',
+    'http://127.0.0.1:3005',
+    '--i-understand-this-sends-load',
+    '--sessions',
+    's.json',
+  ];
 
   it('refuses no arguments, a missing target, a missing acknowledgement or a missing sessions file', () => {
     expect(parseLoadArgs([])).toEqual({ ok: false, error: '--target is required' });
@@ -163,8 +196,13 @@ describe('parseLoadArgs (never runs by default)', () => {
       error: '--i-understand-this-sends-load is required',
     });
     expect(parseLoadArgs(minimal.slice(2))).toMatchObject({ ok: false });
-    expect(parseLoadArgs(minimal.slice(0, 3))).toEqual({ ok: false, error: '--sessions is required' });
-    expect(parseLoadArgs(['--target', 'ftp://x', '--i-understand-this-sends-load', '--sessions', 's'])).toEqual({
+    expect(parseLoadArgs(minimal.slice(0, 3))).toEqual({
+      ok: false,
+      error: '--sessions is required',
+    });
+    expect(
+      parseLoadArgs(['--target', 'ftp://x', '--i-understand-this-sends-load', '--sessions', 's']),
+    ).toEqual({
       ok: false,
       error: '--target must be http(s)',
     });
@@ -182,7 +220,15 @@ describe('parseLoadArgs (never runs by default)', () => {
   });
 
   it('accepts an explicit run and fills defaults', () => {
-    const parsed = parseLoadArgs([...minimal, '--stub-llm-port', '4599', '--stub-ttft-ms', '250', '--source-label', 'direct']);
+    const parsed = parseLoadArgs([
+      ...minimal,
+      '--stub-llm-port',
+      '4599',
+      '--stub-ttft-ms',
+      '250',
+      '--source-label',
+      'direct',
+    ]);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.options).toMatchObject({

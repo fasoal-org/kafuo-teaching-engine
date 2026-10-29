@@ -27,7 +27,9 @@ import {
  * is unusable, the symbol is spoken whole (`Na`, never `N a`: P3).
  */
 export function writeElement(ctx: VerbaliseContext, w: Writer, symbol: string): void {
-  const names = [...symbol].map((ch) => ctx.policy.resolve({ role: 'element', token: ch, domain: ctx.domain }, ctx.mode));
+  const names = [...symbol].map((ch) =>
+    ctx.policy.resolve({ role: 'element', token: ch, domain: ctx.domain }, ctx.mode),
+  );
   if (names.every((name) => name !== null)) {
     for (const name of names) {
       if (name!.proposed) ctx.noteProposed();
@@ -43,7 +45,10 @@ const SUPERSCRIPT_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
 
 /** `²⁻`, `⁺`: the authored charge as superscript glyphs (never «أُس»). */
 function chargeGlyph(charge: Charge): string {
-  const magnitude = charge.magnitude === 1 ? '' : [...String(charge.magnitude)].map((d) => SUPERSCRIPT_DIGITS[Number(d)]).join('');
+  const magnitude =
+    charge.magnitude === 1
+      ? ''
+      : [...String(charge.magnitude)].map((d) => SUPERSCRIPT_DIGITS[Number(d)]).join('');
   return `${magnitude}${charge.sign === '+' ? '⁺' : '⁻'}`;
 }
 
@@ -82,7 +87,8 @@ function writeCount(ctx: VerbaliseContext, w: Writer, value: number): void {
     w.word(word);
     return;
   }
-  const composed = value > 20 && speakOrNull(ctx, 'number', '2') !== null ? integerToArabicWords(value) : null;
+  const composed =
+    value > 20 && speakOrNull(ctx, 'number', '2') !== null ? integerToArabicWords(value) : null;
   w.word(composed ?? String(value));
 }
 

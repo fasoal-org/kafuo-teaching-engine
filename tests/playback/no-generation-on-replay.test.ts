@@ -8,12 +8,19 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', '..');
-const PLAYBACK = ['lib/playback', 'lib/utils/audio-player.ts', 'lib/action/engine.ts', 'lib/media/resolve-audio-bytes.ts'];
+const PLAYBACK = [
+  'lib/playback',
+  'lib/utils/audio-player.ts',
+  'lib/action/engine.ts',
+  'lib/media/resolve-audio-bytes.ts',
+];
 
 function files(path: string): string[] {
   const full = join(ROOT, path);
   if (!statSync(full).isDirectory()) return [full];
-  return readdirSync(full).flatMap((name) => files(join(path, name))).filter((f) => /\.(ts|tsx)$/.test(f));
+  return readdirSync(full)
+    .flatMap((name) => files(join(path, name)))
+    .filter((f) => /\.(ts|tsx)$/.test(f));
 }
 
 describe('no generation on replay (FR-023)', () => {

@@ -48,9 +48,7 @@ export function isLatinLetter(ch: string | undefined): boolean {
 
 /** Arabic script (letters, diacritics, Arabic punctuation excluded). */
 export function isArabicLetter(ch: string | undefined): boolean {
-  return ch !== undefined && /^[ء-ي٠-٩ٮ-ۓۺ-ۿـ]$/.test(ch)
-    ? !isArabicIndicDigit(ch)
-    : false;
+  return ch !== undefined && /^[ء-ي٠-٩ٮ-ۓۺ-ۿـ]$/.test(ch) ? !isArabicIndicDigit(ch) : false;
 }
 
 /**

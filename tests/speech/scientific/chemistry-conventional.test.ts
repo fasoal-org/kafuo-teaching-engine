@@ -19,7 +19,9 @@ describe('Chemistry conventional readings (DEC-052)', () => {
       expect(prepared('\\ce{CH2=CH2}', 'CHEMISTRY', mode)).toContain('رابطة ثنائية');
       expect(prepared('Cu2+ + 2e- → Cu', 'CHEMISTRY', mode)).toContain('إلكترون');
     }
-    expect(prepared('الروابط H-H و N≡N', 'CHEMISTRY')).toBe('الروابط إتش رابطة أحادية إتش و إن رابطة ثلاثية إن');
+    expect(prepared('الروابط H-H و N≡N', 'CHEMISTRY')).toBe(
+      'الروابط إتش رابطة أحادية إتش و إن رابطة ثلاثية إن',
+    );
   });
 
   it('2: the same symbols outside a recognised Chemistry role keep their own reading', () => {
@@ -39,7 +41,8 @@ describe('Chemistry conventional readings (DEC-052)', () => {
     ] as const) {
       for (const mode of both) {
         const reading = prepared(text, subject, mode);
-        for (const word of ['ينتج', 'يتصاعد', 'بالتسخين', 'رابطة']) expect(reading, `${subject} ${text}`).not.toContain(word);
+        for (const word of ['ينتج', 'يتصاعد', 'بالتسخين', 'رابطة'])
+          expect(reading, `${subject} ${text}`).not.toContain(word);
         expect(r1Violations(text, subject, mode)).toEqual([]);
       }
     }
@@ -68,8 +71,12 @@ describe('Chemistry conventional readings (DEC-052)', () => {
     expect(prepared('Zn + 2HCl → ZnCl2 + H2↑', 'CHEMISTRY')).toBe(
       'زد إن زائد اثنين إتش سي إل ينتج زد إن سي إل اثنين زائد إتش اثنين يتصاعد',
     );
-    expect(prepared('التفاعل 2H2+O2->2H2O', 'CHEMISTRY')).toBe('التفاعل اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو');
-    expect(prepared('الاختزال Cu2+ + 2e- → Cu', 'CHEMISTRY')).toBe('الاختزال سي يو، بشحنة موجب اثنين زائد اثنين إلكترون ينتج سي يو');
+    expect(prepared('التفاعل 2H2+O2->2H2O', 'CHEMISTRY')).toBe(
+      'التفاعل اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو',
+    );
+    expect(prepared('الاختزال Cu2+ + 2e- → Cu', 'CHEMISTRY')).toBe(
+      'الاختزال سي يو، بشحنة موجب اثنين زائد اثنين إلكترون ينتج سي يو',
+    );
     expect(prepared('التفاعل \\ce{CaCO3 ->[\\Delta] CaO + CO2}', 'CHEMISTRY')).toBe(
       'التفاعل سي إيه سي أو ثلاثة، بالتسخين، ينتج سي إيه أو زائد سي أو اثنين',
     );

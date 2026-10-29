@@ -33,11 +33,23 @@ describe('normalizeArabic', () => {
 
 describe('tokenize / extractKeywords', () => {
   it('lower-cases Latin and splits on punctuation', () => {
-    expect(tokenize("What's Newton's Second Law?")).toEqual(['what', 's', 'newton', 's', 'second', 'law']);
+    expect(tokenize("What's Newton's Second Law?")).toEqual([
+      'what',
+      's',
+      'newton',
+      's',
+      'second',
+      'law',
+    ]);
   });
 
   it('drops bilingual stopwords and strips Arabic clitics', () => {
-    expect(extractKeywords('ما هو قانون حفظ الكتلة في الدرس؟')).toEqual(['قانون', 'حفظ', 'كتله', 'درس']);
+    expect(extractKeywords('ما هو قانون حفظ الكتلة في الدرس؟')).toEqual([
+      'قانون',
+      'حفظ',
+      'كتله',
+      'درس',
+    ]);
     expect(extractKeywords('what is the law of conservation of mass in the lesson')).toEqual([
       'law',
       'conservation',
@@ -58,8 +70,16 @@ describe('tokenize / extractKeywords', () => {
 
 describe('contentSurfaceWords', () => {
   it('returns the original spelling of the content words', () => {
-    expect(contentSurfaceWords('ما هو التبرير الاستقرائي في الرياضيات؟', 3)).toEqual(['التبرير', 'الاستقرائي', 'الرياضيات']);
-    expect(contentSurfaceWords('What is Newton\'s Second Law?')).toEqual(['Newton', 'Second', 'Law']);
+    expect(contentSurfaceWords('ما هو التبرير الاستقرائي في الرياضيات؟', 3)).toEqual([
+      'التبرير',
+      'الاستقرائي',
+      'الرياضيات',
+    ]);
+    expect(contentSurfaceWords("What is Newton's Second Law?")).toEqual([
+      'Newton',
+      'Second',
+      'Law',
+    ]);
   });
 });
 

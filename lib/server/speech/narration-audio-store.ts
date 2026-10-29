@@ -17,7 +17,11 @@ function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-export function narrationAudioFileName(actionId: string, fingerprint: string, format: string): string {
+export function narrationAudioFileName(
+  actionId: string,
+  fingerprint: string,
+  format: string,
+): string {
   return `tts-${safeSegment(actionId)}-${fingerprintPrefix(fingerprint)}.${safeSegment(format || 'mp3')}`;
 }
 

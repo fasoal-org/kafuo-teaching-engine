@@ -1,12 +1,8 @@
 {
   "table": "states",
   "description": "State markers (s) (l) (g) (aq).",
-  "roles": [
-    "state"
-  ],
-  "domains": [
-    "CHEMISTRY"
-  ],
+  "roles": ["state"],
+  "domains": ["CHEMISTRY"],
   "entries": [
     {
       "key": "s",

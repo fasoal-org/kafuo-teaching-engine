@@ -453,7 +453,11 @@ export class KafuoIntegrationClient {
     if (status === 200 && isRecord(body) && Array.isArray(body.units)) {
       const units: GroundingUnit[] = [];
       for (const unit of body.units) {
-        if (!isRecord(unit) || typeof unit.contentUnitId !== 'string' || typeof unit.text !== 'string') {
+        if (
+          !isRecord(unit) ||
+          typeof unit.contentUnitId !== 'string' ||
+          typeof unit.text !== 'string'
+        ) {
           continue;
         }
         units.push({
@@ -474,7 +478,11 @@ export class KafuoIntegrationClient {
           typeof match.lessonId === 'string' &&
           typeof match.lessonTitle === 'string' &&
           typeof match.confidence === 'number'
-            ? { lessonId: match.lessonId, lessonTitle: match.lessonTitle, confidence: match.confidence }
+            ? {
+                lessonId: match.lessonId,
+                lessonTitle: match.lessonTitle,
+                confidence: match.confidence,
+              }
             : null,
         truncated: body.truncated === true,
       };

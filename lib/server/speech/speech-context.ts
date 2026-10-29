@@ -47,7 +47,8 @@ export async function resolveSpeechContext(input: {
   governedSubjectLookup?: GovernedSubjectLookup;
 }): Promise<ResolvedSpeechContext> {
   const { stage, config, policy } = input;
-  const language = typeof stage?.language === 'string' && stage.language.trim() ? stage.language : null;
+  const language =
+    typeof stage?.language === 'string' && stage.language.trim() ? stage.language : null;
   const readingMode = stage?.speechReadingMode === 'accessible' ? 'accessible' : 'natural';
 
   let stageSubjectCode =

@@ -29,3 +29,7 @@ out/
 
 # SVG arc helper (vendored declaration)
 lib/export/svg-arc-to-cubic-bezier.d.ts
+
+# Workspace testing adapter, kept byte-identical across the five repos by
+# tools/testing/sync_test_policy.py; formatting it here would break that parity.
+.opencode/

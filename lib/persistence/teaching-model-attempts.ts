@@ -1136,7 +1136,10 @@ export async function fallbackBreakdown(
     fallbackParams,
   );
   const fallbackBySubject = new Map(
-    fallbacks.rows.map((row) => [row.subject_code, { succeeded: Number(row.succeeded), failed: Number(row.failed) }]),
+    fallbacks.rows.map((row) => [
+      row.subject_code,
+      { succeeded: Number(row.succeeded), failed: Number(row.failed) },
+    ]),
   );
   const out = new Map<string, FallbackBreakdownRow>();
   for (const row of primaries.rows) {
@@ -1164,7 +1167,9 @@ export async function fallbackBreakdown(
     }
   }
   for (const entry of out.values()) {
-    entry.fallbackRate = entry.primaryAttempts ? entry.fallbackTriggered / entry.primaryAttempts : 0;
+    entry.fallbackRate = entry.primaryAttempts
+      ? entry.fallbackTriggered / entry.primaryAttempts
+      : 0;
   }
   return [...out.values()];
 }

@@ -8,9 +8,17 @@ import { describe, expect, it } from 'vitest';
 
 import { ELEMENT_SYMBOLS } from '@/lib/speech/scientific/chemistry/elements';
 import { chemistryFormulaKind } from '@/lib/speech/scientific/chemistry/grammar';
-import { canonicalFormula, ChemFault, parseChemistry } from '@/lib/speech/scientific/chemistry/parse';
+import {
+  canonicalFormula,
+  ChemFault,
+  parseChemistry,
+} from '@/lib/speech/scientific/chemistry/parse';
 import { verbaliseChemistry } from '@/lib/speech/scientific/chemistry/verbalise-ar';
-import { loadPolicyPack, POLICY_MANIFEST, POLICY_TABLE_FILES } from '@/lib/speech/scientific/policy';
+import {
+  loadPolicyPack,
+  POLICY_MANIFEST,
+  POLICY_TABLE_FILES,
+} from '@/lib/speech/scientific/policy';
 import { codes, prepared, render, TEST_POLICY } from './helpers';
 
 describe('trap list (CO/Co/No/In/He/I/As/Be)', () => {
@@ -71,9 +79,13 @@ describe('parser', () => {
 
   it('accepts every charge spelling', () => {
     for (const text of ['SO4^{2-}', 'SO4^2-', 'SO₄²⁻']) {
-      expect(canonicalFormula(parseChemistry(text, { inCe: false }).sides[0]![0]!.species)).toBe('SO4^2-');
+      expect(canonicalFormula(parseChemistry(text, { inCe: false }).sides[0]![0]!.species)).toBe(
+        'SO4^2-',
+      );
     }
-    expect(canonicalFormula(parseChemistry('Na+', { inCe: false }).sides[0]![0]!.species)).toBe('Na^+');
+    expect(canonicalFormula(parseChemistry('Na+', { inCe: false }).sides[0]![0]!.species)).toBe(
+      'Na^+',
+    );
   });
 
   it('rejects unknown elements and malformed input with a typed fault', () => {
@@ -111,7 +123,16 @@ describe('O-2: no compound, ion or quantity name (D-9b superseded)', () => {
           warn: () => {},
           noteProposed: () => {},
         });
-        for (const name of ['ماء', 'الميثان', 'كلوريد', 'أكسيد', 'أيون', 'حمض', 'هيدروكسيد', 'كربونات']) {
+        for (const name of [
+          'ماء',
+          'الميثان',
+          'كلوريد',
+          'أكسيد',
+          'أيون',
+          'حمض',
+          'هيدروكسيد',
+          'كربونات',
+        ]) {
           expect(writer.toString(), `${input} ${mode}`).not.toContain(name);
         }
       }
@@ -143,10 +164,15 @@ describe('D-9 letters and O-1 counts', () => {
 
   it('O-1: counts 1–20, coefficients and charges are Arabic in the «اثنين» register', () => {
     const pack = loadPolicyPack('ar', { allowProposed: true });
-    for (let n = 0; n <= 20; n += 1) expect(pack.has('numbers-structural', `nom:${n}`), `nom:${n}`).toBe(true);
-    expect(POLICY_TABLE_FILES['chem-letters.json']!.entries.some((e) => e.key.startsWith('count:'))).toBe(false);
+    for (let n = 0; n <= 20; n += 1)
+      expect(pack.has('numbers-structural', `nom:${n}`), `nom:${n}`).toBe(true);
+    expect(
+      POLICY_TABLE_FILES['chem-letters.json']!.entries.some((e) => e.key.startsWith('count:')),
+    ).toBe(false);
     expect(prepared('الأيون SO₄²⁻', 'CHEMISTRY')).toBe('الأيون إس أو أربعة، بشحنة سالب اثنين');
-    expect(prepared('الصيغة C₆H₁₂O₆ هنا', 'CHEMISTRY')).toBe('الصيغة سي ستة إتش اثني عشر أو ستة هنا');
+    expect(prepared('الصيغة C₆H₁₂O₆ هنا', 'CHEMISTRY')).toBe(
+      'الصيغة سي ستة إتش اثني عشر أو ستة هنا',
+    );
     expect(prepared('الكبريت S₂₀ هنا', 'CHEMISTRY')).toBe('الكبريت إس عشرين هنا');
   });
 });
@@ -176,7 +202,9 @@ describe('P7: chemistry detection and notation', () => {
     const read = (text: string) => render(text, 'CHEMISTRY');
     expect(read('الأيون Fe3+').preparedText).toBe('الأيون إف إي، بشحنة موجب ثلاثة');
     expect(read('الأيون SO42-').preparedText).toBe('الأيون إس أو أربعة، بشحنة سالب اثنين');
-    expect(read('الأيون Cr2O72-').preparedText).toBe('الأيون سي آر اثنين أو سبعة، بشحنة سالب اثنين');
+    expect(read('الأيون Cr2O72-').preparedText).toBe(
+      'الأيون سي آر اثنين أو سبعة، بشحنة سالب اثنين',
+    );
     // A single digit on a polyatomic species is a count with a charge of one.
     expect(read('الأيون NH4+').preparedText).toBe('الأيون إن إتش أربعة، بشحنة موجبة');
     expect(read('الأيون NO3-').preparedText).toBe('الأيون إن أو ثلاثة، بشحنة سالبة');
@@ -186,24 +214,38 @@ describe('P7: chemistry detection and notation', () => {
   });
 
   it('DEC-052: a parsed bond reads «رابطة أحادية/ثنائية/ثلاثية» (supersedes O-9)', () => {
-    expect(prepared('الروابط H-H و O=O و N≡N', 'CHEMISTRY')).toBe('الروابط إتش رابطة أحادية إتش و أو رابطة ثنائية أو و إن رابطة ثلاثية إن');
+    expect(prepared('الروابط H-H و O=O و N≡N', 'CHEMISTRY')).toBe(
+      'الروابط إتش رابطة أحادية إتش و أو رابطة ثنائية أو و إن رابطة ثلاثية إن',
+    );
     expect(prepared('\\ce{CH2=CH2}', 'CHEMISTRY')).toBe('سي إتش اثنين رابطة ثنائية سي إتش اثنين');
     expect(prepared('\\ce{HC#CH}', 'CHEMISTRY')).toBe('إتش سي رابطة ثلاثية سي إتش');
     // A spaced `=` inside \ce is still the reaction arrow (mhchem).
-    expect(prepared('\\ce{2H2 + O2 = 2H2O}', 'CHEMISTRY')).toBe('اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو');
+    expect(prepared('\\ce{2H2 + O2 = 2H2O}', 'CHEMISTRY')).toBe(
+      'اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو',
+    );
   });
 
   it('hydrates, coefficients, arrows, states, marks and electrons', () => {
-    expect(prepared('البلورة CuSO4.5H2O', 'CHEMISTRY')).toBe('البلورة سي يو إس أو أربعة، مع خمسة إتش اثنين أو');
+    expect(prepared('البلورة CuSO4.5H2O', 'CHEMISTRY')).toBe(
+      'البلورة سي يو إس أو أربعة، مع خمسة إتش اثنين أو',
+    );
     expect(prepared('نضيف 0.5H₂O', 'CHEMISTRY')).toBe('نضيف 0 فاصلة 5 إتش اثنين أو');
-    expect(prepared('التفاعل 2H2+O2->2H2O', 'CHEMISTRY')).toBe('التفاعل اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو');
+    expect(prepared('التفاعل 2H2+O2->2H2O', 'CHEMISTRY')).toBe(
+      'التفاعل اثنين إتش اثنين زائد أو اثنين ينتج اثنين إتش اثنين أو',
+    );
     expect(prepared('المحلول NaCl (aq)', 'CHEMISTRY')).toBe('المحلول إن إيه سي إل محلول مائي');
-    expect(prepared('Zn + 2HCl → ZnCl2 + H2↑', 'CHEMISTRY')).toBe('زد إن زائد اثنين إتش سي إل ينتج زد إن سي إل اثنين زائد إتش اثنين يتصاعد');
-    expect(prepared('الاختزال Cu2+ + 2e- → Cu', 'CHEMISTRY')).toBe('الاختزال سي يو، بشحنة موجب اثنين زائد اثنين إلكترون ينتج سي يو');
+    expect(prepared('Zn + 2HCl → ZnCl2 + H2↑', 'CHEMISTRY')).toBe(
+      'زد إن زائد اثنين إتش سي إل ينتج زد إن سي إل اثنين زائد إتش اثنين يتصاعد',
+    );
+    expect(prepared('الاختزال Cu2+ + 2e- → Cu', 'CHEMISTRY')).toBe(
+      'الاختزال سي يو، بشحنة موجب اثنين زائد اثنين إلكترون ينتج سي يو',
+    );
     expect(prepared('الرنين A ↔ B', 'CHEMISTRY')).not.toContain('اتزان');
   });
 
   it('counts above 20 are composed in the «اثنين» register', () => {
-    expect(prepared('السكر C₁₂H₂₂O₁₁', 'CHEMISTRY')).toBe('السكر سي اثني عشر إتش اثنين وعشرين أو أحد عشر');
+    expect(prepared('السكر C₁₂H₂₂O₁₁', 'CHEMISTRY')).toBe(
+      'السكر سي اثني عشر إتش اثنين وعشرين أو أحد عشر',
+    );
   });
 });

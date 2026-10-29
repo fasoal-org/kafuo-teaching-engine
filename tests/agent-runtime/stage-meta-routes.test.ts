@@ -103,7 +103,12 @@ describe('GET /api/stage-meta/[stageId]', () => {
   // A Stage-scoped Editor grant counts as ownership for the UI signal — but
   // only its `write` capability: a `read` grant keeps preview read-only.
   function grantCookieFor(stageId: string, capability: 'read' | 'write'): string {
-    const { token } = buildEditorGrantPayload({ tenantId: 'tenant-grant', versionId: 'tpv-1', stageId, capability });
+    const { token } = buildEditorGrantPayload({
+      tenantId: 'tenant-grant',
+      versionId: 'tpv-1',
+      stageId,
+      capability,
+    });
     return `teaching_package_grant=${encodeURIComponent(
       grantCookieValueForRedeem(new Headers(), token, stageId),
     )}`;

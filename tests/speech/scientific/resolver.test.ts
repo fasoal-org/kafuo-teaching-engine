@@ -18,8 +18,12 @@ import {
 } from '@/lib/speech/scientific/policy';
 import { prepared, TEST_POLICY } from './helpers';
 
-const read = (role: PolicyRole, token: string, domain: PolicyDomain | null, mode: 'natural' | 'accessible' = 'natural') =>
-  TEST_POLICY.resolve({ role, token, domain }, mode)?.text ?? null;
+const read = (
+  role: PolicyRole,
+  token: string,
+  domain: PolicyDomain | null,
+  mode: 'natural' | 'accessible' = 'natural',
+) => TEST_POLICY.resolve({ role, token, domain }, mode)?.text ?? null;
 
 describe('role-aware resolution (P2)', () => {
   it('the same token reads by role and subject', () => {
@@ -31,7 +35,8 @@ describe('role-aware resolution (P2)', () => {
     expect(read('prefix', 'm', 'PHYSICS')).toBe('ملي');
     expect(read('element', 'H', 'CHEMISTRY')).toBe('إتش');
     // An Arabic-letter variable reads the same in every subject.
-    for (const domain of ['MATH', 'PHYSICS'] as const) expect(read('variable', 'س', domain)).toBe('سين');
+    for (const domain of ['MATH', 'PHYSICS'] as const)
+      expect(read('variable', 'س', domain)).toBe('سين');
   });
 
   it('a subject-specific entry wins; subject-independent entries serve every subject', () => {
@@ -48,13 +53,16 @@ describe('role-aware resolution (P2)', () => {
 
   it('production reads nothing while every entry is proposed', () => {
     const production = loadPolicyPack('ar', { allowProposed: false });
-    expect(production.resolve({ role: 'variable', token: 'x', domain: 'MATH' }, 'natural')).toBeNull();
+    expect(
+      production.resolve({ role: 'variable', token: 'x', domain: 'MATH' }, 'natural'),
+    ).toBeNull();
   });
 
   it('the compatibility layer returns exactly what the resolver returns', () => {
     const legacy = (entry: ReturnType<typeof policyEntries>[number]): string[] => {
       if (entry.roles.includes('symbol')) return [`sym:${entry.key}`];
-      if (entry.table === 'operators' && entry.domains?.includes('CHEMISTRY')) return [`chem:${entry.key}`];
+      if (entry.table === 'operators' && entry.domains?.includes('CHEMISTRY'))
+        return [`chem:${entry.key}`];
       if (entry.roles.includes('number')) return [`nom:${entry.key}`, `gen:${entry.key}`];
       if (entry.roles.includes('repeat')) return [`times:${entry.key}`];
       return [entry.key];
@@ -63,9 +71,14 @@ describe('role-aware resolution (P2)', () => {
     for (const entry of policyEntries()) {
       const domain = entry.domains?.[0] ?? null;
       for (const mode of ['natural', 'accessible'] as const) {
-        const resolved = TEST_POLICY.resolve({ role: entry.roles[0]!, token: entry.key, domain }, mode)?.text;
+        const resolved = TEST_POLICY.resolve(
+          { role: entry.roles[0]!, token: entry.key, domain },
+          mode,
+        )?.text;
         for (const key of legacy(entry)) {
-          expect(TEST_POLICY.lookup(entry.table, key, mode)?.text, `${entry.table}:${key}`).toBe(resolved);
+          expect(TEST_POLICY.lookup(entry.table, key, mode)?.text, `${entry.table}:${key}`).toBe(
+            resolved,
+          );
           checked += 1;
         }
       }
@@ -76,7 +89,9 @@ describe('role-aware resolution (P2)', () => {
   it('role encodings are fields, not key prefixes', () => {
     for (const [file, table] of Object.entries(POLICY_TABLE_FILES)) {
       for (const entry of table.entries) {
-        expect(/^(?:nom|gen|times|count|sym|chem):/.test(entry.key), `${file}:${entry.key}`).toBe(false);
+        expect(/^(?:nom|gen|times|count|sym|chem):/.test(entry.key), `${file}:${entry.key}`).toBe(
+          false,
+        );
       }
     }
   });
@@ -87,14 +102,19 @@ describe('recognition is separated from wording (P2 item 4)', () => {
 
   it('units, prefixes and functions are recognised from the dictionary keys', () => {
     expect([...UNIT_KEYS].sort()).toEqual(keys('units.json'));
-    const prefixes = POLICY_TABLE_FILES['prefixes.json']!.entries.flatMap((e) => [e.key, ...(e.aliases ?? [])]);
+    const prefixes = POLICY_TABLE_FILES['prefixes.json']!.entries.flatMap((e) => [
+      e.key,
+      ...(e.aliases ?? []),
+    ]);
     expect([...PREFIX_KEYS].sort()).toEqual(prefixes.sort());
     expect([...FUNCTION_NAMES].sort()).toEqual(keys('functions.json'));
   });
 
   it('recognition does not depend on approval: production still parses `5 km` as a unit', () => {
     const production = loadPolicyPack('ar', { allowProposed: false });
-    expect(production.resolve({ role: 'unit', token: 'm', domain: 'PHYSICS' }, 'natural')).toBeNull();
+    expect(
+      production.resolve({ role: 'unit', token: 'm', domain: 'PHYSICS' }, 'natural'),
+    ).toBeNull();
     expect(UNIT_KEYS).toContain('m');
   });
 });
@@ -130,7 +150,9 @@ describe('O-3: case, role and domain are kept internally, never voiced as marker
     );
     for (const entry of policyEntries()) {
       if (!entry.roles.includes('variable') && !entry.roles.includes('element')) continue;
-      expect(operators.has(entry.natural), `${entry.table}:${entry.key} «${entry.natural}»`).toBe(false);
+      expect(operators.has(entry.natural), `${entry.table}:${entry.key} «${entry.natural}»`).toBe(
+        false,
+      );
     }
   });
 });

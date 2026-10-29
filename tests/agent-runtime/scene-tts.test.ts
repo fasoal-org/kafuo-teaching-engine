@@ -73,7 +73,10 @@ describe('scene TTS skip rule and provenance (SATTS §7.3)', () => {
     vi.clearAllMocks();
     mocks.providers.mockReturnValue({ 'configured-tts': {} });
     mocks.generate.mockResolvedValue({ audio: new Uint8Array([1, 2]), format: 'mp3' });
-    mocks.persist.mockImplementation(async ({ prefix }: { prefix: string }) => `/api/classroom-media/stage-a/media/${prefix}-h.mp3`);
+    mocks.persist.mockImplementation(
+      async ({ prefix }: { prefix: string }) =>
+        `/api/classroom-media/stage-a/media/${prefix}-h.mp3`,
+    );
   });
   afterEach(() => vi.unstubAllEnvs());
 
@@ -93,7 +96,10 @@ describe('scene TTS skip rule and provenance (SATTS §7.3)', () => {
   it('flag off: an Action with audio is skipped exactly as before; new audio gets provenance; prefix unchanged', async () => {
     const withAudio = structuredClone(scene);
     (withAudio.actions![0] as { audioId?: string }).audioId = 'old';
-    expect(await synthesizeSceneNarration({ scene: withAudio, force: false })).toMatchObject({ skipped: 1, generated: 0 });
+    expect(await synthesizeSceneNarration({ scene: withAudio, force: false })).toMatchObject({
+      skipped: 1,
+      generated: 0,
+    });
     const fresh = structuredClone(scene);
     await synthesizeSceneNarration({ scene: fresh, force: false });
     expect(mocks.persist).toHaveBeenCalledWith(expect.objectContaining({ prefix: 'tts-speech-a' }));
@@ -104,14 +110,21 @@ describe('scene TTS skip rule and provenance (SATTS §7.3)', () => {
     vi.stubEnv('SCIENTIFIC_TTS_MODE', 'on');
     const legacy = structuredClone(scene);
     (legacy.actions![0] as { audioId?: string }).audioId = 'old';
-    expect(await synthesizeSceneNarration({ scene: legacy, force: false })).toMatchObject({ skipped: 1, generated: 0 });
+    expect(await synthesizeSceneNarration({ scene: legacy, force: false })).toMatchObject({
+      skipped: 1,
+      generated: 0,
+    });
 
     const target = structuredClone(scene);
     await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } });
     expect(mocks.generate).toHaveBeenCalledTimes(1);
-    expect(await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } })).toMatchObject({ skipped: 1, generated: 0 });
+    expect(
+      await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } }),
+    ).toMatchObject({ skipped: 1, generated: 0 });
     // A text change makes it stale → regenerated.
     (target.actions![0] as { text: string }).text = 'Hello again';
-    expect(await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } })).toMatchObject({ generated: 1 });
+    expect(
+      await synthesizeSceneNarration({ scene: target, force: false, stage: { language: 'ar' } }),
+    ).toMatchObject({ generated: 1 });
   });
 });

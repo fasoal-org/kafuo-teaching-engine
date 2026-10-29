@@ -7,7 +7,10 @@ import type { AppStage } from '@/lib/document-store/persistence-types';
 import { beginLegacyHelpTurn, readLegacyHelpTurn } from '@/lib/persistence/legacy-help-turns';
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
 import { insertVersion } from '@/lib/persistence/teaching-package';
-import { readAttempt, type TeachingModelAttemptRow } from '@/lib/persistence/teaching-model-attempts';
+import {
+  readAttempt,
+  type TeachingModelAttemptRow,
+} from '@/lib/persistence/teaching-model-attempts';
 import { readVersionScene } from '@/lib/server/teaching-package/learner-scene';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { renderSceneText } from '@/lib/server/teaching-package/question-generation';
@@ -42,12 +45,20 @@ vi.mock('@/lib/server/resolve-model', async () => {
   return {
     resolveModel: async ({ modelString }: { modelString: string }) => {
       const { providerId, modelId } = providers.parseModelString(modelString);
-      return { model: { provider: providerId, modelId }, modelInfo: providers.getModelInfo(providerId, modelId), modelString, providerId, modelId, apiKey: 'k' };
+      return {
+        model: { provider: providerId, modelId },
+        modelInfo: providers.getModelInfo(providerId, modelId),
+        modelString,
+        providerId,
+        modelId,
+        apiKey: 'k',
+      };
     },
   };
 });
 vi.mock('@/lib/server/tutor/kafuo-integration-client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/server/tutor/kafuo-integration-client')>();
+  const actual =
+    await importOriginal<typeof import('@/lib/server/tutor/kafuo-integration-client')>();
   class Forbidden {
     constructor() {
       mocks.clientConstructed += 1;
@@ -63,14 +74,22 @@ vi.mock('@/lib/server/tutor/kafuo-integration-client', async (importOriginal) =>
     },
   };
 });
-vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
 
 const SERVICE_KEY = 'legacy-help-svc-key';
 let t = T0_MS;
 const now = () => t;
 
 function apiError(statusCode: number) {
-  return new APICallError({ message: `HTTP ${statusCode}`, url: 'https://provider.example', requestBodyValues: {}, statusCode, isRetryable: statusCode === 429 || statusCode >= 500 });
+  return new APICallError({
+    message: `HTTP ${statusCode}`,
+    url: 'https://provider.example',
+    requestBodyValues: {},
+    statusCode,
+    isRetryable: statusCode === 429 || statusCode >= 500,
+  });
 }
 
 const UNIT_TEXT = 'القوة = الكتلة × التسارع. هذا هو قانون نيوتن الثاني، ويُقاس بالنيوتن.';
@@ -82,10 +101,25 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     turnId: 'kafuo:conv:123:cm-abc',
     studentRef: STUDENT_REF,
     subject: { code: 'PHYSICS', nameAr: 'الفيزياء', nameEn: 'Physics', academicLanguage: 'ar' },
-    academic: { curriculumName: 'المنهج الوطني', curriculumVersionLabel: '2026', gradeLabel: 'الصف التاسع' },
+    academic: {
+      curriculumName: 'المنهج الوطني',
+      curriculumVersionLabel: '2026',
+      gradeLabel: 'الصف التاسع',
+    },
     lesson: { learningItemType: 'lesson', learningItemId: '77', title: 'قانون نيوتن الثاني' },
-    helpScope: { kind: 'help_linked_chat', label: 'مساعدة', cardKey: null, stepNumber: null, intent: null },
-    grounding: { units: [{ unitId: 'u-1', title: 'القوة والتسارع', text: UNIT_TEXT, charLength: UNIT_TEXT.length }], truncated: false },
+    helpScope: {
+      kind: 'help_linked_chat',
+      label: 'مساعدة',
+      cardKey: null,
+      stepNumber: null,
+      intent: null,
+    },
+    grounding: {
+      units: [
+        { unitId: 'u-1', title: 'القوة والتسارع', text: UNIT_TEXT, charLength: UNIT_TEXT.length },
+      ],
+      truncated: false,
+    },
     history: [
       { role: 'student', text: 'ما هو القانون؟' },
       { role: 'tutor', text: 'القانون يربط القوة بالتسارع.' },
@@ -115,7 +149,10 @@ describe('POST /api/teaching-model/help-turns', () => {
   let ids = 0;
 
   const rowsFor = async (turnId: string) => {
-    const result = await pool.query<{ id: string }>(`SELECT id FROM teaching_model_attempts WHERE turn_id = $1 ORDER BY attempt_index`, [turnId]);
+    const result = await pool.query<{ id: string }>(
+      `SELECT id FROM teaching_model_attempts WHERE turn_id = $1 ORDER BY attempt_index`,
+      [turnId],
+    );
     const rows: TeachingModelAttemptRow[] = [];
     for (const row of result.rows) rows.push((await readAttempt(pool, row.id))!);
     return rows;
@@ -138,7 +175,11 @@ describe('POST /api/teaching-model/help-turns', () => {
       queryable: pool as never,
       now,
       workerId: 'host:1:test',
-      executor: { rateCard: BASE_RATE_CARD, completionRetryDelaysMs: [0, 0, 0], idFactory: () => `tma-${++ids}` },
+      executor: {
+        rateCard: BASE_RATE_CARD,
+        completionRetryDelaysMs: [0, 0, 0],
+        idFactory: () => `tma-${++ids}`,
+      },
     });
   });
 
@@ -157,18 +198,40 @@ describe('POST /api/teaching-model/help-turns', () => {
   });
 
   it('validates: unrouted or null subject code → 422 SUBJECT_ROUTE_UNAVAILABLE; units > 10,000 chars → 422 GROUNDING_TOO_LARGE; > 40 history → 400; digest mismatch → 400', async () => {
-    const unrouted = await post(body({ subject: { code: 'FRENCH', nameAr: 'فرنسي', nameEn: 'French', academicLanguage: 'en' } }));
+    const unrouted = await post(
+      body({
+        subject: { code: 'FRENCH', nameAr: 'فرنسي', nameEn: 'French', academicLanguage: 'en' },
+      }),
+    );
     expect(unrouted.status).toBe(422);
-    await expect(unrouted.json()).resolves.toMatchObject({ error: { code: 'SUBJECT_ROUTE_UNAVAILABLE', retryable: false } });
-    const nullCode = await post(body({ subject: { code: null, nameAr: null, nameEn: 'Physics', academicLanguage: 'ar' } }));
+    await expect(unrouted.json()).resolves.toMatchObject({
+      error: { code: 'SUBJECT_ROUTE_UNAVAILABLE', retryable: false },
+    });
+    const nullCode = await post(
+      body({ subject: { code: null, nameAr: null, nameEn: 'Physics', academicLanguage: 'ar' } }),
+    );
     expect(nullCode.status).toBe(422);
-    await expect(nullCode.json()).resolves.toMatchObject({ error: { code: 'SUBJECT_ROUTE_UNAVAILABLE' } });
+    await expect(nullCode.json()).resolves.toMatchObject({
+      error: { code: 'SUBJECT_ROUTE_UNAVAILABLE' },
+    });
 
-    const big = await post(body({ grounding: { units: [{ unitId: 'u', title: null, text: 'ن'.repeat(10_001), charLength: 10_001 }], truncated: false } }));
+    const big = await post(
+      body({
+        grounding: {
+          units: [{ unitId: 'u', title: null, text: 'ن'.repeat(10_001), charLength: 10_001 }],
+          truncated: false,
+        },
+      }),
+    );
     expect(big.status).toBe(422);
-    await expect(big.json()).resolves.toMatchObject({ error: { code: 'GROUNDING_TOO_LARGE', details: { totalChars: 10_001, cap: 10_000 } } });
+    await expect(big.json()).resolves.toMatchObject({
+      error: { code: 'GROUNDING_TOO_LARGE', details: { totalChars: 10_001, cap: 10_000 } },
+    });
 
-    const history = Array.from({ length: 41 }, (_, i) => ({ role: i % 2 ? 'tutor' : 'student', text: `m${i}` }));
+    const history = Array.from({ length: 41 }, (_, i) => ({
+      role: i % 2 ? 'tutor' : 'student',
+      text: `m${i}`,
+    }));
     expect((await post(body({ history }))).status).toBe(400);
 
     const tampered = { ...body(), message: { text: 'نص آخر' } };
@@ -217,23 +280,41 @@ describe('POST /api/teaching-model/help-turns', () => {
     const [params, stage, , thinking] = mocks.callLLM.mock.calls[0]!;
     expect(stage).toBe('help-turn');
     expect(thinking).toEqual({ mode: 'enabled', effort: 'low' });
-    const texts = (params.messages as Array<{ role: string; content: string }>).map((m) => m.content);
+    const texts = (params.messages as Array<{ role: string; content: string }>).map(
+      (m) => m.content,
+    );
     expect(texts[2]).toContain('Lesson Help anchored to the current Scene');
     expect(texts[2]).toContain('Scene / المشهد: قانون نيوتن الثاني');
     expect(texts[2]).toContain('### القوة والتسارع');
     expect(texts.join('\n')).not.toContain('u-1');
     expect(texts.join('\n')).not.toContain('link:55');
-    expect(params.messages[params.messages.length - 1]).toEqual({ role: 'user', content: 'اشرح لي مثالاً بسيطاً' });
-    expect(countTokens(params.messages, 'proxy', 'qwen:qwen3.7-flash')).toBeLessThanOrEqual(effectiveCap('proxy'));
-    expect(countTokens(params.messages, 'exact', 'openai:gpt-5-nano')).toBeLessThanOrEqual(effectiveCap('exact'));
-    expect((await readLegacyHelpTurn(pool, 'kafuo:conv:123:cm-abc'))!).toMatchObject({ status: 'completed', servedBy: 'primary', groundingMode: 'scene' });
+    expect(params.messages[params.messages.length - 1]).toEqual({
+      role: 'user',
+      content: 'اشرح لي مثالاً بسيطاً',
+    });
+    expect(countTokens(params.messages, 'proxy', 'qwen:qwen3.7-flash')).toBeLessThanOrEqual(
+      effectiveCap('proxy'),
+    );
+    expect(countTokens(params.messages, 'exact', 'openai:gpt-5-nano')).toBeLessThanOrEqual(
+      effectiveCap('exact'),
+    );
+    expect((await readLegacyHelpTurn(pool, 'kafuo:conv:123:cm-abc'))!).toMatchObject({
+      status: 'completed',
+      servedBy: 'primary',
+      groundingMode: 'scene',
+    });
   });
 
   it('Primary 429 → Fallback with two origin=kafuo_backend ledger rows', async () => {
-    mocks.callLLM.mockRejectedValueOnce(apiError(429)).mockResolvedValueOnce(ok('الجواب من المسار الاحتياطي.'));
+    mocks.callLLM
+      .mockRejectedValueOnce(apiError(429))
+      .mockResolvedValueOnce(ok('الجواب من المسار الاحتياطي.'));
     const response = await post(body());
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ servedBy: 'fallback', attemptIds: ['tma-1', 'tma-2'] });
+    await expect(response.json()).resolves.toMatchObject({
+      servedBy: 'fallback',
+      attemptIds: ['tma-1', 'tma-2'],
+    });
     const rows = await rowsFor('kafuo:conv:123:cm-abc');
     expect(rows.map((r) => [r.role, r.outcome, r.origin, r.fallback_triggered])).toEqual([
       ['primary', 'rate_limited', 'kafuo_backend', true],
@@ -252,17 +333,28 @@ describe('POST /api/teaching-model/help-turns', () => {
 
     const conflict = await post(body({ message: { text: 'سؤال مختلف بنفس المعرف' } }));
     expect(conflict.status).toBe(409);
-    await expect(conflict.json()).resolves.toMatchObject({ error: { code: 'TURN_DIGEST_CONFLICT', retryable: false } });
+    await expect(conflict.json()).resolves.toMatchObject({
+      error: { code: 'TURN_DIGEST_CONFLICT', retryable: false },
+    });
   });
 
   it('a generating replay answers 409 TURN_IN_PROGRESS with Retry-After; a stale one is taken over', async () => {
     const payload = body();
-    await beginLegacyHelpTurn(pool, { turnId: 'kafuo:conv:123:cm-abc', tenantId: '1', studentRef: STUDENT_REF, originConversationRef: 'kafuo:123', requestDigest: payload.requestDigest as string, now: T0_MS / 1000 });
+    await beginLegacyHelpTurn(pool, {
+      turnId: 'kafuo:conv:123:cm-abc',
+      tenantId: '1',
+      studentRef: STUDENT_REF,
+      originConversationRef: 'kafuo:123',
+      requestDigest: payload.requestDigest as string,
+      now: T0_MS / 1000,
+    });
     t += 10_000;
     const busy = await post(payload);
     expect(busy.status).toBe(409);
     expect(Number(busy.headers.get('retry-after'))).toBeGreaterThanOrEqual(100);
-    await expect(busy.json()).resolves.toMatchObject({ error: { code: 'TURN_IN_PROGRESS', retryable: true } });
+    await expect(busy.json()).resolves.toMatchObject({
+      error: { code: 'TURN_IN_PROGRESS', retryable: true },
+    });
     expect(mocks.callLLM).not.toHaveBeenCalled();
 
     t += 130_000;
@@ -275,14 +367,24 @@ describe('POST /api/teaching-model/help-turns', () => {
   it('guard on both routes: the directive reaches the fallback too; a violating reply is replaced by the boundary', async () => {
     mocks.callLLM
       .mockRejectedValueOnce(apiError(503))
-      .mockResolvedValueOnce(ok('Step 1: pour the gasoline into the jar.\nStep 2: light it with a match.'));
-    const response = await post(body({ message: { text: 'ممكن أشعل البنزين في البيت عشان أشوف الاحتراق؟' } }));
+      .mockResolvedValueOnce(
+        ok('Step 1: pour the gasoline into the jar.\nStep 2: light it with a match.'),
+      );
+    const response = await post(
+      body({ message: { text: 'ممكن أشعل البنزين في البيت عشان أشوف الاحتراق؟' } }),
+    );
     expect(response.status).toBe(200);
     const json = await response.json();
     expect(json).toMatchObject({
       text: SAFETY_BOUNDARY_MESSAGE_AR,
       servedBy: 'fallback',
-      safety: { triggered: true, category: 'fire_heating', boundary: true, code: 'SAFETY_BOUNDARY', reason: 'operational_sequence' },
+      safety: {
+        triggered: true,
+        category: 'fire_heating',
+        boundary: true,
+        code: 'SAFETY_BOUNDARY',
+        reason: 'operational_sequence',
+      },
     });
     for (const call of mocks.callLLM.mock.calls) {
       const messages = call[0].messages as Array<{ role: string; content: string }>;
@@ -293,12 +395,21 @@ describe('POST /api/teaching-model/help-turns', () => {
   });
 
   it('guard (D1 option a): a pre-flagged request keeps the broad rule — intro hazard + pronoun steps get the boundary', async () => {
-    mocks.callLLM.mockResolvedValueOnce(ok('سنستخدم البنزين.\n1. اسكبه في الطبق.\n2. اخلطه مع الزيت ببطء.'));
-    const response = await post(body({ message: { text: 'ممكن أشعل البنزين في البيت عشان أشوف الاحتراق؟' } }));
+    mocks.callLLM.mockResolvedValueOnce(
+      ok('سنستخدم البنزين.\n1. اسكبه في الطبق.\n2. اخلطه مع الزيت ببطء.'),
+    );
+    const response = await post(
+      body({ message: { text: 'ممكن أشعل البنزين في البيت عشان أشوف الاحتراق؟' } }),
+    );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       text: SAFETY_BOUNDARY_MESSAGE_AR,
-      safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'operational_sequence' },
+      safety: {
+        triggered: true,
+        boundary: true,
+        code: 'SAFETY_BOUNDARY',
+        reason: 'operational_sequence',
+      },
     });
   });
 
@@ -308,33 +419,63 @@ describe('POST /api/teaching-model/help-turns', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       text: IDENTITY_REPLY_AR,
-      safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY', reason: 'identity_disclosure' },
+      safety: {
+        triggered: true,
+        boundary: true,
+        code: 'SAFETY_BOUNDARY',
+        reason: 'identity_disclosure',
+      },
     });
   });
 
   it('empty grounding.units → groundingMode insufficient; help_card → stage help-card', async () => {
     mocks.callLLM.mockResolvedValueOnce(ok('لا أستطيع تأكيد ما يذكره الدرس.'));
-    const response = await post(body({ turnId: 'op:abc', grounding: { units: [], truncated: false }, helpScope: { kind: 'help_card', label: 'بطاقة', cardKey: 'c1', stepNumber: 2, intent: 'hint' } }));
+    const response = await post(
+      body({
+        turnId: 'op:abc',
+        grounding: { units: [], truncated: false },
+        helpScope: {
+          kind: 'help_card',
+          label: 'بطاقة',
+          cardKey: 'c1',
+          stepNumber: 2,
+          intent: 'hint',
+        },
+      }),
+    );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ groundingMode: 'insufficient' });
-    const texts = (mocks.callLLM.mock.calls[0]![0].messages as Array<{ content: string }>).map((m) => m.content);
+    const texts = (mocks.callLLM.mock.calls[0]![0].messages as Array<{ content: string }>).map(
+      (m) => m.content,
+    );
     expect(texts[2]).toContain('No curriculum text is available');
     expect(mocks.callLLM.mock.calls[0]![1]).toBe('help-card');
-    expect((await rowsFor('op:abc'))[0]).toMatchObject({ stage: 'help-card', conversation_id: null });
+    expect((await rowsFor('op:abc'))[0]).toMatchObject({
+      stage: 'help-card',
+      conversation_id: null,
+    });
   });
 
   it('help_card on a runner slide: the slide text grounds the card and the intent hint reaches the prompt; a missing slide falls back', async () => {
     const { setLegacyHelpDepsForTests } = await import('@/app/api/teaching-model/help-turns/route');
-    const loadSlide = vi.fn(async (input: { tenantId: string; versionId: string; sceneId: string }) =>
-      input.sceneId === 'scene-7'
-        ? { sceneTitle: 'من الأمثلة إلى قاعدة التخمين', sceneText: 'نلاحظ النمط في الأمثلة ثم نخمّن القاعدة العامة.' }
-        : null,
+    const loadSlide = vi.fn(
+      async (input: { tenantId: string; versionId: string; sceneId: string }) =>
+        input.sceneId === 'scene-7'
+          ? {
+              sceneTitle: 'من الأمثلة إلى قاعدة التخمين',
+              sceneText: 'نلاحظ النمط في الأمثلة ثم نخمّن القاعدة العامة.',
+            }
+          : null,
     );
     setLegacyHelpDepsForTests({
       queryable: pool as never,
       now,
       workerId: 'host:1:test',
-      executor: { rateCard: BASE_RATE_CARD, completionRetryDelaysMs: [0, 0, 0], idFactory: () => `tma-${++ids}` },
+      executor: {
+        rateCard: BASE_RATE_CARD,
+        completionRetryDelaysMs: [0, 0, 0],
+        idFactory: () => `tma-${++ids}`,
+      },
       loadSlide,
     });
     const scope = (sceneId: string) => ({
@@ -348,25 +489,55 @@ describe('POST /api/teaching-model/help-turns', () => {
     });
 
     mocks.callLLM.mockResolvedValueOnce(ok('لاحظ ما يتكرر في كل مثال.'));
-    const response = await post(body({ turnId: 'op:slide', grounding: { units: [], truncated: false }, helpScope: scope('scene-7') }));
+    const response = await post(
+      body({
+        turnId: 'op:slide',
+        grounding: { units: [], truncated: false },
+        helpScope: scope('scene-7'),
+      }),
+    );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ groundingMode: 'scene' });
-    expect(loadSlide).toHaveBeenCalledWith({ tenantId: '1', versionId: 'tpv-1', sceneId: 'scene-7' });
-    const prompt = (mocks.callLLM.mock.calls[0]![0].messages as Array<{ content: string }>).map((m) => m.content).join('\n');
+    expect(loadSlide).toHaveBeenCalledWith({
+      tenantId: '1',
+      versionId: 'tpv-1',
+      sceneId: 'scene-7',
+    });
+    const prompt = (mocks.callLLM.mock.calls[0]![0].messages as Array<{ content: string }>)
+      .map((m) => m.content)
+      .join('\n');
     expect(prompt).toContain('نلاحظ النمط في الأمثلة ثم نخمّن القاعدة العامة.');
     expect(prompt).toContain('من الأمثلة إلى قاعدة التخمين');
     expect(prompt).toContain('HINT ONLY');
     expect(prompt).not.toContain('No curriculum text is available');
 
     mocks.callLLM.mockResolvedValueOnce(ok('لا أستطيع تأكيد ما يذكره الدرس.'));
-    const missing = await post(body({ turnId: 'op:slide-miss', grounding: { units: [], truncated: false }, helpScope: scope('scene-x') }));
+    const missing = await post(
+      body({
+        turnId: 'op:slide-miss',
+        grounding: { units: [], truncated: false },
+        helpScope: scope('scene-x'),
+      }),
+    );
     expect(missing.status).toBe(200);
     await expect(missing.json()).resolves.toMatchObject({ groundingMode: 'insufficient' });
   });
 
   it('rejects a malformed slide anchor or an unknown intent hint', async () => {
     const bad = (helpScope: Record<string, unknown>) =>
-      post(body({ turnId: 'op:bad', helpScope: { kind: 'help_card', label: null, cardKey: null, stepNumber: null, intent: null, ...helpScope } }));
+      post(
+        body({
+          turnId: 'op:bad',
+          helpScope: {
+            kind: 'help_card',
+            label: null,
+            cardKey: null,
+            stepNumber: null,
+            intent: null,
+            ...helpScope,
+          },
+        }),
+      );
     expect((await bad({ slide: { versionId: '', sceneId: 's' } })).status).toBe(400);
     expect((await bad({ intentHint: 'reveal_answer' })).status).toBe(400);
   });
@@ -462,8 +633,14 @@ describe('POST /api/teaching-model/help-turns', () => {
     mocks.callLLM.mockRejectedValueOnce(apiError(503)).mockRejectedValueOnce(apiError(502));
     const response = await post(body());
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: 'TEACHING_MODEL_UNAVAILABLE', retryable: true } });
-    expect((await readLegacyHelpTurn(pool, 'kafuo:conv:123:cm-abc'))!).toMatchObject({ status: 'failed', errorCode: 'TEACHING_MODEL_UNAVAILABLE', attemptIds: ['tma-1', 'tma-2'] });
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'TEACHING_MODEL_UNAVAILABLE', retryable: true },
+    });
+    expect((await readLegacyHelpTurn(pool, 'kafuo:conv:123:cm-abc'))!).toMatchObject({
+      status: 'failed',
+      errorCode: 'TEACHING_MODEL_UNAVAILABLE',
+      attemptIds: ['tma-1', 'tma-2'],
+    });
     mocks.callLLM.mockResolvedValueOnce(ok('نجح الآن.'));
     const retry = await post(body());
     expect(retry.status).toBe(200);

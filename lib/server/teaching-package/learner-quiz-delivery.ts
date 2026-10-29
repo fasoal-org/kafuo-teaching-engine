@@ -57,4 +57,3 @@ export function sanitizeLearnerDelivery(payload: unknown): unknown {
   for (const [key, value] of Object.entries(payload)) copy[key] = sanitizeLearnerDelivery(value);
   return copy;
 }
-

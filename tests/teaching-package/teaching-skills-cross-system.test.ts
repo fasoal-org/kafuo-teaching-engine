@@ -50,11 +50,7 @@ const governedVector = (): Vector['request'] =>
   JSON.parse(JSON.stringify(vectors.vectors[2]!.request)) as Vector['request'];
 
 /** Replace every `{skillId, version}` ref equal to `from` with `to`, recursively. */
-function replaceRefs(
-  value: unknown,
-  from: TeachingSkillRef,
-  to: TeachingSkillRef,
-): void {
+function replaceRefs(value: unknown, from: TeachingSkillRef, to: TeachingSkillRef): void {
   const walk = (node: unknown): void => {
     if (Array.isArray(node)) {
       node.forEach(walk);
@@ -100,8 +96,10 @@ describe('W7 matrix — fixture mirror discipline (the shared artifact)', () => 
   it('carries the policy-free legacy vectors unchanged (digest pins the pre-Module-2 shape)', () => {
     for (const vector of [vectors.vectors[0]!, vectors.vectors[1]!]) {
       expect(vector.request.teachingSkills).toBeUndefined();
-      const flow = (vector.request.teachingModel as Record<string, unknown>)
-        .flow as Record<string, unknown>[];
+      const flow = (vector.request.teachingModel as Record<string, unknown>).flow as Record<
+        string,
+        unknown
+      >[];
       expect(flow.every((entry) => !('skillPolicy' in entry))).toBe(true);
     }
   });
@@ -151,9 +149,7 @@ describe('W7 matrix — valid policy: TE parses, resolves, records governance', 
   it('derives governed mode from the marker and parses every entry policy intact', () => {
     const { request } = parseKafuoGenerationRequest(governedVector());
     expect(request.teachingSkillsContract).toBe(TEACHING_SKILLS_CONTRACT_V1);
-    expect(request.teachingModel.flow.every((entry) => entry.skillPolicy !== undefined)).toBe(
-      true,
-    );
+    expect(request.teachingModel.flow.every((entry) => entry.skillPolicy !== undefined)).toBe(true);
   });
 
   it('resolves every exact policy reference against the real W1 canonical registry', () => {
@@ -197,14 +193,15 @@ describe('W7 matrix — marker present + policy MISSING: fail closed, never recl
   it('keeps the request governed — the marker, not policy presence, declares mode', () => {
     const { request } = parseKafuoGenerationRequest(stripped());
     expect(request.teachingSkillsContract).toBe(TEACHING_SKILLS_CONTRACT_V1);
-    expect(request.teachingModel.flow.every((entry) => entry.skillPolicy === undefined)).toBe(
-      true,
-    );
+    expect(request.teachingModel.flow.every((entry) => entry.skillPolicy === undefined)).toBe(true);
   });
 
   it('refuses the completeness check with SKILL_POLICY_REQUIRED (BR-TS-048 vocabulary)', () => {
     const flow = governedFlowOf(stripped());
-    const error = expectTeachingPackageError(() => requireCompleteFlowPolicies(flow), 'SKILL_POLICY_REQUIRED');
+    const error = expectTeachingPackageError(
+      () => requireCompleteFlowPolicies(flow),
+      'SKILL_POLICY_REQUIRED',
+    );
     expect(error.status).toBe(400);
     expect(error.details).toMatchObject({ flowIndex: 0 });
   });
@@ -289,7 +286,11 @@ describe('W7 matrix — unresolved exact version: passes Kafuo, refused HERE', (
   // because every occurrence of the skill moves to v99 together.
   const unresolved = (): Record<string, unknown> => {
     const wire = governedVector();
-    replaceRefs(wire, { skillId: 'feynman-learning', version: 'v1' }, { skillId: 'feynman-learning', version: 'v99' });
+    replaceRefs(
+      wire,
+      { skillId: 'feynman-learning', version: 'v1' },
+      { skillId: 'feynman-learning', version: 'v99' },
+    );
     return wire;
   };
 
@@ -341,7 +342,11 @@ describe('W7 matrix — Module-2 request: mode derived once and carried as a val
     const { request, aggregate } = parseKafuoGenerationRequest(governedVector());
     const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
     expect(
-      new Set([request.teachingSkillsContract, start.teachingSkillsContract, kafuo.teachingSkillsContract]),
+      new Set([
+        request.teachingSkillsContract,
+        start.teachingSkillsContract,
+        kafuo.teachingSkillsContract,
+      ]),
     ).toEqual(new Set([TEACHING_SKILLS_CONTRACT_V1]));
   });
 
@@ -353,8 +358,6 @@ describe('W7 matrix — Module-2 request: mode derived once and carried as a val
     expect(governed.request.teachingSkillsContract).toBe(TEACHING_SKILLS_CONTRACT_V1);
     expect(legacy.request.teachingSkillsContract).toBeUndefined();
     // Identical policy payload, identical digest — mode is orthogonal to policy.
-    expect(canonicalRequestDigest(legacy.request)).toBe(
-      canonicalRequestDigest(governed.request),
-    );
+    expect(canonicalRequestDigest(legacy.request)).toBe(canonicalRequestDigest(governed.request));
   });
 });

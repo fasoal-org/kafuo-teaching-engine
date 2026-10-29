@@ -699,7 +699,11 @@ describe('Stage Help routes', () => {
           ],
           {
             ...makeOutline('قانون حفظ الكتلة'),
-            outlines: [outline('ol-1', 1, ['cu-1']), outline('ol-2', 2), outline('ol-3', 3, ['cu-1'])],
+            outlines: [
+              outline('ol-1', 1, ['cu-1']),
+              outline('ol-2', 2),
+              outline('ol-3', 3, ['cu-1']),
+            ],
           },
         ),
       );

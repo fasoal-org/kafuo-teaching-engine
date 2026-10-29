@@ -13,7 +13,11 @@
  */
 import { createHmac, randomBytes } from 'node:crypto';
 
-import { decodeSigned, encodeSigned, grantSecret } from '@/lib/server/teaching-package/signed-token';
+import {
+  decodeSigned,
+  encodeSigned,
+  grantSecret,
+} from '@/lib/server/teaching-package/signed-token';
 import {
   isLearnerStudentContext,
   type LearnerStudentContext,

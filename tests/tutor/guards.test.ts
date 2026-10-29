@@ -37,7 +37,13 @@ function studentGrant(): string {
       gradeLabel: 'Grade 9',
     },
     allowedSubjects: [
-      { code: 'MATH', offeringId: '10', nameAr: 'الرياضيات', nameEn: 'Math', academicLanguage: 'ar' },
+      {
+        code: 'MATH',
+        offeringId: '10',
+        nameAr: 'الرياضيات',
+        nameEn: 'Math',
+        academicLanguage: 'ar',
+      },
     ],
     entitlements: { freeChat: true, help: true },
     now: NOW,
@@ -49,7 +55,9 @@ function cookieFor(...tokens: string[]): string {
   return `teaching_package_grant=${encodeURIComponent(JSON.stringify(tokens))}`;
 }
 
-function learnerToken(overrides: Partial<Parameters<typeof buildEditorGrantPayload>[0]> = {}): string {
+function learnerToken(
+  overrides: Partial<Parameters<typeof buildEditorGrantPayload>[0]> = {},
+): string {
   return buildEditorGrantPayload({
     tenantId: '1',
     versionId: 'tpv-1',
@@ -75,18 +83,24 @@ describe('withStudentGrant', () => {
   it('404 when the Teaching Package API is not configured, before any verification', async () => {
     vi.stubEnv('DATABASE_URL', '');
     const handler = vi.fn(ok);
-    const response = await withStudentGrant(new NextRequest('http://localhost/api/tutor/x'), handler);
+    const response = await withStudentGrant(
+      new NextRequest('http://localhost/api/tutor/x'),
+      handler,
+    );
     expect(response.status).toBe(404);
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('passes the verified grant and its rate-limit key to the handler', async () => {
     const grant = studentGrant();
-    const handler = vi.fn(async (_req: NextRequest, ctx: { grant: { studentRef: string }; rateLimitKey: string }) =>
-      NextResponse.json({ studentRef: ctx.grant.studentRef, key: ctx.rateLimitKey }),
+    const handler = vi.fn(
+      async (_req: NextRequest, ctx: { grant: { studentRef: string }; rateLimitKey: string }) =>
+        NextResponse.json({ studentRef: ctx.grant.studentRef, key: ctx.rateLimitKey }),
     );
     const response = await withStudentGrant(
-      new NextRequest('http://localhost/api/tutor/x', { headers: { authorization: `Bearer ${grant}` } }),
+      new NextRequest('http://localhost/api/tutor/x', {
+        headers: { authorization: `Bearer ${grant}` },
+      }),
       handler,
       { now: () => NOW },
     );
@@ -99,7 +113,10 @@ describe('withStudentGrant', () => {
 
   it('refuses a missing, expired, or learner-kind credential with the envelope', async () => {
     const handler = vi.fn(ok);
-    const missing = await withStudentGrant(new NextRequest('http://localhost/api/tutor/x'), handler);
+    const missing = await withStudentGrant(
+      new NextRequest('http://localhost/api/tutor/x'),
+      handler,
+    );
     expect(missing.status).toBe(401);
     await expect(missing.json()).resolves.toEqual({
       error: { code: 'GRANT_INVALID', message: expect.any(String), retryable: false },
@@ -130,22 +147,36 @@ describe('withStudentGrant', () => {
     const grant = studentGrant();
     const handler = vi.fn(ok);
     const request = () =>
-      new NextRequest('http://localhost/api/tutor/x', { headers: { authorization: `Bearer ${grant}` } });
+      new NextRequest('http://localhost/api/tutor/x', {
+        headers: { authorization: `Bearer ${grant}` },
+      });
     let t = NOW;
     const clock = { now: () => t };
-    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(200);
-    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(200);
+    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(
+      200,
+    );
+    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(
+      200,
+    );
     const limited = await withStudentGrant(request(), handler, { rateLimit: true, ...clock });
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
     await expect(limited.json()).resolves.toMatchObject({
-      error: { code: 'RATE_LIMITED', retryable: true, details: { retryAfterS: expect.any(Number) } },
+      error: {
+        code: 'RATE_LIMITED',
+        retryable: true,
+        details: { retryAfterS: expect.any(Number) },
+      },
     });
     expect(handler).toHaveBeenCalledTimes(2);
     // Half a minute later one token has refilled (2/min).
     t = NOW + 30_000;
-    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(200);
-    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(429);
+    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(
+      200,
+    );
+    expect((await withStudentGrant(request(), handler, { rateLimit: true, ...clock })).status).toBe(
+      429,
+    );
     // Reads (no rateLimit) never consume a token.
     expect((await withStudentGrant(request(), handler, clock)).status).toBe(200);
   });
@@ -154,7 +185,9 @@ describe('withStudentGrant', () => {
     const grant = studentGrant();
     const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
     const request = () =>
-      new NextRequest('http://localhost/api/tutor/x', { headers: { authorization: `Bearer ${grant}` } });
+      new NextRequest('http://localhost/api/tutor/x', {
+        headers: { authorization: `Bearer ${grant}` },
+      });
     const mapped = await withStudentGrant(
       request(),
       async () => {
@@ -184,7 +217,9 @@ describe('withLearnerGrant', () => {
   it('404 when unconfigured', async () => {
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', '');
     const response = await withLearnerGrant(
-      new NextRequest('http://localhost/api/tutor/help/x', { headers: { cookie: cookieFor(learnerToken()) } }),
+      new NextRequest('http://localhost/api/tutor/help/x', {
+        headers: { cookie: cookieFor(learnerToken()) },
+      }),
       ok,
     );
     expect(response.status).toBe(404);
@@ -193,7 +228,12 @@ describe('withLearnerGrant', () => {
   it('accepts a learner grant with the student block and resolves it per Stage', async () => {
     const response = await withLearnerGrant(
       new NextRequest('http://localhost/api/tutor/help/x', {
-        headers: { cookie: cookieFor(learnerToken(), learnerToken({ stageId: 'stage-2', versionId: 'tpv-2' })) },
+        headers: {
+          cookie: cookieFor(
+            learnerToken(),
+            learnerToken({ stageId: 'stage-2', versionId: 'tpv-2' }),
+          ),
+        },
       }),
       async (_req, ctx) => {
         expect(ctx.grants).toHaveLength(2);
@@ -235,7 +275,10 @@ describe('withLearnerGrant', () => {
     );
     expect(studentBearer.status).toBe(401);
 
-    const nothing = await withLearnerGrant(new NextRequest('http://localhost/api/tutor/help/x'), handler);
+    const nothing = await withLearnerGrant(
+      new NextRequest('http://localhost/api/tutor/help/x'),
+      handler,
+    );
     expect(nothing.status).toBe(401);
     expect(handler).not.toHaveBeenCalled();
   });
@@ -244,7 +287,10 @@ describe('withLearnerGrant', () => {
     vi.stubEnv('TUTOR_TURNS_PER_MINUTE', '1');
     const cookie = cookieFor(learnerToken());
     const request = () =>
-      new NextRequest('http://localhost/api/tutor/help/turns', { method: 'POST', headers: { cookie } });
+      new NextRequest('http://localhost/api/tutor/help/turns', {
+        method: 'POST',
+        headers: { cookie },
+      });
     const handler = async (_req: NextRequest, ctx: { forStage(stageId: string): unknown }) => {
       ctx.forStage('stage-1');
       return ok();

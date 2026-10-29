@@ -16,7 +16,10 @@ import { resolveTTSModel } from '@/lib/server/provider-config';
 import { readSpeechConfig } from '@/lib/server/speech/config';
 import { assessNarrationAudio } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration } from '@/lib/server/speech/prepare';
-import { governedSubjectFromStore, SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
+import {
+  governedSubjectFromStore,
+  SpeechContextUnavailableError,
+} from '@/lib/server/speech/speech-context';
 import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
 import {
   TeachingTtsRouteInvalidError,
@@ -32,7 +35,9 @@ interface AssessBody {
   ttsModelId?: string;
   ttsVoice?: string;
   ttsSpeed?: number;
-  actions?: Array<Pick<SpeechAction, 'id' | 'text' | 'audioId' | 'audioInvalidated' | 'audioProvenance'>>;
+  actions?: Array<
+    Pick<SpeechAction, 'id' | 'text' | 'audioId' | 'audioInvalidated' | 'audioProvenance'>
+  >;
 }
 
 export async function POST(req: NextRequest) {
@@ -44,7 +49,11 @@ export async function POST(req: NextRequest) {
   }
   const actions = Array.isArray(body.actions) ? body.actions.slice(0, MAX_ACTIONS) : [];
   if (!body.ttsProviderId || !body.ttsVoice) {
-    return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required fields: ttsProviderId, ttsVoice');
+    return apiError(
+      'MISSING_REQUIRED_FIELD',
+      400,
+      'Missing required fields: ttsProviderId, ttsVoice',
+    );
   }
   const config = readSpeechConfig();
   const statuses: Record<string, { status: string; reason?: string }> = {};
@@ -57,7 +66,8 @@ export async function POST(req: NextRequest) {
     try {
       stage = await loadStageForSpeech(req, body.stageId, 'write');
     } catch (error) {
-      if (error instanceof SpeechContextUnavailableError) return apiError(error.code, 503, error.message);
+      if (error instanceof SpeechContextUnavailableError)
+        return apiError(error.code, 503, error.message);
       throw error;
     }
     // A malformed configured route on the Stage is reported, never replaced.

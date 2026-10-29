@@ -45,15 +45,22 @@ export async function POST(req: NextRequest) {
   } catch {
     return apiError('INVALID_REQUEST', 400, 'invalid JSON body');
   }
-  if (!body.stageId) return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: stageId');
+  if (!body.stageId)
+    return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: stageId');
   let access;
   try {
     access = await loadStageForSpeech(req, body.stageId, 'diagnostics');
   } catch (error) {
-    if (error instanceof SpeechContextUnavailableError) return apiError(error.code, 503, error.message);
+    if (error instanceof SpeechContextUnavailableError)
+      return apiError(error.code, 503, error.message);
     throw error;
   }
-  if (!access) return apiError('SATTS_DIAGNOSTICS_FORBIDDEN', 403, 'Pronunciation diagnostics need an owner or editor grant');
+  if (!access)
+    return apiError(
+      'SATTS_DIAGNOSTICS_FORBIDDEN',
+      403,
+      'Pronunciation diagnostics need an owner or editor grant',
+    );
   // A malformed configured route on the Stage is reported, never replaced.
   try {
     teachingRouteForStage(access.stage);
@@ -80,7 +87,8 @@ export async function POST(req: NextRequest) {
   });
 
   if (!body.synthesize) return apiSuccess({ mode: config.mode, actions });
-  if (actions.length !== 1) return apiError('INVALID_REQUEST', 400, 'synthesize needs exactly one action');
+  if (actions.length !== 1)
+    return apiError('INVALID_REQUEST', 400, 'synthesize needs exactly one action');
   const target = actions[0]!;
   const action = { id: target.actionId, type: 'speech', text: target.original } as SpeechAction;
   const stage = body.mode ? { ...access.stage, speechReadingMode: body.mode } : access.stage;
@@ -105,11 +113,18 @@ export async function POST(req: NextRequest) {
     recordUsage: true,
   });
   if (outcome.outcome === 'failed' || !outcome.audio) {
-    return apiError(outcome.error?.code ?? 'GENERATION_FAILED', 422, outcome.error?.message ?? 'failed');
+    return apiError(
+      outcome.error?.code ?? 'GENERATION_FAILED',
+      422,
+      outcome.error?.message ?? 'failed',
+    );
   }
   return apiSuccess({
     mode: config.mode,
     actions,
-    preview: { base64: Buffer.from(outcome.audio.bytes).toString('base64'), format: outcome.audio.format },
+    preview: {
+      base64: Buffer.from(outcome.audio.bytes).toString('base64'),
+      format: outcome.audio.format,
+    },
   });
 }

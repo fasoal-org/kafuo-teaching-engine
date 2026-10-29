@@ -21,7 +21,10 @@ function scene(
     type: 'slide',
     title: `S${order}`,
     order,
-    content: { type: 'slide', canvas: { id: 'c', viewportSize: 1000, viewportRatio: 0.5, theme: {} as never, elements: [] } },
+    content: {
+      type: 'slide',
+      canvas: { id: 'c', viewportSize: 1000, viewportRatio: 0.5, theme: {} as never, elements: [] },
+    },
     actions: [],
     createdAt: 1,
     updatedAt: 1,

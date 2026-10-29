@@ -8,12 +8,19 @@
  */
 
 import { NextRequest } from 'next/server';
-import { QwenTTSError, TTSInvalidResponseError, TTSRateLimitError } from '@/lib/audio/tts-providers';
+import {
+  QwenTTSError,
+  TTSInvalidResponseError,
+  TTSRateLimitError,
+} from '@/lib/audio/tts-providers';
 import { TTS_PROVIDERS } from '@/lib/audio/constants';
 import { readSpeechConfig } from '@/lib/server/speech/config';
 import { synthesizeNarration } from '@/lib/server/speech/narration-synthesis';
 import { prepareNarration, routedFallbackProfile } from '@/lib/server/speech/prepare';
-import { governedSubjectFromStore, SpeechContextUnavailableError } from '@/lib/server/speech/speech-context';
+import {
+  governedSubjectFromStore,
+  SpeechContextUnavailableError,
+} from '@/lib/server/speech/speech-context';
 import type { FallbackProfile } from '@/lib/server/speech/speech-profile';
 import { loadStageForSpeech } from '@/lib/server/speech/stage-access';
 import {
@@ -248,7 +255,11 @@ export async function POST(req: NextRequest) {
       routeId: prepared.route?.routeId,
     });
     if (outcome.outcome === 'failed' || !outcome.audio) {
-      return apiError(outcome.error?.code ?? 'GENERATION_FAILED', 422, outcome.error?.message ?? 'failed');
+      return apiError(
+        outcome.error?.code ?? 'GENERATION_FAILED',
+        422,
+        outcome.error?.message ?? 'failed',
+      );
     }
 
     // Convert to base64

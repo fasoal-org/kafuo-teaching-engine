@@ -54,7 +54,8 @@ describe('Natural Teacher Style: bonds and identity subscripts', () => {
   it('6: the symbol is never named («ثابت بولتزمان», «درجة الحرارة»)', () => {
     for (const mode of both) {
       const reading = prepared('$k_B T$', 'PHYSICS', mode);
-      for (const name of ['ثابت', 'بولتزمان', 'درجة', 'الحرارة']) expect(reading).not.toContain(name);
+      for (const name of ['ثابت', 'بولتزمان', 'درجة', 'الحرارة'])
+        expect(reading).not.toContain(name);
       expect(r1Violations('$E = k_B T$', 'PHYSICS', mode)).toEqual([]);
     }
   });

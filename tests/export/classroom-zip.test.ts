@@ -375,7 +375,12 @@ describe('ZIP speech metadata and narration provenance', () => {
   test('an old manifest without the new keys restores nothing', () => {
     expect(manifestStageSpeechMetadata({})).toEqual({});
     expect(
-      stageSpeechMetadataFromManifest({ name: 'n', language: 'directive', createdAt: 1, updatedAt: 1 }),
+      stageSpeechMetadataFromManifest({
+        name: 'n',
+        language: 'directive',
+        createdAt: 1,
+        updatedAt: 1,
+      }),
     ).toEqual({});
   });
 

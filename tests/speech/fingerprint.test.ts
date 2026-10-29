@@ -1,7 +1,11 @@
 /** Fingerprint (plan §13.3, FR-024). */
 import { describe, expect, it } from 'vitest';
 
-import { computeFingerprint, fingerprintPrefix, type FingerprintInputs } from '@/lib/server/speech/fingerprint';
+import {
+  computeFingerprint,
+  fingerprintPrefix,
+  type FingerprintInputs,
+} from '@/lib/server/speech/fingerprint';
 
 const base: FingerprintInputs = {
   originalText: 'نحسب x²',

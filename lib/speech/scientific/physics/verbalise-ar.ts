@@ -26,7 +26,12 @@ function namedPower(ctx: VerbaliseContext, power: number, inDenominator: boolean
   return power === 2 ? 'squared' : 'cubed';
 }
 
-function writeFactor(ctx: VerbaliseContext, w: Writer, factor: UnitFactor, inDenominator: boolean): void {
+function writeFactor(
+  ctx: VerbaliseContext,
+  w: Writer,
+  factor: UnitFactor,
+  inDenominator: boolean,
+): void {
   w.sem('unit', `${factor.prefix ?? ''}${factor.unit}`);
   const unit = speak(ctx, 'unit', factor.unit, factor.unit);
   const prefix = factor.prefix ? speak(ctx, 'prefix', factor.prefix, factor.prefix) : '';
@@ -46,7 +51,11 @@ function writeFactor(ctx: VerbaliseContext, w: Writer, factor: UnitFactor, inDen
 }
 
 /** Every policy entry the worded reading of `factor` consults. */
-function factorEntries(ctx: VerbaliseContext, factor: UnitFactor, inDenominator: boolean): Array<[PolicyRole, string]> {
+function factorEntries(
+  ctx: VerbaliseContext,
+  factor: UnitFactor,
+  inDenominator: boolean,
+): Array<[PolicyRole, string]> {
   const entries: Array<[PolicyRole, string]> = [['unit', factor.unit]];
   if (factor.prefix) entries.push(['prefix', factor.prefix]);
   const named = namedPower(ctx, factor.power, inDenominator);
@@ -75,7 +84,8 @@ export function writeUnit(ctx: VerbaliseContext, unit: UnitNode, w: Writer): voi
     ([role, token]) => ctx.policy.resolve({ role, token, domain: ctx.domain }, ctx.mode) === null,
   );
   if (missing.length > 0) {
-    for (const [role, token] of missing) ctx.warn('SATTS_W_MISSING_DICTIONARY_ENTRY', `${role}:${token}`);
+    for (const [role, token] of missing)
+      ctx.warn('SATTS_W_MISSING_DICTIONARY_ENTRY', `${role}:${token}`);
     // Same semantic tokens as the worded reading (mode parity, FR-019).
     const sem = (factor: UnitFactor) => {
       w.sem('unit', `${factor.prefix ?? ''}${factor.unit}`);

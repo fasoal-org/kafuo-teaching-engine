@@ -57,8 +57,8 @@ vi.mock('@/lib/logger', () => ({
 }));
 
 const PNG = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
-  0, 0, 0, 3, 0, 0, 0, 2, 8, 6, 0, 0, 0,
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 3,
+  0, 0, 0, 2, 8, 6, 0, 0, 0,
 ]);
 const DATA_URL = `data:image/png;base64,${PNG.toString('base64')}`;
 const pdfImage = (id: string) => ({
@@ -145,7 +145,12 @@ describe('generateClassroom source visuals', () => {
   it('without visuals: the outline call receives NO pdfImages and no vision options (byte-compatible)', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          { id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 },
+        ],
+      },
     });
     await generate({});
     const call = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]!;
@@ -164,7 +169,12 @@ describe('generateClassroom source visuals', () => {
     });
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          { id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 },
+        ],
+      },
     });
     await expect(
       generate({
@@ -176,10 +186,28 @@ describe('generateClassroom source visuals', () => {
   it('with visuals: the outline call receives pdfImages + vision mapping, and the aiCall attaches images', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1, suggestedImageIds: ['src-1'] }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'T',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-1'],
+          },
+        ],
+      },
     });
     const materialize = vi.fn(async (_stageId: string, selected: Array<{ id: string }>) => ({
-      servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/api/classroom-media/stage-sv-1/media/${image.id}.png`])),
+      servingMapping: Object.fromEntries(
+        selected.map((image) => [
+          image.id,
+          `/api/classroom-media/stage-sv-1/media/${image.id}.png`,
+        ]),
+      ),
       manifest: selected.map((image) => ({ id: image.id })),
       failedIds: [] as string[],
     }));
@@ -190,7 +218,10 @@ describe('generateClassroom source visuals', () => {
 
     const outlineCall = mocks.generateSceneOutlinesFromRequirements.mock.calls[0]!;
     expect(outlineCall[2]).toHaveLength(1);
-    expect(outlineCall[4]).toMatchObject({ visionEnabled: true, imageMapping: { 'src-1': DATA_URL } });
+    expect(outlineCall[4]).toMatchObject({
+      visionEnabled: true,
+      imageMapping: { 'src-1': DATA_URL },
+    });
 
     // The outline aiCall attaches images as multimodal user content.
     const outlineAiCall = outlineCall[3] as (
@@ -204,7 +235,9 @@ describe('generateClassroom source visuals', () => {
 
     // Only the SELECTED image is materialized — after reserve, exactly once.
     expect(materialize).toHaveBeenCalledTimes(1);
-    expect(materialize.mock.calls[0]![1].map((image: { id: string }) => image.id)).toEqual(['src-1']);
+    expect(materialize.mock.calls[0]![1].map((image: { id: string }) => image.id)).toEqual([
+      'src-1',
+    ]);
   });
 
   it('slide content receives the outline’s assigned images with the serving mapping; quiz/interactive/PBL calls unchanged', async () => {
@@ -213,14 +246,50 @@ describe('generateClassroom source visuals', () => {
       data: {
         languageDirective: 'English.',
         outlines: [
-          { id: 'o1', type: 'slide', title: 'S', description: '', keyPoints: [], order: 1, suggestedImageIds: ['src-1'] },
-          { id: 'o2', type: 'quiz', title: 'Q', description: '', keyPoints: [], order: 2, quizConfig: { questionCount: 1, difficulty: 'easy', questionTypes: ['single'] }, suggestedImageIds: ['src-1'] },
-          { id: 'o3', type: 'pbl', title: 'P', description: '', keyPoints: [], order: 3, pblConfig: { projectTopic: 't', projectDescription: 'd', targetSkills: ['s'], issueCount: 1 }, suggestedImageIds: ['src-1'] },
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'S',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-1'],
+          },
+          {
+            id: 'o2',
+            type: 'quiz',
+            title: 'Q',
+            description: '',
+            keyPoints: [],
+            order: 2,
+            quizConfig: { questionCount: 1, difficulty: 'easy', questionTypes: ['single'] },
+            suggestedImageIds: ['src-1'],
+          },
+          {
+            id: 'o3',
+            type: 'pbl',
+            title: 'P',
+            description: '',
+            keyPoints: [],
+            order: 3,
+            pblConfig: {
+              projectTopic: 't',
+              projectDescription: 'd',
+              targetSkills: ['s'],
+              issueCount: 1,
+            },
+            suggestedImageIds: ['src-1'],
+          },
         ],
       },
     });
     const materialize = vi.fn(async (_stageId: string, selected: Array<{ id: string }>) => ({
-      servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/api/classroom-media/stage-sv-1/media/${image.id}.png`])),
+      servingMapping: Object.fromEntries(
+        selected.map((image) => [
+          image.id,
+          `/api/classroom-media/stage-sv-1/media/${image.id}.png`,
+        ]),
+      ),
       manifest: selected.map((image) => ({ id: image.id })),
       failedIds: [] as string[],
     }));
@@ -254,7 +323,15 @@ describe('generateClassroom source visuals', () => {
       data: {
         languageDirective: 'English.',
         outlines: [
-          { id: 'o1', type: 'slide', title: 'S', description: '', keyPoints: [], order: 1, sourceContentUnitIds: ['10'] },
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'S',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            sourceContentUnitIds: ['10'],
+          },
         ],
       },
     });
@@ -274,7 +351,20 @@ describe('generateClassroom source visuals', () => {
   it('a selected-image materialization failure fails the run (no AI substitution)', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1, suggestedImageIds: ['src-1'] }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'T',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-1'],
+          },
+        ],
+      },
     });
     await expect(
       generate({
@@ -294,7 +384,12 @@ describe('generateClassroom source visuals', () => {
   it('a zero-image PDF passes without any vision enforcement', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          { id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1 },
+        ],
+      },
     });
     const result = await generate({
       input: { pdfContent: { text: 'pdf body', images: [], pdfImages: [] } },
@@ -307,11 +402,18 @@ describe('generateClassroom source visuals', () => {
       success: true,
       data: {
         languageDirective: 'English.',
-        outlines: [{
-          id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1,
-          suggestedImageIds: ['src-1'],
-          mediaGenerations: [{ type: 'image', elementId: 'gen_img_extra', prompt: 'decor' }],
-        }],
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'T',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-1'],
+            mediaGenerations: [{ type: 'image', elementId: 'gen_img_extra', prompt: 'decor' }],
+          },
+        ],
       },
     });
     // Slide content: the selected source visual resolved onto its serving
@@ -333,7 +435,12 @@ describe('generateClassroom source visuals', () => {
       materialize: {
         images: [pdfImage('src-1')],
         materialize: (async (_stageId: string, selected: Array<{ id: string }>) => ({
-          servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/api/classroom-media/stage-sv-1/media/${image.id}.png`])),
+          servingMapping: Object.fromEntries(
+            selected.map((image) => [
+              image.id,
+              `/api/classroom-media/stage-sv-1/media/${image.id}.png`,
+            ]),
+          ),
           manifest: selected.map((image) => ({ id: image.id })),
           failedIds: [] as string[],
         })) as never,
@@ -359,11 +466,18 @@ describe('generateClassroom source visuals', () => {
       success: true,
       data: {
         languageDirective: 'English.',
-        outlines: [{
-          id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1,
-          suggestedImageIds: ['src-9'],
-          mediaGenerations: [{ type: 'image', elementId: 'gen_img_1', prompt: 'competitor' }],
-        }],
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'T',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-9'],
+            mediaGenerations: [{ type: 'image', elementId: 'gen_img_1', prompt: 'competitor' }],
+          },
+        ],
       },
     });
     mocks.generateSceneContent.mockImplementation(async () => ({
@@ -377,7 +491,12 @@ describe('generateClassroom source visuals', () => {
       materialize: {
         images: [pdfImage('src-9')],
         materialize: (async (_stageId: string, selected: Array<{ id: string }>) => ({
-          servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/api/classroom-media/stage-sv-1/media/${image.id}.png`])),
+          servingMapping: Object.fromEntries(
+            selected.map((image) => [
+              image.id,
+              `/api/classroom-media/stage-sv-1/media/${image.id}.png`,
+            ]),
+          ),
           manifest: selected.map((image) => ({ id: image.id })),
           failedIds: [] as string[],
         })) as never,
@@ -397,7 +516,20 @@ describe('generateClassroom source visuals', () => {
   it('persists the teaching flow and source-visual manifest through the sink', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: 'English.', outlines: [{ id: 'o1', type: 'slide', title: 'T', description: '', keyPoints: [], order: 1, suggestedImageIds: ['src-1'] }] },
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'T',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            suggestedImageIds: ['src-1'],
+          },
+        ],
+      },
     });
     const persistSpy = vi.fn();
     const { generateClassroom } = await import('@/lib/server/classroom-generation');
@@ -413,15 +545,35 @@ describe('generateClassroom source visuals', () => {
           reserve: async (buildStage) => ({ id: 'stage-sv-2', stage: buildStage('stage-sv-2') }),
           persist: async (data) => {
             persistSpy(data);
-            return { id: data.id, url: '', stage: data.stage, scenes: data.scenes, createdAt: '2026-09-15T00:00:00.000Z' };
+            return {
+              id: data.id,
+              url: '',
+              stage: data.stage,
+              scenes: data.scenes,
+              createdAt: '2026-09-15T00:00:00.000Z',
+            };
           },
           release: async () => {},
         },
         sourceVisuals: {
           images: [pdfImage('src-1')],
           materialize: (async (_stageId: string, selected: Array<{ id: string }>) => ({
-            servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/api/classroom-media/stage-sv-2/media/${image.id}.png`])),
-            manifest: [{ id: 'src-1', contentResourceId: 'cs-1', pageNumber: 1, mimeType: 'image/png', sha256: '0'.repeat(64), servingPath: '/api/classroom-media/stage-sv-2/media/src-1.png' }],
+            servingMapping: Object.fromEntries(
+              selected.map((image) => [
+                image.id,
+                `/api/classroom-media/stage-sv-2/media/${image.id}.png`,
+              ]),
+            ),
+            manifest: [
+              {
+                id: 'src-1',
+                contentResourceId: 'cs-1',
+                pageNumber: 1,
+                mimeType: 'image/png',
+                sha256: '0'.repeat(64),
+                servingPath: '/api/classroom-media/stage-sv-2/media/src-1.png',
+              },
+            ],
             failedIds: [] as string[],
           })) as never,
         },

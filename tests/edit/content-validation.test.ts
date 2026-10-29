@@ -91,7 +91,9 @@ describe('validateOutline / blocking helpers', () => {
     expect(validateOutline(outline({ contentRole: undefined }))).toEqual([
       { kind: 'unclassifiedSlide' },
     ]);
-    expect(validateOutline(outline({ slideType: 'transition', contentRole: undefined }))).toEqual([]);
+    expect(validateOutline(outline({ slideType: 'transition', contentRole: undefined }))).toEqual(
+      [],
+    );
     expect(
       validateOutline(outline({ type: 'quiz', slideType: undefined, contentRole: undefined })),
     ).toEqual([]);

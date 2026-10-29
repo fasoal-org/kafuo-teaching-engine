@@ -33,7 +33,10 @@ describe('single narration entry (drift guard)', () => {
       for (const file of walk(join(ROOT, base))) {
         const text = readFileSync(file, 'utf8');
         if (!/\bgenerateTTS\b/.test(text)) continue;
-        const imports = /import\s*\{[^}]*\bgenerateTTS\b[^}]*\}\s*from|import\(\s*['"][^'"]*tts-providers['"]\s*\)/.test(text);
+        const imports =
+          /import\s*\{[^}]*\bgenerateTTS\b[^}]*\}\s*from|import\(\s*['"][^'"]*tts-providers['"]\s*\)/.test(
+            text,
+          );
         const rel = relative(ROOT, file);
         if (imports && !ALLOWED.has(rel)) offenders.push(rel);
       }

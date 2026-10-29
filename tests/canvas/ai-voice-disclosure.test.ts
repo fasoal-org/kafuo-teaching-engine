@@ -11,13 +11,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ mode: 'on' as string, audioId: 'ast_1' as string | undefined }));
 
 vi.mock('@/lib/store/settings', () => ({
-  useSettingsStore: (selector: (s: unknown) => unknown) => selector({ scientificSpeechMode: state.mode }),
+  useSettingsStore: (selector: (s: unknown) => unknown) =>
+    selector({ scientificSpeechMode: state.mode }),
 }));
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: (selector: (s: unknown) => unknown) =>
     selector({
       currentSceneId: 'sc',
-      scenes: [{ id: 'sc', actions: [{ id: 'a', type: 'speech', text: 'x', audioId: state.audioId }] }],
+      scenes: [
+        { id: 'sc', actions: [{ id: 'a', type: 'speech', text: 'x', audioId: state.audioId }] },
+      ],
     }),
 }));
 vi.mock('@/lib/hooks/use-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -40,8 +43,12 @@ describe('web AI-voice disclosure (FR-034, AS-012)', () => {
   it('shows the label and the first-play notice; dismissal is remembered on this device', () => {
     const host = render();
     expect(host.textContent).toContain('aiVoice.label');
-    expect(host.querySelector('[data-testid="ai-voice-notice"]')?.textContent).toContain('aiVoice.notice');
-    act(() => (host.querySelector('[data-testid="ai-voice-notice"] button') as HTMLButtonElement).click());
+    expect(host.querySelector('[data-testid="ai-voice-notice"]')?.textContent).toContain(
+      'aiVoice.notice',
+    );
+    act(() =>
+      (host.querySelector('[data-testid="ai-voice-notice"] button') as HTMLButtonElement).click(),
+    );
     expect(host.querySelector('[data-testid="ai-voice-notice"]')).toBeNull();
     expect(window.localStorage.getItem(AI_VOICE_NOTICE_KEY)).toBe('1');
     const again = render();

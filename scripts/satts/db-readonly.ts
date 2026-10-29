@@ -7,15 +7,18 @@ import { Pool } from 'pg';
 
 import type { MaintenanceDocument } from '@/lib/server/speech/maintenance';
 
-export async function withReadOnly<T>(fn: (query: <R>(sql: string, params?: unknown[]) => Promise<R[]>) => Promise<T>): Promise<T> {
+export async function withReadOnly<T>(
+  fn: (query: <R>(sql: string, params?: unknown[]) => Promise<R[]>) => Promise<T>,
+): Promise<T> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is not set');
   const pool = new Pool({ connectionString: url, max: 1 });
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
-    const result = await fn(async <R,>(sql: string, params: unknown[] = []) =>
-      (await client.query(sql, params)).rows as R[],
+    const result = await fn(
+      async <R>(sql: string, params: unknown[] = []) =>
+        (await client.query(sql, params)).rows as R[],
     );
     await client.query('ROLLBACK');
     return result;

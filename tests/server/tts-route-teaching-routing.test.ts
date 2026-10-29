@@ -190,7 +190,11 @@ describe('routing with SCIENTIFIC_TTS_MODE=off (default)', () => {
       ttsVoice: 'nova',
     });
     expect(dynamic.status).toBe(200);
-    expect(sentConfig()).toMatchObject({ providerId: 'openai-tts', modelId: 'tts-1', voice: 'nova' });
+    expect(sentConfig()).toMatchObject({
+      providerId: 'openai-tts',
+      modelId: 'tts-1',
+      voice: 'nova',
+    });
   });
 });
 

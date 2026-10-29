@@ -9,7 +9,11 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { inventoryDocument, type InventoryRow, type MaintenanceDocument } from '@/lib/server/speech/maintenance';
+import {
+  inventoryDocument,
+  type InventoryRow,
+  type MaintenanceDocument,
+} from '@/lib/server/speech/maintenance';
 import { loadPolicyPack } from '@/lib/speech/scientific/policy';
 import { SCENES_SQL, STAGES_SQL, withReadOnly, type StageRow } from './satts/db-readonly';
 
@@ -23,7 +27,9 @@ async function main() {
     for (const stage of await query<StageRow>(STAGES_SQL)) {
       const subject = stage.data?.subjectCode ?? stage.attempt_subject;
       if (!subject) continue;
-      const scenes = await query<{ id: string; data: { actions?: unknown[] } }>(SCENES_SQL, [stage.id]);
+      const scenes = await query<{ id: string; data: { actions?: unknown[] } }>(SCENES_SQL, [
+        stage.id,
+      ]);
       const document: MaintenanceDocument = {
         stage: { ...stage.data, id: stage.id },
         scenes: scenes.map((scene) => ({ id: scene.id, actions: scene.data?.actions ?? [] })),
@@ -43,8 +49,8 @@ async function main() {
     `# SATTS Legacy Inventory — ${date}`,
     '',
     '- **Source:** read-only transaction on `DATABASE_URL` (plan §18.2, D-7). Nothing was written.',
-    '- **Subject:** `Stage.subjectCode`, else the current attempt\'s `subject_code` column (predecessor walk not followed).',
-    '- **Detection:** the renderer\'s run detector; regeneration size uses the draft (proposed) policy.',
+    "- **Subject:** `Stage.subjectCode`, else the current attempt's `subject_code` column (predecessor walk not followed).",
+    "- **Detection:** the renderer's run detector; regeneration size uses the draft (proposed) policy.",
     '',
     '| Subject | Stages | Legacy-audio Actions | …with detected expressions | Regeneration chars |',
     '|---|---|---|---|---|',

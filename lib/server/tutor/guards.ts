@@ -96,7 +96,9 @@ export type StudentGrantHandler = (
   ctx: StudentGrantContext,
 ) => Promise<Response> | Response;
 
-export function studentRateLimitKey(grant: Pick<StudentGrantPayload, 'tenantId' | 'studentRef'>): string {
+export function studentRateLimitKey(
+  grant: Pick<StudentGrantPayload, 'tenantId' | 'studentRef'>,
+): string {
   return `student:${grant.tenantId}:${grant.studentRef}`;
 }
 
@@ -140,7 +142,9 @@ export function isVerifiedLearnerGrant(grant: VerifiedEditorGrant): grant is Ver
   return grant.purpose === 'learner' && grant.student !== undefined;
 }
 
-export function learnerRateLimitKey(grant: Pick<VerifiedEditorGrant, 'tenantId' | 'learnerKey'>): string {
+export function learnerRateLimitKey(
+  grant: Pick<VerifiedEditorGrant, 'tenantId' | 'learnerKey'>,
+): string {
   return `learner:${grant.tenantId}:${grant.learnerKey}`;
 }
 

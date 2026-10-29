@@ -11,7 +11,10 @@ vi.mock('@/lib/speech/scientific/policy', async (importOriginal) => {
   return {
     ...actual,
     // Every entry usable, reported as an approved production pack.
-    loadPolicyPack: (language: string | null, options: Parameters<typeof actual.loadPolicyPack>[1] = {}) => ({
+    loadPolicyPack: (
+      language: string | null,
+      options: Parameters<typeof actual.loadPolicyPack>[1] = {},
+    ) => ({
       ...actual.loadPolicyPack(language, { ...options, allowProposed: true }),
       status: 'approved' as const,
       allowProposed: options.allowProposed === true,

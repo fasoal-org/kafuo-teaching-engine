@@ -13,10 +13,7 @@ import {
   isTeachingPackageStageLockedError,
   TeachingPackageError,
 } from '@/lib/server/teaching-package/errors';
-import type {
-  LearningItemRef,
-  TeachingPackageAggregateKey,
-} from '@/lib/types/teaching-package';
+import type { LearningItemRef, TeachingPackageAggregateKey } from '@/lib/types/teaching-package';
 
 /**
  * Map a teaching package failure onto the API's error envelope. Returns `null`

@@ -310,12 +310,10 @@ describe('policy thinking → provider request body', () => {
     const { resolveModel } = await import('@/lib/server/resolve-model');
     const resolved = await resolveModel({ modelString: 'openai:gpt-5-nano' });
     const { callLLM } = await import('@/lib/ai/llm');
-    await callLLM(
-      { model: resolved.model, prompt: 'hi', maxRetries: 0 },
-      'test-nano',
-      undefined,
-      { mode: 'enabled', effort: 'minimal' },
-    );
+    await callLLM({ model: resolved.model, prompt: 'hi', maxRetries: 0 }, 'test-nano', undefined, {
+      mode: 'enabled',
+      effort: 'minimal',
+    });
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({ model: 'gpt-5-nano', reasoning_effort: 'minimal' });
   });

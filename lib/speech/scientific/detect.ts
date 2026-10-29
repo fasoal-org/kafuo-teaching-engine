@@ -248,16 +248,21 @@ export function arabicVariableEnd(text: string, i: number): number {
   const after = nextNonSpace(text, end);
   const beforeCh = text[before];
   const afterCh = text[after];
-  const opAfter = isOperatorOrRelation(afterCh) && operandStartsAt(text, nextNonSpace(text, after + 1));
-  const opBefore = isOperatorOrRelation(beforeCh) && operandEndsAt(text, prevNonSpace(text, before));
+  const opAfter =
+    isOperatorOrRelation(afterCh) && operandStartsAt(text, nextNonSpace(text, after + 1));
+  const opBefore =
+    isOperatorOrRelation(beforeCh) && operandEndsAt(text, prevNonSpace(text, before));
   const scriptAfter =
-    next !== undefined && (isSuperscriptGlyph(next) || isSubscriptGlyph(next) || next === '^' || next === '_');
+    next !== undefined &&
+    (isSuperscriptGlyph(next) || isSubscriptGlyph(next) || next === '^' || next === '_');
   if (isDigit(beforeCh)) {
     if (NUMBER_MARKER_LETTERS.has(letter)) return -1;
     // Attached: coefficient × variable (`2س`).
     if (before === i - 1) return end;
     // Spaced: a unit position (`5 م/ث`) unless an operator or a script follows.
-    return scriptAfter || (opAfter && afterCh !== '/' && afterCh !== '·' && afterCh !== '⋅') ? end : -1;
+    return scriptAfter || (opAfter && afterCh !== '/' && afterCh !== '·' && afterCh !== '⋅')
+      ? end
+      : -1;
   }
   // The denominator of a unit whose numerator is not a term (`5 م/ث²`, `كم/س`).
   if (!opBefore && (beforeCh === '/' || beforeCh === '·' || beforeCh === '⋅')) return -1;
@@ -333,7 +338,8 @@ const SENTENCE_END = new Set(['.', ',', ':', ';', '!', '?', '؟', '،', '؛']);
 
 function hasMathToken(text: string): boolean {
   for (const ch of text) {
-    if (isLatinLetter(ch) || isDigit(ch) || isStructureChar(ch) || greekKeyForGlyph(ch)) return true;
+    if (isLatinLetter(ch) || isDigit(ch) || isStructureChar(ch) || greekKeyForGlyph(ch))
+      return true;
   }
   return false;
 }
@@ -515,7 +521,12 @@ function isYearRange(run: string): boolean {
   const parts = run.split(/\s*[-–]\s*/);
   return (
     parts.length === 2 &&
-    parts.every((part) => part.length >= 2 && part.length <= 4 && [...part].every((c) => isAsciiDigit(c) || isArabicIndicDigit(c))) &&
+    parts.every(
+      (part) =>
+        part.length >= 2 &&
+        part.length <= 4 &&
+        [...part].every((c) => isAsciiDigit(c) || isArabicIndicDigit(c)),
+    ) &&
     parts[0]!.length === 4
   );
 }
@@ -523,7 +534,12 @@ function isYearRange(run: string): boolean {
 /** `sin`, `log` … followed by a bracket or a spaced number: `sin(x)`, `log 100`. */
 function startsFunctionCall(run: string, i: number): boolean {
   for (const name of FUNCTION_NAMES) {
-    if (!run.startsWith(name, i) || isLatinLetter(run[i - 1]) || isLatinLetter(run[i + name.length])) continue;
+    if (
+      !run.startsWith(name, i) ||
+      isLatinLetter(run[i - 1]) ||
+      isLatinLetter(run[i + name.length])
+    )
+      continue;
     const after = run[i + name.length];
     if (after === '(') return true;
     if (after === ' ' && isDigit(run[i + name.length + 1])) return true;
@@ -541,10 +557,24 @@ function hasUndelimitedMath(run: string): boolean {
     const ch = run[i]!;
     if (ch === '|') bars += 1;
     if (startsFunctionCall(run, i)) return true;
-    if ((ch === ',' || ch === '٬') && isDigit(run[i - 1]) && isDigit(run[i + 1]) && isDigit(run[i + 2]) && isDigit(run[i + 3]) && !isDigit(run[i + 4])) {
+    if (
+      (ch === ',' || ch === '٬') &&
+      isDigit(run[i - 1]) &&
+      isDigit(run[i + 1]) &&
+      isDigit(run[i + 2]) &&
+      isDigit(run[i + 3]) &&
+      !isDigit(run[i + 4])
+    ) {
       return true;
     }
-    if (ch === 'x' && run[i - 1] === ' ' && run[i + 1] === ' ' && isDigit(run[i - 2]) && isDigit(run[i + 2])) return true;
+    if (
+      ch === 'x' &&
+      run[i - 1] === ' ' &&
+      run[i + 1] === ' ' &&
+      isDigit(run[i - 2]) &&
+      isDigit(run[i + 2])
+    )
+      return true;
   }
   return bars >= 2 && bars % 2 === 0;
 }
@@ -572,7 +602,11 @@ function classifyRun(
   // A number with a unit (O-7 evidence) is a quantity; Mathematics too (P6 item 4).
   if (hooks.unitAt && isDigit(run[0])) {
     let k = 0;
-    while (k < run.length && (isDigit(run[k]) || run[k] === '.' || run[k] === '٫' || run[k] === ',' || run[k] === '٬')) k += 1;
+    while (
+      k < run.length &&
+      (isDigit(run[k]) || run[k] === '.' || run[k] === '٫' || run[k] === ',' || run[k] === '٬')
+    )
+      k += 1;
     if (hooks.unitAt(run, k)) return 'quantity';
   }
   if (hasUndelimitedMath(run)) return 'structure';
@@ -588,12 +622,14 @@ function classifyRun(
     ) {
       return 'structure';
     }
-    if ((ch === '.' || ch === '٫') && isDigit(run[i - 1]) && isDigit(run[i + 1])) return 'structure';
+    if ((ch === '.' || ch === '٫') && isDigit(run[i - 1]) && isDigit(run[i + 1]))
+      return 'structure';
     if (ch === ':' && isDigit(run[i - 1]) && isDigit(run[i + 1])) return 'structure';
   }
   if (subject === 'CHEMISTRY') return null;
   // A lone Latin letter (optionally a Greek letter) is a variable/symbol token.
-  if (run.length === 1 && (isLatinLetter(run) || greekKeyForGlyph(run) !== undefined)) return 'symbol';
+  if (run.length === 1 && (isLatinLetter(run) || greekKeyForGlyph(run) !== undefined))
+    return 'symbol';
   // Mathematics: two or three capital letters name points/segments (AB, ABC).
   if (subject === 'MATH' && /^[A-Z]{2,3}$/.test(run)) return 'symbol';
   return null;
@@ -614,7 +650,10 @@ export function detectExpressions(
       if (found) {
         // `$10^{-3}$ kg`: a unit right after a delimited value joins it (P6 item 3).
         const unitStart = found.end + (text[found.end] === ' ' ? 1 : 0);
-        const unitEnd = hooks.unitEnd && hasValue(text.slice(found.innerStart, found.innerEnd)) ? hooks.unitEnd(text, unitStart) : -1;
+        const unitEnd =
+          hooks.unitEnd && hasValue(text.slice(found.innerStart, found.innerEnd))
+            ? hooks.unitEnd(text, unitStart)
+            : -1;
         if (unitEnd > unitStart && isLatinLetter(text[unitStart])) {
           found.unitSuffix = { start: unitStart, end: unitEnd };
           found.end = unitEnd;
@@ -650,7 +689,14 @@ export function detectExpressions(
         const run = text.slice(s, e);
         const reason = classifyRun(run, subject, hooks);
         if (reason) {
-          const candidate: ExpressionCandidate = { kind: 'run', start: s, end: e, innerStart: s, innerEnd: e, reason };
+          const candidate: ExpressionCandidate = {
+            kind: 'run',
+            start: s,
+            end: e,
+            innerStart: s,
+            innerEnd: e,
+            reason,
+          };
           const first = text[s];
           if (
             arabicVariables &&

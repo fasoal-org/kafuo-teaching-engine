@@ -59,7 +59,11 @@ function readFrame(bytes: Uint8Array, offset: number): Mp3Frame | null {
 
 function id3v2Length(bytes: Uint8Array): number {
   if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return 0;
-  const size = ((bytes[6]! & 0x7f) << 21) | ((bytes[7]! & 0x7f) << 14) | ((bytes[8]! & 0x7f) << 7) | (bytes[9]! & 0x7f);
+  const size =
+    ((bytes[6]! & 0x7f) << 21) |
+    ((bytes[7]! & 0x7f) << 14) |
+    ((bytes[8]! & 0x7f) << 7) |
+    (bytes[9]! & 0x7f);
   const footer = (bytes[5]! & 0x10) !== 0 ? 10 : 0;
   return 10 + size + footer;
 }
@@ -92,7 +96,8 @@ export function inspectMp3(bytes: Uint8Array): Mp3Inspection {
   while (offset < end) {
     const frame = readFrame(bytes, offset);
     if (!frame || frame.length <= 4 || offset + frame.length > end) {
-      if (frames.length === 0 && offset < end) throw new AudioConcatError('not an MPEG Layer III stream');
+      if (frames.length === 0 && offset < end)
+        throw new AudioConcatError('not an MPEG Layer III stream');
       break;
     }
     if (!(frames.length === 0 && isHeaderFrame(bytes, frame))) frames.push(frame);
@@ -104,7 +109,10 @@ export function inspectMp3(bytes: Uint8Array): Mp3Inspection {
   return { frames, durationSeconds: (frames.length * samplesPerFrame) / first.sampleRate };
 }
 
-export function joinMp3(parts: readonly Uint8Array[]): { bytes: Uint8Array; durationSeconds: number } {
+export function joinMp3(parts: readonly Uint8Array[]): {
+  bytes: Uint8Array;
+  durationSeconds: number;
+} {
   if (parts.length === 0) throw new AudioConcatError('nothing to join');
   const inspected = parts.map(inspectMp3);
   const ref = inspected[0]!.frames[0]!;
@@ -141,7 +149,8 @@ interface WavPart {
 function readWav(bytes: Uint8Array): WavPart {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tag = (at: number) => String.fromCharCode(...bytes.subarray(at, at + 4));
-  if (bytes.length < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new AudioConcatError('not a WAV part');
+  if (bytes.length < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE')
+    throw new AudioConcatError('not a WAV part');
   let at = 12;
   let fmt: Uint8Array | null = null;
   while (at + 8 <= bytes.length) {
@@ -149,10 +158,17 @@ function readWav(bytes: Uint8Array): WavPart {
     const declared = view.getUint32(at + 4, true);
     if (id === 'data') {
       // Streaming placeholder sizes (0xFFFFFFFF) mean "to the end" (M6).
-      const size = declared === 0xffffffff || at + 8 + declared > bytes.length ? bytes.length - at - 8 : declared;
+      const size =
+        declared === 0xffffffff || at + 8 + declared > bytes.length
+          ? bytes.length - at - 8
+          : declared;
       if (!fmt) throw new AudioConcatError('WAV data before fmt');
       const fmtView = new DataView(fmt.buffer, fmt.byteOffset, fmt.byteLength);
-      return { fmt, data: bytes.subarray(at + 8, at + 8 + size), byteRate: fmtView.getUint32(8, true) };
+      return {
+        fmt,
+        data: bytes.subarray(at + 8, at + 8 + size),
+        byteRate: fmtView.getUint32(8, true),
+      };
     }
     if (id === 'fmt ') fmt = bytes.subarray(at + 8, at + 8 + declared);
     at += 8 + declared + (declared % 2);
@@ -160,7 +176,10 @@ function readWav(bytes: Uint8Array): WavPart {
   throw new AudioConcatError('WAV part has no data chunk');
 }
 
-export function joinWav(parts: readonly Uint8Array[]): { bytes: Uint8Array; durationSeconds: number } {
+export function joinWav(parts: readonly Uint8Array[]): {
+  bytes: Uint8Array;
+  durationSeconds: number;
+} {
   if (parts.length === 0) throw new AudioConcatError('nothing to join');
   const read = parts.map(readWav);
   const fmt = read[0]!.fmt;
@@ -172,7 +191,8 @@ export function joinWav(parts: readonly Uint8Array[]): { bytes: Uint8Array; dura
   const dataSize = read.reduce((n, part) => n + part.data.length, 0);
   const out = new Uint8Array(12 + 8 + fmt.length + 8 + dataSize);
   const view = new DataView(out.buffer);
-  const writeTag = (at: number, text: string) => [...text].forEach((ch, i) => (out[at + i] = ch.charCodeAt(0)));
+  const writeTag = (at: number, text: string) =>
+    [...text].forEach((ch, i) => (out[at + i] = ch.charCodeAt(0)));
   writeTag(0, 'RIFF');
   view.setUint32(4, out.length - 8, true);
   writeTag(8, 'WAVE');
@@ -209,7 +229,8 @@ export function joinAudio(
   parts: readonly Uint8Array[],
   format: string,
 ): { bytes: Uint8Array; durationSeconds: number | null } {
-  if (parts.length === 1) return { bytes: parts[0]!, durationSeconds: audioDurationSeconds(parts[0]!, format) };
+  if (parts.length === 1)
+    return { bytes: parts[0]!, durationSeconds: audioDurationSeconds(parts[0]!, format) };
   if (format === 'mp3') return joinMp3(parts);
   if (format === 'wav') return joinWav(parts);
   throw new AudioConcatError(`cannot join multi-segment ${format} audio`);

@@ -123,7 +123,11 @@ describe('book question enrichment from an approved package', () => {
         pdfContentSummary: null,
         requestedAt: 1,
         teachingFlow: [],
-        contentResource: { id: 'cs-1', mimeType: 'application/pdf', measuredSha256: 'a'.repeat(64) },
+        contentResource: {
+          id: 'cs-1',
+          mimeType: 'application/pdf',
+          measuredSha256: 'a'.repeat(64),
+        },
       },
       now: 1,
     });

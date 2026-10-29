@@ -1,9 +1,7 @@
 {
   "table": "functions",
   "description": "Function names as read in Saudi textbooks (جا، جتا، ظا …).",
-  "roles": [
-    "function"
-  ],
+  "roles": ["function"],
   "entries": [
     {
       "key": "sin",

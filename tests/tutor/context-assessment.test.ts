@@ -38,7 +38,12 @@ function run(cases: Case[], grounding: typeof MASS_GROUNDING | null) {
   for (const ruleset of RULESETS) {
     for (const [message, decision, rule] of cases) {
       const result = assessContext({ message, grounding, ruleset });
-      expect({ ruleset, message, decision: result.decision, rule: result.rule }).toEqual({ ruleset, message, decision, rule });
+      expect({ ruleset, message, decision: result.decision, rule: result.rule }).toEqual({
+        ruleset,
+        message,
+        decision,
+        rule,
+      });
       if (decision === 'retrieve') expect(result.query).toBeTruthy();
       else expect(result.query).toBeUndefined();
     }
@@ -66,7 +71,11 @@ describe('rule 2 — explicit curriculum signal', () => {
     run(
       [
         ['ما تعريف قانون حفظ الكتلة في الدرس؟', 'reuse', 'explicit_curriculum_reuse'],
-        ['what does the textbook say about conservation of mass?', 'reuse', 'explicit_curriculum_reuse'],
+        [
+          'what does the textbook say about conservation of mass?',
+          'reuse',
+          'explicit_curriculum_reuse',
+        ],
         ['ما تعريف السرعة المتجهة حسب المنهج؟', 'retrieve', 'explicit_curriculum_retrieve'],
         ['define velocity as in the lesson', 'retrieve', 'explicit_curriculum_retrieve'],
       ],
@@ -78,7 +87,11 @@ describe('rule 2 — explicit curriculum signal', () => {
     run(
       [
         ['ما تعريف التسارع في الكتاب؟', 'retrieve', 'explicit_curriculum_retrieve'],
-        ['according to the curriculum, what is acceleration?', 'retrieve', 'explicit_curriculum_retrieve'],
+        [
+          'according to the curriculum, what is acceleration?',
+          'retrieve',
+          'explicit_curriculum_retrieve',
+        ],
       ],
       null,
     );
@@ -141,7 +154,10 @@ describe('rule 5 — topic continuity against the current grounding', () => {
   });
 
   it('a single unrelated keyword is not a shift (default none)', () => {
-    const result = assessContext({ message: 'الروابط', grounding: { ...MASS_GROUNDING, turnsSinceUse: 8 } });
+    const result = assessContext({
+      message: 'الروابط',
+      grounding: { ...MASS_GROUNDING, turnsSinceUse: 8 },
+    });
     expect(result.decision).toBe('none');
   });
 });
@@ -177,7 +193,10 @@ describe('rule 7 — default: subject-level conversation', () => {
 describe('stale grounding', () => {
   it(`is treated as absent after ${GROUNDING_STALE_TURNS} turns`, () => {
     const stale = { ...MASS_GROUNDING, turnsSinceUse: GROUNDING_STALE_TURNS + 1 };
-    const result = assessContext({ message: 'احسب كتلة المواد الناتجة من التفاعل', grounding: stale });
+    const result = assessContext({
+      message: 'احسب كتلة المواد الناتجة من التفاعل',
+      grounding: stale,
+    });
     expect(result.groundingStale).toBe(true);
     expect(result.overlap).toBe(0);
     // Without grounding this is lesson discovery (3+ consecutive content words), not reuse.
@@ -204,7 +223,12 @@ describe('discovery_v1 (P7 a/b/c): intent words, topic shift over a continuation
 
   it('the sample question in a NEW conversation retrieves with «اشرحلي» out of the query', () => {
     const v1 = assessContext({ message: SAMPLE, grounding: null, ruleset: 'discovery_v1' });
-    expect(v1).toMatchObject({ decision: 'retrieve', rule: 'lesson_discovery', query: 'مثال مضاد', contentKeywordCount: 2 });
+    expect(v1).toMatchObject({
+      decision: 'retrieve',
+      rule: 'lesson_discovery',
+      query: 'مثال مضاد',
+      contentKeywordCount: 2,
+    });
     // r1 (the kafuo_http default) is unchanged: the intent word still pollutes the query.
     const r1 = assessContext({ message: SAMPLE, grounding: null });
     expect(r1).toMatchObject({ decision: 'retrieve', rule: 'lesson_discovery', ruleset: 'r1' });
@@ -213,14 +237,27 @@ describe('discovery_v1 (P7 a/b/c): intent words, topic shift over a continuation
 
   it('the sample question in a conversation grounded on ANOTHER topic is a topic shift, not a continuation', () => {
     const v1 = assessContext({ message: SAMPLE, grounding: RECENT, ruleset: 'discovery_v1' });
-    expect(v1).toMatchObject({ decision: 'retrieve', rule: 'topic_shift_retrieve', query: 'مثال مضاد', overlap: 0 });
+    expect(v1).toMatchObject({
+      decision: 'retrieve',
+      rule: 'topic_shift_retrieve',
+      query: 'مثال مضاد',
+      overlap: 0,
+    });
     // r1 pinned: «مثال» in the continuation lexicon reused the old topic (the defect P7 fixes behind the ruleset).
-    expect(assessContext({ message: SAMPLE, grounding: RECENT })).toMatchObject({ decision: 'reuse', rule: 'continuation' });
+    expect(assessContext({ message: SAMPLE, grounding: RECENT })).toMatchObject({
+      decision: 'reuse',
+      rule: 'continuation',
+    });
   });
 
   it('the sample question while grounded on the SAME topic still continues', () => {
-    const counterexample = { keywords: extractKeywords('المثال المضاد: مثال يبين أن التخمين خاطئ'), turnsSinceUse: 1 };
-    expect(assessContext({ message: SAMPLE, grounding: counterexample, ruleset: 'discovery_v1' })).toMatchObject({
+    const counterexample = {
+      keywords: extractKeywords('المثال المضاد: مثال يبين أن التخمين خاطئ'),
+      turnsSinceUse: 1,
+    };
+    expect(
+      assessContext({ message: SAMPLE, grounding: counterexample, ruleset: 'discovery_v1' }),
+    ).toMatchObject({
       decision: 'reuse',
       rule: 'continuation',
     });
@@ -233,7 +270,11 @@ describe('discovery_v1 (P7 a/b/c): intent words, topic shift over a continuation
         rule: 'continuation',
       });
     }
-    const bare = assessContext({ message: 'المثال المضاد', grounding: null, ruleset: 'discovery_v1' });
+    const bare = assessContext({
+      message: 'المثال المضاد',
+      grounding: null,
+      ruleset: 'discovery_v1',
+    });
     expect(bare).toMatchObject({ decision: 'none', rule: 'default_none', contentKeywordCount: 2 });
   });
 
@@ -279,7 +320,12 @@ describe('lesson association (CTX-04)', () => {
       }),
     ).toBeNull();
     expect(decideLessonAssociation({ units: units(['L1']), lessonMatch: null })).toBeNull();
-    expect(decideLessonAssociation({ units: [], lessonMatch: { lessonId: 'L1', lessonTitle: 'x', confidence: 0.9 } })).toBeNull();
+    expect(
+      decideLessonAssociation({
+        units: [],
+        lessonMatch: { lessonId: 'L1', lessonTitle: 'x', confidence: 0.9 },
+      }),
+    ).toBeNull();
   });
 
   it('reads TUTOR_LESSON_MATCH_THRESHOLD with a 0.45 default', () => {
@@ -290,7 +336,9 @@ describe('lesson association (CTX-04)', () => {
   });
 
   it('builds snapshot keywords from unit titles and text heads', () => {
-    const keywords = groundingKeywords([{ unitTitle: 'حفظ الكتلة', text: 'كتلة المتفاعلات تساوي كتلة النواتج' }]);
+    const keywords = groundingKeywords([
+      { unitTitle: 'حفظ الكتلة', text: 'كتلة المتفاعلات تساوي كتلة النواتج' },
+    ]);
     expect(keywords).toContain('حفظ');
     expect(keywords).toContain('كتله');
     expect(keywords).toContain('نواتج');

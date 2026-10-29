@@ -52,9 +52,9 @@ export interface AcquisitionPolicy {
   /** Test seam for the pinned dispatcher. */
   dispatcher?: SecureBytesOptions['dispatcher'];
   /** Test seam for the extraction boundary. */
-  extract?: (input: Parameters<typeof extractDocument>[0]) => Promise<
-    ReturnType<typeof extractDocument>
-  >;
+  extract?: (
+    input: Parameters<typeof extractDocument>[0],
+  ) => Promise<ReturnType<typeof extractDocument>>;
 }
 
 const DEFAULT_MAX_BYTES = 200 * 1024 * 1024;
@@ -106,7 +106,9 @@ async function withAcquisitionRetry<T>(
       lastError = error;
       const retryable = error instanceof ContentResourceAcquisitionError && error.retryable;
       if (!retryable || attempt >= maxAttempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * 2 ** (attempt - 1), 10_000)));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1000 * 2 ** (attempt - 1), 10_000)),
+      );
     }
   }
   throw lastError;
@@ -124,117 +126,113 @@ export async function acquireContentResource(
   const maxBytes = policy.maxBytes ?? pdfMaxBytes();
   const bodyTimeoutMs = policy.bodyTimeoutMs ?? pdfBodyTimeoutMs();
   const doExtract =
-    policy.extract ??
-    ((input: Parameters<typeof extractDocument>[0]) => extractDocument(input));
+    policy.extract ?? ((input: Parameters<typeof extractDocument>[0]) => extractDocument(input));
 
-  return withAcquisitionRetry(
-    async () => {
-      // 1. Secure download over the shared fetch-url controls.
-      let downloaded: Awaited<ReturnType<typeof fetchBytesSecurely>>;
-      try {
-        downloaded = await fetchBytesSecurely(resource.url, {
-          allowedContentTypes: new Set(['application/pdf']),
-          maxBytes,
-          bodyTimeoutMs,
-          ...(policy.secureFetch ? { fetchImpl: policy.secureFetch } : {}),
-          ...(policy.dispatcher ? { dispatcher: policy.dispatcher } : {}),
-        });
-      } catch (error) {
-        throw new ContentResourceAcquisitionError(
-          'CONTENT_RESOURCE_DOWNLOAD_FAILED',
-          isNetworkish(error),
-          'the lesson PDF could not be downloaded',
-        );
-      }
+  return withAcquisitionRetry(async () => {
+    // 1. Secure download over the shared fetch-url controls.
+    let downloaded: Awaited<ReturnType<typeof fetchBytesSecurely>>;
+    try {
+      downloaded = await fetchBytesSecurely(resource.url, {
+        allowedContentTypes: new Set(['application/pdf']),
+        maxBytes,
+        bodyTimeoutMs,
+        ...(policy.secureFetch ? { fetchImpl: policy.secureFetch } : {}),
+        ...(policy.dispatcher ? { dispatcher: policy.dispatcher } : {}),
+      });
+    } catch (error) {
+      throw new ContentResourceAcquisitionError(
+        'CONTENT_RESOURCE_DOWNLOAD_FAILED',
+        isNetworkish(error),
+        'the lesson PDF could not be downloaded',
+      );
+    }
 
-      // 2. A truncated download never enters extraction (FRD §10.2.7).
-      if (downloaded.truncated) {
-        throw new ContentResourceAcquisitionError(
-          'CONTENT_RESOURCE_DOWNLOAD_FAILED',
-          false,
-          'the lesson PDF download was truncated before the byte limit was satisfied',
-        );
-      }
+    // 2. A truncated download never enters extraction (FRD §10.2.7).
+    if (downloaded.truncated) {
+      throw new ContentResourceAcquisitionError(
+        'CONTENT_RESOURCE_DOWNLOAD_FAILED',
+        false,
+        'the lesson PDF download was truncated before the byte limit was satisfied',
+      );
+    }
 
-      // 3. Actual PDF signature — the content type alone proves nothing.
-      if (!downloaded.bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) {
-        throw new ContentResourceAcquisitionError(
-          'CONTENT_RESOURCE_NOT_PDF',
-          false,
-          'the retrieved resource is not a PDF',
-        );
-      }
+    // 3. Actual PDF signature — the content type alone proves nothing.
+    if (!downloaded.bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) {
+      throw new ContentResourceAcquisitionError(
+        'CONTENT_RESOURCE_NOT_PDF',
+        false,
+        'the retrieved resource is not a PDF',
+      );
+    }
 
-      // 4. Measured size/checksum against the supplied integrity metadata.
-      const measuredBytes = downloaded.bytes.byteLength;
-      const measuredSha256 = createHash('sha256').update(downloaded.bytes).digest('hex');
-      if (resource.fileSizeBytes !== undefined && resource.fileSizeBytes !== measuredBytes) {
-        throw new ContentResourceAcquisitionError(
-          'CONTENT_RESOURCE_INTEGRITY_MISMATCH',
-          false,
-          'the downloaded PDF size does not match the declared size',
-        );
-      }
-      if (
-        resource.checksumSha256 !== undefined &&
-        resource.checksumSha256.toLowerCase() !== measuredSha256
-      ) {
-        throw new ContentResourceAcquisitionError(
-          'CONTENT_RESOURCE_INTEGRITY_MISMATCH',
-          false,
-          'the downloaded PDF checksum does not match the declared checksum',
-        );
-      }
+    // 4. Measured size/checksum against the supplied integrity metadata.
+    const measuredBytes = downloaded.bytes.byteLength;
+    const measuredSha256 = createHash('sha256').update(downloaded.bytes).digest('hex');
+    if (resource.fileSizeBytes !== undefined && resource.fileSizeBytes !== measuredBytes) {
+      throw new ContentResourceAcquisitionError(
+        'CONTENT_RESOURCE_INTEGRITY_MISMATCH',
+        false,
+        'the downloaded PDF size does not match the declared size',
+      );
+    }
+    if (
+      resource.checksumSha256 !== undefined &&
+      resource.checksumSha256.toLowerCase() !== measuredSha256
+    ) {
+      throw new ContentResourceAcquisitionError(
+        'CONTENT_RESOURCE_INTEGRITY_MISMATCH',
+        false,
+        'the downloaded PDF checksum does not match the declared checksum',
+      );
+    }
 
-      // 5. The existing document extraction boundary — providers with
-      //    `textOnly: false` so source visuals survive.
-      let parsed: ParsedPdfContent;
-      try {
-        const artifact = await doExtract({
-          buffer: downloaded.bytes,
-          ...(resource.fileName !== undefined ? { fileName: resource.fileName } : {}),
-          fileSize: measuredBytes,
-          mimeType: 'application/pdf',
-          config: resolveServerPdfExtractorCandidates({ textOnly: false })[0]!.config,
-        });
-        parsed = documentArtifactToParsedPdfContent(artifact);
-      } catch {
-        throw new ContentResourceAcquisitionError(
-          'PDF_EXTRACTION_FAILED',
-          true,
-          'the PDF extractor failed to process the lesson resource',
-        );
-      }
+    // 5. The existing document extraction boundary — providers with
+    //    `textOnly: false` so source visuals survive.
+    let parsed: ParsedPdfContent;
+    try {
+      const artifact = await doExtract({
+        buffer: downloaded.bytes,
+        ...(resource.fileName !== undefined ? { fileName: resource.fileName } : {}),
+        fileSize: measuredBytes,
+        mimeType: 'application/pdf',
+        config: resolveServerPdfExtractorCandidates({ textOnly: false })[0]!.config,
+      });
+      parsed = documentArtifactToParsedPdfContent(artifact);
+    } catch {
+      throw new ContentResourceAcquisitionError(
+        'PDF_EXTRACTION_FAILED',
+        true,
+        'the PDF extractor failed to process the lesson resource',
+      );
+    }
 
-      // 6. Empty parsed content is an explicit asynchronous failure.
-      if (!parsed.text || parsed.text.trim() === '') {
-        throw new ContentResourceAcquisitionError(
-          'PDF_CONTENT_EMPTY',
-          false,
-          'the PDF produced no extractable text',
-        );
-      }
+    // 6. Empty parsed content is an explicit asynchronous failure.
+    if (!parsed.text || parsed.text.trim() === '') {
+      throw new ContentResourceAcquisitionError(
+        'PDF_CONTENT_EMPTY',
+        false,
+        'the PDF produced no extractable text',
+      );
+    }
 
-      // 7. One normalization boundary for source visuals.
-      const { images: normalizedImages, dropped } = normalizeSourceImages(parsed);
-      const visionImages = toVisionPdfImages(normalizedImages);
-      const visionMapping: Record<string, string> = {};
-      for (const image of visionImages) {
-        visionMapping[image.id] = image.src;
-      }
+    // 7. One normalization boundary for source visuals.
+    const { images: normalizedImages, dropped } = normalizeSourceImages(parsed);
+    const visionImages = toVisionPdfImages(normalizedImages);
+    const visionMapping: Record<string, string> = {};
+    for (const image of visionImages) {
+      visionMapping[image.id] = image.src;
+    }
 
-      return {
-        text: parsed.text,
-        images: parsed.images,
-        normalizedImages,
-        visionImages,
-        visionMapping,
-        measuredBytes,
-        measuredSha256,
-      } satisfies NormalizedSource;
-    },
-    maxAttempts,
-  );
+    return {
+      text: parsed.text,
+      images: parsed.images,
+      normalizedImages,
+      visionImages,
+      visionMapping,
+      measuredBytes,
+      measuredSha256,
+    } satisfies NormalizedSource;
+  }, maxAttempts);
 }
 
 /** Patch the attempt snapshot with the measured resource summary (no URL). */

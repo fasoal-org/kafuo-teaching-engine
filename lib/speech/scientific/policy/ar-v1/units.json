@@ -1,9 +1,7 @@
 {
   "table": "units",
   "description": "SI base/derived units, recognised only in unit position (plan §10.2).",
-  "roles": [
-    "unit"
-  ],
+  "roles": ["unit"],
   "entries": [
     {
       "key": "m",

@@ -46,7 +46,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     );
 
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const result = await setSceneLearningObjectives(pool, id, { tenantId: parseTenantContext(body) }, assignments);
+    const result = await setSceneLearningObjectives(
+      pool,
+      id,
+      { tenantId: parseTenantContext(body) },
+      assignments,
+    );
     return NextResponse.json(result);
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);

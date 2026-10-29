@@ -288,9 +288,7 @@ describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {
       teachingModel: {
         key: 'g5',
         version: 'g5.v5',
-        flow: [
-          { stage: 'outcome_visual_explanations', instructions: 'Teach O1.', scenePolicy },
-        ],
+        flow: [{ stage: 'outcome_visual_explanations', instructions: 'Teach O1.', scenePolicy }],
       },
     });
 

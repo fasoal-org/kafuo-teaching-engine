@@ -58,7 +58,9 @@ beforeEach(async () => {
   // Pacing has its own test below; the rest run unpaced.
   vi.stubEnv('TTS_BATCH_START_GAP_MS', '0');
   mocks.usage.mockReset();
-  mocks.generateTTS.mockReset().mockImplementation(async () => ({ audio: new Uint8Array([1, 2, 3]), format: 'mp3' }));
+  mocks.generateTTS
+    .mockReset()
+    .mockImplementation(async () => ({ audio: new Uint8Array([1, 2, 3]), format: 'mp3' }));
 });
 
 afterEach(async () => {
@@ -72,9 +74,15 @@ describe('generateTTSForClassroom (flag off: only the approved B-items change)',
     const input = scenes();
     const summary = await generateTTSForClassroom(input, 'stage-1', 'http://host');
     expect(summary).toMatchObject({ generated: 2, failed: 0 });
-    const speech = input[0]!.actions![0] as unknown as { audioId: string; audioUrl: string; audioProvenance: { fingerprint: string } };
+    const speech = input[0]!.actions![0] as unknown as {
+      audioId: string;
+      audioUrl: string;
+      audioProvenance: { fingerprint: string };
+    };
     expect(speech.audioId).toBe('tts_s3_a1');
-    expect(speech.audioUrl).toMatch(/^http:\/\/host\/api\/classroom-media\/stage-1\/audio\/tts-a1-[A-Za-z0-9_-]{12}\.mp3$/);
+    expect(speech.audioUrl).toMatch(
+      /^http:\/\/host\/api\/classroom-media\/stage-1\/audio\/tts-a1-[A-Za-z0-9_-]{12}\.mp3$/,
+    );
     expect(speech.audioProvenance.fingerprint).toMatch(/^fp1:/);
     const files = await readdir(join(root, 'stage-1', 'audio'));
     expect(files.sort()).toHaveLength(2);
@@ -88,7 +96,9 @@ describe('generateTTSForClassroom (flag off: only the approved B-items change)',
     vi.stubEnv('TTS_OPENAI_MODELS', 'gpt-4o-mini-tts-2025-12-15');
     const { generateTTSForClassroom } = await load();
     await generateTTSForClassroom(scenes(), 'stage-1', '');
-    expect(mocks.generateTTS.mock.calls[0]![0]).toMatchObject({ modelId: 'gpt-4o-mini-tts-2025-12-15' });
+    expect(mocks.generateTTS.mock.calls[0]![0]).toMatchObject({
+      modelId: 'gpt-4o-mini-tts-2025-12-15',
+    });
   });
 
   it('B-2: one transient failure is retried; B-3: usage is recorded per call', async () => {
@@ -141,13 +151,15 @@ describe('generateTTSForClassroom with SCIENTIFIC_TTS_MODE=on', () => {
     const { generateTTSForClassroom } = await load();
     const input = scenes();
     for (const action of input[0]!.actions!) Object.assign(action, { audioId: 'tts_s3_old' });
-    const summary = await generateTTSForClassroom(input, 'stage-1', '', { stage: { subjectCode: 'MATH', language: 'ar' } });
+    const summary = await generateTTSForClassroom(input, 'stage-1', '', {
+      stage: { subjectCode: 'MATH', language: 'ar' },
+    });
     expect(mocks.generateTTS).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ skipped: 2 });
   });
 });
 
-describe('flag off keeps today\'s provider config; turning the flag on does not mass-regenerate', () => {
+describe("flag off keeps today's provider config; turning the flag on does not mass-regenerate", () => {
   it('generateTTS receives exactly the pre-SATTS batch config (speed may be undefined)', async () => {
     const { generateTTSForClassroom } = await load();
     await generateTTSForClassroom(scenes(), 'stage-1', '');

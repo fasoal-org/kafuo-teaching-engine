@@ -105,18 +105,31 @@ export async function buildTeachingModelReport(
     aggregateAttempts(queryable, { groupBy: ['scene_insertion_id'], ...insertion }),
     aggregateAttempts(queryable, { groupBy: ['version_id'], ...insertion }),
   ]);
-  const [perVersion, perAttempt, fallback, latency, helpByOrigin, budgetBreaches, incomplete, outbox, unresolved] =
-    await Promise.all([
-      aggregateAttempts(queryable, { groupBy: ['version_id'], ...gen }),
-      aggregateAttempts(queryable, { groupBy: ['generation_attempt_id'], ...gen }),
-      fallbackBreakdown(queryable, filter),
-      aggregateAttempts(queryable, { groupBy: ['model_string', 'role', 'capability'], ...filter }),
-      aggregateAttempts(queryable, { groupBy: ['origin', 'subject_code', 'model_string'], ...filter, capability: 'help' }),
-      listBudgetBreaches(queryable, filter, limit),
-      listIncompleteAttempts(queryable, { limit, now, startedOlderThanS: INCOMPLETE_DEADLINE_S }),
-      readOutboxStatus(queryable, now),
-      listUnresolvedFinalizes(queryable, limit),
-    ]);
+  const [
+    perVersion,
+    perAttempt,
+    fallback,
+    latency,
+    helpByOrigin,
+    budgetBreaches,
+    incomplete,
+    outbox,
+    unresolved,
+  ] = await Promise.all([
+    aggregateAttempts(queryable, { groupBy: ['version_id'], ...gen }),
+    aggregateAttempts(queryable, { groupBy: ['generation_attempt_id'], ...gen }),
+    fallbackBreakdown(queryable, filter),
+    aggregateAttempts(queryable, { groupBy: ['model_string', 'role', 'capability'], ...filter }),
+    aggregateAttempts(queryable, {
+      groupBy: ['origin', 'subject_code', 'model_string'],
+      ...filter,
+      capability: 'help',
+    }),
+    listBudgetBreaches(queryable, filter, limit),
+    listIncompleteAttempts(queryable, { limit, now, startedOlderThanS: INCOMPLETE_DEADLINE_S }),
+    readOutboxStatus(queryable, now),
+    listUnresolvedFinalizes(queryable, limit),
+  ]);
   return {
     generatedAt: now,
     filter,
@@ -201,7 +214,11 @@ export function renderTeachingModelReport(report: TeachingModelReport): string {
   out.push(report.overall ? completenessLine(report.overall) : '0 attempts', '');
 
   renderAggregate('Conversational cost per turn', report.conversational.perTurn, out);
-  renderAggregate('Conversational cost per conversation', report.conversational.perConversation, out);
+  renderAggregate(
+    'Conversational cost per conversation',
+    report.conversational.perConversation,
+    out,
+  );
   renderAggregate('Conversational cost per student', report.conversational.perStudent, out);
   renderAggregate('Conversational cost per subject', report.conversational.perSubject, out);
   renderAggregate('Conversational cost per model', report.conversational.perModel, out);
@@ -230,7 +247,11 @@ export function renderTeachingModelReport(report: TeachingModelReport): string {
   out.push('');
 
   renderLatency(report.latency, out);
-  renderAggregate('Help spend by origin (openmaic_runtime vs kafuo_backend)', report.helpByOrigin, out);
+  renderAggregate(
+    'Help spend by origin (openmaic_runtime vs kafuo_backend)',
+    report.helpByOrigin,
+    out,
+  );
 
   out.push(`## Budget breaches (${report.budgetBreaches.length})`);
   for (const row of report.budgetBreaches) {

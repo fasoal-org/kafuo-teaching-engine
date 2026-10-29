@@ -74,14 +74,21 @@ export function renderChemistry(
   const chemical =
     candidate.kind === 'ce' ||
     candidate.reason === 'formula' ||
-    (candidate.kind === 'delimited' && (chemistryFormulaKind(source) === 'formula' || parsesAsChemistry(source)));
+    (candidate.kind === 'delimited' &&
+      (chemistryFormulaKind(source) === 'formula' || parsesAsChemistry(source)));
   if (chemical) {
     let writer: Writer;
     try {
-      writer = verbaliseChemistry(parseChemistry(source, { inCe: candidate.kind === 'ce' }), ctx).writer;
+      writer = verbaliseChemistry(
+        parseChemistry(source, { inCe: candidate.kind === 'ce' }),
+        ctx,
+      ).writer;
     } catch (error) {
       if (error instanceof ChemFault) {
-        throw new ParseFault(error.kind === 'unknown-element' ? 'unknown-element' : error.kind, error.detail);
+        throw new ParseFault(
+          error.kind === 'unknown-element' ? 'unknown-element' : error.kind,
+          error.detail,
+        );
       }
       throw error;
     }

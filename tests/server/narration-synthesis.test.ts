@@ -7,7 +7,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ generate: vi.fn(), usage: vi.fn(), info: vi.fn(), warn: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  generate: vi.fn(),
+  usage: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: mocks.info, warn: mocks.warn, error: vi.fn(), debug: vi.fn() }),
@@ -50,7 +55,13 @@ const ON_EXPERIMENTAL = { ...ON, SATTS_ALLOW_EXPERIMENTAL: 'true' };
 /** The D-4 default (revised 2026-09-29): Cartesia Sonic 3.6 with "Reem". */
 const ON_CARTESIA = { SCIENTIFIC_TTS_MODE: 'on', SCIENTIFIC_TTS_SUBJECTS: 'MATH' };
 const stage = { subjectCode: 'MATH', language: 'ar-SA' };
-const fallback = { providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts', voice: 'alloy', speed: 1, apiKey: 'k' };
+const fallback = {
+  providerId: 'openai-tts',
+  modelId: 'gpt-4o-mini-tts',
+  voice: 'alloy',
+  speed: 1,
+  apiKey: 'k',
+};
 const creds = () => ({ available: true, apiKey: 'server-key' });
 
 let root: string;
@@ -70,7 +81,11 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function run(action: SpeechAction, env: Record<string, string> = ON, overrides: Partial<SynthesisRequest> = {}) {
+async function run(
+  action: SpeechAction,
+  env: Record<string, string> = ON,
+  overrides: Partial<SynthesisRequest> = {},
+) {
   const config = readSpeechConfig(env);
   const prepared = await prepareNarration({
     text: action.text,
@@ -127,7 +142,9 @@ describe('O-4 readiness gate (upgrade plan P3)', () => {
 
   it('the flag is off unless it is exactly `true`', () => {
     expect(readSpeechConfig(ON).allowExperimental).toBe(false);
-    expect(readSpeechConfig({ ...ON, SATTS_ALLOW_EXPERIMENTAL: 'yes' }).allowExperimental).toBe(false);
+    expect(readSpeechConfig({ ...ON, SATTS_ALLOW_EXPERIMENTAL: 'yes' }).allowExperimental).toBe(
+      false,
+    );
     expect(readSpeechConfig(ON_EXPERIMENTAL).allowExperimental).toBe(true);
   });
 });
@@ -159,7 +176,9 @@ describe('synthesizeNarration — governed scientific path', () => {
       modelId: 'gpt-4o-mini-tts-2025-12-15',
       segments: 1,
     });
-    expect(outcome.audioRef).toMatch(/^\/api\/classroom-media\/stage-1\/audio\/tts-a1-[A-Za-z0-9_-]{12}\.mp3$/);
+    expect(outcome.audioRef).toMatch(
+      /^\/api\/classroom-media\/stage-1\/audio\/tts-a1-[A-Za-z0-9_-]{12}\.mp3$/,
+    );
     expect(await readdir(join(root, 'stage-1', 'audio'))).toHaveLength(1);
   });
 
@@ -168,32 +187,55 @@ describe('synthesizeNarration — governed scientific path', () => {
     const { outcome } = await run(action);
     expect(mocks.usage).toHaveBeenCalledOnce();
     const row = mocks.usage.mock.calls[0]![0];
-    expect(row).toMatchObject({ kind: 'tts', unit: 'character', quantity: outcome.usage.preparedChars });
-    expect(row.meta).toMatchObject({ inputTokens: 100, outputTokens: 200, estimated: false, entry: 'batch' });
+    expect(row).toMatchObject({
+      kind: 'tts',
+      unit: 'character',
+      quantity: outcome.usage.preparedChars,
+    });
+    expect(row.meta).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 200,
+      estimated: false,
+      entry: 'batch',
+    });
     expect(row.meta.originalChars).toBe(action.text.length);
   });
 
   it('segments an oversized Action into ordered provider calls and joins one asset (AS-010)', async () => {
-    const text = Array.from({ length: 30 }, (_, i) => `ثم نحسب x^{${i}} + y_${i} في الخطوة`).join('، ');
+    const text = Array.from({ length: 30 }, (_, i) => `ثم نحسب x^{${i}} + y_${i} في الخطوة`).join(
+      '، ',
+    );
     const { outcome } = await run({ id: 'long', type: 'speech', text }, ON_EXPERIMENTAL);
     expect(mocks.generate.mock.calls.length).toBeGreaterThan(1);
-    for (const [, sent] of mocks.generate.mock.calls) expect((sent as string).length).toBeLessThanOrEqual(600);
+    for (const [, sent] of mocks.generate.mock.calls)
+      expect((sent as string).length).toBeLessThanOrEqual(600);
     expect(outcome.provenance?.segments).toBe(mocks.generate.mock.calls.length);
     expect(await readdir(join(root, 'stage-1', 'audio'))).toHaveLength(1);
   });
 
   it('retries an incomplete stream once, then fails the Action all-or-nothing (M4, FR-032)', async () => {
-    mocks.generate.mockImplementation(async (_c: unknown, text: string) => ({ audio: mp3For(text), format: 'mp3', completed: false }));
+    mocks.generate.mockImplementation(async (_c: unknown, text: string) => ({
+      audio: mp3For(text),
+      format: 'mp3',
+      completed: false,
+    }));
     const action: SpeechAction = { id: 'a1', type: 'speech', text: 'نحسب x²' };
     const { outcome } = await run(action);
     expect(mocks.generate).toHaveBeenCalledTimes(2);
-    expect(outcome).toMatchObject({ outcome: 'failed', error: { code: 'SATTS_E_PROVIDER_INCOMPLETE' } });
+    expect(outcome).toMatchObject({
+      outcome: 'failed',
+      error: { code: 'SATTS_E_PROVIDER_INCOMPLETE' },
+    });
     expect(action).toEqual({ id: 'a1', type: 'speech', text: 'نحسب x²' });
     await expect(readdir(join(root, 'stage-1', 'audio'))).rejects.toThrow();
   });
 
   it('flags implausibly short audio as truncated (M4)', async () => {
-    mocks.generate.mockImplementation(async () => ({ audio: mp3For('ا'), format: 'mp3', completed: true }));
+    mocks.generate.mockImplementation(async () => ({
+      audio: mp3For('ا'),
+      format: 'mp3',
+      completed: true,
+    }));
     const { outcome } = await run({ id: 'a1', type: 'speech', text: 'نص طويل جدا '.repeat(20) });
     expect(outcome.error?.code).toBe('SATTS_E_PROVIDER_TRUNCATED');
   });
@@ -201,7 +243,9 @@ describe('synthesizeNarration — governed scientific path', () => {
   it('retries a transient error within the bounded batch policy (B-2)', async () => {
     const { TTSRateLimitError } = await import('@/lib/audio/tts-providers');
     mocks.generate.mockRejectedValueOnce(new TTSRateLimitError('OpenAI', '429'));
-    const { outcome } = await run({ id: 'a1', type: 'speech', text: 'نحسب x²' }, ON, { transientAttempts: 2 });
+    const { outcome } = await run({ id: 'a1', type: 'speech', text: 'نحسب x²' }, ON, {
+      transientAttempts: 2,
+    });
     expect(outcome.outcome).toBe('generated');
     expect(mocks.generate).toHaveBeenCalledTimes(2);
   });
@@ -227,14 +271,21 @@ describe('synthesizeNarration — Cartesia default profile (D-4 revised)', () =>
     });
     expect(config).not.toHaveProperty('instructions');
     expect(config).not.toHaveProperty('streamFormat');
-    expect(outcome.provenance).toMatchObject({ providerId: 'cartesia-tts', deliveryProfile: null, modelId: 'sonic-3.6' });
+    expect(outcome.provenance).toMatchObject({
+      providerId: 'cartesia-tts',
+      deliveryProfile: null,
+      modelId: 'sonic-3.6',
+    });
     // Per-character usage: no provider token counts, so the row is marked estimated.
     expect(mocks.usage.mock.calls[0]![0].meta).toMatchObject({ estimated: true });
   });
 
   it('still flags implausibly short audio as truncated without SSE', async () => {
     mocks.generate.mockImplementation(async () => ({ audio: mp3For('ab'), format: 'mp3' }));
-    const { outcome } = await run({ id: 'a1', type: 'speech', text: 'نحسب الجذر التربيعي للعدد ستة عشر ثم نضيف إليه خمسة' }, ON_CARTESIA);
+    const { outcome } = await run(
+      { id: 'a1', type: 'speech', text: 'نحسب الجذر التربيعي للعدد ستة عشر ثم نضيف إليه خمسة' },
+      ON_CARTESIA,
+    );
     expect(outcome.outcome).toBe('failed');
     expect(outcome.error?.code).toBe('SATTS_E_PROVIDER_TRUNCATED');
   });
@@ -254,13 +305,31 @@ describe('assessNarrationAudio — reuse and targeted invalidation (FR-022, FR-0
     const config = readSpeechConfig(ON);
     let calls = 0;
     for (const action of actions) {
-      const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
+      const { plan, profile } = await prepareNarration({
+        text: action.text,
+        stage,
+        stageId: 'stage-1',
+        config,
+        fallback,
+        governedCredentials: creds,
+        route: null,
+      });
       const assessment = assessNarrationAudio(action, plan, profile, config.mode);
       if (assessment.status === 'current') continue;
       expect(action.id).toBe('a1');
       expect(assessment).toMatchObject({ status: 'stale', reason: 'text' });
       calls += 1;
-      await synthesizeNarration({ action, stageId: 'stage-1', plan, profile, config, reason: 'stale', entry: 'batch', persist: { kind: 'audio-dir', rootDir: root }, recordUsage: true });
+      await synthesizeNarration({
+        action,
+        stageId: 'stage-1',
+        plan,
+        profile,
+        config,
+        reason: 'stale',
+        entry: 'batch',
+        persist: { kind: 'audio-dir', rootDir: root },
+        recordUsage: true,
+      });
     }
     expect(calls).toBe(1);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
@@ -271,27 +340,52 @@ describe('assessNarrationAudio — reuse and targeted invalidation (FR-022, FR-0
     const { outcome } = await run(action);
     const stored = { ...action, audioId: outcome.audioRef, audioProvenance: outcome.provenance };
     const config = readSpeechConfig({ ...ON, TTS_AR_VOICE: 'cedar' });
-    const { plan, profile } = await prepareNarration({ text: action.text, stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
-    expect(assessNarrationAudio(stored, plan, profile, 'on')).toMatchObject({ status: 'stale', reason: 'voice' });
-    expect(assessNarrationAudio({ ...action, audioId: 'x' }, plan, profile, 'on').status).toBe('legacy');
+    const { plan, profile } = await prepareNarration({
+      text: action.text,
+      stage,
+      stageId: 'stage-1',
+      config,
+      fallback,
+      governedCredentials: creds,
+      route: null,
+    });
+    expect(assessNarrationAudio(stored, plan, profile, 'on')).toMatchObject({
+      status: 'stale',
+      reason: 'voice',
+    });
+    expect(assessNarrationAudio({ ...action, audioId: 'x' }, plan, profile, 'on').status).toBe(
+      'legacy',
+    );
     expect(assessNarrationAudio(action, plan, profile, 'on').status).toBe('missing');
-    expect(assessNarrationAudio({ ...stored, audioInvalidated: true }, plan, profile, 'on').status).toBe('missing');
+    expect(
+      assessNarrationAudio({ ...stored, audioInvalidated: true }, plan, profile, 'on').status,
+    ).toBe('missing');
     // Rollback (§18.3): with the flag off, scientific provenance counts as current.
     expect(assessNarrationAudio(stored, plan, profile, 'off').status).toBe('current');
   });
 });
 
-describe('SCIENTIFIC_TTS_MODE=off — today\'s request', () => {
-  it('sends the original text with today\'s profile: no instructions, no SSE, no format', async () => {
+describe("SCIENTIFIC_TTS_MODE=off — today's request", () => {
+  it("sends the original text with today's profile: no instructions, no SSE, no format", async () => {
     const action: SpeechAction = { id: 'a1', type: 'speech', text: 'نحسب \\frac{x^2}{2}' };
     await run(action, {});
     const [config, sent] = mocks.generate.mock.calls[0]!;
     expect(sent).toBe('نحسب \\frac{x^2}{2}');
-    expect(config).toEqual({ providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts', apiKey: 'k', voice: 'alloy', speed: 1, baseUrl: undefined });
+    expect(config).toEqual({
+      providerId: 'openai-tts',
+      modelId: 'gpt-4o-mini-tts',
+      apiKey: 'k',
+      voice: 'alloy',
+      speed: 1,
+      baseUrl: undefined,
+    });
   });
 
-  it('shadow renders for diagnostics but still sends the original with today\'s profile', async () => {
-    const { outcome, prepared } = await run({ id: 'a1', type: 'speech', text: 'نحسب x²' }, { SCIENTIFIC_TTS_MODE: 'shadow', TTS_AR_VOICE: 'marin' });
+  it("shadow renders for diagnostics but still sends the original with today's profile", async () => {
+    const { outcome, prepared } = await run(
+      { id: 'a1', type: 'speech', text: 'نحسب x²' },
+      { SCIENTIFIC_TTS_MODE: 'shadow', TTS_AR_VOICE: 'marin' },
+    );
     expect(mocks.generate.mock.calls[0]![1]).toBe('نحسب x²');
     expect(prepared.plan.shadowPrepared).toContain('تربيع');
     expect(outcome.provenance?.policyVersion).toBeNull();
@@ -325,19 +419,33 @@ describe('speech.narration.outcome events (FR-037, plan §16.1)', () => {
   });
 
   it('failed', async () => {
-    mocks.generate.mockImplementation(async (_c: unknown, text: string) => ({ audio: mp3For(text), format: 'mp3', completed: false }));
+    mocks.generate.mockImplementation(async (_c: unknown, text: string) => ({
+      audio: mp3For(text),
+      format: 'mp3',
+      completed: false,
+    }));
     await run({ id: 'a1', type: 'speech', text: 'نحسب x²' });
     expect(events()).toHaveLength(1);
-    expect(events()[0]).toMatchObject({ outcome: 'failed', errorCode: 'SATTS_E_PROVIDER_INCOMPLETE' });
+    expect(events()[0]).toMatchObject({
+      outcome: 'failed',
+      errorCode: 'SATTS_E_PROVIDER_INCOMPLETE',
+    });
   });
 
   it('reused and skipped (no provider call)', async () => {
     const config = readSpeechConfig(ON);
-    const { plan } = await prepareNarration({ text: 'نحسب x²', stage, stageId: 'stage-1', config, fallback, governedCredentials: creds, route: null });
+    const { plan } = await prepareNarration({
+      text: 'نحسب x²',
+      stage,
+      stageId: 'stage-1',
+      config,
+      fallback,
+      governedCredentials: creds,
+      route: null,
+    });
     recordReuse('batch', { id: 'a1' }, plan, 'current');
     recordReuse('agent', { id: 'a2' }, plan, 'legacy');
     expect(events().map((e) => e.outcome)).toEqual(['reused', 'skipped']);
     expect(mocks.generate).not.toHaveBeenCalled();
   });
 });
-

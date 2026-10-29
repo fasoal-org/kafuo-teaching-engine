@@ -112,7 +112,12 @@ describe('tutor runtime persistence', () => {
     for (const table of ['tutor_messages', 'tutor_help_messages']) {
       const cols = await columns(table);
       expect(cols).toEqual(
-        expect.arrayContaining(['accounting_complete', 'meter_reservation_id', 'meter_finalized', 'turn_attempt']),
+        expect.arrayContaining([
+          'accounting_complete',
+          'meter_reservation_id',
+          'meter_finalized',
+          'turn_attempt',
+        ]),
       );
     }
     expect(await columns('tutor_help_messages')).toContain('step_ref');
@@ -142,7 +147,12 @@ describe('tutor runtime persistence', () => {
     });
     expect(await readConversation(pool, 'conv-1')).toEqual(created);
     expect(await readOwnedConversation(pool, 'conv-1', OWNER)).toEqual(created);
-    expect(await readOwnedConversation(pool, 'conv-1', { ...OWNER, studentRef: 'zzzzzzzzzzzzzzzzzzzzzzzz' })).toBeNull();
+    expect(
+      await readOwnedConversation(pool, 'conv-1', {
+        ...OWNER,
+        studentRef: 'zzzzzzzzzzzzzzzzzzzzzzzz',
+      }),
+    ).toBeNull();
     expect(await readOwnedConversation(pool, 'conv-1', { ...OWNER, tenantId: '2' })).toBeNull();
   });
 
@@ -158,7 +168,13 @@ describe('tutor runtime persistence', () => {
       text: 'hello',
       now: NOW,
     });
-    expect(first).toMatchObject({ id: 'm-1', seq: 1, status: 'accepted', turnAttempt: 1, role: 'student' });
+    expect(first).toMatchObject({
+      id: 'm-1',
+      seq: 1,
+      status: 'accepted',
+      turnAttempt: 1,
+      role: 'student',
+    });
     const duplicate = await insertStudentMessage(pool, {
       id: 'm-1-dup',
       parentId: 'conv-1',
@@ -255,9 +271,21 @@ describe('tutor runtime persistence', () => {
       turnAttempt: 2,
       meterReservationId: 'res-2',
     });
-    expect(retry).toMatchObject({ status: 'generating', turnAttempt: 2, meterReservationId: 'res-2', errorCode: null });
-    const completed = await markMessageCompleted(pool, message.id, { now: NOW + 9, accountingComplete: true });
-    expect(completed).toMatchObject({ status: 'completed', accountingComplete: true, meterReservationId: 'res-2' });
+    expect(retry).toMatchObject({
+      status: 'generating',
+      turnAttempt: 2,
+      meterReservationId: 'res-2',
+      errorCode: null,
+    });
+    const completed = await markMessageCompleted(pool, message.id, {
+      now: NOW + 9,
+      accountingComplete: true,
+    });
+    expect(completed).toMatchObject({
+      status: 'completed',
+      accountingComplete: true,
+      meterReservationId: 'res-2',
+    });
     // Completed is terminal.
     expect(await markMessageFailed(pool, message.id, { now: NOW + 10, errorCode: 'X' })).toBeNull();
 
@@ -314,9 +342,15 @@ describe('tutor runtime persistence', () => {
       await insertConversation(pool, conversation({ id: `conv-${i}`, now: NOW + i }));
     }
     // conv-2 gets a message later than every creation: it sorts first.
-    await recordConversationActivity(pool, 'conv-2', { messageCountDelta: 2, lastMessageAt: NOW + 100 });
+    await recordConversationActivity(pool, 'conv-2', {
+      messageCountDelta: 2,
+      lastMessageAt: NOW + 100,
+    });
     // Another student and an archived one never appear in this list.
-    await insertConversation(pool, conversation({ id: 'conv-other', studentRef: 'zzzzzzzzzzzzzzzzzzzzzzzz' }));
+    await insertConversation(
+      pool,
+      conversation({ id: 'conv-other', studentRef: 'zzzzzzzzzzzzzzzzzzzzzzzz' }),
+    );
     await archiveConversation(pool, 'conv-4', OWNER, NOW + 200);
 
     const page1 = await listConversationsByStudent(pool, { ...OWNER, status: 'active', limit: 2 });
@@ -331,12 +365,23 @@ describe('tutor runtime persistence', () => {
     });
     expect(page2.items.map((c) => c.id)).toEqual(['conv-3', 'conv-1']);
     expect(page2.nextCursor).toBeNull();
-    const garbage = await listConversationsByStudent(pool, { ...OWNER, status: 'active', limit: 10, cursor: '!!' });
+    const garbage = await listConversationsByStudent(pool, {
+      ...OWNER,
+      status: 'active',
+      limit: 10,
+      cursor: '!!',
+    });
     expect(garbage.items).toHaveLength(4);
 
-    const archived = await listConversationsByStudent(pool, { ...OWNER, status: 'archived', limit: 10 });
+    const archived = await listConversationsByStudent(pool, {
+      ...OWNER,
+      status: 'archived',
+      limit: 10,
+    });
     expect(archived.items.map((c) => c.id)).toEqual(['conv-4']);
-    expect(await unarchiveConversation(pool, 'conv-4', OWNER, NOW + 300)).toMatchObject({ status: 'active' });
+    expect(await unarchiveConversation(pool, 'conv-4', OWNER, NOW + 300)).toMatchObject({
+      status: 'active',
+    });
     // Ownership guards the archive path too.
     expect(await archiveConversation(pool, 'conv-1', { ...OWNER, tenantId: '9' }, NOW)).toBeNull();
   });
@@ -347,7 +392,17 @@ describe('tutor runtime persistence', () => {
     const httpSnapshot: GroundingSnapshot = {
       schema: 2,
       source: 'kafuo_http',
-      units: [{ source: 'kafuo_http', unitId: 'u-1', lessonId: 'l-1', lessonTitle: 'Fractions', title: 'Intro', text: '…', chars: 1 }],
+      units: [
+        {
+          source: 'kafuo_http',
+          unitId: 'u-1',
+          lessonId: 'l-1',
+          lessonTitle: 'Fractions',
+          title: 'Intro',
+          text: '…',
+          chars: 1,
+        },
+      ],
       keywords: ['fractions'],
       setAtSeq: 3,
       lastUsedSeq: 3,
@@ -383,7 +438,12 @@ describe('tutor runtime persistence', () => {
   });
 
   it('help sessions are unique per anchor and their messages carry step_ref', async () => {
-    const anchor = { versionId: 'tpv-1', stageId: 'stage-1', sceneId: 'scene-1', learnerKey: 'tp:abc' };
+    const anchor = {
+      versionId: 'tpv-1',
+      stageId: 'stage-1',
+      sceneId: 'scene-1',
+      learnerKey: 'tp:abc',
+    };
     const first = await upsertHelpSession(pool, {
       ...anchor,
       id: 'hs-1',
@@ -638,8 +698,19 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
        VALUES ('conv-1', '1', $1, 'MATH', '10', 'الرياضيات', '{"academicLanguage":"ar"}'::jsonb, $2::jsonb, $3::jsonb, 'active', $4, $4)`,
       [
         OWNER.studentRef,
-        JSON.stringify({ learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'قديم', confidence: 0.9, associatedAtSeq: 1 }),
-        JSON.stringify({ units: [{ unitId: 'u-1', title: 'x', text: 'y', chars: 1 }], keywords: [], setAtSeq: 1, lastUsedSeq: 1 }),
+        JSON.stringify({
+          learningItemType: 'lesson',
+          learningItemId: 'L1',
+          lessonTitle: 'قديم',
+          confidence: 0.9,
+          associatedAtSeq: 1,
+        }),
+        JSON.stringify({
+          units: [{ unitId: 'u-1', title: 'x', text: 'y', chars: 1 }],
+          keywords: [],
+          setAtSeq: 1,
+          lastUsedSeq: 1,
+        }),
         NOW,
       ],
     );
@@ -695,8 +766,15 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
 
     // The old row survives; its pre-P7 association and snapshot parse as "none" (D-19).
     const old = (await readConversation(pool, 'conv-1'))!;
-    expect(old).toMatchObject({ id: 'conv-1', lessonAssociation: null, grounding: null, pendingClarification: null });
-    expect((await readMessagesBySeq(pool, { parentId: 'conv-1', limit: 5 })).messages[0]).toMatchObject({
+    expect(old).toMatchObject({
+      id: 'conv-1',
+      lessonAssociation: null,
+      grounding: null,
+      pendingClarification: null,
+    });
+    expect(
+      (await readMessagesBySeq(pool, { parentId: 'conv-1', limit: 5 })).messages[0],
+    ).toMatchObject({
       groundingMode: 'retrieved',
     });
 
@@ -768,13 +846,33 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
   });
 
   it('parses only association v2 and the rollback-only schema 1; anything else is none', () => {
-    const v2 = { schema: 2, learningItemType: 'SECTION', learningItemId: '612', title: 'المثال المضاد', confidence: 0.81, associatedAtSeq: 3, buildId: '41' };
+    const v2 = {
+      schema: 2,
+      learningItemType: 'SECTION',
+      learningItemId: '612',
+      title: 'المثال المضاد',
+      confidence: 0.81,
+      associatedAtSeq: 3,
+      buildId: '41',
+    };
     expect(parseConversationAssociation(v2)).toEqual(v2);
     expect(parseConversationAssociation(JSON.stringify(v2))).toEqual(v2);
-    const v1 = { schema: 1, lessonId: '290', lessonTitle: 'التبرير', confidence: 0.6, associatedAtSeq: 1 };
+    const v1 = {
+      schema: 1,
+      lessonId: '290',
+      lessonTitle: 'التبرير',
+      confidence: 0.6,
+      associatedAtSeq: 1,
+    };
     expect(parseConversationAssociation(v1)).toEqual(v1);
     for (const other of [
-      { learningItemType: 'lesson', learningItemId: 'L1', lessonTitle: 'x', confidence: 0.9, associatedAtSeq: 1 },
+      {
+        learningItemType: 'lesson',
+        learningItemId: 'L1',
+        lessonTitle: 'x',
+        confidence: 0.9,
+        associatedAtSeq: 1,
+      },
       { ...v2, learningItemType: 'lesson' },
       { ...v2, learningItemId: '' },
       { ...v1, lessonId: 290 },
@@ -788,11 +886,26 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
   });
 
   it('parses only snapshot v2; a pre-P7 or malformed snapshot is none; pending clarification is validated', () => {
-    expect(parseGroundingSnapshot({ units: [], keywords: [], setAtSeq: 1, lastUsedSeq: 1 })).toBeNull();
+    expect(
+      parseGroundingSnapshot({ units: [], keywords: [], setAtSeq: 1, lastUsedSeq: 1 }),
+    ).toBeNull();
     const direct = {
       schema: 2,
       source: 'direct',
-      units: [{ source: 'direct', unitId: '1', itemId: '2', itemType: 'LESSON', buildId: '3', revisionId: '4', unitUpdatedAt: 't', title: null, text: 'x', chars: 1 }],
+      units: [
+        {
+          source: 'direct',
+          unitId: '1',
+          itemId: '2',
+          itemType: 'LESSON',
+          buildId: '3',
+          revisionId: '4',
+          unitUpdatedAt: 't',
+          title: null,
+          text: 'x',
+          chars: 1,
+        },
+      ],
       items: [{ itemId: '2', itemType: 'LESSON', title: 'T' }],
       keywords: ['x'],
       setAtSeq: 1,
@@ -800,14 +913,30 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
     };
     expect(parseGroundingSnapshot(direct)).toEqual(direct);
     // A direct unit without build data cannot be revalidated: the snapshot is none.
-    expect(parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], buildId: undefined }] })).toBeNull();
+    expect(
+      parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], buildId: undefined }] }),
+    ).toBeNull();
     // A kafuo_http unit inside a direct snapshot is not a direct unit.
-    expect(parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], source: 'kafuo_http' }] })).toBeNull();
+    expect(
+      parseGroundingSnapshot({ ...direct, units: [{ ...direct.units[0], source: 'kafuo_http' }] }),
+    ).toBeNull();
 
-    const pending = { candidates: [{ itemId: '1', itemType: 'LESSON', title: 'أ' }, { itemId: '2', itemType: 'SECTION', title: 'ب' }], questionSeq: 3, askedAtSeq: 4 };
+    const pending = {
+      candidates: [
+        { itemId: '1', itemType: 'LESSON', title: 'أ' },
+        { itemId: '2', itemType: 'SECTION', title: 'ب' },
+      ],
+      questionSeq: 3,
+      askedAtSeq: 4,
+    };
     expect(parsePendingClarification(pending)).toEqual(pending);
     expect(parsePendingClarification({ ...pending, candidates: [] })).toBeNull();
-    expect(parsePendingClarification({ ...pending, candidates: [...pending.candidates, ...pending.candidates] })).toBeNull();
+    expect(
+      parsePendingClarification({
+        ...pending,
+        candidates: [...pending.candidates, ...pending.candidates],
+      }),
+    ).toBeNull();
     expect(parsePendingClarification({ ...pending, questionSeq: 'x' })).toBeNull();
   });
 
@@ -815,7 +944,11 @@ describe('discovery-first P7 schema evolution and stored shapes', () => {
     await pool.query(`CREATE TABLE teaching_package_versions (id TEXT PRIMARY KEY)`);
     await ensureTutorRuntimeSchema(pool);
     await insertConversation(pool, conversation({ id: 'conv-1' }));
-    const pending = { candidates: [{ itemId: '155', itemType: 'LESSON' as const, title: 'التبرير' }], questionSeq: 1, askedAtSeq: 2 };
+    const pending = {
+      candidates: [{ itemId: '155', itemType: 'LESSON' as const, title: 'التبرير' }],
+      questionSeq: 1,
+      askedAtSeq: 2,
+    };
     await updateConversationPendingClarification(pool, 'conv-1', pending, NOW + 1);
     expect((await readConversation(pool, 'conv-1'))!.pendingClarification).toEqual(pending);
     await updateConversationPendingClarification(pool, 'conv-1', null, NOW + 2);

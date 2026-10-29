@@ -48,7 +48,9 @@ export const HAZARD_CATEGORIES: readonly HazardCategory[] = [
 ];
 
 /** A `both(a, b)` matcher keeps its two patterns so the post-check can re-test them with word edges. */
-type PairMatcher = ((normalized: string) => boolean) & { readonly parts: readonly [RegExp, RegExp] };
+type PairMatcher = ((normalized: string) => boolean) & {
+  readonly parts: readonly [RegExp, RegExp];
+};
 type Matcher = RegExp | PairMatcher;
 
 /** Unicode-aware word edges: `\b` is ASCII-only and useless for Arabic. */
@@ -83,47 +85,81 @@ const ACTION_AR = new RegExp(
  */
 const LEXICON: Readonly<Record<HazardCategory, readonly Matcher[]>> = {
   heights: [
-    words('from the roof|off the (roof|balcony|ledge)|from a height|from up high|rooftop|out of the window|from the window|from the balcony|(climb|climbing|jump|jumping) (onto|on|off|from|out of) (the )?(roof|balcony|window|ladder|top|railing|tree)'),
+    words(
+      'from the roof|off the (roof|balcony|ledge)|from a height|from up high|rooftop|out of the window|from the window|from the balcony|(climb|climbing|jump|jumping) (onto|on|off|from|out of) (the )?(roof|balcony|window|ladder|top|railing|tree)',
+    ),
     /(من (السطح|البلكونه|الشرفه|الشباك|فوق|مكان عالي|السلم|الشجره)|من ارتفاع|سطح البيت|سلم عالي|اقفز من|نقفز من|اتسلق (السطح|الشباك|السور|الشجره))/u,
   ],
   fire_heating: [
-    words('set (it |them |this )?on fire|light (it|this|them|a fire|a match|the lighter|the alcohol|the paper|the gas)|lighter|matches|ignite|igniting|ignition|blowtorch|bonfire|gasoline|petrol|kerosene|fireworks?|explosive|explosives|burn (it|this|them|some|the|at home|myself|paper|plastic)|heat (it|this|them|the \\w+) (up )?(on|over|with) (the |a )?(stove|flame|fire|burner|lighter|candle)|boil(ing)? (oil|gasoline|petrol|alcohol|acetone)'),
+    words(
+      'set (it |them |this )?on fire|light (it|this|them|a fire|a match|the lighter|the alcohol|the paper|the gas)|lighter|matches|ignite|igniting|ignition|blowtorch|bonfire|gasoline|petrol|kerosene|fireworks?|explosive|explosives|burn (it|this|them|some|the|at home|myself|paper|plastic)|heat (it|this|them|the \\w+) (up )?(on|over|with) (the |a )?(stove|flame|fire|burner|lighter|candle)|boil(ing)? (oil|gasoline|petrol|alcohol|acetone)',
+    ),
     /(اشعل|نشعل|هشعل|اشعال|احرق|نحرق|هحرق|ولاعه|كبريت|بنزين|جاز|كيروسين|العاب ناريه|متفجر|تفجير|(اسخن|سخن|نسخن|هسخن)(ه|ها|هم)? (علي|فوق) (النار|البوتاجاز|الموقد|الشمعه|الولاعه)|(اغلي|نغلي) (زيت|بنزين|كحول|اسيتون))/u,
   ],
   electricity: [
-    words('electric(al)? shock|wall socket|power (socket|outlet)|outlet|mains|bare wires?|live wire|high voltage|car battery|short[- ]circuit|electrocut(e|ed|ion)|touch(ing)? the wires?|strip the wires?'),
+    words(
+      'electric(al)? shock|wall socket|power (socket|outlet)|outlet|mains|bare wires?|live wire|high voltage|car battery|short[- ]circuit|electrocut(e|ed|ion)|touch(ing)? the wires?|strip the wires?',
+    ),
     both(words('stick|put|insert|push|poke'), words('socket|outlet|plug')),
     /(صدمه كهربائيه|فيشه|الفيشه|بريزه|البريزه|سلك مكشوف|اسلاك مكشوفه|سلك عاري|جهد عالي|بطاريه (السياره|العربيه)|قصر كهربائي|ماس كهربائي|(المس|امسك|هلمس) (السلك|الاسلاك|الكهرباء)|(احط|هحط|ادخل) .{0,25}(في|جوه) (الفيشه|البريزه))/u,
   ],
   chemicals_fumes_mixing: [
-    words('bleach|ammonia|chlorine|thermite|mercury|drain cleaner|toxic gas|poison(ous)? gas|fumes|potassium (nitrate|permanganate|chlorate)|sodium metal|lye|caustic soda'),
-    both(ACTION_EN, words('acid|acids|hydrochloric|sulfuric|sulphuric|nitric|sodium hydroxide|hydrogen peroxide|acetone|alcohol|ethanol|methanol|pesticide|insecticide|chemicals?|cleaners?|detergents?|magnesium')),
+    words(
+      'bleach|ammonia|chlorine|thermite|mercury|drain cleaner|toxic gas|poison(ous)? gas|fumes|potassium (nitrate|permanganate|chlorate)|sodium metal|lye|caustic soda',
+    ),
+    both(
+      ACTION_EN,
+      words(
+        'acid|acids|hydrochloric|sulfuric|sulphuric|nitric|sodium hydroxide|hydrogen peroxide|acetone|alcohol|ethanol|methanol|pesticide|insecticide|chemicals?|cleaners?|detergents?|magnesium',
+      ),
+    ),
     /(كلور|الكلور|امونيا|نشادر|ثرمايت|زئبق|غاز سام|ابخره سامه|بخار سام|صودا كاويه|برمنجنات|كلورات البوتاسيوم|نترات البوتاسيوم|صوديوم معدني)/u,
-    both(ACTION_AR, /(حمض|احماض|حامض|هيدروكلوريك|كبريتيك|نيتريك|هيدروكسيد|ماء اكسجين|بيروكسيد|اسيتون|كحول|ايثانول|ميثانول|مبيد|كيماويات|مواد كيميائيه|ماده كيميائيه|منظف|منظفات|ماغنسيوم|مغنيسيوم)/u),
+    both(
+      ACTION_AR,
+      /(حمض|احماض|حامض|هيدروكلوريك|كبريتيك|نيتريك|هيدروكسيد|ماء اكسجين|بيروكسيد|اسيتون|كحول|ايثانول|ميثانول|مبيد|كيماويات|مواد كيميائيه|ماده كيميائيه|منظف|منظفات|ماغنسيوم|مغنيسيوم)/u,
+    ),
     /(اخلط|نخلط|هخلط|خلط|امزج|نمزج) (الكلور|الامونيا|المنظفات|منظفات|الحمض|حمض|المواد الكيميائيه|مواد كيميائيه|كيماويات)/u,
   ],
   sharp_tools: [
-    both(ACTION_EN, words('knife|knives|blade|razor|scalpel|box cutter|cutter|saw|axe|hatchet|needle|syringe|drill|nail gun')),
+    both(
+      ACTION_EN,
+      words(
+        'knife|knives|blade|razor|scalpel|box cutter|cutter|saw|axe|hatchet|needle|syringe|drill|nail gun',
+      ),
+    ),
     words('cut (myself|my (hand|finger|skin|arm)|the skin|open (it|the battery|a battery))'),
-    both(ACTION_AR, /(سكين|سكينه|سكاكين|شفره|موس|امواس|مشرط|كتر|منشار|فاس|ابره|حقنه|سرنجه|شنيور|دريل)/u),
+    both(
+      ACTION_AR,
+      /(سكين|سكينه|سكاكين|شفره|موس|امواس|مشرط|كتر|منشار|فاس|ابره|حقنه|سرنجه|شنيور|دريل)/u,
+    ),
     /(اقطع|هقطع|نقطع) (نفسي|جلدي|ايدي|يدي|صباعي|البطاريه)/u,
   ],
   glassware: [
-    words('broken glass|glass shards?|shatter(s|ed|ing)?|heat(ing)? (a |the )?(glass|jar|bottle|test tube|beaker|flask)|(glass|jar|bottle) (on|over) (the )?(stove|fire|flame|burner)|seal(ed)? (bottle|jar) and heat|pressure in a (bottle|jar)'),
+    words(
+      'broken glass|glass shards?|shatter(s|ed|ing)?|heat(ing)? (a |the )?(glass|jar|bottle|test tube|beaker|flask)|(glass|jar|bottle) (on|over) (the )?(stove|fire|flame|burner)|seal(ed)? (bottle|jar) and heat|pressure in a (bottle|jar)',
+    ),
     /(زجاج مكسور|شظايا|(اسخن|سخن|نسخن|هسخن|تسخين) (الزجاج|زجاجه|الزجاجه|انبوبه|الانبوبه|برطمان|البرطمان|الدورق|البيكر)|(زجاجه|برطمان|انبوبه) (علي|فوق) (النار|البوتاجاز|الموقد|الشعله)|ينفجر الزجاج|ضغط في (زجاجه|برطمان))/u,
   ],
   ingestion: [
-    words('(drink|taste|eat|swallow|lick|ingest) (it|this|that|them|some|the (acid|bleach|chemical|liquid|solution|powder|crystals|sample|mixture|substance))|put (it|this|some) in (my|the) mouth'),
+    words(
+      '(drink|taste|eat|swallow|lick|ingest) (it|this|that|them|some|the (acid|bleach|chemical|liquid|solution|powder|crystals|sample|mixture|substance))|put (it|this|some) in (my|the) mouth',
+    ),
     /((اشرب|نشرب|هشرب|اتذوق|اذوق|نذوق|اكل|ناكل|هاكل|ابلع|نبلع|الحس)(ه|ها|هم)?( (المحلول|الخليط|الماده|الكيماوي|العينه|السائل|البودره|الحمض|ده|دي|دول|شويه منه|منه|منها))|(احط|هحط)(ه|ها)? في (بقي|فمي|الفم))/u,
   ],
   skin_eye_contact: [
-    words('on (my|the|your) skin|bare hands?|with my hands|in (my|the|your) eyes?|splash(es|ed|ing)? (in|on|into)|rub (it |this )?(on|into)|apply (it |this )?(to|on) (my|the) skin|(no|without) (gloves|goggles|protection|eye protection)'),
+    words(
+      'on (my|the|your) skin|bare hands?|with my hands|in (my|the|your) eyes?|splash(es|ed|ing)? (in|on|into)|rub (it |this )?(on|into)|apply (it |this )?(to|on) (my|the) skin|(no|without) (gloves|goggles|protection|eye protection)',
+    ),
     /(علي (جلدي|الجلد|ايدي|يدي|ايديا|بشرتي)|بايدي|بايديا|بدون (قفاز|قفازات|نظاره|نظارات|حمايه)|من غير (قفاز|قفازات|نظاره|نظارات|حمايه)|في (عيني|العين|عينيا|عيوني|عينه)|يطرطش|رذاذ في|(افرك|هفرك)(ه|ها)? علي)/u,
   ],
   supervision: [
     both(
-      words('experiment|try (it|this|that)|do (it|this|that)|make (it|this)|test (it|this)|reaction'),
-      words('alone at home|home alone|at home (by myself|on my own|alone)|by myself|on my own|without (an |any )?adult|no adult|without (my |a )?(teacher|parents?|supervision|supervisor)|unsupervised|in my room|in the kitchen (alone|by myself)'),
+      words(
+        'experiment|try (it|this|that)|do (it|this|that)|make (it|this)|test (it|this)|reaction',
+      ),
+      words(
+        'alone at home|home alone|at home (by myself|on my own|alone)|by myself|on my own|without (an |any )?adult|no adult|without (my |a )?(teacher|parents?|supervision|supervisor)|unsupervised|in my room|in the kitchen (alone|by myself)',
+      ),
     ),
     both(
       /(تجربه|التجربه|اجرب|نجرب|هجرب|اعمل|نعمل|هعمل|تفاعل)/u,
@@ -148,7 +184,8 @@ export function preCheck(text: string): GuardPreCheck {
   const normalized = normalizeText(text);
   const categories: HazardCategory[] = [];
   for (const category of HAZARD_CATEGORIES) {
-    if (LEXICON[category].some((matcher) => matches(matcher, normalized))) categories.push(category);
+    if (LEXICON[category].some((matcher) => matches(matcher, normalized)))
+      categories.push(category);
   }
   const triggered = categories.length > 0;
   return { triggered, categories, directive: triggered ? SAFETY_DIRECTIVE_TEXT : null };
@@ -195,7 +232,8 @@ const CONTAINER_AR =
  * Named compounds that are not hazards although they contain a hazard word
  * (DNA, amino / fatty acids). Blanked before the step-line hazard test only.
  */
-const SAFE_COMPOUNDS = /(حمض|احماض) (ال)?(نووي|نوويه|اميني|امينيه|دهني|دهنيه)|(deoxyribonucleic|ribonucleic|nucleic|amino|fatty) acids?/giu;
+const SAFE_COMPOUNDS =
+  /(حمض|احماض) (ال)?(نووي|نوويه|اميني|امينيه|دهني|دهنيه)|(deoxyribonucleic|ribonucleic|nucleic|amino|fatty) acids?/giu;
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 /** Arabic clitics allowed around a word: و/ف, then ال / بال / لل / ب / ل / ك before; ه / ها / هم / هما after. */
@@ -208,7 +246,10 @@ const ALLOWED_SUFFIX = /^(ه|ها|هم|هما)?$/u;
  * suffix, so «يصبح» is not «صب», «كلوريد» is not «كلور», «انجاز» is not «جاز».
  */
 function stepTest(pattern: RegExp, text: string): boolean {
-  const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  const re = new RegExp(
+    pattern.source,
+    pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`,
+  );
   for (let match = re.exec(text); match !== null; match = re.exec(text)) {
     const start = match.index;
     const end = start + match[0].length;
@@ -217,7 +258,10 @@ function stepTest(pattern: RegExp, text: string): boolean {
       while (left > 0 && WORD_CHAR.test(text[left - 1]!)) left -= 1;
       let right = end;
       while (right < text.length && WORD_CHAR.test(text[right]!)) right += 1;
-      if (ALLOWED_PREFIX.test(text.slice(left, start)) && ALLOWED_SUFFIX.test(text.slice(end, right))) {
+      if (
+        ALLOWED_PREFIX.test(text.slice(left, start)) &&
+        ALLOWED_SUFFIX.test(text.slice(end, right))
+      ) {
         return true;
       }
     }
@@ -243,8 +287,7 @@ function stepHasOperationalVerb(line: string): boolean {
   if (stepTest(STRONG_VERB_EN, line) || stepTest(STRONG_VERB_AR, line)) return true;
   const weak = stepTest(WEAK_VERB_EN, line) || stepTest(WEAK_VERB_AR, line);
   return (
-    weak &&
-    (QUANTITY.test(line) || stepTest(CONTAINER_EN, line) || stepTest(CONTAINER_AR, line))
+    weak && (QUANTITY.test(line) || stepTest(CONTAINER_EN, line) || stepTest(CONTAINER_AR, line))
   );
 }
 
@@ -359,7 +402,9 @@ export function replyLanguage(
 
 export const SAFETY_BOUNDARY_CODE = 'SAFETY_BOUNDARY' as const;
 
-export type GuardResult<T> = { ok: true; value: T } | { ok: false; boundary: string; error: string };
+export type GuardResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; boundary: string; error: string };
 
 /**
  * Run a guard step; any exception becomes the boundary (SAFE-02), given in
@@ -411,7 +456,5 @@ export function safetyRecord(
     categories: pre.categories,
     boundary: boundary.applied,
   };
-  return boundary.applied
-    ? { ...base, code: SAFETY_BOUNDARY_CODE, reason: boundary.reason }
-    : base;
+  return boundary.applied ? { ...base, code: SAFETY_BOUNDARY_CODE, reason: boundary.reason } : base;
 }

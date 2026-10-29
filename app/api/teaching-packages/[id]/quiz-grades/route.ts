@@ -20,10 +20,7 @@ import { NextResponse } from 'next/server';
 import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
-import {
-  gradeLearnerQuiz,
-  parseLearnerAnswers,
-} from '@/lib/server/teaching-package/learner-quiz';
+import { gradeLearnerQuiz, parseLearnerAnswers } from '@/lib/server/teaching-package/learner-quiz';
 import {
   parseTenantContext,
   readJsonObject,
@@ -40,7 +37,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     authenticateServiceRequest(req);
     const { id } = await params;
     const body = await readJsonObject(req);
-    if (!body) throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
+    if (!body)
+      throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
     const tenantId = parseTenantContext(body);
     if (typeof body.sceneId !== 'string' || body.sceneId.trim() === '') {
       throw new TeachingPackageError('INVALID_REQUEST', 'sceneId must be a non-empty string');

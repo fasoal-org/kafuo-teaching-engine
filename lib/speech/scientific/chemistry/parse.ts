@@ -47,7 +47,13 @@ export interface Isotope {
 }
 
 export type Species =
-  | { t: 'formula'; units: FormulaUnit[]; hydrates: Hydrate[]; charge: Charge | null; isotope?: Isotope }
+  | {
+      t: 'formula';
+      units: FormulaUnit[];
+      hydrates: Hydrate[];
+      charge: Charge | null;
+      isotope?: Isotope;
+    }
   | { t: 'electron' }
   /** P9: `[H⁺]` — a species in written square brackets, read with its brackets. */
   | { t: 'bracketed'; inner: Species };
@@ -220,7 +226,10 @@ class ChemParser {
 
   private arrow(): ChemArrow | null {
     for (const [text, arrow] of ARROWS) {
-      if (this.src.startsWith(text, this.pos) && !/[A-Za-z]/.test(this.src[this.pos + text.length] ?? '')) {
+      if (
+        this.src.startsWith(text, this.pos) &&
+        !/[A-Za-z]/.test(this.src[this.pos + text.length] ?? '')
+      ) {
         this.pos += text.length;
         return arrow;
       }
@@ -254,7 +263,10 @@ class ChemParser {
 
   private termStartsAt(i: number): boolean {
     const ch = this.src[i];
-    return ch !== undefined && (isUpper(ch) || isAsciiDigit(ch) || ch === '(' || ch === '[' || ch in VULGAR_COEFFICIENTS);
+    return (
+      ch !== undefined &&
+      (isUpper(ch) || isAsciiDigit(ch) || ch === '(' || ch === '[' || ch in VULGAR_COEFFICIENTS)
+    );
   }
 
   private term(): Term {
@@ -267,7 +279,11 @@ class ChemParser {
       return { coeff, species, state, mark: ch };
     }
     // mhchem ` ^` (gas) and ` v` (precipitate), P9.
-    if (this.inCe && ch === ' ' && (this.src[this.pos + 1] === '^' || this.src[this.pos + 1] === 'v')) {
+    if (
+      this.inCe &&
+      ch === ' ' &&
+      (this.src[this.pos + 1] === '^' || this.src[this.pos + 1] === 'v')
+    ) {
       const after = this.src[this.pos + 2];
       if (after === undefined || after === ' ') {
         const mark = this.src[this.pos + 1] === '^' ? '↑' : '↓';
@@ -307,7 +323,11 @@ class ChemParser {
         frac += this.src[j];
         j += 1;
       }
-      if (isUpper(this.src[j]) || this.src[j] === '(' || (this.src[j] === ' ' && isUpper(this.src[j + 1]))) {
+      if (
+        isUpper(this.src[j]) ||
+        this.src[j] === '(' ||
+        (this.src[j] === ' ' && isUpper(this.src[j + 1]))
+      ) {
         this.pos = j;
         this.spaces();
         return { kind: 'decimal', intDigits: digits, fracDigits: frac };
@@ -336,8 +356,10 @@ class ChemParser {
     // An electron: e⁻, e^-, e^{-}, or e- inside \ce.
     if (this.src[this.pos] === 'e' && !isLower(this.src[this.pos + 1])) {
       const rest = this.src.slice(this.pos + 1);
-      const plainMinus = (this.inCe || this.reactionContext) && rest.startsWith('-') && !isUpper(rest[1]);
-      const marker = ['⁻', '^-', '^{-}'].find((m) => rest.startsWith(m)) ?? (plainMinus ? '-' : null);
+      const plainMinus =
+        (this.inCe || this.reactionContext) && rest.startsWith('-') && !isUpper(rest[1]);
+      const marker =
+        ['⁻', '^-', '^{-}'].find((m) => rest.startsWith(m)) ?? (plainMinus ? '-' : null);
       if (marker) {
         this.pos += 1 + marker.length;
         return { t: 'electron' };
@@ -364,11 +386,20 @@ class ChemParser {
       hydrates.push({ coeff: digits ? { value: Number(digits) } : null, units: hydrateUnits });
     }
     const countStart = this.lastCountStart;
-    const charge = this.asciiCharge(hydrates.length > 0 ? hydrates[hydrates.length - 1]!.units : units, this.charge(), countStart);
+    const charge = this.asciiCharge(
+      hydrates.length > 0 ? hydrates[hydrates.length - 1]!.units : units,
+      this.charge(),
+      countStart,
+    );
     // `C-14`: a hyphen and a mass number after a lone element (P9).
-    const hyphenMass = !isotope && !charge && units.length === 1 && units[0]!.t === 'el' && !units[0]!.count ? this.hyphenMass() : null;
+    const hyphenMass =
+      !isotope && !charge && units.length === 1 && units[0]!.t === 'el' && !units[0]!.count
+        ? this.hyphenMass()
+        : null;
     const nuclide = isotope ?? (hyphenMass === null ? null : { mass: hyphenMass, atomic: null });
-    return nuclide ? { t: 'formula', units, hydrates, charge, isotope: nuclide } : { t: 'formula', units, hydrates, charge };
+    return nuclide
+      ? { t: 'formula', units, hydrates, charge, isotope: nuclide }
+      : { t: 'formula', units, hydrates, charge };
   }
 
   /** `[H⁺]`, `[OH^-]`: brackets around one charged species, or `null` (a group) with the cursor unchanged. */
@@ -412,7 +443,8 @@ class ChemParser {
       mass ??= braced('^') ?? unicode(superscriptValue);
       atomic ??= braced('_') ?? unicode(subscriptValue);
     }
-    if (mass !== null && isUpper(this.src[this.pos])) return { mass: Number(mass), atomic: atomic === null ? null : Number(atomic) };
+    if (mass !== null && isUpper(this.src[this.pos]))
+      return { mass: Number(mass), atomic: atomic === null ? null : Number(atomic) };
     this.pos = save;
     return null;
   }
@@ -438,7 +470,8 @@ class ChemParser {
   /** O-9: `-`, `=`, `≡`, `#` glued between two units. */
   private bond(): BondOrder | null {
     const ch = this.src[this.pos];
-    const order: BondOrder | null = ch === '-' ? '-' : ch === '=' ? '=' : ch === '≡' || ch === '#' ? '≡' : null;
+    const order: BondOrder | null =
+      ch === '-' ? '-' : ch === '=' ? '=' : ch === '≡' || ch === '#' ? '≡' : null;
     if (!order) return null;
     const next = this.src[this.pos + 1];
     if (next === undefined || !(isUpper(next) || next === '(' || next === '[')) return null;
@@ -512,7 +545,10 @@ class ChemParser {
       this.pos += 1;
     }
     const ascii = digits.length > 0;
-    while (this.pos < this.src.length && /^[0-9]$/.test(subscriptValue(this.src[this.pos]!) ?? '')) {
+    while (
+      this.pos < this.src.length &&
+      /^[0-9]$/.test(subscriptValue(this.src[this.pos]!) ?? '')
+    ) {
       digits += subscriptValue(this.src[this.pos]!);
       this.pos += 1;
     }
@@ -550,7 +586,14 @@ class ChemParser {
     // A trailing +/- attached to the species (Na+, Cl-), not an arrow or a separator.
     if ((ch === '+' || ch === '-') && this.src[this.pos + 1] !== '>') {
       const after = this.src[this.pos + 1];
-      if (after === undefined || after === ' ' || after === '(' || after === ')' || after === '↑' || after === '↓') {
+      if (
+        after === undefined ||
+        after === ' ' ||
+        after === '(' ||
+        after === ')' ||
+        after === '↑' ||
+        after === '↓'
+      ) {
         this.pos += 1;
         return { sign: ch, magnitude: 1 };
       }
@@ -573,7 +616,8 @@ class ChemParser {
     const digits = this.src.slice(countStart, signAt);
     if (!/^[0-9]+$/.test(digits)) return charge;
     // A single element (`Fe3+`) or a bracketed complex (`[Cu(NH3)4]2+`): the digit is the charge.
-    const single = (units.length === 1 && last.t === 'el') || (last.t === 'group' && last.bracket === '[');
+    const single =
+      (units.length === 1 && last.t === 'el') || (last.t === 'group' && last.bracket === '[');
     if (digits.length === 1 && !single) return { ...charge, ascii: true };
     const magnitude = Number(digits[digits.length - 1]);
     if (magnitude < 1) return charge;
@@ -638,7 +682,8 @@ export function canonicalFormula(species: Species): string {
   if (species.t === 'electron') return 'e^-';
   if (species.t === 'bracketed') return `[${canonicalFormula(species.inner)}]`;
   let key = unitsKey(species.units);
-  for (const hydrate of species.hydrates) key += `·${hydrate.coeff ? hydrate.coeff.value : ''}${unitsKey(hydrate.units)}`;
+  for (const hydrate of species.hydrates)
+    key += `·${hydrate.coeff ? hydrate.coeff.value : ''}${unitsKey(hydrate.units)}`;
   if (species.charge) {
     key += `^${species.charge.magnitude === 1 ? '' : species.charge.magnitude}${species.charge.sign}`;
   }
@@ -646,7 +691,9 @@ export function canonicalFormula(species: Species): string {
 }
 
 function elements(units: FormulaUnit[]): string[] {
-  return units.flatMap((unit) => (unit.t === 'el' ? [unit.symbol] : unit.t === 'group' ? elements(unit.units) : []));
+  return units.flatMap((unit) =>
+    unit.t === 'el' ? [unit.symbol] : unit.t === 'group' ? elements(unit.units) : [],
+  );
 }
 
 /**

@@ -463,7 +463,10 @@ export interface MeterOutboxStatus {
 }
 
 /** Health / report block (plan §9.1). */
-export async function readOutboxStatus(queryable: Queryable, now: number): Promise<MeterOutboxStatus> {
+export async function readOutboxStatus(
+  queryable: Queryable,
+  now: number,
+): Promise<MeterOutboxStatus> {
   const result = await queryable.query<{
     pending: number | string;
     oldest_created_at: number | string | null;
@@ -482,7 +485,9 @@ export async function readOutboxStatus(queryable: Queryable, now: number): Promi
   return {
     pendingFinalizes: Number(row?.pending ?? 0),
     oldestPendingFinalizeAgeS:
-      oldest === null || oldest === undefined ? null : Math.max(0, Math.round(now - Number(oldest))),
+      oldest === null || oldest === undefined
+        ? null
+        : Math.max(0, Math.round(now - Number(oldest))),
     conflictFinalizes: Number(row?.conflict ?? 0),
     terminalFailedFinalizes: Number(row?.terminal_failed ?? 0),
   };

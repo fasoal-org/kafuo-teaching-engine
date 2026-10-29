@@ -362,15 +362,9 @@
               "stage": "lesson_opener",
               "instructions": "Open the lesson.",
               "scenePolicy": {
-                "sceneTypes": [
-                  "slide"
-                ],
-                "slideTypes": [
-                  "cover"
-                ],
-                "contentRoles": [
-                  "orientation"
-                ],
+                "sceneTypes": ["slide"],
+                "slideTypes": ["cover"],
+                "contentRoles": ["orientation"],
                 "visual": "required",
                 "cardinality": "exactly_one"
               }
@@ -379,9 +373,7 @@
               "stage": "outcome_visual_explanations",
               "instructions": "Teach O1 with a textbook visual.",
               "scenePolicy": {
-                "sceneTypes": [
-                  "slide"
-                ],
+                "sceneTypes": ["slide"],
                 "contentRoles": [
                   "explanation",
                   "procedure",
@@ -397,9 +389,7 @@
               "stage": "outcome_check_understanding",
               "instructions": "Check O1.",
               "scenePolicy": {
-                "sceneTypes": [
-                  "quiz"
-                ],
+                "sceneTypes": ["quiz"],
                 "cardinality": "exactly_one"
               }
             },
@@ -407,12 +397,8 @@
               "stage": "lesson_learning_game",
               "instructions": "Play.",
               "scenePolicy": {
-                "sceneTypes": [
-                  "interactive"
-                ],
-                "widgetTypes": [
-                  "game"
-                ],
+                "sceneTypes": ["interactive"],
+                "widgetTypes": ["game"],
                 "cardinality": "exactly_one"
               }
             }

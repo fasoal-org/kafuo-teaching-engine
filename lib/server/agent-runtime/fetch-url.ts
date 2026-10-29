@@ -571,7 +571,12 @@ export async function fetchBytesSecurely(
           `Unsupported content type: ${contentType || '(missing)'}`,
         );
       }
-      const downloaded = await readWithTruncation(response, maxBytes, options.signal, bodyTimeoutMs);
+      const downloaded = await readWithTruncation(
+        response,
+        maxBytes,
+        options.signal,
+        bodyTimeoutMs,
+      );
       return {
         bytes: downloaded.bytes,
         truncated: downloaded.truncated,

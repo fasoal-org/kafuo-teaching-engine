@@ -19,7 +19,6 @@ interface Guard {
   matches(source: string, candidate: ExpressionCandidate): boolean;
 }
 
-
 /**
  * Every audit construct is now read correctly or flagged by its own review
  * warning (`SATTS_W_AMBIGUOUS_UNIT`, `SATTS_W_AMBIGUOUS_CHARGE`): no guard is

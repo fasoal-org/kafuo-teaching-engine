@@ -101,7 +101,9 @@ describe('approved teaching package resolver', () => {
     }
 
     for (const { item } of cases) {
-      await expect(resolveApprovedTeachingPackage({ tenantId: 'tenant-test', learningItem: item }, qp())).resolves.toEqual({ kind: 'none' });
+      await expect(
+        resolveApprovedTeachingPackage({ tenantId: 'tenant-test', learningItem: item }, qp()),
+      ).resolves.toEqual({ kind: 'none' });
     }
   });
 
@@ -109,7 +111,10 @@ describe('approved teaching package resolver', () => {
     await seedStage('stage-resolve-approved');
     const versionId = await seedVersion(1, 'approved', 'stage-resolve-approved');
 
-    const resolution = await resolveApprovedTeachingPackage({ tenantId: 'tenant-test', learningItem: ITEM }, qp());
+    const resolution = await resolveApprovedTeachingPackage(
+      { tenantId: 'tenant-test', learningItem: ITEM },
+      qp(),
+    );
     expect(resolution).toMatchObject({
       kind: 'approved',
       stageId: 'stage-resolve-approved',
@@ -122,7 +127,10 @@ describe('approved teaching package resolver', () => {
     await seedVersion(1, 'approved', 'stage-resolve-tombstoned');
     await tombstoneStageMeta(qp(), 'stage-resolve-tombstoned');
 
-    const promise = resolveApprovedTeachingPackage({ tenantId: 'tenant-test', learningItem: ITEM }, qp());
+    const promise = resolveApprovedTeachingPackage(
+      { tenantId: 'tenant-test', learningItem: ITEM },
+      qp(),
+    );
     await expect(promise).rejects.toBeInstanceOf(TeachingPackageError);
     await expect(promise).rejects.toMatchObject({
       code: 'STAGE_NOT_LIVE',
@@ -139,7 +147,10 @@ describe('approved teaching package resolver', () => {
     await seedVersion(1, 'approved', 'stage-resolve-order-1');
     await seedVersion(2, 'draft', 'stage-resolve-order-2');
 
-    const versions = await listVersionsByItem(qp(), { tenantId: 'tenant-test', learningItem: ITEM });
+    const versions = await listVersionsByItem(qp(), {
+      tenantId: 'tenant-test',
+      learningItem: ITEM,
+    });
     expect(versions.map((version) => version.version)).toEqual([1, 2, 3]);
   });
 });

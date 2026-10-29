@@ -80,9 +80,17 @@ export function PronunciationPanel({ actionId, sceneId }: { actionId: string; sc
     if (!stageId) return;
     setPreviewing(true);
     try {
-      const result = await postDiagnostics({ stageId, sceneId, actionIds: [actionId], synthesize: true, ...tts() });
+      const result = await postDiagnostics({
+        stageId,
+        sceneId,
+        actionIds: [actionId],
+        synthesize: true,
+        ...tts(),
+      });
       if (result.preview) {
-        await new Audio(`data:audio/${result.preview.format};base64,${result.preview.base64}`).play();
+        await new Audio(
+          `data:audio/${result.preview.format};base64,${result.preview.base64}`,
+        ).play();
       }
     } catch {
       setFailed(true);
@@ -102,7 +110,10 @@ export function PronunciationPanel({ actionId, sceneId }: { actionId: string; sc
 
   if (!visible) return null;
   return (
-    <div className="border-t border-border/40 px-3 py-1.5 text-[11.5px]" data-testid="pronunciation-panel">
+    <div
+      className="border-t border-border/40 px-3 py-1.5 text-[11.5px]"
+      data-testid="pronunciation-panel"
+    >
       <button
         type="button"
         className="text-muted-foreground hover:text-foreground"
@@ -115,7 +126,9 @@ export function PronunciationPanel({ actionId, sceneId }: { actionId: string; sc
       >
         {t('edit.pronunciation.title')}
       </button>
-      {open && failed && <p className="mt-1 text-destructive">{t('edit.pronunciation.unavailable')}</p>}
+      {open && failed && (
+        <p className="mt-1 text-destructive">{t('edit.pronunciation.unavailable')}</p>
+      )}
       {open && data && (
         <div className="mt-1.5 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -154,7 +167,9 @@ export function PronunciationPanel({ actionId, sceneId }: { actionId: string; sc
                 {data.warnings.map((warning, index) => (
                   <li key={`${warning.code}-${index}`}>
                     <code>{warning.code}</code>{' '}
-                    <mark dir="ltr">{data.original.slice(warning.source.start, warning.source.end)}</mark>
+                    <mark dir="ltr">
+                      {data.original.slice(warning.source.start, warning.source.end)}
+                    </mark>
                   </li>
                 ))}
               </ul>
@@ -182,12 +197,17 @@ export function SpeechReadingModeSetting() {
   const setMode = useStageStore((state) => state.setSpeechReadingMode);
   if (!visible) return null;
   return (
-    <label className="flex items-center gap-2 px-3 py-1 text-[11.5px] text-muted-foreground" data-testid="speech-reading-mode">
+    <label
+      className="flex items-center gap-2 px-3 py-1 text-[11.5px] text-muted-foreground"
+      data-testid="speech-reading-mode"
+    >
       {t('edit.pronunciation.readingMode')}
       <select
         className="rounded border border-border bg-transparent px-1 py-0.5 text-foreground"
         value={mode}
-        onChange={(event) => setMode(event.target.value === 'accessible' ? 'accessible' : 'natural')}
+        onChange={(event) =>
+          setMode(event.target.value === 'accessible' ? 'accessible' : 'natural')
+        }
       >
         <option value="natural">{t('edit.pronunciation.readingModeNatural')}</option>
         <option value="accessible">{t('edit.pronunciation.readingModeAccessible')}</option>

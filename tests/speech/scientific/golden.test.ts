@@ -70,10 +70,13 @@ describe('reference set coverage (FRD §28 minimum counts)', () => {
 });
 
 describe('Arabic-letter golden cases are idempotent (G6)', () => {
-  it.each(CASES.filter((c) => c.file === 'arabic.jsonl').map((c) => [c.id, c] as const))('%s', (_id, c) => {
-    for (const mode of ['natural', 'accessible'] as const) {
-      const once = render(c.original, c.subject, mode);
-      expect(render(once.preparedText, c.subject, mode).preparedText).toBe(once.preparedText);
-    }
-  });
+  it.each(CASES.filter((c) => c.file === 'arabic.jsonl').map((c) => [c.id, c] as const))(
+    '%s',
+    (_id, c) => {
+      for (const mode of ['natural', 'accessible'] as const) {
+        const once = render(c.original, c.subject, mode);
+        expect(render(once.preparedText, c.subject, mode).preparedText).toBe(once.preparedText);
+      }
+    },
+  );
 });

@@ -10,22 +10,33 @@ import { describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ mode: 'off' as string, mayEdit: true }));
 
 vi.mock('@/lib/store/settings', () => ({
-  useSettingsStore: (selector: (s: unknown) => unknown) => selector({ scientificSpeechMode: state.mode }),
+  useSettingsStore: (selector: (s: unknown) => unknown) =>
+    selector({ scientificSpeechMode: state.mode }),
 }));
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: (selector: (s: unknown) => unknown) =>
     selector({ stage: { id: 'stage-1' }, setSpeechReadingMode: () => {} }),
 }));
-vi.mock('@/lib/classroom/generation-permission', () => ({ useMayGenerateForStage: () => state.mayEdit }));
+vi.mock('@/lib/classroom/generation-permission', () => ({
+  useMayGenerateForStage: () => state.mayEdit,
+}));
 vi.mock('@/lib/hooks/use-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
-import { PronunciationPanel, SpeechReadingModeSetting } from '@/components/edit/ActionsBar/PronunciationPanel';
+import {
+  PronunciationPanel,
+  SpeechReadingModeSetting,
+} from '@/components/edit/ActionsBar/PronunciationPanel';
 
 function render(): HTMLElement {
   const host = document.createElement('div');
   act(() => {
     createRoot(host).render(
-      createElement('div', null, createElement(PronunciationPanel, { actionId: 'a1' }), createElement(SpeechReadingModeSetting)),
+      createElement(
+        'div',
+        null,
+        createElement(PronunciationPanel, { actionId: 'a1' }),
+        createElement(SpeechReadingModeSetting),
+      ),
     );
   });
   return host;

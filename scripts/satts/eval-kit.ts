@@ -29,7 +29,10 @@ import { CAP_USD, estimateUsd, spentUsd, speech, tok, writeOut } from '../spikes
 
 const GOLDEN = join(__dirname, '..', '..', 'tests', 'speech', 'scientific', 'golden');
 const MODEL = 'gpt-4o-mini-tts-2025-12-15';
-const VOICES = (process.env.SATTS_EVAL_VOICES || 'marin,cedar').split(',').map((v) => v.trim()).filter(Boolean);
+const VOICES = (process.env.SATTS_EVAL_VOICES || 'marin,cedar')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
 /** Pessimistic speaking rate for the estimate (Wave 0 measured 8–10 chars/s). */
 const PESSIMISTIC_CHARS_PER_SEC = 7;
 const CONCURRENCY = 4;
@@ -88,7 +91,8 @@ function planClips(): Clip[] {
   const policy = loadPolicyPack('ar', { allowProposed: true });
   const renders: Array<Omit<Clip, 'clip' | 'voice' | 'instructed'>> = [];
   for (const c of loadCases()) {
-    const modes: Array<'natural' | 'accessible'> = c.category === 'modes' ? ['natural', 'accessible'] : ['natural'];
+    const modes: Array<'natural' | 'accessible'> =
+      c.category === 'modes' ? ['natural', 'accessible'] : ['natural'];
     for (const mode of modes) {
       const prepared = renderScientificSpeech(
         {
@@ -104,13 +108,25 @@ function planClips(): Clip[] {
         },
         policy,
       ).preparedText;
-      renders.push({ caseId: c.id, category: c.category, subject: c.subject, mode, original: c.original, prepared });
+      renders.push({
+        caseId: c.id,
+        category: c.category,
+        subject: c.subject,
+        mode,
+        original: c.original,
+        prepared,
+      });
     }
   }
   const clips: Omit<Clip, 'clip'>[] = renders.flatMap((render) =>
-    VOICES.flatMap((voice) => [true, false].map((instructed) => ({ ...render, voice, instructed }))),
+    VOICES.flatMap((voice) =>
+      [true, false].map((instructed) => ({ ...render, voice, instructed })),
+    ),
   );
-  return shuffle(clips, 20260928).map((clip, i) => ({ ...clip, clip: `C${String(i + 1).padStart(4, '0')}` }));
+  return shuffle(clips, 20260928).map((clip, i) => ({
+    ...clip,
+    clip: `C${String(i + 1).padStart(4, '0')}`,
+  }));
 }
 
 function estimate(clips: Clip[]): number {
@@ -118,7 +134,11 @@ function estimate(clips: Clip[]): number {
   return clips.reduce(
     (usd, clip) =>
       usd +
-      estimateUsd(tok(clip.prepared), clip.instructed ? instructionTokens : 0, clip.prepared.length / PESSIMISTIC_CHARS_PER_SEC + 1),
+      estimateUsd(
+        tok(clip.prepared),
+        clip.instructed ? instructionTokens : 0,
+        clip.prepared.length / PESSIMISTIC_CHARS_PER_SEC + 1,
+      ),
     0,
   );
 }
@@ -159,7 +179,10 @@ async function main() {
   writeOut('eval-kit/index.html', listeningPage(clips));
   writeOut(
     'eval-kit/rating-sheet.csv',
-    ['clip,reviewer,naturalness_1_5,intelligibility_1_5,fidelity_pass_fail,pace_1_5,notes', ...clips.map((c) => `${c.clip},,,,,,`)].join('\n') + '\n',
+    [
+      'clip,reviewer,naturalness_1_5,intelligibility_1_5,fidelity_pass_fail,pace_1_5,notes',
+      ...clips.map((c) => `${c.clip},,,,,,`),
+    ].join('\n') + '\n',
   );
   writeOut('eval-kit/answer-key.json', JSON.stringify(clips, null, 2));
   if (!run) {
@@ -167,7 +190,9 @@ async function main() {
     return;
   }
   if (spent + cost > CAP_USD) {
-    console.error(`refusing: ledger $${spent.toFixed(2)} + estimate $${cost.toFixed(2)} exceeds $${CAP_USD}`);
+    console.error(
+      `refusing: ledger $${spent.toFixed(2)} + estimate $${cost.toFixed(2)} exceeds $${CAP_USD}`,
+    );
     process.exit(2);
   }
   let next = 0;
@@ -201,7 +226,9 @@ async function main() {
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  console.log(`done: ${clips.length - failed} clips, ${failed} failed, ledger=$${spentUsd().toFixed(4)}`);
+  console.log(
+    `done: ${clips.length - failed} clips, ${failed} failed, ledger=$${spentUsd().toFixed(4)}`,
+  );
 }
 
 void main();

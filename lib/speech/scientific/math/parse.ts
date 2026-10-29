@@ -31,7 +31,13 @@ export type MathNode =
       right: MathNode;
     }
   /** P9: `\int_a^b`, `\sum_{i=1}^{n}`, `\prod` with their body. */
-  | { t: 'bigop'; op: 'int' | 'iint' | 'oint' | 'sum' | 'prod'; lower: MathNode | null; upper: MathNode | null; body: MathNode }
+  | {
+      t: 'bigop';
+      op: 'int' | 'iint' | 'oint' | 'sum' | 'prod';
+      lower: MathNode | null;
+      upper: MathNode | null;
+      body: MathNode;
+    }
   /** P9: `\lim_{x \to 0} f(x)`. */
   | { t: 'lim'; under: MathNode | null; body: MathNode }
   /** P9: a tuple, an interval `[2, 5)` or a set `\{1, 2\}`, read with its written brackets. */
@@ -125,7 +131,20 @@ export interface MathParseOptions {
  * any other letter the bracket is a factor, so a factored product keeps its
  * meaning (`x(x+1)`, `a(b+c)`: R1, DEC-044).
  */
-const FUNCTION_LETTERS: ReadonlySet<string> = new Set(['f', 'g', 'h', 'p', 'q', 'F', 'G', 'P', 'E', 'د', 'ه', 'ق']);
+const FUNCTION_LETTERS: ReadonlySet<string> = new Set([
+  'f',
+  'g',
+  'h',
+  'p',
+  'q',
+  'F',
+  'G',
+  'P',
+  'E',
+  'د',
+  'ه',
+  'ق',
+]);
 
 /** The elided left operand of a leading binary operator (spoken as nothing). */
 const LEADING_HOLE: MathNode = { t: 'text', content: '' };
@@ -237,7 +256,14 @@ const ATOM_SYMBOLS: Readonly<Record<string, string>> = {
 };
 
 /** Commands that only wrap their argument (bold vector, font). */
-const TRANSPARENT_COMMANDS = new Set(['mathbf', 'boldsymbol', 'bm', 'mathit', 'mathbb', 'displaystyle']);
+const TRANSPARENT_COMMANDS = new Set([
+  'mathbf',
+  'boldsymbol',
+  'bm',
+  'mathit',
+  'mathbb',
+  'displaystyle',
+]);
 
 const FRAC_COMMANDS = new Set(['frac', 'dfrac', 'tfrac']);
 
@@ -324,7 +350,9 @@ class Parser {
   private additive(): MathNode {
     const lead = this.pos === 0 && this.options.leadingBinary ? this.binaryOp(this.peek()) : null;
     let left =
-      lead === '+' || lead === '-' || lead === '±' || lead === '∓' ? LEADING_HOLE : this.multiplicative();
+      lead === '+' || lead === '-' || lead === '±' || lead === '∓'
+        ? LEADING_HOLE
+        : this.multiplicative();
     for (;;) {
       const tok = this.peek();
       const op = this.binaryOp(tok);
@@ -366,7 +394,11 @@ class Parser {
           tok.value === 'left' ||
           TRANSPARENT_COMMANDS.has(tok.value) ||
           DEFERRED_COMMANDS.has(tok.value) ||
-          !(tok.value in RELATION_COMMANDS || tok.value in OPERATOR_COMMANDS || tok.value === 'right')
+          !(
+            tok.value in RELATION_COMMANDS ||
+            tok.value in OPERATOR_COMMANDS ||
+            tok.value === 'right'
+          )
         );
       case 'sym':
         return true;
@@ -400,7 +432,15 @@ class Parser {
     let left = this.product();
     for (;;) {
       const op = this.binaryOp(this.peek());
-      if (op === '*' || op === '·' || op === '/' || op === '÷' || op === '∪' || op === '∩' || op === '∘') {
+      if (
+        op === '*' ||
+        op === '·' ||
+        op === '/' ||
+        op === '÷' ||
+        op === '∪' ||
+        op === '∩' ||
+        op === '∘'
+      ) {
         this.next();
         const right = this.product();
         left = { t: 'bin', op, left, right };
@@ -418,7 +458,13 @@ class Parser {
       const tok = this.peek();
       if (this.binaryOp(tok) !== null || !this.startsPrimary(tok)) break;
       // `(f∘g)(x)`: a bracketed composition applied to an argument (P9).
-      if (tok?.kind === 'lparen' && !tok.spaced && left.t === 'group' && left.body.t === 'bin' && left.body.op === '∘') {
+      if (
+        tok?.kind === 'lparen' &&
+        !tok.spaced &&
+        left.t === 'group' &&
+        left.body.t === 'bin' &&
+        left.body.op === '∘'
+      ) {
         left = { t: 'apply', fn: left, arg: this.primary() };
         continue;
       }
@@ -441,10 +487,23 @@ class Parser {
   /** `1/4` after a spaced whole number (`3 1/4`), when proper: consumes it. */
   private spacedMixedFraction(): Extract<MathNode, { t: 'frac' }> | null {
     const [num, slash, den, after] = [this.peek(), this.peek(1), this.peek(2), this.peek(3)];
-    if (!num || num.kind !== 'num' || !num.spaced || slash?.kind !== 'op' || slash.value !== '/') return null;
-    if (!den || den.kind !== 'num' || den.spaced || num.fracDigits || den.fracDigits || slash.spaced) return null;
+    if (!num || num.kind !== 'num' || !num.spaced || slash?.kind !== 'op' || slash.value !== '/')
+      return null;
+    if (
+      !den ||
+      den.kind !== 'num' ||
+      den.spaced ||
+      num.fracDigits ||
+      den.fracDigits ||
+      slash.spaced
+    )
+      return null;
     if (after && !after.spaced && (after.kind === 'letter' || after.kind === 'num')) return null;
-    const node: Extract<MathNode, { t: 'frac' }> = { t: 'frac', num: { t: 'num', tok: num }, den: { t: 'num', tok: den } };
+    const node: Extract<MathNode, { t: 'frac' }> = {
+      t: 'frac',
+      num: { t: 'num', tok: num },
+      den: { t: 'num', tok: den },
+    };
     if (!isProperIntegerFraction(node)) return null;
     this.pos += 3;
     return node;
@@ -469,7 +528,8 @@ class Parser {
     if (this.options.matchUnit && this.scriptDepth === 0 && isPowerOfTen(node) && this.pos > 0) {
       const match = this.unitAt(this.tokens[this.pos - 1]!.end);
       if (match) {
-        while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end) this.pos += 1;
+        while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end)
+          this.pos += 1;
         node = { t: 'qty', value: node, unit: match.unit };
       }
     }
@@ -513,7 +573,11 @@ class Parser {
           base = { t: 'degree', arg: base };
           continue;
         }
-        if (after?.kind === 'lbrace' && this.peek(1)?.kind === 'cmd' && this.peek(1)?.value === 'circ') {
+        if (
+          after?.kind === 'lbrace' &&
+          this.peek(1)?.kind === 'cmd' &&
+          this.peek(1)?.value === 'circ'
+        ) {
           this.next();
           this.next();
           this.expect('rbrace');
@@ -570,7 +634,13 @@ class Parser {
       const arg = this.scriptArgumentInner(multiDigit);
       return { t: 'unary', op: tok.value === '-' ? 'neg' : 'pos', arg };
     }
-    if (tok.kind === 'num' && tok.intDigits && tok.intDigits.length > 1 && tok.fracDigits === null && !multiDigit) {
+    if (
+      tok.kind === 'num' &&
+      tok.intDigits &&
+      tok.intDigits.length > 1 &&
+      tok.fracDigits === null &&
+      !multiDigit
+    ) {
       // `x^23` in LaTeX is `x^{2}3`; read only the first digit as the script.
       throw new ParseFault('malformed', 'ambiguous multi-digit script without braces');
     }
@@ -596,7 +666,11 @@ class Parser {
         const node: MathNode = { t: 'var', name: tok.value };
         // O-5: function application when the bracket is attached.
         const after = this.peek();
-        if (after?.kind === 'lparen' && !after.spaced && (FUNCTION_LETTERS.has(tok.value) || this.singleSymbolBracket())) {
+        if (
+          after?.kind === 'lparen' &&
+          !after.spaced &&
+          (FUNCTION_LETTERS.has(tok.value) || this.singleSymbolBracket())
+        ) {
           const arg = this.primary();
           return { t: 'apply', fn: node, arg };
         }
@@ -626,15 +700,21 @@ class Parser {
         }
         this.leave();
         // `(1, 2)`, `[2, 5)`: a tuple or an interval, read with its brackets (P9).
-        if (this.peek()?.kind === 'comma') return this.listRest(tok.kind === 'lparen' ? '(' : '[', body);
+        if (this.peek()?.kind === 'comma')
+          return this.listRest(tok.kind === 'lparen' ? '(' : '[', body);
         const end = this.next();
         if (end.kind !== close) throw new ParseFault('malformed', 'unbalanced group');
-        const group: MathNode = { t: 'group', kind: tok.kind === 'lparen' ? 'paren' : 'bracket', body };
+        const group: MathNode = {
+          t: 'group',
+          kind: tok.kind === 'lparen' ? 'paren' : 'bracket',
+          body,
+        };
         // `(5.0 ± 0.1) m`: a unit after a bracketed value belongs to it (P6 item 7).
         if (this.scriptDepth === 0 && hasNumber(body)) {
           const match = this.unitAt(end.end);
           if (match) {
-            while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end) this.pos += 1;
+            while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end)
+              this.pos += 1;
             return { t: 'qty', value: group, unit: match.unit };
           }
         }
@@ -747,14 +827,19 @@ class Parser {
       items.push(this.relation());
     }
     const end = this.next();
-    if (end.kind !== 'rparen' && end.kind !== 'rbrack') throw new ParseFault('malformed', 'unbalanced list');
+    if (end.kind !== 'rparen' && end.kind !== 'rbrack')
+      throw new ParseFault('malformed', 'unbalanced list');
     return { t: 'list', open, close: end.kind === 'rparen' ? ')' : ']', items };
   }
 
   /** `(x)`, `(2)`, `(-a)`, `(س)` at the cursor: a bracket holding exactly one symbol. */
   private singleSymbolBracket(): boolean {
     let i = this.pos + 1;
-    if (this.tokens[i]?.kind === 'op' && (this.tokens[i]!.value === '-' || this.tokens[i]!.value === '+')) i += 1;
+    if (
+      this.tokens[i]?.kind === 'op' &&
+      (this.tokens[i]!.value === '-' || this.tokens[i]!.value === '+')
+    )
+      i += 1;
     const inner = this.tokens[i];
     if (!inner || !['letter', 'num', 'greek'].includes(inner.kind)) return false;
     return this.tokens[i + 1]?.kind === 'rparen';
@@ -787,13 +872,16 @@ class Parser {
         spaced: false,
       };
       const exponent: MathNode =
-        tok.sciSign === '-' ? { t: 'unary', op: 'neg', arg: { t: 'num', tok: expTok } } : { t: 'num', tok: expTok };
+        tok.sciSign === '-'
+          ? { t: 'unary', op: 'neg', arg: { t: 'num', tok: expTok } }
+          : { t: 'num', tok: expTok };
       node = { t: 'sci', mantissa, exponent };
     }
     if (this.options.matchUnit && this.scriptDepth === 0) {
       const match = this.unitAt(tok.end);
       if (match) {
-        while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end) this.pos += 1;
+        while (this.pos < this.tokens.length && this.tokens[this.pos]!.start < match.end)
+          this.pos += 1;
         return { t: 'qty', value: node, unit: match.unit };
       }
     }
@@ -836,7 +924,11 @@ class Parser {
   /** `sin 2x` takes `2x`; `sin x + 1` stops before `+`. */
   private unaryForFunction(): MathNode {
     let left = this.unary();
-    while (this.binaryOp(this.peek()) === null && this.startsPrimary(this.peek()) && this.peek()?.kind !== 'func') {
+    while (
+      this.binaryOp(this.peek()) === null &&
+      this.startsPrimary(this.peek()) &&
+      this.peek()?.kind !== 'func'
+    ) {
       left = { t: 'bin', op: 'juxt', left, right: this.postfix() };
     }
     return left;
@@ -935,7 +1027,10 @@ class Parser {
       throw new ParseFault('malformed', 'missing \\right');
     }
     const delim = this.next();
-    if (!['rparen', 'rbrack', 'pipe'].includes(delim.kind) && !(delim.kind === 'cmd' && delim.value === '|')) {
+    if (
+      !['rparen', 'rbrack', 'pipe'].includes(delim.kind) &&
+      !(delim.kind === 'cmd' && delim.value === '|')
+    ) {
       throw new ParseFault('malformed', 'unsupported \\right delimiter');
     }
   }
@@ -945,7 +1040,12 @@ class Parser {
     const tok = this.peek();
     if (!tok) throw new ParseFault('malformed', 'missing fraction argument');
     if (tok.kind === 'lbrace') return this.braced();
-    if (tok.kind === 'num' && tok.intDigits && tok.intDigits.length > 1 && tok.fracDigits === null) {
+    if (
+      tok.kind === 'num' &&
+      tok.intDigits &&
+      tok.intDigits.length > 1 &&
+      tok.fracDigits === null
+    ) {
       // `\frac12` → 1 over 2: split the first digit off the number token.
       const first = tok.intDigits[0]!;
       const rest = tok.intDigits.slice(1);
@@ -965,7 +1065,9 @@ class Parser {
 }
 
 function isInteger(node: MathNode): boolean {
-  return node.t === 'num' && !node.tok.fracDigits && !node.tok.sciExp && Boolean(node.tok.intDigits);
+  return (
+    node.t === 'num' && !node.tok.fracDigits && !node.tok.sciExp && Boolean(node.tok.intDigits)
+  );
 }
 
 /** A fraction of two integers whose numerator is smaller than its denominator. */
@@ -986,7 +1088,15 @@ function toAsciiDigits(digits: string): string {
 function digitsNode(digits: string, at: Token): MathNode {
   return {
     t: 'num',
-    tok: { kind: 'num', value: digits, start: at.start, end: at.end, intDigits: digits, fracDigits: null, spaced: false },
+    tok: {
+      kind: 'num',
+      value: digits,
+      start: at.start,
+      end: at.end,
+      intDigits: digits,
+      fracDigits: null,
+      spaced: false,
+    },
   };
 }
 
@@ -1042,7 +1152,11 @@ export function scriptText(value: string): MathNode {
   } else {
     throw new ParseFault('malformed', `script ${value}`);
   }
-  return negative ? { t: 'unary', op: 'neg', arg: node } : positive ? { t: 'unary', op: 'pos', arg: node } : node;
+  return negative
+    ? { t: 'unary', op: 'neg', arg: node }
+    : positive
+      ? { t: 'unary', op: 'pos', arg: node }
+      : node;
 }
 
 export interface MathParseResult {

@@ -106,9 +106,13 @@ describe('P6: units and O-7 evidence', () => {
   it('compound units: a bracketed denominator, spaced factors, `\\text{}` powers', () => {
     expect(prepared('السعة 4186 J/(kg·K)', 'PHYSICS')).toBe('السعة 4186 جول لكل كيلوجرام كلفن');
     expect(prepared('السرعة 3 m s⁻¹', 'PHYSICS')).toBe('السرعة 3 متر ثانية أُس سالب واحد');
-    expect(prepared('التسارع $9.8\\,\\text{m/s}^2$', 'PHYSICS')).toBe('التسارع 9 فاصلة 8 متر لكل ثانية تربيع');
+    expect(prepared('التسارع $9.8\\,\\text{m/s}^2$', 'PHYSICS')).toBe(
+      'التسارع 9 فاصلة 8 متر لكل ثانية تربيع',
+    );
     expect(prepared('الطول 5 \\mu m', 'PHYSICS')).toBe('الطول 5 ميكرومتر');
-    expect(prepared('الحرارة 25 ℃ و $25^\\circ C$', 'PHYSICS')).toBe('الحرارة 25 درجة سيليزية و 25 درجة سيليزية');
+    expect(prepared('الحرارة 25 ℃ و $25^\\circ C$', 'PHYSICS')).toBe(
+      'الحرارة 25 درجة سيليزية و 25 درجة سيليزية',
+    );
     expect(prepared('العدد 6.02 × 10^23', 'PHYSICS')).toBe('العدد 6 فاصلة 02 في 10 أُس 23');
   });
 

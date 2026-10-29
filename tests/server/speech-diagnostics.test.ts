@@ -6,7 +6,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const mocks = vi.hoisted(() => ({ loadStage: vi.fn(), generateTTS: vi.fn(), usage: vi.fn(), persist: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  loadStage: vi.fn(),
+  generateTTS: vi.fn(),
+  usage: vi.fn(),
+  persist: vi.fn(),
+}));
 
 vi.mock('@/lib/server/speech/stage-access', () => ({ loadStageForSpeech: mocks.loadStage }));
 vi.mock('@/lib/audio/tts-providers', async (importOriginal) => ({
@@ -14,7 +19,9 @@ vi.mock('@/lib/audio/tts-providers', async (importOriginal) => ({
   generateTTS: mocks.generateTTS,
 }));
 vi.mock('@/lib/server/usage-storage', () => ({ recordGenerationUsage: mocks.usage }));
-vi.mock('@/lib/server/classroom-media-bytes', () => ({ persistClassroomMediaBytes: mocks.persist }));
+vi.mock('@/lib/server/classroom-media-bytes', () => ({
+  persistClassroomMediaBytes: mocks.persist,
+}));
 
 const document = {
   stage: { id: 'stage-1', subjectCode: 'MATH', language: 'ar-SA' },
@@ -64,7 +71,13 @@ describe('POST /api/speech/diagnostics', () => {
     expect(mocks.loadStage).toHaveBeenCalledWith(expect.anything(), 'stage-1', 'diagnostics');
     expect(json.actions).toHaveLength(2);
     const [a1, a2] = json.actions;
-    expect(a1).toMatchObject({ actionId: 'a1', original: 'نحسب x² و \\foo{y}', path: 'scientific', status: 'missing', policyStatus: 'experimental' });
+    expect(a1).toMatchObject({
+      actionId: 'a1',
+      original: 'نحسب x² و \\foo{y}',
+      path: 'scientific',
+      status: 'missing',
+      policyStatus: 'experimental',
+    });
     expect(a1.prepared).toContain('سين تربيع');
     expect(a1.warnings.map((w: { code: string }) => w.code)).toContain('SATTS_W_UNKNOWN_COMMAND');
     expect(a2).toMatchObject({ prepared: 'مقدمة عامة' });

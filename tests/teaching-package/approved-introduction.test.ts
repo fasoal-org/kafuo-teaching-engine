@@ -394,7 +394,9 @@ describe('projectApprovedIntroduction (g5.v3)', () => {
 
   it('keeps a sentence written under its heading, and prefers numbers to paragraphs', () => {
     const scenes = [
-      slide('s1', 1, 'lesson_opener', 'Pair Work', [p('<strong>How can one fact become a useful question?</strong>')]),
+      slide('s1', 1, 'lesson_opener', 'Pair Work', [
+        p('<strong>How can one fact become a useful question?</strong>'),
+      ]),
       slide('s2', 2, 'lesson_learning_map', 'What You Will Learn', [
         p('<strong>How can one factual sentence lead to a clear question?</strong>') +
           p('Today, you will turn information into meaningful questions and answers.'),
@@ -552,7 +554,9 @@ describe('projectApprovedIntroduction (g5.v3)', () => {
   });
 
   it('projects every lesson that already projected exactly as before the overview fallback', () => {
-    const lessons: Array<[string, () => AppScene[], { context: string[]; whyThisLesson: string[]; overview: string[] }]> = [
+    const lessons: Array<
+      [string, () => AppScene[], { context: string[]; whyThisLesson: string[]; overview: string[] }]
+    > = [
       [
         '160',
         item160Scenes,
@@ -765,11 +769,7 @@ describe('GET /api/teaching-packages/[id]/introduction', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.versionId).toBe('tpv-approved0001');
-    expect(Object.keys(body.introduction).sort()).toEqual([
-      'context',
-      'overview',
-      'whyThisLesson',
-    ]);
+    expect(Object.keys(body.introduction).sort()).toEqual(['context', 'overview', 'whyThisLesson']);
   });
 
   it('maps a non-approved version to 409', async () => {

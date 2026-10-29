@@ -17,7 +17,14 @@ const PRODUCTION = { allowProposed: false } as const;
 
 function referenceSet() {
   return [
-    ...loadGolden().flatMap((c) => (['natural', 'accessible'] as const).map((mode) => ({ id: c.id, text: c.original, subject: c.subject, mode }))),
+    ...loadGolden().flatMap((c) =>
+      (['natural', 'accessible'] as const).map((mode) => ({
+        id: c.id,
+        text: c.original,
+        subject: c.subject,
+        mode,
+      })),
+    ),
     ...loadAudit()
       .filter((c) => c.policy === 'proposed')
       .map((c) => ({ id: c.id, text: c.original, subject: c.subject, mode: c.mode })),

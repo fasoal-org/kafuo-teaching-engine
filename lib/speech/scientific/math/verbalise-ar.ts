@@ -37,9 +37,21 @@ const OP_SYMBOLS: Readonly<Record<string, string>> = {
   '·': '·',
 };
 
-const BIGOP_LABELS = { int: 'integral', iint: 'double-integral', oint: 'contour-integral', sum: 'sum', prod: 'product' } as const;
+const BIGOP_LABELS = {
+  int: 'integral',
+  iint: 'double-integral',
+  oint: 'contour-integral',
+  sum: 'sum',
+  prod: 'product',
+} as const;
 const BIGOP_GLYPHS = { int: '∫', iint: '∬', oint: '∮', sum: '∑', prod: '∏' } as const;
-const ACCENT_LABELS = { bar: 'bar', hat: 'hat', dot: 'dot-accent', ddot: 'double-dot-accent', tilde: 'tilde' } as const;
+const ACCENT_LABELS = {
+  bar: 'bar',
+  hat: 'hat',
+  dot: 'dot-accent',
+  ddot: 'double-dot-accent',
+  tilde: 'tilde',
+} as const;
 const ACCENT_GLYPHS = { bar: '¯', hat: '^', dot: '˙', ddot: '¨', tilde: '~' } as const;
 /** The closing word of a written bracket (`symbol` entries). */
 const CLOSING: Readonly<Record<string, string>> = { ')': ')', ']': ']', '}': '}' };
@@ -69,7 +81,10 @@ function isTerm(node: MathNode): boolean {
   if (n.t === 'pow' || n.t === 'sub') {
     const script = unbrace(n.t === 'pow' ? n.exp : n.index);
     const simpleScript =
-      script.t === 'num' || script.t === 'var' || script.t === 'greek' || (script.t === 'unary' && script.arg.t === 'num');
+      script.t === 'num' ||
+      script.t === 'var' ||
+      script.t === 'greek' ||
+      (script.t === 'unary' && script.arg.t === 'num');
     return isAtomic(unbrace(n.base)) && simpleScript;
   }
   return n.t === 'bin' && n.op === 'juxt' && isTerm(n.left) && isTerm(n.right);
@@ -264,7 +279,10 @@ export class MathVerbaliser {
         this.operand(node.left, w, true);
         // The accessible entry holds the label; the connective is always the natural word.
         w.boundary(
-          this.ctx.policy.resolve({ role: 'label', token: 'ratio', domain: this.ctx.domain }, 'natural')?.text ?? ':',
+          this.ctx.policy.resolve(
+            { role: 'label', token: 'ratio', domain: this.ctx.domain },
+            'natural',
+          )?.text ?? ':',
         );
         this.operand(node.right, w, true);
         return;
@@ -340,11 +358,7 @@ export class MathVerbaliser {
    * A grouped sub-expression. Accessible mode always names the brackets.
    * Natural mode speaks the grouping only when `force` (precedence needs it).
    */
-  private group(
-    node: Extract<MathNode, { t: 'group' }>,
-    w: Writer,
-    force: boolean,
-  ): void {
+  private group(node: Extract<MathNode, { t: 'group' }>, w: Writer, force: boolean): void {
     if (node.kind === 'brace' && !force) {
       this.node(unbrace(node.body), w);
       return;
@@ -377,7 +391,12 @@ export class MathVerbaliser {
     // Natural: «مجموع أ وب» / «الفرق بين أ وب» for a simple sum/difference,
     // otherwise «المقدار …،». The sum/difference words carry the operator, so
     // they are used only when both entries are usable (FR-030).
-    if (body.t === 'bin' && (body.op === '+' || body.op === '-') && isAtomic(body.left) && isAtomic(body.right)) {
+    if (
+      body.t === 'bin' &&
+      (body.op === '+' || body.op === '-') &&
+      isAtomic(body.left) &&
+      isAtomic(body.right)
+    ) {
       const lead = labelOrNull(this.ctx, body.op === '+' ? 'sum-of' : 'difference-of');
       const and = lead === null ? null : labelOrNull(this.ctx, 'and');
       if (lead !== null && and !== null) {
@@ -701,7 +720,8 @@ export class MathVerbaliser {
    */
   private identitySubscript(base: MathNode, index: MathNode): boolean {
     const domain = this.ctx.domain;
-    if (this.accessible || this.inFormula || (domain !== 'PHYSICS' && domain !== 'CHEMISTRY')) return false;
+    if (this.accessible || this.inFormula || (domain !== 'PHYSICS' && domain !== 'CHEMISTRY'))
+      return false;
     const b = unbrace(base);
     if (b.t !== 'var' && b.t !== 'greek') return false;
     const i = unbrace(index);
@@ -742,7 +762,12 @@ export class MathVerbaliser {
     const under = this.identitySubscript(base, index) ? labelOrNull(this.ctx, 'subscript') : null;
     if (under !== null) w.word(under);
     else if (this.accessible) w.word(label(this.ctx, 'index', '_'));
-    else if (this.ctx.policy.resolve({ role: 'label', token: 'index', domain: this.ctx.domain }, 'natural') === null) {
+    else if (
+      this.ctx.policy.resolve(
+        { role: 'label', token: 'index', domain: this.ctx.domain },
+        'natural',
+      ) === null
+    ) {
       // Natural reading marks the subscript by position only («سين واحد»); that
       // convention is itself a policy entry. Without it, the literal `_` keeps
       // `x_1` distinct from the product `x 1` (FR-030).
@@ -884,7 +909,11 @@ export class MathVerbaliser {
 
 export function verbaliseMath(node: MathNode, ctx: MathVerbaliseContext): Writer {
   const natural = ctx.mode === 'natural';
-  const w = new Writer({ pauseClosesScope: natural, speakScopeEnds: !natural, pauseEndsScope: natural });
+  const w = new Writer({
+    pauseClosesScope: natural,
+    speakScopeEnds: !natural,
+    pauseEndsScope: natural,
+  });
   new MathVerbaliser(ctx).write(node, w);
   return w;
 }

@@ -6,7 +6,11 @@ import {
   resetHandoffNonceMemoryForTests,
   setHandoffNonceStoreForTests,
 } from '@/lib/server/tutor/handoff-nonce-store';
-import { mintStudentHandoff, verifyStudentGrant, verifyStudentHandoff } from '@/lib/server/tutor/student-grant';
+import {
+  mintStudentHandoff,
+  verifyStudentGrant,
+  verifyStudentHandoff,
+} from '@/lib/server/tutor/student-grant';
 
 /**
  * `POST /api/tutor/handoff` (service key, contracts §3.1) and
@@ -31,7 +35,13 @@ const VALID_BODY = {
   },
   allowedSubjects: [
     { code: 'MATH', offeringId: '10', nameAr: 'الرياضيات', nameEn: 'Math', academicLanguage: 'ar' },
-    { code: 'FRENCH', offeringId: '12', nameAr: 'الفرنسية', nameEn: 'French', academicLanguage: 'en' },
+    {
+      code: 'FRENCH',
+      offeringId: '12',
+      nameAr: 'الفرنسية',
+      nameEn: 'French',
+      academicLanguage: 'en',
+    },
   ],
   localeHint: 'ar',
   entitlements: { freeChat: true, help: true },
@@ -127,7 +137,9 @@ describe('POST /api/tutor/handoff', () => {
       expect(response.status, JSON.stringify(body)).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ error: { code } });
     }
-    const notJson = await (await import('@/app/api/tutor/handoff/route')).POST(
+    const notJson = await (
+      await import('@/app/api/tutor/handoff/route')
+    ).POST(
       new NextRequest('http://localhost/api/tutor/handoff', {
         method: 'POST',
         headers: { authorization: `Bearer ${SERVICE_KEY}` },
@@ -176,7 +188,9 @@ describe('GET /api/tutor/handoff/redeem', () => {
       error: { code: 'GRANT_INVALID', message: expect.any(String), retryable: false },
     });
     const { GET } = await import('@/app/api/tutor/handoff/redeem/route');
-    expect((await GET(new NextRequest('http://localhost/api/tutor/handoff/redeem'))).status).toBe(401);
+    expect((await GET(new NextRequest('http://localhost/api/tutor/handoff/redeem'))).status).toBe(
+      401,
+    );
 
     const { token } = mintStudentHandoff({
       ...VALID_BODY,

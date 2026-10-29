@@ -155,9 +155,7 @@ function holdsListLine(block: TextBlock): boolean {
 }
 
 function isSentence(block: TextBlock): boolean {
-  return block.text
-    .split('\n')
-    .every((line) => SENTENCE_END.test(line.trim()));
+  return block.text.split('\n').every((line) => SENTENCE_END.test(line.trim()));
 }
 
 function scenesFor(scenes: AppScene[], key: string): AppScene[] {
@@ -177,13 +175,15 @@ function joinBlocks(blocks: TextBlock[]): string {
  *  heading written in the same element as its sentence (`Why it matters` / `Readers…`)
  *  drops the heading and keeps the sentence instead of losing both. */
 function sentenceLines(blocks: TextBlock[]): string {
-  return blocks
-    .flatMap((block) => block.text.split('\n'))
-    .map((line) => line.trim())
-    // A letter is required: a bare `?` or `…` is a diagram label, not a sentence.
-    .filter((line) => SENTENCE_END.test(line) && /\p{L}/u.test(line))
-    .join('\n')
-    .trim();
+  return (
+    blocks
+      .flatMap((block) => block.text.split('\n'))
+      .map((line) => line.trim())
+      // A letter is required: a bare `?` or `…` is a diagram label, not a sentence.
+      .filter((line) => SENTENCE_END.test(line) && /\p{L}/u.test(line))
+      .join('\n')
+      .trim()
+  );
 }
 
 type Projector = (scenes: AppScene[]) => ApprovedIntroduction;
@@ -301,9 +301,6 @@ export async function readApprovedIntroduction(
   return {
     versionId: version.id,
     teachingModel: version.teachingModel,
-    introduction: projectApprovedIntroduction(
-      version.teachingModel,
-      document.scenes as AppScene[],
-    ),
+    introduction: projectApprovedIntroduction(version.teachingModel, document.scenes as AppScene[]),
   };
 }

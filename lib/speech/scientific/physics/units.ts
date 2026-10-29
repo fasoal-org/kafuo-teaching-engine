@@ -53,7 +53,9 @@ function readPower(src: string, i: number): { power: number; end: number } | nul
       j += 1;
     }
     const value = Number(text);
-    return Number.isInteger(value) && text !== '-' && text !== '+' ? { power: value, end: j } : null;
+    return Number.isInteger(value) && text !== '-' && text !== '+'
+      ? { power: value, end: j }
+      : null;
   }
   if (src[i] === '^') {
     let j = i + 1;
@@ -102,9 +104,12 @@ function readDegreeUnit(src: string, i: number): { unit: string; end: number } |
   else if (src.startsWith('^{\\circ}', j)) j += 8;
   else return null;
   while (src[j] === ' ') j += 1;
-  if ((src[j] === 'C' || src[j] === 'F') && !isUnitLetter(src[j + 1])) return { unit: `°${src[j]}`, end: j + 1 };
+  if ((src[j] === 'C' || src[j] === 'F') && !isUnitLetter(src[j + 1]))
+    return { unit: `°${src[j]}`, end: j + 1 };
   const wrapped = readWrapped(src, j);
-  return wrapped && (wrapped.inner === 'C' || wrapped.inner === 'F') ? { unit: `°${wrapped.inner}`, end: wrapped.end } : null;
+  return wrapped && (wrapped.inner === 'C' || wrapped.inner === 'F')
+    ? { unit: `°${wrapped.inner}`, end: wrapped.end }
+    : null;
 }
 
 function readFactor(src: string, i: number): { factor: UnitFactor; end: number } | null {
@@ -159,7 +164,8 @@ function skipFactorSpace(src: string, i: number): number {
   let j = i;
   for (;;) {
     if (src[j] === ' ' || src[j] === '\u00a0' || src[j] === '~') j += 1;
-    else if (src[j] === '\\' && (src[j + 1] === ',' || src[j + 1] === ';' || src[j + 1] === ' ')) j += 2;
+    else if (src[j] === '\\' && (src[j + 1] === ',' || src[j + 1] === ';' || src[j + 1] === ' '))
+      j += 2;
     else return j;
   }
 }
@@ -180,7 +186,10 @@ function nextFactor(src: string, j: number): { factor: UnitFactor; end: number }
  * `·` or spacing, optionally `/` and a denominator — one factor, or a
  * bracketed group `/(kg·K)`.
  */
-function readUnitExpression(src: string, i: number): { unit: Omit<UnitNode, 'source'>; end: number } | null {
+function readUnitExpression(
+  src: string,
+  i: number,
+): { unit: Omit<UnitNode, 'source'>; end: number } | null {
   const first = readFactor(src, i);
   if (!first) return null;
   const num: UnitFactor[] = [first.factor];
@@ -227,14 +236,19 @@ function skipUnitSpace(src: string, i: number): number {
   let j = i;
   for (;;) {
     if (src[j] === ' ' || src[j] === '\u00a0' || src[j] === '~') j += 1;
-    else if (src[j] === '\\' && (src[j + 1] === ',' || src[j + 1] === ';' || src[j + 1] === ' ')) j += 2;
+    else if (src[j] === '\\' && (src[j + 1] === ',' || src[j + 1] === ';' || src[j + 1] === ' '))
+      j += 2;
     else if (src.startsWith('\\quad', j)) j += 5;
     else return j;
   }
 }
 
 /** `\text{m/s}^2`: a power written after the wrapper belongs to the unit's last factor. */
-function withTrailingPower(unit: Omit<UnitNode, 'source'>, src: string, end: number): { unit: Omit<UnitNode, 'source'>; end: number } {
+function withTrailingPower(
+  unit: Omit<UnitNode, 'source'>,
+  src: string,
+  end: number,
+): { unit: Omit<UnitNode, 'source'>; end: number } {
   const power = readPower(src, end);
   if (!power) return { unit, end };
   const list = unit.den.length > 0 ? unit.den : unit.num;
@@ -270,7 +284,12 @@ export function matchUnit(src: string, pos: number): UnitMatch | null {
   const [only] = unit.num;
   const glued = start === pos;
   const ambiguous =
-    glued && unit.den.length === 0 && unit.num.length === 1 && only!.prefix === null && only!.power === 1 && /^[A-Za-z]$/.test(only!.unit);
+    glued &&
+    unit.den.length === 0 &&
+    unit.num.length === 1 &&
+    only!.prefix === null &&
+    only!.power === 1 &&
+    /^[A-Za-z]$/.test(only!.unit);
   return { end: parsed.end, unit, ...(ambiguous ? { ambiguous: true } : {}) };
 }
 
@@ -294,5 +313,9 @@ export function isBareCompoundUnit(src: string): boolean {
   const text = src.trim();
   if (/[0-9]/.test(text)) return false;
   const parsed = readUnitExpression(text, 0);
-  return parsed !== null && parsed.end === text.length && parsed.unit.num.length + parsed.unit.den.length >= 2;
+  return (
+    parsed !== null &&
+    parsed.end === text.length &&
+    parsed.unit.num.length + parsed.unit.den.length >= 2
+  );
 }

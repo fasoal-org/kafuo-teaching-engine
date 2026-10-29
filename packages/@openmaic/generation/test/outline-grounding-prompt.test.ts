@@ -115,9 +115,7 @@ describe('normalized grounding prompt contract', () => {
 
   it('requires sourceContentUnitIds in the Scene field table', () => {
     const { system } = grounded();
-    const row = system
-      .split('\n')
-      .find((line) => line.startsWith('| sourceContentUnitIds'));
+    const row = system.split('\n').find((line) => line.startsWith('| sourceContentUnitIds'));
     expect(row).toBeDefined();
     expect(row).toContain('✅');
   });

@@ -24,7 +24,11 @@ describe('audit regression set (P0)', () => {
       ids.add(c.id);
       expect(['pending', 'enforced']).toContain(c.status);
       expect(/^P[0-9]$/.test(c.phase), c.id).toBe(true);
-      if (c.distinctFrom) expect(CASES.some((other) => other.id === c.distinctFrom), c.id).toBe(true);
+      if (c.distinctFrom)
+        expect(
+          CASES.some((other) => other.id === c.distinctFrom),
+          c.id,
+        ).toBe(true);
     }
   });
 
@@ -43,8 +47,13 @@ describe('audit regression set (P0)', () => {
         expect(result.preparedText, `${c.id} (${c.mode})`).toBe(c.expected);
         if (c.expectWarning) expect(result.warnings.map((w) => w.code)).toContain(c.expectWarning);
         // Enforced means read correctly, not rescued by the literal fallback.
-        const review = result.warnings.filter((w) => w.severity === 'review' && w.code !== c.expectWarning);
-        expect(review.map((w) => `${w.code}(${w.detail ?? ''})`), c.id).toEqual([]);
+        const review = result.warnings.filter(
+          (w) => w.severity === 'review' && w.code !== c.expectWarning,
+        );
+        expect(
+          review.map((w) => `${w.code}(${w.detail ?? ''})`),
+          c.id,
+        ).toEqual([]);
       });
 
       if (c.distinctFrom) {
@@ -56,14 +65,13 @@ describe('audit regression set (P0)', () => {
     },
   );
 
-  it.each(CASES.filter((c) => c.status === 'pending' && c.wrongMeaning).map((c) => [c.id, c] as const))(
-    'pending wrong-meaning case %s raises a review-severity warning until fixed',
-    (_id, c) => {
-      const result = run(c);
-      const review = result.warnings.filter((w) => w.severity === 'review');
-      expect(review.length, `${c.id}: ${result.preparedText}`).toBeGreaterThan(0);
-    },
-  );
+  it.each(
+    CASES.filter((c) => c.status === 'pending' && c.wrongMeaning).map((c) => [c.id, c] as const),
+  )('pending wrong-meaning case %s raises a review-severity warning until fixed', (_id, c) => {
+    const result = run(c);
+    const review = result.warnings.filter((w) => w.severity === 'review');
+    expect(review.length, `${c.id}: ${result.preparedText}`).toBeGreaterThan(0);
+  });
 
   it('every review guard names the phase that removes it', () => {
     for (const phase of Object.values(REVIEW_GUARD_PHASES)) expect(phase).toMatch(/^P[0-9]$/);

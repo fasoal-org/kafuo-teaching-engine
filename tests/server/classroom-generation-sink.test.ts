@@ -304,12 +304,17 @@ describe('generateClassroom persistence sink', () => {
 
     it('marks the scene with the count when a line failed, and the package still completes', async () => {
       mocks.generateTTSForClassroom.mockImplementation(async (scenes) => {
-        const first = scenes[0].actions.find((action: { type: string }) => action.type === 'speech');
+        const first = scenes[0].actions.find(
+          (action: { type: string }) => action.type === 'speech',
+        );
         first.audioId = 'tts_s1_a1';
       });
       const scene = await persistedScene({ enableTTS: true });
       expect(scene.generationIssues).toEqual([
-        expect.objectContaining({ code: 'NARRATION_AUDIO_FAILED', message: expect.stringContaining('1 of 2') }),
+        expect.objectContaining({
+          code: 'NARRATION_AUDIO_FAILED',
+          message: expect.stringContaining('1 of 2'),
+        }),
       ]);
     });
 
@@ -322,7 +327,8 @@ describe('generateClassroom persistence sink', () => {
 
     it('adds no mark when every spoken line has audio', async () => {
       mocks.generateTTSForClassroom.mockImplementation(async (scenes) => {
-        for (const action of scenes[0].actions) if (action.type === 'speech') action.audioId = `tts_s1_${action.id}`;
+        for (const action of scenes[0].actions)
+          if (action.type === 'speech') action.audioId = `tts_s1_${action.id}`;
       });
       const scene = await persistedScene({ enableTTS: true });
       expect(scene.generationIssues ?? []).toEqual([]);

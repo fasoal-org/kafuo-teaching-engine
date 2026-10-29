@@ -24,9 +24,6 @@ interface ClipPath {
   };
 }
 
-
-
-
 export const CLIPPATHS: ClipPath = {
   rect: {
     name: '矩形',

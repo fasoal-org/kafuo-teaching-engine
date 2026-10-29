@@ -471,7 +471,9 @@ describe('SATTS dynamic web speech (plan §7.6, FR-027)', () => {
 
   it('with the scientific mode on, sends the Stage id and dynamic: true', async () => {
     const { useStageStore } = await import('@/lib/store/stage');
-    useStageStore.setState({ stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 } } as never);
+    useStageStore.setState({
+      stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 },
+    } as never);
     (mocks.settings as Record<string, unknown>).scientificSpeechMode = 'on';
     act(() => root.render(createElement(Probe)));
     await seal('A');
@@ -480,7 +482,9 @@ describe('SATTS dynamic web speech (plan §7.6, FR-027)', () => {
 
   it('with the mode off (default), a Stage still sends its id and dynamic: true (TTS routing)', async () => {
     const { useStageStore } = await import('@/lib/store/stage');
-    useStageStore.setState({ stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 } } as never);
+    useStageStore.setState({
+      stage: { id: 'stage-9', name: 'S', createdAt: 1, updatedAt: 1 },
+    } as never);
     await seal('A');
     expect(requests[0]!.body).toMatchObject({ stageId: 'stage-9', dynamic: true });
   });

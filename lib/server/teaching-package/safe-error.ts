@@ -78,13 +78,7 @@ export function validateTeachingEngineIntegrationConfig(env: {
       `INTEGRATION_NOT_CONFIGURED: TEACHING_ENGINE_WEBHOOK_URL is required when TEACHING_ENGINE_SERVICE_KEY is set${where}`,
     );
   }
-  if (
-    !isAcceptableWebhookUrl(
-      env.webhookUrl,
-      env.isProduction,
-      env.allowInsecureLoopbackWebhook,
-    )
-  ) {
+  if (!isAcceptableWebhookUrl(env.webhookUrl, env.isProduction, env.allowInsecureLoopbackWebhook)) {
     throw new Error(
       env.isProduction
         ? 'INTEGRATION_NOT_CONFIGURED: TEACHING_ENGINE_WEBHOOK_URL must be an https URL when TEACHING_ENGINE_SERVICE_KEY is set in production'

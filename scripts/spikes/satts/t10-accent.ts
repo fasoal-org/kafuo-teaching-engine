@@ -46,9 +46,24 @@ const SENTENCES = [
 ];
 
 const VARIANTS = [
-  { id: 'A', name: 'A · MSA + current instructions', text: (s: (typeof SENTENCES)[number]) => s.msa, instr: SAUDI_INSTRUCTIONS_V1 },
-  { id: 'B', name: 'B · MSA + stronger Riyadh-accent instructions', text: (s: (typeof SENTENCES)[number]) => s.msa, instr: INSTR_B },
-  { id: 'C', name: 'C · white Saudi dialect wording + dialect instructions', text: (s: (typeof SENTENCES)[number]) => s.saudi, instr: INSTR_C },
+  {
+    id: 'A',
+    name: 'A · MSA + current instructions',
+    text: (s: (typeof SENTENCES)[number]) => s.msa,
+    instr: SAUDI_INSTRUCTIONS_V1,
+  },
+  {
+    id: 'B',
+    name: 'B · MSA + stronger Riyadh-accent instructions',
+    text: (s: (typeof SENTENCES)[number]) => s.msa,
+    instr: INSTR_B,
+  },
+  {
+    id: 'C',
+    name: 'C · white Saudi dialect wording + dialect instructions',
+    text: (s: (typeof SENTENCES)[number]) => s.saudi,
+    instr: INSTR_C,
+  },
 ];
 
 async function main() {
@@ -81,7 +96,8 @@ function html() {
     const rows = VARIANTS.map(
       (v) =>
         `<tr><th>${esc(v.name)}</th><td dir="rtl" lang="ar">${esc(v.text(s))}</td>${VOICES.map(
-          (voice) => `<td><audio controls preload="none" src="${s.nn}-${v.id}-${voice}.mp3"></audio></td>`,
+          (voice) =>
+            `<td><audio controls preload="none" src="${s.nn}-${v.id}-${voice}.mp3"></audio></td>`,
         ).join('')}</tr>`,
     ).join('');
     return `<h2>${s.nn} · ${s.label}</h2><table><thead><tr><th>Variant</th><th>Text sent</th>${VOICES.map((v) => `<th>${v}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;

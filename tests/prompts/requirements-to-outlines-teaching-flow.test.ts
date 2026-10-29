@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildOutlinePrompt,
-  type TeachingFlowEntry,
-} from '@openmaic/generation';
+import { buildOutlinePrompt, type TeachingFlowEntry } from '@openmaic/generation';
 
 const FLOW: TeachingFlowEntry[] = [
   { stage: 'lesson_introduction', instructions: 'Introduce the whole item once.' },
@@ -28,9 +25,12 @@ function baseVars() {
 
 describe('requirements-to-outlines teaching-flow conditional block', () => {
   it('renders the authoritative flow block and rules when a flow is supplied', () => {
-    const { system, user } = buildOutlinePrompt({ requirement: 'Teach photosynthesis' }, {
-      teachingFlow: FLOW,
-    });
+    const { system, user } = buildOutlinePrompt(
+      { requirement: 'Teach photosynthesis' },
+      {
+        teachingFlow: FLOW,
+      },
+    );
     expect(system).toContain('Authoritative Teaching Model Flow');
     expect(system).toContain('stage="lesson_introduction"');
     expect(system).toContain('stage="outcome_teaching_cards"');
@@ -43,9 +43,12 @@ describe('requirements-to-outlines teaching-flow conditional block', () => {
 
   it('renders byte-identical prompts without a flow (legacy/non-Kafuo path)', () => {
     const without = buildOutlinePrompt({ requirement: 'Teach photosynthesis' }, {});
-    const empty = buildOutlinePrompt({ requirement: 'Teach photosynthesis' }, {
-      teachingFlow: [],
-    });
+    const empty = buildOutlinePrompt(
+      { requirement: 'Teach photosynthesis' },
+      {
+        teachingFlow: [],
+      },
+    );
 
     expect(without.system).not.toContain('Authoritative Teaching Model Flow');
     expect(without.system).not.toContain('teachingStage');

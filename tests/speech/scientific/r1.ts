@@ -78,17 +78,27 @@ export const CHEMISTRY_CONVENTIONAL: readonly string[] = [
 ];
 
 export function words(text: string): string {
-  return ` ${text.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean).join(' ')} `;
+  return ` ${text
+    .split(/[^\p{L}\p{M}\p{N}]+/u)
+    .filter(Boolean)
+    .join(' ')} `;
 }
 
 /** Forbidden words an expression reading adds that the authored text does not contain. */
-export function r1Violations(text: string, subject: ScientificSubjectCode, mode: 'natural' | 'accessible'): string[] {
+export function r1Violations(
+  text: string,
+  subject: ScientificSubjectCode,
+  mode: 'natural' | 'accessible',
+): string[] {
   const result = render(text, subject, mode);
   const original = words(text);
   const found = new Set<string>();
   for (const span of result.spans.filter((s) => s.kind === 'expression')) {
     const reading = words(result.preparedText.slice(span.prepared.start, span.prepared.end));
-    const forbidden = subject === 'CHEMISTRY' ? FORBIDDEN_MEANINGS : [...FORBIDDEN_MEANINGS, ...CHEMISTRY_CONVENTIONAL];
+    const forbidden =
+      subject === 'CHEMISTRY'
+        ? FORBIDDEN_MEANINGS
+        : [...FORBIDDEN_MEANINGS, ...CHEMISTRY_CONVENTIONAL];
     for (const word of forbidden) {
       if (reading.includes(` ${word} `) && !original.includes(` ${word} `)) found.add(word);
     }

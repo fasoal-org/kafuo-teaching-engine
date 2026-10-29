@@ -1,9 +1,7 @@
 {
   "table": "greek",
   "description": "Greek letter names, keyed by LaTeX name; Unicode glyphs map to these keys.",
-  "roles": [
-    "greek"
-  ],
+  "roles": ["greek"],
   "entries": [
     {
       "key": "alpha",

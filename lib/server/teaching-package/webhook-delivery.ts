@@ -134,7 +134,9 @@ export async function deliverPendingWebhooks(options: {
           [WEBHOOK_EVENT_HEADERS.signature]: signature,
         },
         body: rawBody,
-        signal: AbortSignal.timeout(numericEnv('TEACHING_ENGINE_WEBHOOK_TIMEOUT_MS', DEFAULT_TIMEOUT_MS)),
+        signal: AbortSignal.timeout(
+          numericEnv('TEACHING_ENGINE_WEBHOOK_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
+        ),
       });
       if (response.ok) {
         await markWebhookDelivered(pool, row.id, now());
@@ -167,9 +169,7 @@ export async function deliverPendingWebhooks(options: {
           lastError: describeErrorSafely(error).name,
           now: now(),
         });
-        log.error(
-          `webhook delivery ${row.id} terminally failed after ${attempts} attempt(s)`,
-        );
+        log.error(`webhook delivery ${row.id} terminally failed after ${attempts} attempt(s)`);
         continue;
       }
       await markWebhookRetry(pool, row.id, {
@@ -196,8 +196,7 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
 }): Promise<void> {
   const workerId = options?.workerId ?? `sweep-${process.pid}`;
   const pool =
-    options?.pool ??
-    (await getServerPersistenceProvider(process.env.DATABASE_URL ?? '')).pool;
+    options?.pool ?? (await getServerPersistenceProvider(process.env.DATABASE_URL ?? '')).pool;
   const staleBefore = Date.now() - attemptStaleMs();
   const reclaimed = await reclaimStaleAttempts(pool, null, staleBefore);
   for (const attempt of reclaimed) {
@@ -228,9 +227,7 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
           message: 'the generation attempt was reclaimed after its runner became stale',
           retryable: true,
         },
-        ...(attempt.versionId
-          ? {}
-          : {}),
+        ...(attempt.versionId ? {} : {}),
       }),
     ).catch((error) => {
       log.error(
@@ -294,7 +291,10 @@ export function startWebhookDeliverySchedule(): WebhookScheduleHandle | undefine
 
   let running = false;
   let stopped = false;
-  const interval = numericEnv('TEACHING_ENGINE_WEBHOOK_SWEEP_INTERVAL_MS', DEFAULT_SWEEP_INTERVAL_MS);
+  const interval = numericEnv(
+    'TEACHING_ENGINE_WEBHOOK_SWEEP_INTERVAL_MS',
+    DEFAULT_SWEEP_INTERVAL_MS,
+  );
   const timer = setInterval(() => {
     if (running || stopped) return;
     running = true;

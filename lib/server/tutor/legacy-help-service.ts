@@ -52,7 +52,10 @@ import {
   type SafetyRecord,
 } from '@/lib/server/tutor/experiment-guard';
 import { identityReply, namesProvider } from '@/lib/server/tutor/identity-guard';
-import { readVersionScene, type LearnerSceneDeps } from '@/lib/server/teaching-package/learner-scene';
+import {
+  readVersionScene,
+  type LearnerSceneDeps,
+} from '@/lib/server/teaching-package/learner-scene';
 import {
   assembleTutorPrompt,
   isHelpIntentHint,
@@ -62,7 +65,12 @@ import {
   type HelpQuestionInput,
   type HistoryTurnInput,
 } from '@/lib/server/tutor/prompt-assembly';
-import { parseAcademic, parseLearnerSubject, parseLocaleHint, parseStudentRef } from '@/lib/server/tutor/student-context';
+import {
+  parseAcademic,
+  parseLearnerSubject,
+  parseLocaleHint,
+  parseStudentRef,
+} from '@/lib/server/tutor/student-context';
 import { resolveProxyRatio, UNIT_CHAR_CAP } from '@/lib/server/tutor/token-budget';
 import { TURN_IN_PROGRESS_WINDOW_S, classifyTurnFailure } from '@/lib/server/tutor/turn-runner';
 
@@ -93,8 +101,17 @@ export interface LegacyHelpTurnRequest {
   requestDigest: string;
   studentRef: string;
   /** `code` null = the lesson's master subject has no routing key (refused as unrouted). */
-  subject: { code: string | null; nameAr: string | null; nameEn: string | null; academicLanguage: string };
-  academic: { curriculumName: string | null; curriculumVersionLabel: string | null; gradeLabel: string | null };
+  subject: {
+    code: string | null;
+    nameAr: string | null;
+    nameEn: string | null;
+    academicLanguage: string;
+  };
+  academic: {
+    curriculumName: string | null;
+    curriculumVersionLabel: string | null;
+    gradeLabel: string | null;
+  };
   lesson: { learningItemType: string; learningItemId: string; title: string } | null;
   helpScope: {
     kind: 'help_linked_chat' | 'help_card';
@@ -130,7 +147,8 @@ function optionalString(value: unknown, where: string): string | null {
 }
 
 function requireString(value: unknown, where: string): string {
-  if (typeof value !== 'string' || value.trim() === '') throw invalid(`${where} must be a non-empty string`);
+  if (typeof value !== 'string' || value.trim() === '')
+    throw invalid(`${where} must be a non-empty string`);
   return value;
 }
 
@@ -173,14 +191,17 @@ function parseHelpQuestion(value: unknown): HelpQuestionInput | null {
 
 export function parseLegacyHelpTurnRequest(body: Record<string, unknown>): LegacyHelpTurnRequest {
   const tenantContext = body.tenantContext;
-  if (!isRecord(tenantContext)) throw new TeachingPackageError('TENANT_REQUIRED', 'tenantContext.tenantId is required');
+  if (!isRecord(tenantContext))
+    throw new TeachingPackageError('TENANT_REQUIRED', 'tenantContext.tenantId is required');
   const tenantId = requireString(tenantContext.tenantId, 'tenantContext.tenantId');
   if (body.origin !== 'kafuo_backend') throw invalid("origin must be 'kafuo_backend'");
-  if (typeof body.actorRef !== 'string') throw new TeachingPackageError('ACTOR_REQUIRED', 'actorRef must be a string');
+  if (typeof body.actorRef !== 'string')
+    throw new TeachingPackageError('ACTOR_REQUIRED', 'actorRef must be a string');
   const turnId = requireString(body.turnId, 'turnId');
   if (turnId.length > 200) throw invalid('turnId must be at most 200 chars');
   const requestDigest = requireString(body.requestDigest, 'requestDigest').toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(requestDigest)) throw invalid('requestDigest must be a sha256 hex digest');
+  if (!/^[0-9a-f]{64}$/.test(requestDigest))
+    throw invalid('requestDigest must be a sha256 hex digest');
   const studentRef = parseStudentRef(body.studentRef);
   const subject = parseLearnerSubject(body.subject);
   const academic = parseAcademic(body.academic, { requireCurriculumId: false });
@@ -268,7 +289,10 @@ export function parseLegacyHelpTurnRequest(body: Record<string, unknown>): Legac
   if (!isRecord(body.message)) throw invalid('message must be an object');
   const message = requireString(body.message.text, 'message.text');
   if (message.length > LEGACY_HELP_MAX_MESSAGE_CHARS) {
-    throw new TeachingPackageError('REQUEST_TOO_LARGE', `message.text must be at most ${LEGACY_HELP_MAX_MESSAGE_CHARS} chars`);
+    throw new TeachingPackageError(
+      'REQUEST_TOO_LARGE',
+      `message.text must be at most ${LEGACY_HELP_MAX_MESSAGE_CHARS} chars`,
+    );
   }
 
   return {
@@ -321,10 +345,15 @@ function responseOf(row: LegacyHelpTurnRow): LegacyHelpTurnResponse {
 }
 
 export interface LegacyHelpDeps {
-  queryable: TeachingCallOptions['queryable'] & { query(text: string, params?: unknown[]): Promise<unknown> };
+  queryable: TeachingCallOptions['queryable'] & {
+    query(text: string, params?: unknown[]): Promise<unknown>;
+  };
   now?: () => number;
   workerId?: string;
-  executor?: Pick<TeachingCallOptions, 'rateCard' | 'proxyRatioReader' | 'completionRetryDelaysMs' | 'timeoutMs' | 'idFactory'>;
+  executor?: Pick<
+    TeachingCallOptions,
+    'rateCard' | 'proxyRatioReader' | 'completionRetryDelaysMs' | 'timeoutMs' | 'idFactory'
+  >;
   inProgressWindowS?: number;
   /** Test seam; defaults to `readVersionScene` over the teaching-package document store. */
   loadSlide?: (input: {
@@ -347,11 +376,18 @@ async function resolveSlide(
   const input = { tenantId: request.tenantId, versionId: slide.versionId, sceneId: slide.sceneId };
   try {
     if (deps.loadSlide) return await deps.loadSlide(input);
-    const scene = await readVersionScene({ pool: deps.queryable as unknown as LearnerSceneDeps['pool'] }, input);
+    const scene = await readVersionScene(
+      { pool: deps.queryable as unknown as LearnerSceneDeps['pool'] },
+      input,
+    );
     return { sceneTitle: scene.sceneTitle, sceneText: scene.sceneText };
   } catch (error) {
     log.warn(
-      JSON.stringify({ event: 'legacy_help.slide_unavailable', turnId: request.turnId, sceneId: slide.sceneId }),
+      JSON.stringify({
+        event: 'legacy_help.slide_unavailable',
+        turnId: request.turnId,
+        sceneId: slide.sceneId,
+      }),
       describeErrorSafely(error),
     );
     return null;
@@ -374,9 +410,13 @@ export async function runLegacyHelpTurn(
   const request = parseLegacyHelpTurnRequest(body);
   const digest = computeHelpTurnDigest(body);
   if (digest !== request.requestDigest) {
-    throw new TeachingPackageError('INVALID_REQUEST', 'requestDigest does not match the canonical request', {
-      expected: digest,
-    });
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'requestDigest does not match the canonical request',
+      {
+        expected: digest,
+      },
+    );
   }
   if (request.subject.code === null || !isSubjectCode(request.subject.code)) {
     throw new TeachingPackageError(
@@ -399,7 +439,10 @@ export async function runLegacyHelpTurn(
   if (!begun.inserted) {
     const existing = begun.row;
     if (existing.requestDigest !== digest) {
-      throw new TeachingPackageError('TURN_DIGEST_CONFLICT', 'turnId was already used with a different request');
+      throw new TeachingPackageError(
+        'TURN_DIGEST_CONFLICT',
+        'turnId was already used with a different request',
+      );
     }
     if (existing.status === 'completed') return responseOf(existing);
     if (existing.status === 'generating' && nowS() - existing.generatingAt < windowS) {
@@ -412,13 +455,19 @@ export async function runLegacyHelpTurn(
       staleBefore: nowS() - windowS,
     });
     if (!retaken) {
-      throw new TeachingPackageError('TURN_IN_PROGRESS', 'this turn is being generated', { retryAfterS: windowS });
+      throw new TeachingPackageError('TURN_IN_PROGRESS', 'this turn is being generated', {
+        retryAfterS: windowS,
+      });
     }
   }
 
   const fail = async (code: string, attemptIds: string[] = []) => {
-    await failLegacyHelpTurn(queryable, request.turnId, { errorCode: code, attemptIds, now: nowS() }).catch(
-      (error) => log.error('legacy help turn fail-mark failed:', describeErrorSafely(error)),
+    await failLegacyHelpTurn(queryable, request.turnId, {
+      errorCode: code,
+      attemptIds,
+      now: nowS(),
+    }).catch((error) =>
+      log.error('legacy help turn fail-mark failed:', describeErrorSafely(error)),
     );
   };
 
@@ -431,7 +480,10 @@ export async function runLegacyHelpTurn(
   );
   const pre = guardOrBoundary(() => preCheck(request.message), boundary);
   if (!pre.ok) {
-    const safety = safetyRecord({ triggered: true, categories: [], directive: null }, { applied: true, reason: 'guard_error' });
+    const safety = safetyRecord(
+      { triggered: true, categories: [], directive: null },
+      { applied: true, reason: 'guard_error' },
+    );
     const stored = await completeLegacyHelpTurn(queryable, request.turnId, {
       text: pre.boundary,
       servedBy: 'primary',
@@ -461,32 +513,34 @@ export async function runLegacyHelpTurn(
     text: unit.text,
     ...(request.grounding.truncated ? { truncated: true } : {}),
   }));
-  const grounding: GroundingInput = slide && slide.sceneText.trim()
-    ? {
-        // The runner's committed slide is what the student is looking at: its visible text
-        // anchors the card, and the request's units (if any) stay the fact source behind it.
-        mode: 'scene',
-        sceneTitle: slide.sceneTitle || request.helpScope.label || sceneTitle,
-        sceneText: slide.sceneText,
-        units,
-      }
-    : request.grounding.units.length === 0
-      ? { mode: 'insufficient' }
-      : {
+  const grounding: GroundingInput =
+    slide && slide.sceneText.trim()
+      ? {
+          // The runner's committed slide is what the student is looking at: its visible text
+          // anchors the card, and the request's units (if any) stay the fact source behind it.
           mode: 'scene',
-          sceneTitle,
-          units: request.grounding.units.map((unit) => ({
-            title: unit.title,
-            text: unit.text,
-            ...(request.grounding.truncated ? { truncated: true } : {}),
-          })),
-        };
+          sceneTitle: slide.sceneTitle || request.helpScope.label || sceneTitle,
+          sceneText: slide.sceneText,
+          units,
+        }
+      : request.grounding.units.length === 0
+        ? { mode: 'insufficient' }
+        : {
+            mode: 'scene',
+            sceneTitle,
+            units: request.grounding.units.map((unit) => ({
+              title: unit.title,
+              text: unit.text,
+              ...(request.grounding.truncated ? { truncated: true } : {}),
+            })),
+          };
   const proxyTarget = [policy.primary, policy.fallback].find((t) => t.counterKind === 'proxy');
   const proxyRatio = proxyTarget
     ? await resolveProxyRatio(
         proxyTarget.modelString,
         deps.executor?.proxyRatioReader ??
-          (async (modelString) => (await readCalibration(queryable, modelString))?.proxyRatio ?? null),
+          (async (modelString) =>
+            (await readCalibration(queryable, modelString))?.proxyRatio ?? null),
       )
     : null;
   let assembled: ReturnType<typeof assembleTutorPrompt>;
@@ -511,7 +565,8 @@ export async function runLegacyHelpTurn(
     if (error instanceof TeachingPackageError) await fail(error.code);
     throw error;
   }
-  const groundingMode: 'scene' | 'insufficient' = assembled.groundingMode === 'scene' ? 'scene' : 'insufficient';
+  const groundingMode: 'scene' | 'insufficient' =
+    assembled.groundingMode === 'scene' ? 'scene' : 'insufficient';
 
   // --- executor (started row → call → completion, direct writes) ------------
   let result: TeachingCallResult;
@@ -561,21 +616,42 @@ export async function runLegacyHelpTurn(
   // --- post-check → boundary ------------------------------------------------------
   let text = result.text;
   let safety = safetyRecord(safetyPre, { applied: false });
-  const post = guardOrBoundary(() => postCheck(text, { preTriggered: safetyPre.triggered }), boundary);
+  const post = guardOrBoundary(
+    () => postCheck(text, { preTriggered: safetyPre.triggered }),
+    boundary,
+  );
   if (!post.ok || post.value.violation) {
     text = boundary;
     safety = safetyRecord(safetyPre, {
       applied: true,
       reason: post.ok ? (post.value.rule ?? 'operational_sequence') : 'guard_error',
     });
-    log.info(JSON.stringify({ event: 'tutor.safety_triggered', turnId: request.turnId, boundary: true, reason: safety.reason }));
+    log.info(
+      JSON.stringify({
+        event: 'tutor.safety_triggered',
+        turnId: request.turnId,
+        boundary: true,
+        reason: safety.reason,
+      }),
+    );
   } else if (namesProvider(text)) {
     // Layer 3 (guardrails review 28 Oct 2026): a reply naming the model or provider.
     text = identityReply(
-      replyLanguage(detectScript(request.message), request.localeHint, request.subject.academicLanguage),
+      replyLanguage(
+        detectScript(request.message),
+        request.localeHint,
+        request.subject.academicLanguage,
+      ),
     );
     safety = safetyRecord(safetyPre, { applied: true, reason: 'identity_disclosure' });
-    log.info(JSON.stringify({ event: 'tutor.safety_triggered', turnId: request.turnId, boundary: true, reason: safety.reason }));
+    log.info(
+      JSON.stringify({
+        event: 'tutor.safety_triggered',
+        turnId: request.turnId,
+        boundary: true,
+        reason: safety.reason,
+      }),
+    );
   }
 
   const stored = await completeLegacyHelpTurn(queryable, request.turnId, {
@@ -620,6 +696,9 @@ export async function runLegacyHelpTurn(
 /** Register the 7-day retention pass with the accounting sweeper (boot). */
 export function registerLegacyHelpRetention(): void {
   registerRetentionSweep('legacy_help_turns', (queryable, nowS) =>
-    deleteExpiredLegacyHelpTurns(queryable as Parameters<typeof deleteExpiredLegacyHelpTurns>[0], nowS),
+    deleteExpiredLegacyHelpTurns(
+      queryable as Parameters<typeof deleteExpiredLegacyHelpTurns>[0],
+      nowS,
+    ),
   );
 }

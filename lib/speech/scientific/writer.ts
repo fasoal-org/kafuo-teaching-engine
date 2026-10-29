@@ -8,7 +8,11 @@
 import type { RenderWarningCode } from './warnings';
 import type { PolicyDomain, PolicyPack, PolicyReading, PolicyRole } from './policy';
 
-type Part = { text: string; kind: 'word' | 'pause' | 'colon' | 'prefix' | 'suffix'; operator?: boolean };
+type Part = {
+  text: string;
+  kind: 'word' | 'pause' | 'colon' | 'prefix' | 'suffix';
+  operator?: boolean;
+};
 
 export interface WriterOptions {
   /**
@@ -170,7 +174,8 @@ export class Writer {
 
   colon(): this {
     const last = this.parts[this.parts.length - 1];
-    if (last && (last.kind === 'word' || last.kind === 'suffix')) this.parts.push({ text: ':', kind: 'colon' });
+    if (last && (last.kind === 'word' || last.kind === 'suffix'))
+      this.parts.push({ text: ':', kind: 'colon' });
     return this;
   }
 
@@ -192,7 +197,8 @@ export class Writer {
     if (!text) return this;
     // A closing symbol ends the literal group it belongs to.
     this.pendingScopes = [];
-    if (last && (last.kind === 'word' || last.kind === 'suffix')) this.parts.push({ text, kind: 'suffix' });
+    if (last && (last.kind === 'word' || last.kind === 'suffix'))
+      this.parts.push({ text, kind: 'suffix' });
     else this.parts.push({ text, kind: 'word' });
     return this;
   }

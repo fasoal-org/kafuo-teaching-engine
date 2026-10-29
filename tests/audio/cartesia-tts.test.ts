@@ -17,7 +17,12 @@ function mp3Bytes(): ArrayBuffer {
 
 function okMp3() {
   const buffer = mp3Bytes();
-  return { ok: true, status: 200, arrayBuffer: async () => buffer, headers: { get: () => 'audio/mpeg' } };
+  return {
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => buffer,
+    headers: { get: () => 'audio/mpeg' },
+  };
 }
 
 describe('Cartesia TTS', () => {
@@ -62,7 +67,13 @@ describe('Cartesia TTS', () => {
   it('omits language when none is given, clamps speed to the documented 0.6–1.5 range and trims the base URL', async () => {
     mockFetch.mockResolvedValueOnce(okMp3());
     await generateTTS(
-      { providerId: 'cartesia-tts', apiKey: 'k', voice: REEM, baseUrl: 'https://example.test/', speed: 3 },
+      {
+        providerId: 'cartesia-tts',
+        apiKey: 'k',
+        voice: REEM,
+        baseUrl: 'https://example.test/',
+        speed: 3,
+      },
       'x',
     );
     const [url, init] = mockFetch.mock.calls[0];
@@ -74,7 +85,9 @@ describe('Cartesia TTS', () => {
   });
 
   it('requires an API key', async () => {
-    await expect(generateTTS({ providerId: 'cartesia-tts', voice: REEM }, 'x')).rejects.toThrow(/API key required/);
+    await expect(generateTTS({ providerId: 'cartesia-tts', voice: REEM }, 'x')).rejects.toThrow(
+      /API key required/,
+    );
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -86,9 +99,9 @@ describe('Cartesia TTS', () => {
       text: async () => '{"error":"invalid voice"}',
       headers: { get: () => 'application/json' },
     });
-    await expect(generateTTS({ providerId: 'cartesia-tts', apiKey: 'k', voice: 'nope' }, 'x')).rejects.toThrow(
-      /Cartesia TTS API error/,
-    );
+    await expect(
+      generateTTS({ providerId: 'cartesia-tts', apiKey: 'k', voice: 'nope' }, 'x'),
+    ).rejects.toThrow(/Cartesia TTS API error/);
   });
 
   it('puts the HTTP status in the error, so a 5xx reads as transient to the narration retry', async () => {
@@ -99,14 +112,18 @@ describe('Cartesia TTS', () => {
       text: async () => '{"error":"overloaded"}',
       headers: { get: () => 'application/json' },
     });
-    await expect(generateTTS({ providerId: 'cartesia-tts', apiKey: 'k', voice: REEM }, 'x')).rejects.toThrow(
-      /Cartesia TTS API error \(503\): \{"error":"overloaded"\}/,
-    );
+    await expect(
+      generateTTS({ providerId: 'cartesia-tts', apiKey: 'k', voice: REEM }, 'x'),
+    ).rejects.toThrow(/Cartesia TTS API error \(503\): \{"error":"overloaded"\}/);
   });
 
   it('has a governed capability row for versioned Sonic models only (no instructions, per-character usage)', () => {
     const cap = providerCapability('cartesia-tts', 'sonic-3.6');
-    expect(cap).toMatchObject({ supportsInstructions: false, usageSource: 'none', localeParam: 'language' });
+    expect(cap).toMatchObject({
+      supportsInstructions: false,
+      usageSource: 'none',
+      localeParam: 'language',
+    });
     expect(cap!.maxReliableSegmentChars).toBeLessThanOrEqual(cap!.maxInputChars);
     expect(providerCapability('cartesia-tts', 'sonic-latest')).toBeNull();
   });

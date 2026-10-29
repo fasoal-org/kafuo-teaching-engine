@@ -144,7 +144,11 @@ describe('sanitizeLearnerDelivery', () => {
       ],
       points: 2,
     });
-    expect(questions[2]).toEqual({ id: 'q-short-keyed', type: 'short_answer', question: 'Name it' });
+    expect(questions[2]).toEqual({
+      id: 'q-short-keyed',
+      type: 'short_answer',
+      question: 'Name it',
+    });
   });
 
   it('withholds a grading field added later (allowlist, not denylist)', () => {

@@ -241,9 +241,12 @@ describe('scene learning objectives', () => {
     it('sets, reads back, and clears objectives through putScene', async () => {
       const versionId = await seedVersion('draft');
       const now = 1_800_000_000_000;
-      const result = await setSceneLearningObjectives(txPool(), versionId, { tenantId: 'tenant-test' }, [
-        normalizeAssignment({ sceneId: 'scene-1', learningObjectives: objectives() }, now),
-      ]);
+      const result = await setSceneLearningObjectives(
+        txPool(),
+        versionId,
+        { tenantId: 'tenant-test' },
+        [normalizeAssignment({ sceneId: 'scene-1', learningObjectives: objectives() }, now)],
+      );
       expect(result.updatedSceneIds).toEqual(['scene-1']);
 
       const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);

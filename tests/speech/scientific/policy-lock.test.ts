@@ -99,7 +99,9 @@ describe('policy pack lock', () => {
     expect(pack.lookup('arabic-letters', 'ه', 'natural')?.text).toBe('هاء');
     // The conjunction is never a variable.
     expect(pack.has('arabic-letters', 'و')).toBe(false);
-    expect(POLICY_TABLE_FILES['arabic-letters.json']!.entries.every((e) => e.status === 'proposed')).toBe(true);
+    expect(
+      POLICY_TABLE_FILES['arabic-letters.json']!.entries.every((e) => e.status === 'proposed'),
+    ).toBe(true);
   });
 
   it('R1/O-2: no rendering code references a semantic-name table', () => {
@@ -110,7 +112,14 @@ describe('policy pack lock', () => {
     expect(sources.length).toBeGreaterThan(10);
     for (const file of sources) {
       const text = readFileSync(join(root, file), 'utf8');
-      for (const table of [/'compounds'/, /'ions'/, /'quantity-expansions'/, /\bcompounds\.json/, /\bions\.json/, /quantity-expansions\.json/]) {
+      for (const table of [
+        /'compounds'/,
+        /'ions'/,
+        /'quantity-expansions'/,
+        /\bcompounds\.json/,
+        /\bions\.json/,
+        /quantity-expansions\.json/,
+      ]) {
         expect(table.test(text), `${file} references ${table}`).toBe(false);
       }
     }
@@ -121,7 +130,10 @@ describe('policy pack lock', () => {
       for (const entry of table.entries) {
         for (const text of [entry.natural, entry.accessible ?? '']) {
           expect(/اثنان|اثنا |اتنين/.test(text), `${file}:${entry.key} ${text}`).toBe(false);
-          expect(/^(?:ون|تو|ثري|فور|فايف|سِكس|سِفن|إيت|ناين|تِن)$/.test(text), `${file}:${entry.key}`).toBe(false);
+          expect(
+            /^(?:ون|تو|ثري|فور|فايف|سِكس|سِفن|إيت|ناين|تِن)$/.test(text),
+            `${file}:${entry.key}`,
+          ).toBe(false);
         }
       }
     }

@@ -35,7 +35,9 @@ export const COMPACTION_MIN_OLD_TURNS = 8;
 export const COMPACTION_SUMMARY_MAX_CHARS = 1200;
 export const COMPACTION_INPUT_TOKEN_CAP = 8_000;
 
-export function isCompactionEnabled(env: Record<string, string | undefined> = process.env): boolean {
+export function isCompactionEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
   const raw = env.TUTOR_COMPACTION_ENABLED?.trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
@@ -74,8 +76,13 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
     (message) =>
       conversation.summaryThroughSeq === null || message.seq > conversation.summaryThroughSeq,
   );
-  const completedStudents = afterSummary.filter((m) => m.role === 'student' && m.status === 'completed');
-  const oldStudents = completedStudents.slice(0, Math.max(0, completedStudents.length - COMPACTION_KEEP_RECENT_TURNS));
+  const completedStudents = afterSummary.filter(
+    (m) => m.role === 'student' && m.status === 'completed',
+  );
+  const oldStudents = completedStudents.slice(
+    0,
+    Math.max(0, completedStudents.length - COMPACTION_KEEP_RECENT_TURNS),
+  );
   if (oldStudents.length < COMPACTION_MIN_OLD_TURNS) {
     return { compacted: false, summaryThroughSeq: conversation.summaryThroughSeq };
   }
@@ -84,7 +91,8 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
   const throughSeq = reply ? reply.seq : boundaryStudent.seq;
   const oldWindow = afterSummary.filter((m) => m.seq <= throughSeq);
   const turns = pairHistoryTurns(oldWindow);
-  if (turns.length === 0) return { compacted: false, summaryThroughSeq: conversation.summaryThroughSeq };
+  if (turns.length === 0)
+    return { compacted: false, summaryThroughSeq: conversation.summaryThroughSeq };
 
   let assembled: ReturnType<typeof assembleTutorPrompt>;
   try {
@@ -100,7 +108,13 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
       capTokens: COMPACTION_INPUT_TOKEN_CAP,
     });
   } catch (error) {
-    log.warn(JSON.stringify({ event: 'tutor.compaction_skipped', conversationId: conversation.id, error: describeErrorSafely(error) }));
+    log.warn(
+      JSON.stringify({
+        event: 'tutor.compaction_skipped',
+        conversationId: conversation.id,
+        error: describeErrorSafely(error),
+      }),
+    );
     return { compacted: false, summaryThroughSeq: conversation.summaryThroughSeq };
   }
 
@@ -134,10 +148,23 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
       summaryThroughSeq: throughSeq,
       now: input.now,
     });
-    log.info(JSON.stringify({ event: 'tutor.compaction', conversationId: conversation.id, throughSeq, turns: turns.length }));
+    log.info(
+      JSON.stringify({
+        event: 'tutor.compaction',
+        conversationId: conversation.id,
+        throughSeq,
+        turns: turns.length,
+      }),
+    );
     return { compacted: true, summaryThroughSeq: throughSeq };
   } catch (error) {
-    log.warn(JSON.stringify({ event: 'tutor.compaction_failed', conversationId: conversation.id, error: describeErrorSafely(error) }));
+    log.warn(
+      JSON.stringify({
+        event: 'tutor.compaction_failed',
+        conversationId: conversation.id,
+        error: describeErrorSafely(error),
+      }),
+    );
     return { compacted: false, summaryThroughSeq: conversation.summaryThroughSeq };
   }
 }

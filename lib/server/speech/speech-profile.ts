@@ -95,7 +95,8 @@ export function resolveSpeechProfile(input: {
   const capability = providerCapability(target.providerId, target.modelId);
   if (!capability) return fallbackProfile;
   // A pinned snapshot is required where the provider offers one (§12.2).
-  if (capability.pinnedModelRequired && !/\d{4}-\d{2}-\d{2}$/.test(target.modelId)) return fallbackProfile;
+  if (capability.pinnedModelRequired && !/\d{4}-\d{2}-\d{2}$/.test(target.modelId))
+    return fallbackProfile;
   const credentials = input.governedCredentials(target.providerId);
   if (!credentials.available) return fallbackProfile;
   const instructions = capability.supportsInstructions ? DELIVERY_INSTRUCTIONS_AR_SA_V1 : null;

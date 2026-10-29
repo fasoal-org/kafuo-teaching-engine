@@ -27,9 +27,19 @@ const GOLDEN_BODY: Record<string, unknown> = {
   requestDigest: 'x',
   studentRef: 'abcdefghijklmnopqrstuvwx',
   subject: { code: 'PHYSICS', nameAr: 'الفيزياء', nameEn: 'Physics', academicLanguage: 'ar' },
-  academic: { curriculumName: 'المنهج الوطني', curriculumVersionLabel: '2026', gradeLabel: 'الصف التاسع' },
+  academic: {
+    curriculumName: 'المنهج الوطني',
+    curriculumVersionLabel: '2026',
+    gradeLabel: 'الصف التاسع',
+  },
   lesson: { learningItemType: 'lesson', learningItemId: '77', title: 'قانون نيوتن الثاني' },
-  helpScope: { kind: 'help_linked_chat', label: 'مساعدة', cardKey: null, stepNumber: 3, intent: null },
+  helpScope: {
+    kind: 'help_linked_chat',
+    label: 'مساعدة',
+    cardKey: null,
+    stepNumber: 3,
+    intent: null,
+  },
   grounding: {
     units: [
       {
@@ -116,7 +126,9 @@ describe('canonical JSON (Python json.dumps sort_keys, no whitespace, ensure_asc
   it('matches the Backend byte for byte on the golden body', () => {
     expect(canonicalHelpTurnRequest(GOLDEN_BODY)).toBe(GOLDEN_CANONICAL);
     expect(computeHelpTurnDigest(GOLDEN_BODY)).toBe(GOLDEN_DIGEST);
-    expect(createHash('sha256').update(Buffer.from(GOLDEN_CANONICAL, 'utf8')).digest('hex')).toBe(GOLDEN_DIGEST);
+    expect(createHash('sha256').update(Buffer.from(GOLDEN_CANONICAL, 'utf8')).digest('hex')).toBe(
+      GOLDEN_DIGEST,
+    );
   });
 
   it('matches the Backend byte for byte on a help card carrying slide, intentHint and question (C-5)', () => {
@@ -132,7 +144,9 @@ describe('canonical JSON (Python json.dumps sort_keys, no whitespace, ensure_asc
     delete withoutBoth.actorRef;
     delete withoutBoth.requestDigest;
     expect(computeHelpTurnDigest(withoutBoth)).toBe(GOLDEN_DIGEST);
-    expect(computeHelpTurnDigest({ ...GOLDEN_BODY, actorRef: 'someone-else', requestDigest: 'y' })).toBe(GOLDEN_DIGEST);
+    expect(
+      computeHelpTurnDigest({ ...GOLDEN_BODY, actorRef: 'someone-else', requestDigest: 'y' }),
+    ).toBe(GOLDEN_DIGEST);
     // A nested `actorRef` is data and stays.
     expect(canonicalJson({ a: { actorRef: 1 } })).toBe('{"a":{"actorRef":1}}');
   });

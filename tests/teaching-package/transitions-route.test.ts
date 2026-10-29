@@ -46,7 +46,10 @@ beforeEach(() => {
 describe('POST /api/teaching-packages/[id]/transitions', () => {
   it('answers a plain 404 when the API is not configured', async () => {
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', '');
-    expect((await post({ action: 'submit', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a' })).status).toBe(404);
+    expect(
+      (await post({ action: 'submit', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a' }))
+        .status,
+    ).toBe(404);
   });
 
   it('refuses a request without the service key', async () => {
@@ -61,7 +64,11 @@ describe('POST /api/teaching-packages/[id]/transitions', () => {
   });
 
   it('rejects an unknown action with 400', async () => {
-    const response = await post({ action: 'publish', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'actor-1' });
+    const response = await post({
+      action: 'publish',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'actor-1',
+    });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'INVALID_REQUEST' },
@@ -75,7 +82,11 @@ describe('POST /api/teaching-packages/[id]/transitions', () => {
   });
 
   it('rejects a reject without a reason with 400 REASON_REQUIRED', async () => {
-    const response = await post({ action: 'reject', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'actor-1' });
+    const response = await post({
+      action: 'reject',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'actor-1',
+    });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'REASON_REQUIRED' } });
     expect(mocks.reject).not.toHaveBeenCalled();
@@ -84,7 +95,12 @@ describe('POST /api/teaching-packages/[id]/transitions', () => {
   it('routes each action to its lifecycle command and returns the version', async () => {
     const version = { id: 'tpv-route-1', status: 'approved' };
     mocks.approve.mockResolvedValue(version);
-    const response = await post({ action: 'approve', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'reviewer-1', comment: 'lgtm' });
+    const response = await post({
+      action: 'approve',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'reviewer-1',
+      comment: 'lgtm',
+    });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ version });
     expect(mocks.approve).toHaveBeenCalledTimes(1);
@@ -97,11 +113,20 @@ describe('POST /api/teaching-packages/[id]/transitions', () => {
 
     await post({ action: 'submit', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a1' });
     expect(mocks.submitForReview).toHaveBeenCalledTimes(1);
-    await post({ action: 'start_edit', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a1' });
+    await post({
+      action: 'start_edit',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'a1',
+    });
     expect(mocks.startReviewEdit).toHaveBeenCalledTimes(1);
     await post({ action: 'discard', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a1' });
     expect(mocks.discardSuccessor).toHaveBeenCalledTimes(1);
-    await post({ action: 'reject', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a1', reason: 'r' });
+    await post({
+      action: 'reject',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'a1',
+      reason: 'r',
+    });
     expect(mocks.reject).toHaveBeenCalledTimes(1);
   });
 
@@ -126,7 +151,12 @@ describe('POST /api/teaching-packages/[id]/transitions', () => {
   });
 
   it('rejects an invalid expectedStatus with 400', async () => {
-    const response = await post({ action: 'submit', tenantContext: { tenantId: 'tenant-route' }, actorRef: 'a1', expectedStatus: 'published' });
+    const response = await post({
+      action: 'submit',
+      tenantContext: { tenantId: 'tenant-route' },
+      actorRef: 'a1',
+      expectedStatus: 'published',
+    });
     expect(response.status).toBe(400);
     expect(mocks.submitForReview).not.toHaveBeenCalled();
   });

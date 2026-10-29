@@ -5,10 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
-import {
-  ensureDocumentSchema,
-  ensureStageMetaSchema,
-} from './helpers';
+import { ensureDocumentSchema, ensureStageMetaSchema } from './helpers';
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
@@ -52,7 +49,13 @@ describe('teaching package webhooks', () => {
     learningItem: { type: 'lesson' as const, id: `li-wh-${randomUUID()}` },
   };
 
-  async function enqueue(eventType: 'teaching_package.status_changed' | 'teaching_package.generation_succeeded' | 'teaching_package.generation_failed', data: Record<string, unknown> = { version: { id: 'tpv-1' } }) {
+  async function enqueue(
+    eventType:
+      | 'teaching_package.status_changed'
+      | 'teaching_package.generation_succeeded'
+      | 'teaching_package.generation_failed',
+    data: Record<string, unknown> = { version: { id: 'tpv-1' } },
+  ) {
     const { enqueueWebhookEvent } = await import('@/lib/server/teaching-package/webhook-events');
     await enqueueWebhookEvent(txPool(), aggregate, eventType, () => data as never);
   }
@@ -63,8 +66,12 @@ describe('teaching package webhooks', () => {
     await enqueue('teaching_package.generation_failed');
     await enqueue('teaching_package.generation_succeeded');
     expect(await readLatestWebhookSequence(qp(), aggregate)).toBe(3);
-    const rows = await pool.query(`SELECT sequence, event_type FROM teaching_package_webhook_deliveries ORDER BY sequence`);
-    expect(rows.rows.map((r: unknown) => Number((r as { sequence: number }).sequence))).toEqual([1, 2, 3]);
+    const rows = await pool.query(
+      `SELECT sequence, event_type FROM teaching_package_webhook_deliveries ORDER BY sequence`,
+    );
+    expect(rows.rows.map((r: unknown) => Number((r as { sequence: number }).sequence))).toEqual([
+      1, 2, 3,
+    ]);
   });
 
   it('rejects a payload carrying source content or retrieval credentials', async () => {
@@ -81,9 +88,8 @@ describe('teaching package webhooks', () => {
   });
 
   it('signs exactly `<timestamp>.<raw body>` with the dedicated secret (vector)', async () => {
-    const { signWebhookDelivery, webhookSignatureInput } = await import(
-      '@/lib/server/teaching-package/webhook-delivery'
-    );
+    const { signWebhookDelivery, webhookSignatureInput } =
+      await import('@/lib/server/teaching-package/webhook-delivery');
     const { createHmac } = await import('node:crypto');
     const timestamp = '1760000000';
     const body = '{"id":"tpe-1"}';
@@ -98,9 +104,8 @@ describe('teaching package webhooks', () => {
     await enqueue('teaching_package.status_changed', { marker: 'first' });
     await enqueue('teaching_package.generation_failed', { marker: 'second' });
 
-    const { deliverPendingWebhooks } = await import(
-      '@/lib/server/teaching-package/webhook-delivery'
-    );
+    const { deliverPendingWebhooks } =
+      await import('@/lib/server/teaching-package/webhook-delivery');
     // First attempt: only seq 1 is delivered — seq 2 has an older pending row? No:
     // seq 1 delivered, seq 2 claimable only after seq 1 leaves pending.
     const seen: string[] = [];
@@ -124,8 +129,12 @@ describe('teaching package webhooks', () => {
     });
     expect(secondPass).toBe(1);
     expect(seen).toHaveLength(2);
-    const statuses = await pool.query(`SELECT sequence, status FROM teaching_package_webhook_deliveries ORDER BY sequence`);
-    expect(statuses.rows.every((r: unknown) => (r as { status: string }).status === 'delivered')).toBe(true);
+    const statuses = await pool.query(
+      `SELECT sequence, status FROM teaching_package_webhook_deliveries ORDER BY sequence`,
+    );
+    expect(
+      statuses.rows.every((r: unknown) => (r as { status: string }).status === 'delivered'),
+    ).toBe(true);
     // The signature header is present and verifiable.
     const headers = (fetchImpl.mock.calls[0]![1] as { headers: Record<string, string> }).headers;
     expect(headers['X-Teaching-Engine-Signature']).toMatch(/^v1=[0-9a-f]{64}$/);
@@ -138,12 +147,13 @@ describe('teaching package webhooks', () => {
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_SECRET', 'whsec-test');
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_MAX_RETRIES', '2');
     await enqueue('teaching_package.status_changed', { marker: 'terminal' });
-    const { deliverPendingWebhooks } = await import(
-      '@/lib/server/teaching-package/webhook-delivery'
-    );
+    const { deliverPendingWebhooks } =
+      await import('@/lib/server/teaching-package/webhook-delivery');
     const fetchImpl = vi.fn(async () => new Response(null, { status: 400 }));
     await deliverPendingWebhooks({ workerId: 'w1', fetchImpl: fetchImpl as never, pool: txPool() });
-    const row = await pool.query(`SELECT status, attempts FROM teaching_package_webhook_deliveries`);
+    const row = await pool.query(
+      `SELECT status, attempts FROM teaching_package_webhook_deliveries`,
+    );
     expect(row.rows[0]).toMatchObject({ status: 'terminal_failed' });
     expect(fetchImpl).toHaveBeenCalledTimes(1); // 4xx never retries
   });
@@ -178,9 +188,8 @@ describe('teaching package webhooks', () => {
       ['tpa-sweep-wh', Date.now() - 31 * 60 * 1000],
     );
 
-    const { sweepWebhooksAndStaleAttempts } = await import(
-      '@/lib/server/teaching-package/webhook-delivery'
-    );
+    const { sweepWebhooksAndStaleAttempts } =
+      await import('@/lib/server/teaching-package/webhook-delivery');
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_URL', 'https://kafuo.test/hook');
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_SECRET', 'whsec-test');
     vi.stubEnv('DATABASE_URL', `postgres://wh-${randomUUID()}`);
@@ -189,28 +198,34 @@ describe('teaching package webhooks', () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     await sweepWebhooksAndStaleAttempts({ fetchImpl: fetchImpl as never, pool: txPool() });
 
-    const attempt = await pool.query(`SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = 'tpa-sweep-wh'`);
+    const attempt = await pool.query(
+      `SELECT status, error_code FROM teaching_package_generation_attempts WHERE id = 'tpa-sweep-wh'`,
+    );
     expect(attempt.rows[0]).toMatchObject({
       status: 'failed',
       error_code: 'ATTEMPT_RECLAIMED_STALE',
     });
-    const events = await pool.query(`SELECT event_type, payload FROM teaching_package_webhook_deliveries`);
+    const events = await pool.query(
+      `SELECT event_type, payload FROM teaching_package_webhook_deliveries`,
+    );
     const failedEvent = events.rows.find(
-      (r: unknown) => (r as { event_type: string }).event_type === 'teaching_package.generation_failed',
+      (r: unknown) =>
+        (r as { event_type: string }).event_type === 'teaching_package.generation_failed',
     ) as { payload: { error: { code: string } } } | undefined;
     expect(failedEvent?.payload.error.code).toBe('ATTEMPT_RECLAIMED_STALE');
   });
 
   it('emits superseded-then-approved in sequence order on successor approval, and NOTHING on createSuccessor', async () => {
     // Covered end-to-end through the lifecycle service with a PGlite pool.
-    const { approve, createSuccessor, submitForReview } = await import(
-      '@/lib/server/teaching-package/lifecycle'
-    );
+    const { approve, createSuccessor, submitForReview } =
+      await import('@/lib/server/teaching-package/lifecycle');
     const { insertVersion } = await import('@/lib/persistence/teaching-package');
     const { makeDocument, makeSlideScene } = await import('../agent-runtime/_stage-fixtures');
-    const { createOwnerBoundDocumentStore } = await import('@/lib/persistence/owner-bound-document-store');
+    const { createOwnerBoundDocumentStore } =
+      await import('@/lib/persistence/owner-bound-document-store');
     const { validateAppScene, validateAppStage } = await import('@/lib/document-store/validators');
-    const { teachingPackageStageGuardFence } = await import('@/lib/server/teaching-package/stage-guard');
+    const { teachingPackageStageGuardFence } =
+      await import('@/lib/server/teaching-package/stage-guard');
     const { TEACHING_PACKAGE_STAGE_OWNER } = await import('@/lib/server/teaching-package/owner');
 
     vi.stubEnv('DATABASE_URL', `postgres://wh-app-${randomUUID()}`);
@@ -226,9 +241,7 @@ describe('teaching package webhooks', () => {
       mutationFence: teachingPackageStageGuardFence(),
     });
     const mkStage = async (name: string) => {
-      await store.saveDocument(
-        makeDocument(name, name, [makeSlideScene('s1', name, 1)]) as never,
-      );
+      await store.saveDocument(makeDocument(name, name, [makeSlideScene('s1', name, 1)]) as never);
       return name;
     };
     const stageA = await mkStage('stageA1');
@@ -243,7 +256,11 @@ describe('teaching package webhooks', () => {
       now: 1,
     });
     // No flow recorded → the exact-flow gate is skipped for this legacy-shaped seed.
-    await submitForReview(txPool(), { tenantId: agg.tenantId, versionId: 'tpv-wh-1', actorRef: 'a' });
+    await submitForReview(txPool(), {
+      tenantId: agg.tenantId,
+      versionId: 'tpv-wh-1',
+      actorRef: 'a',
+    });
     await approve(txPool(), { tenantId: agg.tenantId, versionId: 'tpv-wh-1', actorRef: 'a' });
 
     const successor = await createSuccessor(txPool(), {
@@ -256,7 +273,11 @@ describe('teaching package webhooks', () => {
       `SELECT COUNT(*)::int AS n FROM teaching_package_webhook_deliveries WHERE tenant_id = $1 AND learning_item_id = $2`,
       [agg.tenantId, item.id],
     );
-    await submitForReview(txPool(), { tenantId: agg.tenantId, versionId: successor.id, actorRef: 'a' });
+    await submitForReview(txPool(), {
+      tenantId: agg.tenantId,
+      versionId: successor.id,
+      actorRef: 'a',
+    });
     void stageB;
     await approve(txPool(), { tenantId: agg.tenantId, versionId: successor.id, actorRef: 'a' });
 
@@ -264,16 +285,28 @@ describe('teaching package webhooks', () => {
       `SELECT sequence, event_type, payload FROM teaching_package_webhook_deliveries WHERE tenant_id = $1 AND learning_item_id = $2 ORDER BY sequence`,
       [agg.tenantId, item.id],
     );
-    const events = rows.rows as Array<{ sequence: number; event_type: string; payload: { version: { previousStatus?: string; status?: string } } }>;
+    const events = rows.rows as Array<{
+      sequence: number;
+      event_type: string;
+      payload: { version: { previousStatus?: string; status?: string } };
+    }>;
     // The successor-approval pair is the tail: superseded (v1) then approved (v2).
     const tail = events.slice(-2);
     expect(tail[0]!.event_type).toBe('teaching_package.status_changed');
-    expect(tail[0]!.payload.version).toMatchObject({ previousStatus: 'approved', status: 'superseded' });
-    expect(tail[1]!.payload.version).toMatchObject({ previousStatus: 'in_review', status: 'approved' });
+    expect(tail[0]!.payload.version).toMatchObject({
+      previousStatus: 'approved',
+      status: 'superseded',
+    });
+    expect(tail[1]!.payload.version).toMatchObject({
+      previousStatus: 'in_review',
+      status: 'approved',
+    });
     expect(Number(tail[1]!.sequence)).toBeGreaterThan(Number(tail[0]!.sequence));
     // And createSuccessor itself added nothing between approve(v1) and submit(v2):
     const countBeforeSuccessor = Number((before.rows[0] as { n: number }).n);
-    const createdEvents = events.filter((e) => (e.payload.version as { status?: string } | undefined)?.status === 'draft');
+    const createdEvents = events.filter(
+      (e) => (e.payload.version as { status?: string } | undefined)?.status === 'draft',
+    );
     expect(createdEvents.length).toBe(0);
     expect(events.length).toBe(countBeforeSuccessor + 3); // submit(v2) + superseded + approved
   });
@@ -315,9 +348,7 @@ describe('the cross-application webhook signature vector', () => {
 
     // The signature input is `<timestamp>.<raw body>` — not the body alone, and
     // not a re-serialization of it.
-    expect(webhookSignatureInput(vector.timestamp, vector.rawBody)).toBe(
-      vector.signatureInput,
-    );
+    expect(webhookSignatureInput(vector.timestamp, vector.rawBody)).toBe(vector.signatureInput);
     expect(vector.signatureInput).toBe(`${vector.timestamp}.${vector.rawBody}`);
 
     // And the signature over it matches the vector Kafuo independently verifies.
@@ -332,9 +363,7 @@ describe('the cross-application webhook signature vector', () => {
   });
 
   it('signs with the webhook secret, never the service key', async () => {
-    const { signWebhookDelivery } = await import(
-      '@/lib/server/teaching-package/webhook-delivery'
-    );
+    const { signWebhookDelivery } = await import('@/lib/server/teaching-package/webhook-delivery');
 
     // Two different secrets must give two different signatures — the property
     // that makes the dedicated webhook secret meaningful at all.
@@ -346,8 +375,7 @@ describe('the cross-application webhook signature vector', () => {
 
   it('posts to the configured URL verbatim, without touching its path', async () => {
     const { webhookBaseUrl } = await import('@/lib/server/teaching-package/webhook-delivery');
-    const configured =
-      'https://kafuo.example/api/v2/integrations/teaching-engine/webhooks';
+    const configured = 'https://kafuo.example/api/v2/integrations/teaching-engine/webhooks';
     vi.stubEnv('TEACHING_ENGINE_WEBHOOK_URL', configured);
 
     // Read back byte-for-byte: no segment appended, stripped or normalized. The
@@ -372,9 +400,8 @@ describe('teaching engine integration configuration validation', () => {
     webhookSecret: 'whsec-distinct',
   };
   const validate = async (overrides: Partial<typeof base>) => {
-    const { validateTeachingEngineIntegrationConfig } = await import(
-      '@/lib/server/teaching-package/safe-error'
-    );
+    const { validateTeachingEngineIntegrationConfig } =
+      await import('@/lib/server/teaching-package/safe-error');
     return () => validateTeachingEngineIntegrationConfig({ ...base, ...overrides });
   };
 
@@ -402,9 +429,7 @@ describe('teaching engine integration configuration validation', () => {
 
   it('requires the database URL, the webhook URL and the webhook secret in development', async () => {
     expect(await validate({ databaseUrl: '' })).toThrow(/DATABASE_URL is required/);
-    expect(await validate({ webhookUrl: '' })).toThrow(
-      /TEACHING_ENGINE_WEBHOOK_URL is required/,
-    );
+    expect(await validate({ webhookUrl: '' })).toThrow(/TEACHING_ENGINE_WEBHOOK_URL is required/);
     expect(await validate({ webhookSecret: '' })).toThrow(
       /TEACHING_ENGINE_WEBHOOK_SECRET is required/,
     );

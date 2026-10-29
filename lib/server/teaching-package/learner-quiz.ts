@@ -207,7 +207,9 @@ export function gradeQuizQuestions(
       { unknownQuestionIds: unknown.slice(0, 20) },
     );
   }
-  const results = questions.map((question) => gradeQuestion(question, answers[question.id], reveal));
+  const results = questions.map((question) =>
+    gradeQuestion(question, answers[question.id], reveal),
+  );
   let earned = 0;
   let possible = 0;
   let pendingPossible = 0;

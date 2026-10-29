@@ -1,12 +1,8 @@
 {
   "table": "letters",
   "description": "Mathematics variable and point names (D-1 Saudi curriculum convention, D-2 MSA). Physics and Chemistry read Latin symbols with chem-letters.json.",
-  "roles": [
-    "variable"
-  ],
-  "domains": [
-    "MATH"
-  ],
+  "roles": ["variable"],
+  "domains": ["MATH"],
   "entries": [
     {
       "key": "a",

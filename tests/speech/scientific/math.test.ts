@@ -35,7 +35,10 @@ describe('Mathematics parser', () => {
     expect(parseMath('د(س)', { arabicLetters: true }).node.t).toBe('apply');
     // A compound argument: only the conventional function letters (DEC-044).
     expect(parseMath('f(x+1)').node.t).toBe('apply');
-    expect(parseMath('س(س+1)', { arabicLetters: true }).node).toMatchObject({ t: 'bin', op: 'juxt' });
+    expect(parseMath('س(س+1)', { arabicLetters: true }).node).toMatchObject({
+      t: 'bin',
+      op: 'juxt',
+    });
     expect(parseMath('a(x+1)').node).toMatchObject({ t: 'bin', op: 'juxt' });
     expect(parseMath('x(x-1)').node).toMatchObject({ t: 'bin', op: 'juxt' });
     // A spaced bracket is a factor.
@@ -43,13 +46,24 @@ describe('Mathematics parser', () => {
   });
 
   it('P4 item 1: `/` binds looser than an implicit product: dy/dx = (dy)/(dx), a/bc = a/(bc)', () => {
-    expect(parseMath('dy/dx').node).toMatchObject({ t: 'bin', op: '/', left: { op: 'juxt' }, right: { op: 'juxt' } });
-    expect(parseMath('a/bc').node).toMatchObject({ t: 'bin', op: '/', left: { t: 'var' }, right: { op: 'juxt' } });
+    expect(parseMath('dy/dx').node).toMatchObject({
+      t: 'bin',
+      op: '/',
+      left: { op: 'juxt' },
+      right: { op: 'juxt' },
+    });
+    expect(parseMath('a/bc').node).toMatchObject({
+      t: 'bin',
+      op: '/',
+      left: { t: 'var' },
+      right: { op: 'juxt' },
+    });
     expect(parseMath('a/b \\times c').node).toMatchObject({ t: 'bin', op: '*', left: { op: '/' } });
   });
 
   it('P4 item 2: mixed numbers are a whole and a proper fraction, never a product', () => {
-    for (const src of ['2\\frac{1}{3}', '2⅓', '3 1/4']) expect(parseMath(src).node.t, src).toBe('mixed');
+    for (const src of ['2\\frac{1}{3}', '2⅓', '3 1/4'])
+      expect(parseMath(src).node.t, src).toBe('mixed');
     expect(parseMath('2\\frac{x}{3}').node).toMatchObject({ t: 'bin', op: 'juxt' });
     expect(parseMath('2\\frac{5}{3}').node).toMatchObject({ t: 'bin', op: 'juxt' });
     expect(parseMath('3 1/4x').node.t).not.toBe('mixed');
@@ -121,7 +135,9 @@ describe('Mathematics verbaliser (§10.1 table rows)', () => {
       ['x₁', 'x_1'],
     ]) {
       expect(read(unicode!).toString(), unicode).toBe(read(caret!).toString());
-      expect(read(unicode!, 'accessible').toString(), unicode).toBe(read(caret!, 'accessible').toString());
+      expect(read(unicode!, 'accessible').toString(), unicode).toBe(
+        read(caret!, 'accessible').toString(),
+      );
     }
   });
 
@@ -133,7 +149,9 @@ describe('Mathematics verbaliser (§10.1 table rows)', () => {
       ['2½', '2\\frac{1}{2}'],
     ]) {
       expect(read(glyph!).toString(), glyph).toBe(read(frac!).toString());
-      expect(read(glyph!, 'accessible').toString(), glyph).toBe(read(frac!, 'accessible').toString());
+      expect(read(glyph!, 'accessible').toString(), glyph).toBe(
+        read(frac!, 'accessible').toString(),
+      );
     }
   });
 
@@ -168,7 +186,9 @@ describe('renderer warning paths (§14.1)', () => {
 
   it('a binary +/- after a term is never read as a sign; a sign after prose stays a sign', () => {
     expect(prepared('المجموع وس + 1 هنا')).toBe('المجموع وس زائد 1 هنا');
-    expect(prepared('إذا كانت س = 5 فإن 2س + 3 = 13')).toBe('إذا كانت سين يساوي 5 فإن 2 سين زائد 3 يساوي 13');
+    expect(prepared('إذا كانت س = 5 فإن 2س + 3 = 13')).toBe(
+      'إذا كانت سين يساوي 5 فإن 2 سين زائد 3 يساوي 13',
+    );
     expect(prepared('الناتج هو - 3')).toBe('الناتج هو سالب 3');
     expect(prepared('درجة الحرارة - 5')).toBe('درجة الحرارة سالب 5');
   });

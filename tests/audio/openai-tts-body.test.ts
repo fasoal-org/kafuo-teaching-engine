@@ -29,7 +29,13 @@ const sentBody = () => (fetchMock.mock.calls[0]![1] as RequestInit).body as stri
 describe('OpenAI TTS request body — general path is byte-identical', () => {
   it('openai-tts: model, input, voice, speed — nothing else', async () => {
     await generateTTS(
-      { providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts', apiKey: 'k', voice: 'alloy', speed: 1.2 },
+      {
+        providerId: 'openai-tts',
+        modelId: 'gpt-4o-mini-tts',
+        apiKey: 'k',
+        voice: 'alloy',
+        speed: 1.2,
+      },
       'مرحبا x²',
     );
     expect(sentBody()).toBe(
@@ -66,7 +72,13 @@ describe('OpenAI TTS request body — governed profile fields (plan §8.6)', () 
 
   it('adds instructions and response_format only for openai-tts + gpt-4o-mini-tts*', async () => {
     await generateTTS(
-      { providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts-2025-12-15', apiKey: 'k', voice: 'marin', ...governed },
+      {
+        providerId: 'openai-tts',
+        modelId: 'gpt-4o-mini-tts-2025-12-15',
+        apiKey: 'k',
+        voice: 'marin',
+        ...governed,
+      },
       'نص',
     );
     expect(sentBody()).toBe(
@@ -75,7 +87,16 @@ describe('OpenAI TTS request body — governed profile fields (plan §8.6)', () 
   });
 
   it('never sends instructions to tts-1 or to a custom OpenAI-compatible provider', async () => {
-    await generateTTS({ providerId: 'openai-tts', modelId: 'tts-1', apiKey: 'k', voice: 'alloy', instructions: 'x' }, 'a');
+    await generateTTS(
+      {
+        providerId: 'openai-tts',
+        modelId: 'tts-1',
+        apiKey: 'k',
+        voice: 'alloy',
+        instructions: 'x',
+      },
+      'a',
+    );
     expect(JSON.parse(sentBody())).not.toHaveProperty('instructions');
     fetchMock.mockClear();
     await generateTTS(
@@ -102,10 +123,18 @@ describe('OpenAI TTS request body — governed profile fields (plan §8.6)', () 
       'data: {"type":"speech.audio.done","usage":{"input_tokens":117,"output_tokens":236,"total_tokens":353}}\n' +
       'data: [DONE]\n';
     fetchMock.mockImplementationOnce(
-      async () => new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      async () =>
+        new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
     );
     const result = await generateTTS(
-      { providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts-2025-12-15', apiKey: 'k', voice: 'marin', streamFormat: 'sse', responseFormat: 'mp3' },
+      {
+        providerId: 'openai-tts',
+        modelId: 'gpt-4o-mini-tts-2025-12-15',
+        apiKey: 'k',
+        voice: 'marin',
+        streamFormat: 'sse',
+        responseFormat: 'mp3',
+      },
       'نص',
     );
     expect(JSON.parse(sentBody())).toMatchObject({ stream_format: 'sse' });
@@ -120,12 +149,21 @@ describe('OpenAI TTS request body — governed profile fields (plan §8.6)', () 
   it('SSE mode: a stream cut without speech.audio.done reports completed=false (M4)', async () => {
     fetchMock.mockImplementationOnce(
       async () =>
-        new Response(`data: {"type":"speech.audio.delta","audio":"${Buffer.from([9]).toString('base64')}"}\n`, {
-          status: 200,
-        }),
+        new Response(
+          `data: {"type":"speech.audio.delta","audio":"${Buffer.from([9]).toString('base64')}"}\n`,
+          {
+            status: 200,
+          },
+        ),
     );
     const result = await generateTTS(
-      { providerId: 'openai-tts', modelId: 'gpt-4o-mini-tts', apiKey: 'k', voice: 'marin', streamFormat: 'sse' },
+      {
+        providerId: 'openai-tts',
+        modelId: 'gpt-4o-mini-tts',
+        apiKey: 'k',
+        voice: 'marin',
+        streamFormat: 'sse',
+      },
       'x',
     );
     expect(result.completed).toBe(false);

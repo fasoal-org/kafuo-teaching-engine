@@ -29,7 +29,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     async (request, { grant }) => {
       const { id } = await params;
       const body = await readJsonObject(request);
-      if (!body) throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
+      if (!body)
+        throw new TeachingPackageError('INVALID_REQUEST', 'request body must be a JSON object');
       const deps = await resolveTutorRuntimeDeps();
       return sendMessage(deps, {
         grant,

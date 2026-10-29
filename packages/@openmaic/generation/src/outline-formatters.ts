@@ -11,9 +11,7 @@ import type { ImageMapping, PdfImage } from './outline-types.js';
  */
 function formatImageGrounding(img: PdfImage): string {
   const parts = [
-    img.sourceContentUnitIds?.length
-      ? `Content Units: ${img.sourceContentUnitIds.join(', ')}`
-      : '',
+    img.sourceContentUnitIds?.length ? `Content Units: ${img.sourceContentUnitIds.join(', ')}` : '',
     img.figureLabel ? `Figure: ${img.figureLabel}` : '',
     img.caption ? `Caption: ${img.caption}` : '',
   ].filter(Boolean);

@@ -47,11 +47,17 @@ async function post(body: Record<string, unknown>) {
   return { status: response.status, json: await response.json() };
 }
 
-const mathStage = { stage: { subjectCode: 'MATH', language: 'ar-SA' }, access: 'owner', loadDocument: async () => null };
+const mathStage = {
+  stage: { subjectCode: 'MATH', language: 'ar-SA' },
+  access: 'owner',
+  loadDocument: async () => null,
+};
 
 beforeEach(() => {
   vi.resetModules();
-  mocks.generateTTS.mockReset().mockImplementation(async () => ({ audio: new Uint8Array([1]), format: 'mp3' }));
+  mocks.generateTTS
+    .mockReset()
+    .mockImplementation(async () => ({ audio: new Uint8Array([1]), format: 'mp3' }));
   mocks.loadStage.mockReset().mockResolvedValue(mathStage);
   mocks.usage.mockReset();
   delete process.env.TTS_OPENAI_API_KEY;
@@ -61,8 +67,11 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('SCIENTIFIC_TTS_MODE=off (default)', () => {
-  it('reads the Stage (TTS routing); an unrouted Stage sends the original text with today\'s config', async () => {
-    mocks.loadStage.mockResolvedValue({ ...mathStage, stage: { subjectCode: 'SOCIAL_STUDIES', language: 'ar-SA' } });
+  it("reads the Stage (TTS routing); an unrouted Stage sends the original text with today's config", async () => {
+    mocks.loadStage.mockResolvedValue({
+      ...mathStage,
+      stage: { subjectCode: 'SOCIAL_STUDIES', language: 'ar-SA' },
+    });
     const { status, json } = await post({ stageId: 'stage-1', actionId: 'a1' });
     expect(status).toBe(200);
     expect(mocks.loadStage).toHaveBeenCalledWith(expect.anything(), 'stage-1', 'write');
@@ -99,7 +108,12 @@ describe('SCIENTIFIC_TTS_MODE=on', () => {
   });
 
   it('takes the subject from the Stage and renders; a body subject is ignored', async () => {
-    const { json } = await post({ stageId: 'stage-1', actionId: 'a1', subjectCode: 'CHEMISTRY', language: 'en' });
+    const { json } = await post({
+      stageId: 'stage-1',
+      actionId: 'a1',
+      subjectCode: 'CHEMISTRY',
+      language: 'en',
+    });
     expect(mocks.loadStage).toHaveBeenCalledWith(expect.anything(), 'stage-1', 'write');
     const sent = mocks.generateTTS.mock.calls[0]![1] as string;
     expect(sent).not.toBe('نحسب x² + 1');

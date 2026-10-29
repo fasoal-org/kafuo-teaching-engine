@@ -267,7 +267,13 @@ export type MessageRole = 'student' | 'tutor';
 export type MessageStatus = 'accepted' | 'generating' | 'completed' | 'failed';
 export type ServedBy = 'primary' | 'fallback';
 /** `clarification` is Free Chat only (P7, D-8 (a)): a deterministic template, no model call. */
-export type GroundingMode = 'none' | 'reuse' | 'retrieved' | 'scene' | 'insufficient' | 'clarification';
+export type GroundingMode =
+  | 'none'
+  | 'reuse'
+  | 'retrieved'
+  | 'scene'
+  | 'insufficient'
+  | 'clarification';
 export type LineageStatus = 'own_attempt' | 'predecessor_attempt' | 'partial' | 'unavailable';
 /** The retrieval path that served a Free Chat turn (`TUTOR_GROUNDING_SOURCE`, effective). */
 export type GroundingSourceTag = 'kafuo_http' | 'direct' | 'shadow';
@@ -1101,7 +1107,9 @@ function encodeCursor(cursor: ConversationCursor): string {
 function decodeCursor(raw: string | null | undefined): ConversationCursor | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as Partial<ConversationCursor>;
+    const parsed = JSON.parse(
+      Buffer.from(raw, 'base64url').toString('utf8'),
+    ) as Partial<ConversationCursor>;
     if (typeof parsed.at === 'number' && typeof parsed.id === 'string') {
       return { at: parsed.at, id: parsed.id };
     }
@@ -1143,7 +1151,9 @@ export async function listConversationsByStudent(
   return {
     items,
     nextCursor:
-      hasMore && last ? encodeCursor({ at: last.lastMessageAt ?? last.createdAt, id: last.id }) : null,
+      hasMore && last
+        ? encodeCursor({ at: last.lastMessageAt ?? last.createdAt, id: last.id })
+        : null,
   };
 }
 

@@ -15,17 +15,43 @@ import { makeSlideScene } from '../agent-runtime/_stage-fixtures';
 /** Minimal real PNG header bytes (1×1) so magic/dimension checks exercise reality. */
 function pngBytes(width = 3, height = 2): Buffer {
   const header = Buffer.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-    0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-    (width >>> 24) & 0xff, (width >>> 16) & 0xff, (width >>> 8) & 0xff, width & 0xff,
-    (height >>> 24) & 0xff, (height >>> 16) & 0xff, (height >>> 8) & 0xff, height & 0xff,
-    8, 6, 0, 0, 0,
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a, // PNG signature
+    0,
+    0,
+    0,
+    13,
+    0x49,
+    0x48,
+    0x44,
+    0x52, // IHDR chunk
+    (width >>> 24) & 0xff,
+    (width >>> 16) & 0xff,
+    (width >>> 8) & 0xff,
+    width & 0xff,
+    (height >>> 24) & 0xff,
+    (height >>> 16) & 0xff,
+    (height >>> 8) & 0xff,
+    height & 0xff,
+    8,
+    6,
+    0,
+    0,
+    0,
   ]);
   return header;
 }
 
 function jpegBytes(): Buffer {
-  return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+  return Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+  ]);
 }
 
 function gifBytes(): Buffer {
@@ -34,9 +60,38 @@ function gifBytes(): Buffer {
 
 function webpBytes(): Buffer {
   return Buffer.from([
-    0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, // RIFF....WEBP
-    0x56, 0x50, 0x38, 0x20, // "VP8 " lossy
-    0, 0, 0, 0, 0x30, 0x01, 0x00, 0x9d, 0x01, 0x2a, 0xf0, 0x01, 0xa7, 0x02, 0xb4, 0x03,
+    0x52,
+    0x49,
+    0x46,
+    0x46,
+    0,
+    0,
+    0,
+    0,
+    0x57,
+    0x45,
+    0x42,
+    0x50, // RIFF....WEBP
+    0x56,
+    0x50,
+    0x38,
+    0x20, // "VP8 " lossy
+    0,
+    0,
+    0,
+    0,
+    0x30,
+    0x01,
+    0x00,
+    0x9d,
+    0x01,
+    0x2a,
+    0xf0,
+    0x01,
+    0xa7,
+    0x02,
+    0xb4,
+    0x03,
   ]);
 }
 
@@ -44,7 +99,9 @@ function dataUrl(bytes: Buffer, mime: string): string {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-function parsed(images: Array<{ id: string; src: string; pageNumber: number; description?: string }>): ParsedPdfContent {
+function parsed(
+  images: Array<{ id: string; src: string; pageNumber: number; description?: string }>,
+): ParsedPdfContent {
   return {
     text: 'pdf text',
     images: images.map((image) => image.src),
@@ -66,16 +123,16 @@ describe('normalizeSourceImages', () => {
         { id: 'img_1', src: dataUrl(pngBytes(), 'image/png'), pageNumber: 1 },
         { id: '../../etc/passwd', src: dataUrl(jpegBytes(), 'image/jpeg'), pageNumber: 2 },
         { id: 'mineru-3', src: dataUrl(gifBytes(), 'image/gif'), pageNumber: 0 },
-        { id: 'cloud-4', src: dataUrl(webpBytes(), 'image/webp'), pageNumber: 3, description: 'a figure' },
+        {
+          id: 'cloud-4',
+          src: dataUrl(webpBytes(), 'image/webp'),
+          pageNumber: 3,
+          description: 'a figure',
+        },
       ]),
     );
     expect(result.dropped).toBe(0);
-    expect(result.images.map((image) => image.id)).toEqual([
-      'src-1',
-      'src-2',
-      'src-3',
-      'src-4',
-    ]);
+    expect(result.images.map((image) => image.id)).toEqual(['src-1', 'src-2', 'src-3', 'src-4']);
     // pageNumber <= 0 becomes unknown (null), never a fake page.
     expect(result.images[2]!.pageNumber).toBeNull();
     expect(result.images[3]!.description).toBe('a figure');
@@ -154,8 +211,12 @@ describe('materializeSourceImages', () => {
       'cs-9',
     );
     expect(Object.keys(servingMapping)).toEqual(['src-1', 'src-2']);
-    expect(servingMapping['src-1']).toMatch(/^\/api\/classroom-media\/Stage_ok1\/media\/src_1_[0-9a-f]{8}\.png$/);
-    expect(servingMapping['src-2']).toMatch(/^\/api\/classroom-media\/Stage_ok1\/media\/src_2_[0-9a-f]{8}\.png$/);
+    expect(servingMapping['src-1']).toMatch(
+      /^\/api\/classroom-media\/Stage_ok1\/media\/src_1_[0-9a-f]{8}\.png$/,
+    );
+    expect(servingMapping['src-2']).toMatch(
+      /^\/api\/classroom-media\/Stage_ok1\/media\/src_2_[0-9a-f]{8}\.png$/,
+    );
     // Identical bytes → identical content hash fragment in both names.
     const hashOf = (value: string) => value.match(/_([0-9a-f]{8})\.png$/)![1];
     expect(hashOf(servingMapping['src-2']!)).toBe(hashOf(servingMapping['src-1']!));
@@ -247,7 +308,9 @@ describe('applySourceVisualPrecedence (per visual need)', () => {
   });
 
   it('an already-referenced selected visual is not duplicated onto placeholders', () => {
-    const scenes = [slide('o1', ['/api/classroom-media/stage-x/media/src_1_cccc.png', 'gen_img_1'])];
+    const scenes = [
+      slide('o1', ['/api/classroom-media/stage-x/media/src_1_cccc.png', 'gen_img_1']),
+    ];
     const outlines = [
       {
         id: 'o1',

@@ -293,7 +293,17 @@ const COMBINING_ACCENTS: Readonly<Record<string, string>> = {
 };
 
 /** Spacing commands dropped by the tokenizer. */
-const SPACING_COMMANDS = new Set([',', ';', ':', '!', ' ', 'quad', 'qquad', 'enspace', 'thinspace']);
+const SPACING_COMMANDS = new Set([
+  ',',
+  ';',
+  ':',
+  '!',
+  ' ',
+  'quad',
+  'qquad',
+  'enspace',
+  'thinspace',
+]);
 
 export function isSuperscriptGlyph(ch: string): boolean {
   return ch in SUPERSCRIPTS;
@@ -345,7 +355,13 @@ export function tokenize(src: string, options: TokenizeOptions = {}): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   let spaced = false;
-  const push = (kind: TokenKind, value: string, start: number, end: number, extra?: Partial<Token>) => {
+  const push = (
+    kind: TokenKind,
+    value: string,
+    start: number,
+    end: number,
+    extra?: Partial<Token>,
+  ) => {
     tokens.push({ kind, value, start, end, spaced, ...extra });
     spaced = false;
   };
@@ -362,7 +378,8 @@ export function tokenize(src: string, options: TokenizeOptions = {}): Token[] {
     if (isDigit(ch)) {
       const start = i;
       const arabic = isArabicIndicDigit(ch);
-      const sameDigit = (c: string | undefined) => (arabic ? isArabicIndicDigit(c) : isAsciiDigit(c));
+      const sameDigit = (c: string | undefined) =>
+        arabic ? isArabicIndicDigit(c) : isAsciiDigit(c);
       let intDigits = '';
       let grouped = false;
       while (i < src.length) {
@@ -526,7 +543,12 @@ export function tokenize(src: string, options: TokenizeOptions = {}): Token[] {
           }
         }
       }
-      if (GREEK_KEYS.has(name) || name === 'varepsilon' || name === 'varphi' || name === 'vartheta') {
+      if (
+        GREEK_KEYS.has(name) ||
+        name === 'varepsilon' ||
+        name === 'varphi' ||
+        name === 'vartheta'
+      ) {
         const key = name.startsWith('var') ? name.slice(3) : name;
         push('greek', key, start, i);
         continue;
@@ -670,7 +692,14 @@ export function tokenize(src: string, options: TokenizeOptions = {}): Token[] {
 function timesBetweenNumbers(tokens: Token[]): Token[] {
   for (let i = 1; i + 1 < tokens.length; i += 1) {
     const [prev, tok, next] = [tokens[i - 1]!, tokens[i]!, tokens[i + 1]!];
-    if (tok.kind === 'letter' && tok.value === 'x' && tok.spaced && next.spaced && prev.kind === 'num' && next.kind === 'num') {
+    if (
+      tok.kind === 'letter' &&
+      tok.value === 'x' &&
+      tok.spaced &&
+      next.spaced &&
+      prev.kind === 'num' &&
+      next.kind === 'num'
+    ) {
       tokens[i] = { ...tok, kind: 'op', value: '*' };
     }
   }

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  createBlankEditableScene,
-  teachingStageForInsertion,
-} from '@/lib/edit/scene-defaults';
+import { createBlankEditableScene, teachingStageForInsertion } from '@/lib/edit/scene-defaults';
 import { duplicateSlideScene } from '@/lib/edit/slide-defaults';
 import type { Scene } from '@/lib/types/stage';
 import { makeSlideScene } from '../agent-runtime/_stage-fixtures';

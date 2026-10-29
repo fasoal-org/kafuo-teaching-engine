@@ -10,7 +10,14 @@ import { describe, expect, it } from 'vitest';
 import type { ScientificSubjectCode } from '@/lib/speech/scientific/context';
 import { tokenize, type Token } from '@/lib/speech/scientific/math/tokenize';
 import type { PolicyPackOptions } from '@/lib/speech/scientific/policy';
-import { chemistryExpression, mathRelation, mulberry32, narration, physicsExpression, type Rng } from './generator';
+import {
+  chemistryExpression,
+  mathRelation,
+  mulberry32,
+  narration,
+  physicsExpression,
+  type Rng,
+} from './generator';
 import { render } from './helpers';
 
 const PRODUCTION: PolicyPackOptions = { allowProposed: false };
@@ -18,7 +25,20 @@ const MODES = ['natural', 'accessible'] as const;
 
 type SymbolClass = 'plus' | 'minus' | 'times' | 'div' | 'pm' | 'rel' | 'script' | 'arrow' | 'root';
 
-const RELATION_COMMANDS = new Set(['le', 'leq', 'leqslant', 'ge', 'geq', 'geqslant', 'neq', 'ne', 'approx', 'equiv', 'lt', 'gt']);
+const RELATION_COMMANDS = new Set([
+  'le',
+  'leq',
+  'leqslant',
+  'ge',
+  'geq',
+  'geqslant',
+  'neq',
+  'ne',
+  'approx',
+  'equiv',
+  'lt',
+  'gt',
+]);
 
 function classOf(tok: Token): SymbolClass | null {
   switch (tok.kind) {
@@ -79,13 +99,19 @@ function withoutCharges(text: string, subject: ScientificSubjectCode): [string, 
 }
 
 /** Source symbols, with `^\circ` (a degree sign, not a script) removed. */
-function sourceCensus(source: string, subject: ScientificSubjectCode): Record<SymbolClass | 'charge', number> {
+function sourceCensus(
+  source: string,
+  subject: ScientificSubjectCode,
+): Record<SymbolClass | 'charge', number> {
   const [rest, charges] = withoutCharges(source.replace(/\^\{?\\circ\}?/g, '°'), subject);
   return { ...census(rest), charge: charges };
 }
 
 /** Prepared symbols; charges are spoken as words or kept as superscript glyphs. */
-function preparedCensus(prepared: string, subject: ScientificSubjectCode): Record<SymbolClass | 'charge', number> {
+function preparedCensus(
+  prepared: string,
+  subject: ScientificSubjectCode,
+): Record<SymbolClass | 'charge', number> {
   const [rest, charges] = withoutCharges(prepared, subject);
   const counts = census(rest);
   counts.div += prepared.split(/\bfrac\b/).length - 1;
@@ -107,14 +133,16 @@ function checkNothingDropped(text: string, subject: ScientificSubjectCode): void
       const before = sourceCensus(source, subject);
       const after = preparedCensus(prepared, subject);
       for (const cls of Object.keys(before) as Array<SymbolClass | 'charge'>) {
-        expect(after[cls], `${mode} ${cls}: ${JSON.stringify(source)} → ${JSON.stringify(prepared)}`).toBeGreaterThanOrEqual(
-          before[cls],
-        );
+        expect(
+          after[cls],
+          `${mode} ${cls}: ${JSON.stringify(source)} → ${JSON.stringify(prepared)}`,
+        ).toBeGreaterThanOrEqual(before[cls]);
       }
       if (span.fallbackReason === 'notation') {
-        expect(brackets(prepared), `${mode} brackets: ${JSON.stringify(source)} → ${JSON.stringify(prepared)}`).toBeGreaterThanOrEqual(
-          (source.match(/[()[\]]/g) ?? []).length,
-        );
+        expect(
+          brackets(prepared),
+          `${mode} brackets: ${JSON.stringify(source)} → ${JSON.stringify(prepared)}`,
+        ).toBeGreaterThanOrEqual((source.match(/[()[\]]/g) ?? []).length);
       }
     }
   }
@@ -125,7 +153,12 @@ describe('production policy: a missing dictionary entry never drops content (FR-
     ['$x^2 + \\frac{1}{2} = 4$', 'MATH', 'x ^ 2 + 1 / 2 = 4', 'x ^ 2 + 1 / 2، =، 4'],
     ['9.8 m/s²', 'PHYSICS', '9.8 m/s²', '9.8 m/s²'],
     ['2H₂ + O₂ → 2H₂O', 'CHEMISTRY', '2 H 2 + O 2 → 2 H 2 O', '2 H، 2 + O، 2، →، 2 H، 2، O'],
-    ['إذا كانت س = 5 فإن 2س + 3 = 13', 'MATH', 'إذا كانت س = 5 فإن 2 س + 3 = 13', 'إذا كانت س، =، 5 فإن 2 س + 3، =، 13'],
+    [
+      'إذا كانت س = 5 فإن 2س + 3 = 13',
+      'MATH',
+      'إذا كانت س = 5 فإن 2 س + 3 = 13',
+      'إذا كانت س، =، 5 فإن 2 س + 3، =، 13',
+    ],
     ['الكسر ½ و ¾', 'MATH', 'الكسر 1 / 2 و 3 / 4', 'الكسر 1 / 2 و 3 / 4'],
   ] as const)('%s (%s)', (text, subject, natural, accessible) => {
     const n = render(text, subject, 'natural', PRODUCTION);
@@ -139,7 +172,9 @@ describe('production policy: a missing dictionary entry never drops content (FR-
 
   it('literal forms for grouping, roots, absolute value, charges, states and the electron', () => {
     const math = (text: string) => render(text, 'MATH', 'natural', PRODUCTION).preparedText;
-    expect(math('نحسب \\sqrt{x+1} و |x - 3| و (a+b)^2')).toBe('نحسب √ (x + 1) و |x - 3| و (a + b) ^ 2');
+    expect(math('نحسب \\sqrt{x+1} و |x - 3| و (a+b)^2')).toBe(
+      'نحسب √ (x + 1) و |x - 3| و (a + b) ^ 2',
+    );
     expect(math('نبسط \\frac{x+1}{x-1} الآن')).toBe('نبسط (x + 1) / (x - 1) الآن');
     expect(math('نحسب \\sqrt[3]{8} و \\sqrt[4]{x}')).toBe('نحسب ∛ 8 و ∜ x');
     expect(math('الحد x^{n+1} و x_1')).toBe('الحد x ^ (n + 1) و x _ 1');
@@ -181,7 +216,12 @@ describe('production policy: a missing dictionary entry never drops content (FR-
       [true, 'notation'],
     ]);
     expect(production.stats.expressionsFallback).toBe(2);
-    expect(production.stats.fallbackReasons).toEqual({ notation: 1, policy: 1, bound: 0, fault: 0 });
+    expect(production.stats.fallbackReasons).toEqual({
+      notation: 1,
+      policy: 1,
+      bound: 0,
+      fault: 0,
+    });
     // With the experimental pack the same expression is worded, not a fallback.
     const proposed = render('نحسب $x^2 + 1$', 'MATH', 'natural', { allowProposed: true });
     expect(proposed.spans.find((span) => span.kind === 'expression')?.fallback).toBe(false);
@@ -194,9 +234,9 @@ describe('production policy: a missing dictionary entry never drops content (FR-
     expect(details).not.toContain('label:decimal');
     expect(details).toContain('operator:+');
     // A decimal still consults (and reports) the separator word.
-    expect(render('نحسب $1.5 + 3$', 'MATH', 'natural', PRODUCTION).warnings.map((w) => w.detail)).toContain(
-      'label:decimal',
-    );
+    expect(
+      render('نحسب $1.5 + 3$', 'MATH', 'natural', PRODUCTION).warnings.map((w) => w.detail),
+    ).toContain('label:decimal');
   });
 
   const RUNS = 200;
@@ -211,29 +251,54 @@ describe('production policy: a missing dictionary entry never drops content (FR-
       try {
         checkNothingDropped(text, subject);
       } catch (error) {
-        throw new Error(`seed ${seed} run ${i} input ${JSON.stringify(text)}: ${(error as Error).message}`);
+        throw new Error(
+          `seed ${seed} run ${i} input ${JSON.stringify(text)}: ${(error as Error).message}`,
+        );
       }
     }
   });
 });
 
 describe('P3: the literal fallback is always speakable', () => {
-  const NAMED = ['xrightarrow', 'rightarrow', 'to', 'vec', 'hat', 'overline', 'bar', 'binom', 'partial', 'angle', 'emptyset', 'subset', 'uparrow', 'rightleftharpoons'];
+  const NAMED = [
+    'xrightarrow',
+    'rightarrow',
+    'to',
+    'vec',
+    'hat',
+    'overline',
+    'bar',
+    'binom',
+    'partial',
+    'angle',
+    'emptyset',
+    'subset',
+    'uparrow',
+    'rightleftharpoons',
+  ];
 
-  it.each([PRODUCTION, { allowProposed: true }])('never speaks a known LaTeX command name (%o)', (policy) => {
-    for (const name of [...NAMED, 'Delta', 'circ']) {
-      for (const text of [`نكتب $a \\${name}{b} c$ هنا`, `\\ce{A \\${name} B}`]) {
-        for (const subject of ['MATH', 'CHEMISTRY'] as const) {
-          const out = render(text, subject, 'natural', policy).preparedText;
-          expect(out.split(/[\s،]+/), `${name} ${subject}: ${out}`).not.toContain(name);
+  it.each([PRODUCTION, { allowProposed: true }])(
+    'never speaks a known LaTeX command name (%o)',
+    (policy) => {
+      for (const name of [...NAMED, 'Delta', 'circ']) {
+        for (const text of [`نكتب $a \\${name}{b} c$ هنا`, `\\ce{A \\${name} B}`]) {
+          for (const subject of ['MATH', 'CHEMISTRY'] as const) {
+            const out = render(text, subject, 'natural', policy).preparedText;
+            expect(out.split(/[\s،]+/), `${name} ${subject}: ${out}`).not.toContain(name);
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   it('`^\\circ` is a degree, never «أُس circ»', () => {
     for (const policy of [PRODUCTION, { allowProposed: true }]) {
-      const out = render('الزاوية $(90)^\\circ$ و \\ce{x^{\\circ}}', 'MATH', 'natural', policy).preparedText;
+      const out = render(
+        'الزاوية $(90)^\\circ$ و \\ce{x^{\\circ}}',
+        'MATH',
+        'natural',
+        policy,
+      ).preparedText;
       expect(out).not.toContain('circ');
       expect(out).not.toContain('أُس');
     }
@@ -252,9 +317,12 @@ describe('P3: the literal fallback is always speakable', () => {
   it('an English word stays prose, with a review warning, never spelled letter by letter', () => {
     const result = render('نكتب $\\text{heat}$ هنا', 'PHYSICS', 'natural', { allowProposed: true });
     expect(result.preparedText).toBe('نكتب heat هنا');
-    expect(result.warnings.map((w) => `${w.code}:${w.detail}`)).toContain('SATTS_W_UNSUPPORTED_NOTATION:english-word');
+    expect(result.warnings.map((w) => `${w.code}:${w.detail}`)).toContain(
+      'SATTS_W_UNSUPPORTED_NOTATION:english-word',
+    );
     // A unit or a function name is not an English word.
-    expect(render('نكتب $\\text{mol}$ هنا', 'PHYSICS', 'natural', { allowProposed: true }).preparedText).not.toContain('mol');
+    expect(
+      render('نكتب $\\text{mol}$ هنا', 'PHYSICS', 'natural', { allowProposed: true }).preparedText,
+    ).not.toContain('mol');
   });
 });
-

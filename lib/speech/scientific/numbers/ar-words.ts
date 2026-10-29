@@ -9,18 +9,7 @@
  * Anything outside that range returns `null` and the caller keeps the digits.
  */
 
-const ONES = [
-  'صفر',
-  'واحد',
-  'اثنين',
-  'ثلاثة',
-  'أربعة',
-  'خمسة',
-  'ستة',
-  'سبعة',
-  'ثمانية',
-  'تسعة',
-];
+const ONES = ['صفر', 'واحد', 'اثنين', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة'];
 const TEENS = [
   'عشرة',
   'أحد عشر',

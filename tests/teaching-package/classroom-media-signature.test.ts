@@ -68,7 +68,9 @@ describe('signLearnerMediaUrls', () => {
       /^\/api\/classroom-media\/stage-a\/media\/fig\.png\?exp=4000000000&sig=[A-Za-z0-9_-]{43}$/,
     );
     const absolute = sign('https://te.test/api/classroom-media/stage-a/audio/a.mp3');
-    expect(absolute).toMatch(/^https:\/\/te\.test\/api\/classroom-media\/stage-a\/audio\/a\.mp3\?exp=\d+&sig=/);
+    expect(absolute).toMatch(
+      /^https:\/\/te\.test\/api\/classroom-media\/stage-a\/audio\/a\.mp3\?exp=\d+&sig=/,
+    );
     const withQuery = sign('/api/classroom-media/stage-a/media/fig.png?v=2');
     expect(withQuery).toMatch(/\/fig\.png\?exp=4000000000&sig=[A-Za-z0-9_-]+&v=2$/);
     expect(parse(withQuery).search.get('v')).toBe('2');
@@ -114,7 +116,9 @@ describe('verifyClassroomMediaSignature', () => {
 
   it('accepts the signed link for exactly that file until it expires', () => {
     const { exp, sig } = parse(sign('/api/classroom-media/stage-a/media/fig.png'));
-    expect(verifyClassroomMediaSignature('stage-a', ['media', 'fig.png'], exp, sig, NOW)).toBe(true);
+    expect(verifyClassroomMediaSignature('stage-a', ['media', 'fig.png'], exp, sig, NOW)).toBe(
+      true,
+    );
     // Expired.
     expect(
       verifyClassroomMediaSignature('stage-a', ['media', 'fig.png'], exp, sig, EXP * 1000 + 1),
@@ -137,18 +141,18 @@ describe('verifyClassroomMediaSignature', () => {
 
   it('signs the decoded path the route receives (percent-encoded file names)', () => {
     const { exp, sig } = parse(sign('/api/classroom-media/stage-a/media/my%20fig%2B1.png'));
-    expect(
-      verifyClassroomMediaSignature('stage-a', ['media', 'my fig+1.png'], exp, sig, NOW),
-    ).toBe(true);
+    expect(verifyClassroomMediaSignature('stage-a', ['media', 'my fig+1.png'], exp, sig, NOW)).toBe(
+      true,
+    );
   });
 
   it('uses its own key: a grant-secret HMAC of the same message is not a valid signature', () => {
     const { exp } = parse(sign('/api/classroom-media/stage-a/media/fig.png'));
     const grantToken = encodeSigned({ kind: 'grant', stageId: 'stage-a' });
     const rawSig = grantToken.slice(grantToken.indexOf('.') + 1);
-    expect(
-      verifyClassroomMediaSignature('stage-a', ['media', 'fig.png'], exp, rawSig, NOW),
-    ).toBe(false);
+    expect(verifyClassroomMediaSignature('stage-a', ['media', 'fig.png'], exp, rawSig, NOW)).toBe(
+      false,
+    );
   });
 
   it('refuses everything when no signing key is configured', () => {

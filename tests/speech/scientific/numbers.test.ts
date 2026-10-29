@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { integerToArabicWords, numberToArabicWords } from '@/lib/speech/scientific/numbers/ar-words';
+import {
+  integerToArabicWords,
+  numberToArabicWords,
+} from '@/lib/speech/scientific/numbers/ar-words';
 
 describe('Arabic number-to-words (numbersMode: words, §10.1 contingency; O-1 «اثنين» register)', () => {
   it.each([

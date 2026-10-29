@@ -1,9 +1,7 @@
 {
   "table": "fractions",
   "description": "Approved unit fractions spoken as words (plan §10.1).",
-  "roles": [
-    "fraction"
-  ],
+  "roles": ["fraction"],
   "entries": [
     {
       "key": "1/2",

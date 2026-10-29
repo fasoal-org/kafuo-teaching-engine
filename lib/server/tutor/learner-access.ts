@@ -84,7 +84,9 @@ export type LearnerAccessOutcome =
 export interface LearnerAccessDeps {
   /** Reads the grant's version (→ learning item). Not needed by `checkLearnerAccessScope`. */
   pool?: Queryable;
-  client?: { checkLearnerAccess(request: LearnerAccessCheckRequest): Promise<LearnerAccessCheckResult> };
+  client?: {
+    checkLearnerAccess(request: LearnerAccessCheckRequest): Promise<LearnerAccessCheckResult>;
+  };
   /** Epoch ms. */
   now?: () => number;
   /** Defaults to `isKafuoIntegrationConfigured()`. */
@@ -177,7 +179,8 @@ export async function checkLearnerAccessScope(
       log.warn(
         JSON.stringify({
           event: 'tutor.learner_access_unchecked',
-          detail: 'KAFUO_INTEGRATION_BASE_URL is unset; learner reads are not re-validated (development only)',
+          detail:
+            'KAFUO_INTEGRATION_BASE_URL is unset; learner reads are not re-validated (development only)',
         }),
       );
     }
@@ -391,9 +394,13 @@ export function learnerHelpError(outcome: LearnerAccessOutcome): TeachingPackage
       reason: outcome.reason,
     });
   }
-  return new TeachingPackageError('ALLOWANCE_EXHAUSTED', 'the student can no longer open this lesson', {
-    reason: outcome.reason,
-    window: null,
-    resetAt: null,
-  });
+  return new TeachingPackageError(
+    'ALLOWANCE_EXHAUSTED',
+    'the student can no longer open this lesson',
+    {
+      reason: outcome.reason,
+      window: null,
+      resetAt: null,
+    },
+  );
 }

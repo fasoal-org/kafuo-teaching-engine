@@ -30,7 +30,10 @@ export function render(
   mode: 'natural' | 'accessible' = 'natural',
   options: PolicyPackOptions = { allowProposed: true },
 ) {
-  return renderScientificSpeech({ context: context(text, subject, mode) }, loadPolicyPack('ar', options));
+  return renderScientificSpeech(
+    { context: context(text, subject, mode) },
+    loadPolicyPack('ar', options),
+  );
 }
 
 export function prepared(
@@ -69,7 +72,9 @@ export const GOLDEN_DIR = join(__dirname, 'golden');
 
 export function loadGolden(): Array<GoldenCase & { file: string }> {
   const out: Array<GoldenCase & { file: string }> = [];
-  for (const file of readdirSync(GOLDEN_DIR).filter((f) => f.endsWith('.jsonl')).sort()) {
+  for (const file of readdirSync(GOLDEN_DIR)
+    .filter((f) => f.endsWith('.jsonl'))
+    .sort()) {
     for (const line of readFileSync(join(GOLDEN_DIR, file), 'utf8').split('\n')) {
       if (line.trim()) out.push({ ...(JSON.parse(line) as GoldenCase), file });
     }

@@ -18,7 +18,18 @@ describe('ar-SA-saudi-edu-v1 delivery instructions', () => {
   });
 
   it('carry no subject vocabulary or expression meaning', () => {
-    for (const word of ['math', 'physic', 'chemi', 'fraction', 'equation', 'formula', 'force', 'water', 'squared', 'element']) {
+    for (const word of [
+      'math',
+      'physic',
+      'chemi',
+      'fraction',
+      'equation',
+      'formula',
+      'force',
+      'water',
+      'squared',
+      'element',
+    ]) {
       expect(DELIVERY_INSTRUCTIONS_AR_SA_V1.toLowerCase()).not.toContain(word);
     }
   });

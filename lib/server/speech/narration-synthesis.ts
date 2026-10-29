@@ -29,7 +29,11 @@ import type { SpeechContext } from '@/lib/speech/scientific/context';
 import { loadPolicyPack } from '@/lib/speech/scientific/policy';
 import type { RenderedSpan } from '@/lib/speech/scientific/result';
 import { makeWarning, type RenderWarning } from '@/lib/speech/scientific/warnings';
-import { sanitizeAudioProvenance, type SpeechAction, type SpeechAudioProvenance } from '@/lib/types/action';
+import {
+  sanitizeAudioProvenance,
+  type SpeechAction,
+  type SpeechAudioProvenance,
+} from '@/lib/types/action';
 import { persistClassroomMediaBytes } from '@/lib/server/classroom-media-bytes';
 import { recordGenerationUsage } from '@/lib/server/usage-storage';
 import { joinAudio, AudioConcatError } from './audio-concat';
@@ -44,7 +48,14 @@ import type { SpeechProfile } from './speech-profile';
 const log = createLogger('SpeechNarration');
 
 export type NarrationEntry = 'route' | 'batch' | 'agent' | 'dynamic' | 'preview';
-export type SynthesisReason = 'initial' | 'stale' | 'manual' | 'policy' | 'repair' | 'dynamic' | 'preview';
+export type SynthesisReason =
+  | 'initial'
+  | 'stale'
+  | 'manual'
+  | 'policy'
+  | 'repair'
+  | 'dynamic'
+  | 'preview';
 export type StaleReason =
   | 'text'
   | 'prepared'
@@ -142,28 +153,38 @@ export function planNarration(input: {
 
   if (scientific) {
     // Production: proposed (unapproved) dictionary entries are never spoken.
-    const production = loadPolicyPack(context.language, { allowProposed: input.allowProposed === true });
-    const gated = input.allowProposed !== true && production.status !== 'approved' && !config.allowExperimental;
+    const production = loadPolicyPack(context.language, {
+      allowProposed: input.allowProposed === true,
+    });
+    const gated =
+      input.allowProposed !== true && production.status !== 'approved' && !config.allowExperimental;
     if (gated) {
       // O-4 readiness gate: the unapproved policy never reaches learners. The
       // narration is sent as authored (D-10: the narration AI already writes
       // formulas in words), with the governed profile.
-      warnings = [makeWarning('SATTS_W_POLICY_NOT_APPROVED', 0, text.length, production.policyVersion)];
+      warnings = [
+        makeWarning('SATTS_W_POLICY_NOT_APPROVED', 0, text.length, production.policyVersion),
+      ];
       policyVersion = production.policyVersion;
       policyStatus = production.status;
     } else {
       const experimental = production.status !== 'approved' && input.allowProposed !== true;
       if (experimental) {
-        log.warn(`SATTS_ALLOW_EXPERIMENTAL: speaking proposed wording (${production.policyVersion}, experimental)`);
+        log.warn(
+          `SATTS_ALLOW_EXPERIMENTAL: speaking proposed wording (${production.policyVersion}, experimental)`,
+        );
       }
-      const policy = experimental ? loadPolicyPack(context.language, { allowProposed: true }) : production;
+      const policy = experimental
+        ? loadPolicyPack(context.language, { allowProposed: true })
+        : production;
       const rendered = renderScientificSpeech({ context }, policy);
       sentText = rendered.preparedText;
       spans = rendered.spans;
       warnings = rendered.warnings;
       policyVersion = rendered.policyVersion;
       policyStatus = policy.status;
-      if (rendered.blocking) blocking = { code: rendered.blocking.code, message: rendered.blocking.message };
+      if (rendered.blocking)
+        blocking = { code: rendered.blocking.code, message: rendered.blocking.message };
     }
   } else if (config.mode === 'shadow' && context.subjectCode !== null) {
     // Shadow: render and report, but send the original with today's profile.
@@ -189,12 +210,19 @@ export function planNarration(input: {
         maxTokens: capability.maxReliableSegmentTokens,
         kappa: capability.tokenKappa,
         instructionsTokens,
-        hardTokenCap: capability.maxInputTokens !== undefined ? capability.maxInputTokens - TOKEN_CAP_MARGIN : undefined,
+        hardTokenCap:
+          capability.maxInputTokens !== undefined
+            ? capability.maxInputTokens - TOKEN_CAP_MARGIN
+            : undefined,
       },
       countTokens,
     );
     if (result.ok) segments = result.segments;
-    else blocking = { code: result.code, message: `an atomic expression exceeds the segment budget at ${result.at}` };
+    else
+      blocking = {
+        code: result.code,
+        message: `an atomic expression exceeds the segment budget at ${result.at}`,
+      };
   }
 
   const subjectCode = scientific ? context.subjectCode : null;
@@ -255,9 +283,14 @@ export function assessNarrationAudio(
   if (!action.audioId || action.audioInvalidated) return { status: 'missing', expectedFingerprint };
   const provenance = sanitizeAudioProvenance(action.audioProvenance);
   if (!provenance) return { status: 'legacy', expectedFingerprint };
-  if (mode === 'off' && provenance.policyVersion !== null) return { status: 'current', expectedFingerprint };
+  if (mode === 'off' && provenance.policyVersion !== null)
+    return { status: 'current', expectedFingerprint };
   if (provenance.fingerprint === expectedFingerprint) {
-    if (provenance.policyStatus === 'experimental' && plan.path === 'scientific' && plan.policyStatus === 'approved') {
+    if (
+      provenance.policyStatus === 'experimental' &&
+      plan.path === 'scientific' &&
+      plan.policyStatus === 'approved'
+    ) {
       return { status: 'stale', expectedFingerprint, reason: 'experimental' };
     }
     return { status: 'current', expectedFingerprint };
@@ -347,11 +380,7 @@ export function loggableErrorMessage(message: string): string {
     .slice(0, 300);
 }
 
-function outcomeEvent(
-  req: SynthesisRequest,
-  outcome: SynthesisOutcome,
-  startedAt: number,
-): void {
+function outcomeEvent(req: SynthesisRequest, outcome: SynthesisOutcome, startedAt: number): void {
   log.info(
     'speech.narration.outcome',
     JSON.stringify({
@@ -404,11 +433,19 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
   const governedStream = profile.governed && profile.capability?.usageSource === 'sse-done';
   const config: TTSModelConfig = {
     providerId: profile.providerId as TTSProviderId,
-    modelId: profile.governed ? profile.modelId : 'requestModelId' in profile ? profile.requestModelId : profile.modelId,
+    modelId: profile.governed
+      ? profile.modelId
+      : 'requestModelId' in profile
+        ? profile.requestModelId
+        : profile.modelId,
     apiKey: profile.apiKey,
     baseUrl: profile.baseUrl,
     voice: profile.voice,
-    speed: profile.governed ? profile.speed : 'requestSpeed' in profile ? profile.requestSpeed : profile.speed,
+    speed: profile.governed
+      ? profile.speed
+      : 'requestSpeed' in profile
+        ? profile.requestSpeed
+        : profile.speed,
     ...(profile.providerOptions ? { providerOptions: profile.providerOptions } : {}),
     ...(req.signal ? { signal: req.signal } : {}),
     ...(profile.governed
@@ -442,7 +479,10 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
         const result = await generateTTS(config, segment.text);
         format = result.format || format;
         if (governedStream && result.completed === false) {
-          throw new NarrationSynthesisError('SATTS_E_PROVIDER_INCOMPLETE', 'stream ended without speech.audio.done');
+          throw new NarrationSynthesisError(
+            'SATTS_E_PROVIDER_INCOMPLETE',
+            'stream ended without speech.audio.done',
+          );
         }
         if (profile.governed) {
           const { durationSeconds } = joinAudio([result.audio], format);
@@ -473,10 +513,15 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
                     originalChars: req.action.text.length,
                     instructionsChars: profile.instructions?.length ?? 0,
                     ...(result.usage
-                      ? { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, estimated: false }
+                      ? {
+                          inputTokens: result.usage.inputTokens,
+                          outputTokens: result.usage.outputTokens,
+                          estimated: false,
+                        }
                       : {
                           estInputTokens:
-                            countTokens(segment.text) + (profile.instructions ? countTokens(profile.instructions) : 0),
+                            countTokens(segment.text) +
+                            (profile.instructions ? countTokens(profile.instructions) : 0),
                           estimated: true,
                         }),
                     subjectCode: plan.subjectCode,
@@ -502,8 +547,12 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
         // Timeouts keep propagating as before (agent runtime relies on it).
         if (error instanceof TTSRequestTimeoutError && req.entry === 'agent') throw error;
         // All-or-nothing: no asset is written for a partially synthesised Action.
-        if (req.entry === 'route' || req.entry === 'dynamic' || req.entry === 'preview') throw error;
-        return fail('SATTS_E_PROVIDER_FAILED', error instanceof Error ? error.message : String(error));
+        if (req.entry === 'route' || req.entry === 'dynamic' || req.entry === 'preview')
+          throw error;
+        return fail(
+          'SATTS_E_PROVIDER_FAILED',
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
   }
@@ -539,7 +588,9 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
     warningCount: plan.warnings.length,
     generatedAt: new Date().toISOString(),
     reason:
-      req.reason === 'dynamic' || req.reason === 'preview' || req.reason === 'initial' ? 'initial' : req.reason,
+      req.reason === 'dynamic' || req.reason === 'preview' || req.reason === 'initial'
+        ? 'initial'
+        : req.reason,
   };
 
   let audioRef: string | undefined;

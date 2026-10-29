@@ -114,14 +114,17 @@ describe('teaching package read routes', () => {
   it('answer a plain 404 when the API is not configured', async () => {
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', '');
     const response = await listVersionsRoute(
-      authed('http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=lesson&learningItemId=li'),
+      authed(
+        'http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=lesson&learningItemId=li',
+      ),
     );
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('Not found');
   });
 
   it('refuse a missing or wrong bearer token with 401', async () => {
-    const url = 'http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=lesson&learningItemId=li';
+    const url =
+      'http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=lesson&learningItemId=li';
     const missing = await listVersionsRoute(new NextRequest(url));
     expect(missing.status).toBe(401);
     await expect(missing.json()).resolves.toMatchObject({
@@ -156,7 +159,9 @@ describe('teaching package read routes', () => {
 
   it('reject an unsupported learning item type with 400', async () => {
     const response = await listVersionsRoute(
-      authed('http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=course&learningItemId=li'),
+      authed(
+        'http://localhost/api/teaching-packages?tenantId=tenant-read&learningItemType=course&learningItemId=li',
+      ),
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
@@ -275,7 +280,9 @@ describe('teaching package read routes', () => {
       }),
     );
     const response = await attemptRoute(
-      authed('http://localhost/api/teaching-packages/generation-attempts/tpa-read-1?tenantId=tenant-read'),
+      authed(
+        'http://localhost/api/teaching-packages/generation-attempts/tpa-read-1?tenantId=tenant-read',
+      ),
       { params: Promise.resolve({ attemptId: 'tpa-read-1' }) },
     );
     expect(response.status).toBe(200);
@@ -300,7 +307,9 @@ describe('teaching package read routes', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'TENANT_REQUIRED' } });
     const current = await currentRoute(
-      authed('http://localhost/api/teaching-packages/current?learningItemType=lesson&learningItemId=li'),
+      authed(
+        'http://localhost/api/teaching-packages/current?learningItemType=lesson&learningItemId=li',
+      ),
     );
     expect(current.status).toBe(400);
   });
@@ -309,7 +318,9 @@ describe('teaching package read routes', () => {
     const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
     mocks.getAttempt.mockRejectedValue(new TeachingPackageError('NOT_FOUND', 'not found'));
     const response = await attemptRoute(
-      authed('http://localhost/api/teaching-packages/generation-attempts/tpa-absent?tenantId=tenant-read'),
+      authed(
+        'http://localhost/api/teaching-packages/generation-attempts/tpa-absent?tenantId=tenant-read',
+      ),
       { params: Promise.resolve({ attemptId: 'tpa-absent' }) },
     );
     expect(response.status).toBe(404);
@@ -357,9 +368,7 @@ describe('the teaching package route surface', () => {
     const generateRoute = await import('@/app/api/teaching-packages/generate/route');
 
     expect(collectionRoute).not.toHaveProperty('POST');
-    expect(generateRoute.POST).not.toBe(
-      (collectionRoute as Record<string, unknown>).GET,
-    );
+    expect(generateRoute.POST).not.toBe((collectionRoute as Record<string, unknown>).GET);
     // Both are Node-runtime server routes; neither is an edge alias of the other.
     expect(collectionRoute.runtime).toBe('nodejs');
     expect(generateRoute.runtime).toBe('nodejs');

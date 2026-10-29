@@ -11,7 +11,9 @@ import { STAGES_SQL, withReadOnly, type StageRow } from './satts/db-readonly';
 
 async function main() {
   if (process.argv.includes('--apply')) {
-    console.error('Refusing --apply: the backfill writes Stages and needs explicit owner approval (plan §18.2).');
+    console.error(
+      'Refusing --apply: the backfill writes Stages and needs explicit owner approval (plan §18.2).',
+    );
     process.exit(2);
   }
   const proposals = await withReadOnly(async (query) => {

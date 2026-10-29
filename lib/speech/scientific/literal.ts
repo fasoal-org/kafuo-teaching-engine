@@ -152,7 +152,10 @@ export function isEnglishText(content: string): boolean {
   if (!words.every((word) => /^[A-Za-z]+$/.test(word))) return false;
   const functions = policyTokens('function');
   const units = policyTokens('unit');
-  return words.some((word) => word.length >= 3) && !words.every((word) => functions.has(word) || units.has(word));
+  return (
+    words.some((word) => word.length >= 3) &&
+    !words.every((word) => functions.has(word) || units.has(word))
+  );
 }
 
 function writeToken(ctx: LiteralContext, w: Writer, tok: Token): void {
@@ -171,7 +174,10 @@ function writeToken(ctx: LiteralContext, w: Writer, tok: Token): void {
     case 'vfrac': {
       // `½`: the approved unit-fraction word when usable, else `1 / 2`.
       const [num, den] = vulgarFractionParts(tok.value);
-      const found = ctx.policy.resolve({ role: 'fraction', token: tok.value, domain: ctx.domain }, ctx.mode);
+      const found = ctx.policy.resolve(
+        { role: 'fraction', token: tok.value, domain: ctx.domain },
+        ctx.mode,
+      );
       if (found) {
         if (found.proposed) ctx.noteProposed();
         w.word(found.text);
@@ -316,7 +322,12 @@ function degreeAt(tokens: Token[], i: number): number {
   if (tokens[i]?.kind !== 'caret') return -1;
   const next = tokens[i + 1];
   if (next?.kind === 'cmd' && next.value === 'circ') return i + 2;
-  if (next?.kind === 'lbrace' && tokens[i + 2]?.kind === 'cmd' && tokens[i + 2]?.value === 'circ' && tokens[i + 3]?.kind === 'rbrace') {
+  if (
+    next?.kind === 'lbrace' &&
+    tokens[i + 2]?.kind === 'cmd' &&
+    tokens[i + 2]?.value === 'circ' &&
+    tokens[i + 3]?.kind === 'rbrace'
+  ) {
     return i + 4;
   }
   return -1;
@@ -329,7 +340,9 @@ function chargeAt(tokens: Token[], i: number): { charge: Charge; next: number } 
   const parse = (body: string): Charge | null => {
     const match = /^(\d?)([+-])$/.exec(body) ?? /^([+-])(\d)$/.exec(body);
     if (!match) return null;
-    const [digits, sign] = /^[+-]/.test(match[1]!) ? [match[2]!, match[1]!] : [match[1]!, match[2]!];
+    const [digits, sign] = /^[+-]/.test(match[1]!)
+      ? [match[2]!, match[1]!]
+      : [match[1]!, match[2]!];
     const magnitude = digits ? Number(digits) : 1;
     return magnitude >= 1 && magnitude <= 9 ? { sign: sign as '+' | '-', magnitude } : null;
   };
@@ -342,7 +355,11 @@ function chargeAt(tokens: Token[], i: number): { charge: Charge; next: number } 
   const braced = tokens[j]?.kind === 'lbrace';
   if (braced) j += 1;
   let body = '';
-  while (j < tokens.length && (tokens[j]!.kind === 'num' || tokens[j]!.kind === 'op') && body.length < 3) {
+  while (
+    j < tokens.length &&
+    (tokens[j]!.kind === 'num' || tokens[j]!.kind === 'op') &&
+    body.length < 3
+  ) {
     body += tokens[j]!.value;
     j += 1;
     if (!braced && /[+-]$/.test(body)) break;
@@ -365,8 +382,12 @@ function chemistryLiteral(ctx: LiteralContext, w: Writer, tokens: Token[]): void
     const tok = tokens[i]!;
     const next = tokens[i + 1];
     if (tok.kind === 'letter' && tok.value >= 'A' && tok.value <= 'Z') {
-      const two = next?.kind === 'letter' && !next.spaced && next.value >= 'a' && next.value <= 'z' ? tok.value + next.value : '';
-      const symbol = two && isElementSymbol(two) ? two : isElementSymbol(tok.value) ? tok.value : '';
+      const two =
+        next?.kind === 'letter' && !next.spaced && next.value >= 'a' && next.value <= 'z'
+          ? tok.value + next.value
+          : '';
+      const symbol =
+        two && isElementSymbol(two) ? two : isElementSymbol(tok.value) ? tok.value : '';
       if (symbol) {
         w.sem('el', symbol);
         writeElement(ctx, w, symbol);
@@ -393,7 +414,11 @@ function chemistryLiteral(ctx: LiteralContext, w: Writer, tokens: Token[]): void
         afterSpecies = false;
         continue;
       }
-      if ((tok.kind === 'num' || tok.kind === 'sub') && /^[0-9]+$/.test(tok.kind === 'num' ? (tok.intDigits ?? '') : tok.value) && !(tok.kind === 'num' && tok.fracDigits)) {
+      if (
+        (tok.kind === 'num' || tok.kind === 'sub') &&
+        /^[0-9]+$/.test(tok.kind === 'num' ? (tok.intDigits ?? '') : tok.value) &&
+        !(tok.kind === 'num' && tok.fracDigits)
+      ) {
         const value = tok.kind === 'num' ? integerValue(tok)! : Number(tok.value);
         w.sem('count', String(value));
         w.word(structuralWord(ctx, value, 20) ?? String(value));
@@ -413,7 +438,10 @@ export function literalReading(
   const w = new Writer();
   let tokens: Token[];
   try {
-    tokens = tokenize(source, { scientificE: false, arabicLetters: options.arabicLetters === true });
+    tokens = tokenize(source, {
+      scientificE: false,
+      arabicLetters: options.arabicLetters === true,
+    });
   } catch {
     tokens = [];
   }
@@ -435,7 +463,11 @@ export function literalReading(
   for (let i = 0; i < cleaned.length; i += 1) {
     const tok = cleaned[i]!;
     // `\begin{matrix}` / `\end{matrix}`: the environment name is one word.
-    if (tok.kind === 'cmd' && (tok.value === 'begin' || tok.value === 'end') && cleaned[i + 1]?.kind === 'lbrace') {
+    if (
+      tok.kind === 'cmd' &&
+      (tok.value === 'begin' || tok.value === 'end') &&
+      cleaned[i + 1]?.kind === 'lbrace'
+    ) {
       let j = i + 2;
       let name = '';
       while (j < cleaned.length && cleaned[j]!.kind === 'letter') {

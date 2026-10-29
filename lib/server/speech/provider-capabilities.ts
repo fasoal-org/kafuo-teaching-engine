@@ -70,8 +70,8 @@ const CAPABILITIES: ReadonlyArray<{
 
 export function providerCapability(providerId: string, modelId: string): ProviderCapability | null {
   return (
-    CAPABILITIES.find((row) => row.providerId === providerId && row.model.test(modelId))?.capability ??
-    null
+    CAPABILITIES.find((row) => row.providerId === providerId && row.model.test(modelId))
+      ?.capability ?? null
   );
 }
 

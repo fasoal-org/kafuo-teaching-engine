@@ -5,7 +5,11 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readFinalize } from '@/lib/persistence/meter-finalize-outbox';
-import { readConversation, readMessagesBySeq, readTurnGrounding } from '@/lib/persistence/tutor-runtime';
+import {
+  readConversation,
+  readMessagesBySeq,
+  readTurnGrounding,
+} from '@/lib/persistence/tutor-runtime';
 import { resetLedgerRetryQueueForTests } from '@/lib/server/teaching-model/ledger-retry-queue';
 import { BASE_RATE_CARD } from '@/lib/server/teaching-model/rate-card';
 import { signWebhookDelivery } from '@/lib/server/teaching-package/webhook-delivery';
@@ -25,7 +29,17 @@ import {
   unitRow,
   type FakeGrounding,
 } from './fake-grounding-reader';
-import { asConnectable, createTutorPool, ok, readSse, RecordingPool, STUDENT_REF, studentBearer, T0_MS, textStream } from './tutor-test-harness';
+import {
+  asConnectable,
+  createTutorPool,
+  ok,
+  readSse,
+  RecordingPool,
+  STUDENT_REF,
+  studentBearer,
+  T0_MS,
+  textStream,
+} from './tutor-test-harness';
 
 /**
  * End-to-end Free Chat (plan §11 row "Free Chat", P6 `e2e-free-chat`): the
@@ -60,11 +74,20 @@ vi.mock('@/lib/server/resolve-model', async () => {
   return {
     resolveModel: async ({ modelString }: { modelString: string }) => {
       const { providerId, modelId } = providers.parseModelString(modelString);
-      return { model: { provider: providerId, modelId }, modelInfo: providers.getModelInfo(providerId, modelId), modelString, providerId, modelId, apiKey: 'k' };
+      return {
+        model: { provider: providerId, modelId },
+        modelInfo: providers.getModelInfo(providerId, modelId),
+        modelString,
+        providerId,
+        modelId,
+        apiKey: 'k',
+      };
     },
   };
 });
-vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
 
 const SERVICE_KEY = 'e2e-svc-key';
 const WEBHOOK_SECRET = 'whsec-e2e';
@@ -99,7 +122,17 @@ async function startFakeKafuo(): Promise<FakeKafuoServer> {
       if (!verified) return json(401, { error: { code: 'invalid_signature' } });
       if (path.endsWith('/meters/reserve')) {
         reservations += 1;
-        return json(200, { allowed: true, reservationId: String(1000 + reservations), replay: false, status: { limit: 30, used: reservations, remaining: 30 - reservations, resetAt: '2026-10-01T00:00:00+03:00' } });
+        return json(200, {
+          allowed: true,
+          reservationId: String(1000 + reservations),
+          replay: false,
+          status: {
+            limit: 30,
+            used: reservations,
+            remaining: 30 - reservations,
+            resetAt: '2026-10-01T00:00:00+03:00',
+          },
+        });
       }
       if (path.endsWith('/meters/finalize')) {
         const id = String(body.reservationId);
@@ -110,8 +143,24 @@ async function startFakeKafuo(): Promise<FakeKafuoServer> {
       if (path.endsWith('/grounding/search')) {
         return json(200, {
           units: [
-            { contentUnitId: 'cu-1', lessonId: 'L1', lessonTitle: 'قانون حفظ الكتلة', unitTitle: 'المتفاعلات والنواتج', text: 'كتلة المواد المتفاعلة تساوي كتلة المواد الناتجة في أي تفاعل كيميائي.', charLength: 66, score: 0.91 },
-            { contentUnitId: 'cu-2', lessonId: 'L1', lessonTitle: 'قانون حفظ الكتلة', unitTitle: 'تطبيق', text: 'عند احتراق الماغنسيوم تبقى الكتلة الكلية محفوظة.', charLength: 45, score: 0.7 },
+            {
+              contentUnitId: 'cu-1',
+              lessonId: 'L1',
+              lessonTitle: 'قانون حفظ الكتلة',
+              unitTitle: 'المتفاعلات والنواتج',
+              text: 'كتلة المواد المتفاعلة تساوي كتلة المواد الناتجة في أي تفاعل كيميائي.',
+              charLength: 66,
+              score: 0.91,
+            },
+            {
+              contentUnitId: 'cu-2',
+              lessonId: 'L1',
+              lessonTitle: 'قانون حفظ الكتلة',
+              unitTitle: 'تطبيق',
+              text: 'عند احتراق الماغنسيوم تبقى الكتلة الكلية محفوظة.',
+              charLength: 45,
+              score: 0.7,
+            },
           ],
           lessonMatch: { lessonId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.66 },
           truncated: false,
@@ -127,7 +176,10 @@ async function startFakeKafuo(): Promise<FakeKafuoServer> {
     baseUrl: `http://127.0.0.1:${port}/api/v2/integrations/teaching-engine`,
     calls,
     finalizeCounts,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
   };
 }
 
@@ -140,7 +192,13 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
 
   async function createConversation(subjectCode = 'CHEMISTRY') {
     const { POST } = await import('@/app/api/tutor/conversations/route');
-    const response = await POST(new NextRequest('http://localhost/api/tutor/conversations', { method: 'POST', headers: { 'content-type': 'application/json', authorization: studentBearer() }, body: JSON.stringify({ subjectCode, clientRequestId: 'cr-e2e' }) }));
+    const response = await POST(
+      new NextRequest('http://localhost/api/tutor/conversations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: studentBearer() },
+        body: JSON.stringify({ subjectCode, clientRequestId: 'cr-e2e' }),
+      }),
+    );
     expect(response.status).toBe(201);
     return ((await response.json()) as { conversation: { id: string } }).conversation.id;
   }
@@ -148,7 +206,11 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
   async function turn(conversationId: string, clientMessageId: string, text: string) {
     const { POST } = await import('@/app/api/tutor/conversations/[id]/messages/route');
     const response = await POST(
-      new NextRequest(`http://localhost/api/tutor/conversations/${conversationId}/messages`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: studentBearer() }, body: JSON.stringify({ clientMessageId, text, localeHint: 'ar' }) }),
+      new NextRequest(`http://localhost/api/tutor/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: studentBearer() },
+        body: JSON.stringify({ clientMessageId, text, localeHint: 'ar' }),
+      }),
       params(conversationId),
     );
     expect(response.status).toBe(200);
@@ -173,11 +235,19 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
     mocks.streamLLM.mockImplementation(() => textStream('كتلة المتفاعلات تساوي كتلة النواتج.'));
     setTutorRuntimeDepsForTests({
       pool: asConnectable(pool),
-      kafuo: new KafuoIntegrationClient({ baseUrl: kafuo.baseUrl, secret: WEBHOOK_SECRET, timeoutMs: 5_000 }),
+      kafuo: new KafuoIntegrationClient({
+        baseUrl: kafuo.baseUrl,
+        secret: WEBHOOK_SECRET,
+        timeoutMs: 5_000,
+      }),
       now: () => T0_MS + ids * 1000,
       workerId: 'host:1:e2e',
       idFactory: () => `id-${++ids}`,
-      executor: { rateCard: BASE_RATE_CARD, completionRetryDelaysMs: [0, 0, 0], idFactory: () => `tma-${++ids}` },
+      executor: {
+        rateCard: BASE_RATE_CARD,
+        completionRetryDelaysMs: [0, 0, 0],
+        idFactory: () => `tma-${++ids}`,
+      },
       heartbeatMs: 0,
       completionTxRetryDelaysMs: [0, 0],
     });
@@ -194,11 +264,22 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
 
     // Turn 1: explicit curriculum signal without grounding → retrieve.
     const first = await turn(conversationId, 'cm-1', 'ما تعريف قانون حفظ الكتلة في الدرس؟');
-    expect(first.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done', 'title']);
+    expect(first.map((f) => f.event)).toEqual([
+      'turn_start',
+      'grounding',
+      'text_delta',
+      'done',
+      'title',
+    ]);
     expect(first[1]!.data).toEqual({ mode: 'retrieved', lessonTitle: 'قانون حفظ الكتلة' });
     expect(first[4]!.data).toEqual({ title: 'قانون حفظ الكتلة' });
     expect(kafuo.calls.filter((c) => c.path.endsWith('/grounding/search'))).toHaveLength(1);
-    expect(kafuo.calls.find((c) => c.path.endsWith('/grounding/search'))!.body).toMatchObject({ tenantId: '1', studentRef: STUDENT_REF, subjectOfferingId: '11', maxChars: 10_000 });
+    expect(kafuo.calls.find((c) => c.path.endsWith('/grounding/search'))!.body).toMatchObject({
+      tenantId: '1',
+      studentRef: STUDENT_REF,
+      subjectOfferingId: '11',
+      maxChars: 10_000,
+    });
 
     // Turn 2: continuation → reuse, no search.
     const second = await turn(conversationId, 'cm-2', 'ليه؟ بسّط أكتر');
@@ -213,12 +294,22 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
     // Every request to Kafuo carried a valid signature; nothing was refused.
     expect(kafuo.calls.every((c) => c.verified)).toBe(true);
     expect(kafuo.calls.filter((c) => c.path.endsWith('/meters/reserve'))).toHaveLength(3);
-    expect(kafuo.calls.filter((c) => c.path.endsWith('/meters/reserve')).map((c) => c.body.turnAttempt)).toEqual([1, 1, 1]);
+    expect(
+      kafuo.calls.filter((c) => c.path.endsWith('/meters/reserve')).map((c) => c.body.turnAttempt),
+    ).toEqual([1, 1, 1]);
 
     // Finalize: exactly once per reservation, outbox rows delivered, messages flagged.
-    expect([...kafuo.finalizeCounts.entries()].sort()).toEqual([['1001', 1], ['1002', 1], ['1003', 1]]);
+    expect([...kafuo.finalizeCounts.entries()].sort()).toEqual([
+      ['1001', 1],
+      ['1002', 1],
+      ['1003', 1],
+    ]);
     for (const id of ['1001', '1002', '1003']) {
-      expect(await readFinalize(pool, id)).toMatchObject({ status: 'delivered', outcome: 'delivered', attempts: 1 });
+      expect(await readFinalize(pool, id)).toMatchObject({
+        status: 'delivered',
+        outcome: 'delivered',
+        attempts: 1,
+      });
     }
     const { messages } = await readMessagesBySeq(pool, { parentId: conversationId, limit: 20 });
     expect(messages.map((m) => [m.role, m.status, m.groundingMode])).toEqual([
@@ -229,14 +320,24 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       ['student', 'completed', null],
       ['tutor', 'completed', 'none'],
     ]);
-    expect(messages.filter((m) => m.role === 'tutor').every((m) => m.meterFinalized && m.accountingComplete)).toBe(true);
+    expect(
+      messages
+        .filter((m) => m.role === 'tutor')
+        .every((m) => m.meterFinalized && m.accountingComplete),
+    ).toBe(true);
 
     const conversation = (await readConversation(pool, conversationId))!;
     expect(conversation).toMatchObject({
       title: 'قانون حفظ الكتلة',
       titleSource: 'lesson',
       messageCount: 6,
-      lessonAssociation: { schema: 1, lessonId: 'L1', lessonTitle: 'قانون حفظ الكتلة', confidence: 0.66, associatedAtSeq: 1 },
+      lessonAssociation: {
+        schema: 1,
+        lessonId: 'L1',
+        lessonTitle: 'قانون حفظ الكتلة',
+        confidence: 0.66,
+        associatedAtSeq: 1,
+      },
       grounding: { schema: 2, source: 'kafuo_http', setAtSeq: 1, lastUsedSeq: 3 },
     });
     expect(conversation.grounding!.units.map((u) => u.unitId)).toEqual(['cu-1', 'cu-2']);
@@ -247,26 +348,43 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
     expect(firstRequest.map((m) => m.content).join('\n')).not.toMatch(/cu-1|L1|1001/);
     expect(mocks.callLLM).not.toHaveBeenCalled();
     // Turn 2 carried turn 1 as history.
-    const secondRequest = mocks.streamLLM.mock.calls[1]![0].messages as Array<{ role: string; content: string }>;
-    expect(secondRequest.some((m) => m.role === 'assistant' && m.content === 'كتلة المتفاعلات تساوي كتلة النواتج.')).toBe(true);
+    const secondRequest = mocks.streamLLM.mock.calls[1]![0].messages as Array<{
+      role: string;
+      content: string;
+    }>;
+    expect(
+      secondRequest.some(
+        (m) => m.role === 'assistant' && m.content === 'كتلة المتفاعلات تساوي كتلة النواتج.',
+      ),
+    ).toBe(true);
   });
 
   it('a signature the server rejects surfaces as METER_UNAVAILABLE before any model call', async () => {
     const conversationId = await createConversation();
     setTutorRuntimeDepsForTests({
       pool: asConnectable(pool),
-      kafuo: new KafuoIntegrationClient({ baseUrl: kafuo.baseUrl, secret: 'wrong-secret', timeoutMs: 5_000 }),
+      kafuo: new KafuoIntegrationClient({
+        baseUrl: kafuo.baseUrl,
+        secret: 'wrong-secret',
+        timeoutMs: 5_000,
+      }),
       now: () => T0_MS,
       heartbeatMs: 0,
       executor: { rateCard: BASE_RATE_CARD },
     });
     const { POST } = await import('@/app/api/tutor/conversations/[id]/messages/route');
     const response = await POST(
-      new NextRequest(`http://localhost/api/tutor/conversations/${conversationId}/messages`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: studentBearer() }, body: JSON.stringify({ clientMessageId: 'cm-x', text: 'ما هي الكتلة؟' }) }),
+      new NextRequest(`http://localhost/api/tutor/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: studentBearer() },
+        body: JSON.stringify({ clientMessageId: 'cm-x', text: 'ما هي الكتلة؟' }),
+      }),
       params(conversationId),
     );
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: 'METER_UNAVAILABLE', retryable: true } });
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'METER_UNAVAILABLE', retryable: true },
+    });
     expect(kafuo.calls.some((c) => !c.verified)).toBe(true);
     expect(mocks.streamLLM).not.toHaveBeenCalled();
   });
@@ -275,8 +393,17 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
     let grounding: FakeGrounding;
     const SECTION_612 = candidate('612', 'المثال المضاد', 'SECTION', 8);
     const LESSON_155 = candidate('155', 'التبرير والبرهان', 'LESSON', 9);
-    const CU_3279 = unitRow('3279', '612', 'المفردات: المثال المضاد مثال واحد يبيّن أن التخمين خاطئ.', { itemType: 'SECTION', unitTitle: 'المفردات', similarity: 0.83 });
-    const CU_3278 = unitRow('3278', '612', 'يُسمى المثال الذي ينقض التخمين المثال المضاد.', { itemType: 'SECTION', unitTitle: 'إيجاد أمثلة مضادة', similarity: 0.71 });
+    const CU_3279 = unitRow(
+      '3279',
+      '612',
+      'المفردات: المثال المضاد مثال واحد يبيّن أن التخمين خاطئ.',
+      { itemType: 'SECTION', unitTitle: 'المفردات', similarity: 0.83 },
+    );
+    const CU_3278 = unitRow('3278', '612', 'يُسمى المثال الذي ينقض التخمين المثال المضاد.', {
+      itemType: 'SECTION',
+      unitTitle: 'إيجاد أمثلة مضادة',
+      similarity: 0.71,
+    });
 
     const calls = (suffix: string) => kafuo.calls.filter((c) => c.path.endsWith(suffix));
 
@@ -286,11 +413,19 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       grounding = fakeGroundingReader(mocks.events);
       setTutorRuntimeDepsForTests({
         pool: asConnectable(pool),
-        kafuo: new KafuoIntegrationClient({ baseUrl: kafuo.baseUrl, secret: WEBHOOK_SECRET, timeoutMs: 5_000 }),
+        kafuo: new KafuoIntegrationClient({
+          baseUrl: kafuo.baseUrl,
+          secret: WEBHOOK_SECRET,
+          timeoutMs: 5_000,
+        }),
         now: () => T0_MS + ids * 1000,
         workerId: 'host:1:e2e',
         idFactory: () => `id-${++ids}`,
-        executor: { rateCard: BASE_RATE_CARD, completionRetryDelaysMs: [0, 0, 0], idFactory: () => `tma-${++ids}` },
+        executor: {
+          rateCard: BASE_RATE_CARD,
+          completionRetryDelaysMs: [0, 0, 0],
+          idFactory: () => `tma-${++ids}`,
+        },
         heartbeatMs: 0,
         completionTxRetryDelaysMs: [0, 0],
         grounding: grounding.deps,
@@ -306,14 +441,24 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       grounding.queue('searchUnits', found(CU_3279, CU_3278));
       const retrieved = await turn(conversationId, 'cm-1', 'اشرحلي المثال المضاد');
       expect(events(retrieved)).toEqual(['turn_start', 'grounding', 'text_delta', 'done', 'title']);
-      expect(retrieved[1]!.data).toEqual({ mode: 'retrieved', lessonTitle: 'المثال المضاد', itemType: 'SECTION' });
+      expect(retrieved[1]!.data).toEqual({
+        mode: 'retrieved',
+        lessonTitle: 'المثال المضاد',
+        itemType: 'SECTION',
+      });
       expect(retrieved[4]!.data).toEqual({ title: 'المثال المضاد' });
-      expect(mocks.events.indexOf('guard:pre')).toBeLessThan(mocks.events.indexOf('reader:resolve'));
+      expect(mocks.events.indexOf('guard:pre')).toBeLessThan(
+        mocks.events.indexOf('reader:resolve'),
+      );
 
       // reuse (revalidated once)
       const reuse = await turn(conversationId, 'cm-2', 'ليه؟ بسّط أكتر');
       expect(events(reuse)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
-      expect(reuse[1]!.data).toEqual({ mode: 'reuse', lessonTitle: 'المثال المضاد', itemType: 'SECTION' });
+      expect(reuse[1]!.data).toEqual({
+        mode: 'reuse',
+        lessonTitle: 'المثال المضاد',
+        itemType: 'SECTION',
+      });
       expect(grounding.mocks.validateUnits).toHaveBeenCalledTimes(1);
 
       // none (social: never probed)
@@ -325,7 +470,11 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       // clarification (ambiguous): no reservation
       const reservesBefore = calls('/meters/reserve').length;
       grounding.queue('resolveItems', ambiguous(LESSON_155, SECTION_612));
-      const clarification = await turn(conversationId, 'cm-4', 'اشرح الدوال الخطية والدوال التربيعية');
+      const clarification = await turn(
+        conversationId,
+        'cm-4',
+        'اشرح الدوال الخطية والدوال التربيعية',
+      );
       expect(events(clarification)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
       expect(clarification[1]!.data).toMatchObject({ mode: 'clarification' });
       expect(calls('/meters/reserve')).toHaveLength(reservesBefore);
@@ -344,9 +493,16 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
 
       // insufficient: retrieval_unavailable (the reader failed)
       grounding.queue('resolveItems', new Error('statement timeout'));
-      const unavailable = await turn(conversationId, 'cm-7', 'اشرحلي نظرية فيثاغورس والمثلثات القائمة');
+      const unavailable = await turn(
+        conversationId,
+        'cm-7',
+        'اشرحلي نظرية فيثاغورس والمثلثات القائمة',
+      );
       expect(events(unavailable)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
-      expect(unavailable[1]!.data).toEqual({ mode: 'insufficient', reason: 'retrieval_unavailable' });
+      expect(unavailable[1]!.data).toEqual({
+        mode: 'insufficient',
+        reason: 'retrieval_unavailable',
+      });
 
       // Embedding / vector search ran only for the retrieved turn.
       expect(grounding.mocks.embed).toHaveBeenCalledTimes(1);
@@ -356,7 +512,10 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
       expect(calls('/meters/reserve').map((c) => c.body.turnAttempt)).toEqual([1, 1, 1, 1, 1, 1]);
       expect([...kafuo.finalizeCounts.values()]).toEqual([1, 1, 1, 1, 1, 1]);
       for (const id of kafuo.finalizeCounts.keys()) {
-        expect(await readFinalize(pool, id)).toMatchObject({ status: 'delivered', outcome: 'delivered' });
+        expect(await readFinalize(pool, id)).toMatchObject({
+          status: 'delivered',
+          outcome: 'delivered',
+        });
       }
       expect(calls('/grounding/search')).toHaveLength(0);
       expect(kafuo.calls.every((c) => c.verified)).toBe(true);
@@ -385,29 +544,63 @@ describe('Free Chat end to end (routes + real Kafuo client + fake Kafuo server)'
     it('the safety boundary still wins on a retrieved direct turn; a guard failure answers before any probe or resolution', async () => {
       const conversationId = await createConversation('CHEMISTRY');
       grounding.queue('resolveItems', single(candidate('900', 'الأمان في المختبر', 'LESSON')));
-      grounding.queue('searchUnits', found(unitRow('9001', '900', 'لا تخلط المواد الكيميائية خارج المختبر.', { unitTitle: 'قواعد الأمان' })));
+      grounding.queue(
+        'searchUnits',
+        found(
+          unitRow('9001', '900', 'لا تخلط المواد الكيميائية خارج المختبر.', {
+            unitTitle: 'قواعد الأمان',
+          }),
+        ),
+      );
       mocks.streamLLM.mockImplementationOnce(() =>
         textStream('الخطوة 1: اخلط الكلور مع الأمونيا في وعاء.\nالخطوة 2: سخن الخليط على النار.'),
       );
-      const frames = await turn(conversationId, 'cm-1', 'ممكن أخلط الكلور مع الأمونيا في البيت؟ اشرح التفاعل الكيميائي');
+      const frames = await turn(
+        conversationId,
+        'cm-1',
+        'ممكن أخلط الكلور مع الأمونيا في البيت؟ اشرح التفاعل الكيميائي',
+      );
       // TE-2: a safety-flagged turn never names the conversation.
-      expect(frames.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'restart', 'text_delta', 'done']);
-      expect(frames[1]!.data).toEqual({ mode: 'retrieved', lessonTitle: 'الأمان في المختبر', itemType: 'LESSON' });
+      expect(frames.map((f) => f.event)).toEqual([
+        'turn_start',
+        'grounding',
+        'text_delta',
+        'restart',
+        'text_delta',
+        'done',
+      ]);
+      expect(frames[1]!.data).toEqual({
+        mode: 'retrieved',
+        lessonTitle: 'الأمان في المختبر',
+        itemType: 'LESSON',
+      });
       expect(frames[3]!.data).toEqual({ servedBy: 'fallback', reason: 'safety_boundary' });
       expect(frames[4]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE_AR });
-      expect(frames[5]!.data).toMatchObject({ safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY' } });
+      expect(frames[5]!.data).toMatchObject({
+        safety: { triggered: true, boundary: true, code: 'SAFETY_BOUNDARY' },
+      });
       const sent = mocks.streamLLM.mock.calls[0]![0].messages as Array<{ content: string }>;
       expect(sent[sent.length - 2]!.content).toContain('SAFETY DIRECTIVE');
       const [reservationId] = [...kafuo.finalizeCounts.keys()];
-      expect(await readFinalize(pool, reservationId!)).toMatchObject({ outcome: 'delivered', reason: 'safety_boundary' });
-      expect(mocks.events.indexOf('guard:pre')).toBeLessThan(mocks.events.indexOf('reader:resolve'));
+      expect(await readFinalize(pool, reservationId!)).toMatchObject({
+        outcome: 'delivered',
+        reason: 'safety_boundary',
+      });
+      expect(mocks.events.indexOf('guard:pre')).toBeLessThan(
+        mocks.events.indexOf('reader:resolve'),
+      );
 
       // The guard itself fails: the boundary is the reply — no probe, no resolution, no reservation.
       mocks.preCheckThrows = true;
       grounding.reset();
       const reserves = calls('/meters/reserve').length;
       const boundary = await turn(conversationId, 'cm-2', 'اشرحلي المثال المضاد');
-      expect(boundary.map((f) => f.event)).toEqual(['turn_start', 'grounding', 'text_delta', 'done']);
+      expect(boundary.map((f) => f.event)).toEqual([
+        'turn_start',
+        'grounding',
+        'text_delta',
+        'done',
+      ]);
       expect(boundary[1]!.data).toEqual({ mode: 'none' });
       // FC-D13: the guard-error boundary is in the student's language too.
       expect(boundary[2]!.data).toEqual({ delta: SAFETY_BOUNDARY_MESSAGE_AR });

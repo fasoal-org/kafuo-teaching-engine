@@ -121,9 +121,7 @@ export function parseActionsFromStructuredOutput(
         // so it is dropped here, at the boundary where model output first becomes
         // an `Action`. Identity only in the log — never the action's content.
         if (!isActionType(actionName)) {
-          log.warn(
-            `Dropping action item with unknown type: ${JSON.stringify(actionName ?? null)}`,
-          );
+          log.warn(`Dropping action item with unknown type: ${JSON.stringify(actionName ?? null)}`);
           continue;
         }
         // Params spread FIRST: `id` and `type` are the action's identity, and a

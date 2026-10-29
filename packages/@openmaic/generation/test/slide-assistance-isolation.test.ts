@@ -184,7 +184,9 @@ describe('planner prose never becomes learner content (T-07)', () => {
         contentRole: 'explanation',
         contentKind: 'procedure' as never,
       }).roleGuidance,
-    ).toBe(buildSlideRoleContext({ slideType: 'content', contentRole: 'explanation' }).roleGuidance);
+    ).toBe(
+      buildSlideRoleContext({ slideType: 'content', contentRole: 'explanation' }).roleGuidance,
+    );
     expect(buildSlideRoleContext({ slideType: 'transition' }).roleGuidance).toContain(
       'purely structural',
     );

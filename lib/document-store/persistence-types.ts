@@ -3,10 +3,7 @@ import type { Stage } from '@openmaic/dsl';
 
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
-import type {
-  SourceVisualManifestEntry,
-  TeachingFlowEntry,
-} from '@/lib/types/teaching-package';
+import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
 
 /** App-owned stage shape. Device playback position is not document metadata. */
 export type AppStage = Stage;

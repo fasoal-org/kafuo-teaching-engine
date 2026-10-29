@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', SERVICE_KEY);
   vi.stubEnv('DATABASE_URL', 'postgres://editor-grant-test');
-  vi.clearAllMocks();  // The redeem's single-use nonce claim (ET-16 a) runs on an in-memory double:
+  vi.clearAllMocks(); // The redeem's single-use nonce claim (ET-16 a) runs on an in-memory double:
   // the durable store fails closed without a database (G2).
   resetHandoffNonceMemoryForTests();
   setHandoffNonceStoreForTests(createMemoryHandoffNonceStoreForTests());

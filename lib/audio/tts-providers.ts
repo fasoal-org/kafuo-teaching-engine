@@ -1220,7 +1220,10 @@ async function generateCartesiaTTS(
   text: string,
   signal: AbortSignal,
 ): Promise<TTSGenerationResult> {
-  const baseUrl = (config.baseUrl || TTS_PROVIDERS['cartesia-tts'].defaultBaseUrl || '').replace(/\/+$/, '');
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['cartesia-tts'].defaultBaseUrl || '').replace(
+    /\/+$/,
+    '',
+  );
   const format = config.responseFormat === 'wav' || config.format === 'wav' ? 'wav' : 'mp3';
   // Documented range 0.6–1.5 (generation_config.speed).
   const speed = Math.min(1.5, Math.max(0.6, config.speed || 1.0));

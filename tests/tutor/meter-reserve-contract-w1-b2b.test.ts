@@ -90,7 +90,12 @@ vi.mock('@/lib/logger', () => ({
 
 type TeTurn =
   | { httpStatus: 200; finalize: boolean }
-  | { httpStatus: number; code: string; retryable: boolean; details: Record<string, unknown> | null };
+  | {
+      httpStatus: number;
+      code: string;
+      retryable: boolean;
+      details: Record<string, unknown> | null;
+    };
 
 interface ReserveFixture {
   case: string;
@@ -170,18 +175,15 @@ describe('meter reserve contract fixtures (shared with the backend)', () => {
     }
   });
 
-  it.skipIf(!existsSync(BACKEND_FIXTURE_DIR))(
-    'is byte-identical to the backend copy',
-    () => {
-      const ours = fixtureFiles(FIXTURE_DIR);
-      expect(fixtureFiles(BACKEND_FIXTURE_DIR)).toEqual(ours);
-      for (const name of ours) {
-        const mine = readFileSync(path.join(FIXTURE_DIR, name));
-        const theirs = readFileSync(path.join(BACKEND_FIXTURE_DIR, name));
-        expect(mine.equals(theirs), name).toBe(true);
-      }
-    },
-  );
+  it.skipIf(!existsSync(BACKEND_FIXTURE_DIR))('is byte-identical to the backend copy', () => {
+    const ours = fixtureFiles(FIXTURE_DIR);
+    expect(fixtureFiles(BACKEND_FIXTURE_DIR)).toEqual(ours);
+    for (const name of ours) {
+      const mine = readFileSync(path.join(FIXTURE_DIR, name));
+      const theirs = readFileSync(path.join(BACKEND_FIXTURE_DIR, name));
+      expect(mine.equals(theirs), name).toBe(true);
+    }
+  });
 });
 
 describe('KafuoIntegrationClient.reserve parses every fixture (contracts §2.2)', () => {
@@ -200,9 +202,12 @@ describe('KafuoIntegrationClient.reserve parses every fixture (contracts §2.2)'
   }
 
   it('turns a numeric reservationId into a string', async () => {
-    const decision = await clientAnswering({ allowed: true, reservationId: 501, replay: false, status: null }).reserve(
-      RESERVE,
-    );
+    const decision = await clientAnswering({
+      allowed: true,
+      reservationId: 501,
+      replay: false,
+      status: null,
+    }).reserve(RESERVE);
     expect(decision).toMatchObject({ allowed: true, reservationId: '501' });
   });
 });
