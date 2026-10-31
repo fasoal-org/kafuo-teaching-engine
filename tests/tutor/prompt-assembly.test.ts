@@ -34,7 +34,7 @@ const MATH_POLICY: AssemblePolicy = {
   fallback: { counterKind: 'exact', modelString: 'openai:gpt-5-nano' },
 };
 const ARABIC_POLICY: AssemblePolicy = {
-  primary: { counterKind: 'exact', modelString: 'openai:gpt-5.6-luna' },
+  primary: { counterKind: 'exact', modelString: 'openai:gpt-6-luna' },
   fallback: { counterKind: 'proxy', modelString: 'qwen:qwen3.7-flash' },
 };
 

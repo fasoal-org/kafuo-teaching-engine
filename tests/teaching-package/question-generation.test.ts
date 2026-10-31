@@ -240,7 +240,7 @@ describe('teaching question generation from an approved package', () => {
           ? {
               subjectCode: options.subjectCode,
               policyVersion: 'r1-2026-09',
-              primaryModel: 'openai:gpt-5.6-luna',
+              primaryModel: 'openai:gpt-6-luna',
               fallbackModel: 'qwen:qwen3.7-flash',
             }
           : {}),
@@ -335,17 +335,17 @@ describe('teaching question generation from an approved package', () => {
 
       const result = await generateTeachingQuestionSet(qp(), request(seeded));
       expect(result.envelope).toEqual(ENVELOPE);
-      expect(result.model).toBe('openai:gpt-5.6-luna');
+      expect(result.model).toBe('openai:gpt-6-luna');
 
       // The policy pair, resolved with NO stage — never the question-generation route.
       expect(mocks.resolveModel.mock.calls.map((c) => c[0])).toEqual([
-        { modelString: 'openai:gpt-5.6-luna' },
+        { modelString: 'openai:gpt-6-luna' },
         { modelString: 'qwen:qwen3.7-flash' },
       ]);
       expect(mocks.callLLM).toHaveBeenCalledTimes(1);
       const [params, source, retryOptions] = mocks.callLLM.mock.calls[0]!;
       expect(params).toMatchObject({
-        model: { modelString: 'openai:gpt-5.6-luna' },
+        model: { modelString: 'openai:gpt-6-luna' },
         system: expect.stringContaining(''),
         prompt: expect.stringContaining('Compare two proper fractions.'),
         maxRetries: 0,
@@ -392,7 +392,7 @@ describe('teaching question generation from an approved package', () => {
         mocks.callLLM.mock.calls.map(
           (c) => (c[0] as { model: { modelString: string } }).model.modelString,
         ),
-      ).toEqual(['openai:gpt-5.6-luna', 'qwen:qwen3.7-flash']);
+      ).toEqual(['openai:gpt-6-luna', 'qwen:qwen3.7-flash']);
       const rows = await ledger();
       expect(
         rows.map((row) => [row.role, row.outcome, row.fallback_triggered, row.fallback_reason]),
@@ -434,7 +434,7 @@ describe('teaching question generation from an approved package', () => {
       const seeded = await seed({ successor: true, subjectCode: 'PHYSICS' });
       mocks.callLLM.mockResolvedValue(ok(JSON.stringify(ENVELOPE)));
       const result = await generateTeachingQuestionSet(qp(), request(seeded));
-      expect(result.model).toBe('openai:gpt-5.6-luna');
+      expect(result.model).toBe('openai:gpt-6-luna');
       const rows = await ledger();
       expect(rows[0]).toMatchObject({ subject_code: 'PHYSICS', version_id: seeded.versionId });
     });

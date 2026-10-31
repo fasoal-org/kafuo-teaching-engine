@@ -136,14 +136,14 @@ describe('model-routes', () => {
   it('parses an api and a contextWindow on an object route value', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 'openai-completions',
         contextWindow: 32_000,
       },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
     expect(getStageRoute('maic-agent-driver')).toEqual({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
       api: 'openai-completions',
       contextWindow: 32_000,
     });
@@ -151,11 +151,11 @@ describe('model-routes', () => {
 
   it('accepts dialect as an alias for api', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', dialect: 'openai-responses' },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', dialect: 'openai-responses' },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
     expect(getStageRoute('maic-agent-driver')).toEqual({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
       api: 'openai-responses',
     });
   });
@@ -167,14 +167,14 @@ describe('model-routes', () => {
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 'openai-completions',
         dialect: 'anthropic-messages',
       },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
     expect(getStageRoute('maic-agent-driver')).toEqual({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
       api: 'openai-completions',
     });
     expect(warn).toHaveBeenCalledWith(
@@ -189,14 +189,14 @@ describe('model-routes', () => {
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 123,
         dialect: 'openai-completions',
       },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
     expect(getStageRoute('maic-agent-driver')).toEqual({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
       api: 'openai-completions',
     });
     expect(warn).toHaveBeenCalledWith(
@@ -210,10 +210,10 @@ describe('model-routes', () => {
       createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', api: 123 },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', api: 123 },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
-    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-6-luna' });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -223,20 +223,20 @@ describe('model-routes', () => {
       createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', dialect: ['openai-completions'] },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', dialect: ['openai-completions'] },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
-    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-6-luna' });
     expect(warn).toHaveBeenCalled();
   });
 
   it('floors a fractional positive contextWindow', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', contextWindow: 32_000.9 },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', contextWindow: 32_000.9 },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
     expect(getStageRoute('maic-agent-driver')).toEqual({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
       contextWindow: 32_000,
     });
   });
@@ -247,10 +247,10 @@ describe('model-routes', () => {
       createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', contextWindow: 0.5 },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', contextWindow: 0.5 },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
-    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-6-luna' });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -260,10 +260,10 @@ describe('model-routes', () => {
       createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', contextWindow: 0 },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', contextWindow: 0 },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
-    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-6-luna' });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -273,22 +273,22 @@ describe('model-routes', () => {
       createLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     }));
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', contextWindow: '32000' },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', contextWindow: '32000' },
     });
     const { getStageRoute } = await import('@/lib/server/model-routes');
-    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-5.6-luna' });
+    expect(getStageRoute('maic-agent-driver')).toEqual({ model: 'openai:gpt-6-luna' });
     expect(warn).toHaveBeenCalled();
   });
 
   it('routes the agent driver stage (maic-agent-driver)', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 'openai-completions',
       },
     });
     const { getStageModel } = await import('@/lib/server/model-routes');
-    expect(getStageModel('maic-agent-driver')).toBe('openai:gpt-5.6-luna');
+    expect(getStageModel('maic-agent-driver')).toBe('openai:gpt-6-luna');
   });
 
   it('supports the full thinking config (budgetTokens/enabled/level/mode)', async () => {

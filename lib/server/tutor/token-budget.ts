@@ -2,7 +2,7 @@
  * Input budget counters (Kafuo R1 contracts §8, plan §8.7).
  *
  * | counter | models                          | basis                                   | margin | cap    |
- * | exact   | openai:gpt-5-nano, gpt-5.6-luna | js-tiktoken o200k_base + framing        | 6 %    | 30,080 |
+ * | exact   | openai:gpt-5-nano, gpt-6-luna   | js-tiktoken o200k_base + framing        | 6 %    | 30,080 |
  * | proxy   | qwen:qwen3.7-flash              | exact count × proxy_ratio (calibrated)  | 20 %   | 25,600 |
  *
  * The count is over the SERIALIZED MESSAGE TEXTS the executor hands to the

@@ -4,7 +4,7 @@
   "subjects": {
     "MATH": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -16,7 +16,7 @@
     },
     "PHYSICS": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -28,7 +28,7 @@
     },
     "BIOLOGY": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -40,7 +40,7 @@
     },
     "ARABIC": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -52,7 +52,7 @@
     },
     "SOCIAL_STUDIES": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -64,7 +64,7 @@
     },
     "CHEMISTRY": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },
@@ -76,7 +76,7 @@
     },
     "ENGLISH": {
       "primary": {
-        "model": "openai:gpt-5.6-luna",
+        "model": "openai:gpt-6-luna",
         "thinking": { "mode": "enabled", "effort": "low" },
         "label": "low"
       },

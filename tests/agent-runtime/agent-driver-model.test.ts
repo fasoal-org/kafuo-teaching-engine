@@ -44,7 +44,7 @@ describe('agent driver model route', () => {
   it('fails loud when reasoning effort is configured for the tool-using driver', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         thinking: { effort: 'medium' },
         api: 'openai-completions',
       },
@@ -57,7 +57,7 @@ describe('agent driver model route', () => {
   it('requires an explicit provider prefix', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'gpt-5.6-luna',
+        model: 'gpt-6-luna',
         api: 'openai-completions',
       },
     });
@@ -67,7 +67,7 @@ describe('agent driver model route', () => {
     expect(mocks.resolveModel).not.toHaveBeenCalled();
   });
 
-  it.each(['gpt-5.6-terra', 'gpt-5.6-luna'])(
+  it.each(['gpt-5.6-terra', 'gpt-6-luna'])(
     'accepts configured driver model %s and passes the explicit pi API dialect',
     async (modelId) => {
       process.env.MODEL_ROUTES = JSON.stringify({
@@ -101,14 +101,14 @@ describe('agent driver model route', () => {
 
   it('uses the provider catalog window when the model is known', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
-      'maic-agent-driver': { model: 'openai:gpt-5.6-luna', api: 'openai-completions' },
+      'maic-agent-driver': { model: 'openai:gpt-6-luna', api: 'openai-completions' },
     });
     mocks.resolveModel.mockResolvedValue({
       model: {},
       modelInfo: { contextWindow: 200_000, outputWindow: 16_384 },
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       apiKey: 'secret',
       baseUrl: 'https://gateway.example/v1',
       thinkingConfig: undefined,
@@ -185,7 +185,7 @@ describe('agent driver model route', () => {
   it('lets the route pin a contextWindow below the catalog value', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 'openai-completions',
         contextWindow: 32_000,
       },
@@ -193,9 +193,9 @@ describe('agent driver model route', () => {
     mocks.resolveModel.mockResolvedValue({
       model: {},
       modelInfo: { contextWindow: 1_050_000, outputWindow: 128_000 },
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       apiKey: 'secret',
       baseUrl: 'https://gateway.example/v1',
       thinkingConfig: undefined,
@@ -210,7 +210,7 @@ describe('agent driver model route', () => {
   it('propagates an unresolvable provider failure', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'custom:gpt-5.6-luna',
+        model: 'custom:gpt-6-luna',
         api: 'openai-completions',
       },
     });
@@ -223,16 +223,16 @@ describe('agent driver model route', () => {
   it('fails loud for an incompatible pi API dialect', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
         api: 'anthropic-messages',
       },
     });
     mocks.resolveModel.mockResolvedValue({
       model: {},
       modelInfo: {},
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       apiKey: 'secret',
       baseUrl: 'https://gateway.example/v1',
       thinkingConfig: { effort: 'medium' },
@@ -245,15 +245,15 @@ describe('agent driver model route', () => {
   it('fails loud when api/dialect is omitted', async () => {
     process.env.MODEL_ROUTES = JSON.stringify({
       'maic-agent-driver': {
-        model: 'openai:gpt-5.6-luna',
+        model: 'openai:gpt-6-luna',
       },
     });
     mocks.resolveModel.mockResolvedValue({
       model: {},
       modelInfo: {},
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       apiKey: 'secret',
       baseUrl: 'https://gateway.example/v1',
       thinkingConfig: undefined,

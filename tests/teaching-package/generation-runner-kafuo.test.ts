@@ -1855,7 +1855,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
       // Exactly the policy pair, with NO stage: the stage route can never win.
       expect(POLICY_CALLS()).toEqual([
-        { modelString: 'openai:gpt-5.6-luna' },
+        { modelString: 'openai:gpt-6-luna' },
         { modelString: 'qwen:qwen3.7-flash' },
       ]);
       expect(POLICY_CALLS().some((call) => 'stage' in call)).toBe(false);
@@ -1866,7 +1866,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(row.input_snapshot).toMatchObject({
         subjectCode: 'MATH',
         policyVersion: 'r1-2026-09',
-        primaryModel: 'openai:gpt-5.6-luna',
+        primaryModel: 'openai:gpt-6-luna',
         fallbackModel: 'qwen:qwen3.7-flash',
       });
       expect(row.input_snapshot.resolvedLlmModel).toBeUndefined();
@@ -1875,7 +1875,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const execution = mocks.generateClassroom.mock.calls[0]![0];
       expect(execution.modelPolicy).toMatchObject({
         subjectCode: 'MATH',
-        primary: { role: 'primary', modelString: 'openai:gpt-5.6-luna' },
+        primary: { role: 'primary', modelString: 'openai:gpt-6-luna' },
         fallback: { role: 'fallback', modelString: 'qwen:qwen3.7-flash' },
       });
       expect(execution.attribution).toEqual({

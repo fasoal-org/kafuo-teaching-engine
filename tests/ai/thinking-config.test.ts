@@ -130,7 +130,7 @@ describe('thinking config normalization', () => {
     });
   });
 
-  it.each(['gpt-5.6', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
+  it.each(['gpt-5.6', 'gpt-5.6-terra', 'gpt-6-luna'])(
     'normalizes %s with medium default and max effort',
     (modelId) => {
       const thinking = getThinking('openai', modelId);

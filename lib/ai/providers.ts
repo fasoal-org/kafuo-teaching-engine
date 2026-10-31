@@ -130,22 +130,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         },
       },
       {
-        id: 'gpt-5.6-luna',
-        name: 'GPT-5.6 Luna',
-        contextWindow: 1050000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
         id: 'gpt-5.5',
         name: 'GPT-5.5',
         contextWindow: 1050000,

@@ -269,12 +269,13 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     vi.stubEnv(
       'MODEL_ROUTES',
       JSON.stringify({
-        'generate-classroom': 'openai:gpt-6-luna',
-        'scene-outlines-stream': 'openai:gpt-6-luna',
-        'scene-content': 'openai:gpt-6-luna',
-        'scene-content:slide': 'openai:gpt-6-luna',
-        'scene-actions': 'openai:gpt-6-luna',
-        'agent-profiles': 'openai:gpt-6-luna',
+        // A model other than the policy's own, so a win by the route would show.
+        'generate-classroom': 'openai:gpt-5.6-terra',
+        'scene-outlines-stream': 'openai:gpt-5.6-terra',
+        'scene-content': 'openai:gpt-5.6-terra',
+        'scene-content:slide': 'openai:gpt-5.6-terra',
+        'scene-actions': 'openai:gpt-5.6-terra',
+        'agent-profiles': 'openai:gpt-5.6-terra',
       }),
     );
     const policy = await policyFor('MATH'); // Luna primary → Qwen fallback
@@ -294,7 +295,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
       'scene-actions',
     ]);
     for (const call of calls) {
-      expect(call.model).toBe('openai:gpt-5.6-luna');
+      expect(call.model).toBe('openai:gpt-6-luna');
       expect(call.maxRetries).toBe(0);
     }
     // The base model is still resolved for utilities, but no teaching stage
@@ -319,7 +320,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
         policy_version: 'r1-2026-09',
         origin: 'openmaic_runtime',
         role: 'primary',
-        model_string: 'openai:gpt-5.6-luna',
+        model_string: 'openai:gpt-6-luna',
         accounting_status: 'complete',
         outcome: 'succeeded',
         generation_attempt_id: 'tpa-routed-1',
@@ -338,10 +339,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
   });
 
   it('keeps web-search-query-rewrite on its stage route, off the ledger (contracts §0 L5)', async () => {
-    vi.stubEnv(
-      'MODEL_ROUTES',
-      JSON.stringify({ 'web-search-query-rewrite': 'openai:gpt-5.6-luna' }),
-    );
+    vi.stubEnv('MODEL_ROUTES', JSON.stringify({ 'web-search-query-rewrite': 'openai:gpt-6-luna' }));
     mocks.resolveClassroomWebSearchConfig.mockReturnValue({ providerId: 'tavily', apiKey: 'k' });
     mocks.callLLM.mockImplementation(async (_params, source: string) =>
       ok(
@@ -359,7 +357,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     });
 
     const rewrite = callsBySource().find((c) => c.source === 'web-search-query-rewrite');
-    expect(rewrite).toMatchObject({ model: 'openai:gpt-5.6-luna' });
+    expect(rewrite).toMatchObject({ model: 'openai:gpt-6-luna' });
     expect(mocks.resolveModel.mock.calls.map((c) => (c[0] as { stage?: string }).stage)).toContain(
       'web-search-query-rewrite',
     );
@@ -427,7 +425,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     });
     // Text-only calls stay on the primary.
     expect(calls.find((c) => c.source === 'scene-actions')).toMatchObject({
-      model: 'openai:gpt-5.6-luna',
+      model: 'openai:gpt-6-luna',
     });
 
     const rows = await ledgerRows();
@@ -466,7 +464,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     const calls = callsBySource();
     // Outline: primary 429 → fallback served (two provider calls, one AICallFn call).
     expect(calls.filter((c) => c.source === 'scene-outlines-stream').map((c) => c.model)).toEqual([
-      'openai:gpt-5.6-luna',
+      'openai:gpt-6-luna',
       'qwen:qwen3.7-flash',
     ]);
     // Content: primary AND fallback failed → exactly two provider calls, then
@@ -574,7 +572,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
   });
 
   it('without a policy the unrouted path is byte-identical: stage routes apply and no ledger row is written', async () => {
-    vi.stubEnv('MODEL_ROUTES', JSON.stringify({ 'scene-content:slide': 'openai:gpt-5.6-luna' }));
+    vi.stubEnv('MODEL_ROUTES', JSON.stringify({ 'scene-content:slide': 'openai:gpt-6-luna' }));
     await generate();
     const calls = callsBySource();
     expect(calls.map((c) => c.source)).toEqual([
@@ -582,7 +580,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
       'generate-classroom-scene',
       'generate-classroom-scene',
     ]);
-    expect(calls[1]).toMatchObject({ model: 'openai:gpt-5.6-luna' });
+    expect(calls[1]).toMatchObject({ model: 'openai:gpt-6-luna' });
     expect(calls[0]).toMatchObject({ model: 'test:base-model' });
     expect(await ledgerRows()).toEqual([]);
   });

@@ -188,7 +188,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     await ensureTeachingModelAttemptsSchema(pool);
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
-    policy = await resolveSubjectModelPolicy('MATH'); // primary gpt-5.6-luna (exact, vision) → fallback qwen (proxy, no vision)
+    policy = await resolveSubjectModelPolicy('MATH'); // primary gpt-6-luna (exact, vision) → fallback qwen (proxy, no vision)
     execute = await import('@/lib/server/teaching-model/execute');
   });
 
@@ -225,11 +225,11 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     const [primaryParams, primarySource, , primaryThinking] = mocks.callLLM.mock.calls[0]!;
     const [fallbackParams, , , fallbackThinking] = mocks.callLLM.mock.calls[1]!;
     expect(primaryParams).toMatchObject({
-      model: { provider: 'openai', modelId: 'gpt-5.6-luna' },
+      model: { provider: 'openai', modelId: 'gpt-6-luna' },
       system: SMALL.system,
       messages: SMALL.messages,
       maxRetries: 0,
-      maxOutputTokens: getModelInfo('openai', 'gpt-5.6-luna')!.outputWindow,
+      maxOutputTokens: getModelInfo('openai', 'gpt-6-luna')!.outputWindow,
     });
     expect(primaryParams.abortSignal).toBeInstanceOf(AbortSignal);
     expect(primarySource).toBe('free-chat-turn');
@@ -314,7 +314,7 @@ describe('executeTeachingCall / executeTeachingStream', () => {
       opts(),
     );
     expect(mocks.callLLM).toHaveBeenCalledTimes(2);
-    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('gpt-5.6-luna');
+    expect(mocks.callLLM.mock.calls[0]![0].model.modelId).toBe('gpt-6-luna');
     expect(mocks.callLLM.mock.calls[1]![0].model.modelId).toBe('qwen3.7-flash');
     expect(result.parsed).toEqual({ scenes: [1] });
     const [primary, fallback] = await rows('tma-1', 'tma-2');

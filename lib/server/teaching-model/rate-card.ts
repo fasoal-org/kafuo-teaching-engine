@@ -14,7 +14,8 @@
  *    run, so cached input is priced AT the fresh rate (an explicit upper
  *    bound, never a silent discount) and cache write is unpriced (`null`).
  *  - gpt-5-nano: `run_gpt5nano.py` PRICE_IN 0.05 / PRICE_CACHED_IN 0.005 / PRICE_OUT 0.40.
- *  - gpt-5.6-luna: `run_addround.py::PRICING` fresh_in 0.20 / cached_in 0.02 /
+ *  - gpt-5.6-luna (retired from active execution 31 Oct 2026; its rate stays so the
+ *    historical ledger rows written with it keep their cost): `run_addround.py::PRICING` fresh_in 0.20 / cached_in 0.02 /
  *    out 1.20. Its `cache_write_in` 0.25 is recorded here for the record but
  *    the OpenAI family never reports a write field the executor accounts
  *    (plan §7.6: `cache_write_reported=false`, no write component), so it

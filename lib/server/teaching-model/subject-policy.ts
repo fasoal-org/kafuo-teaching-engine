@@ -33,7 +33,9 @@ export type SubjectCode = (typeof SUBJECT_CODES)[number];
 export const POLICY_MODEL_STRINGS = [
   'qwen:qwen3.7-flash',
   'openai:gpt-5-nano',
-  'openai:gpt-5.6-luna',
+  // gpt-5.6-luna was retired from active execution on 31 Oct 2026 and replaced by
+  // gpt-6-luna; it is no longer a model this policy may name. Historical ledger rows
+  // keep the model string they were written with.
   'openai:gpt-6-luna',
 ] as const;
 
@@ -59,7 +61,7 @@ const QWEN_NOTHINK: PolicyTarget = Object.freeze({
 });
 
 const LUNA_LOW: PolicyTarget = Object.freeze({
-  model: 'openai:gpt-5.6-luna',
+  model: 'openai:gpt-6-luna',
   thinking: Object.freeze({ mode: 'enabled', effort: 'low' }) as ThinkingConfig,
   label: 'low',
 });

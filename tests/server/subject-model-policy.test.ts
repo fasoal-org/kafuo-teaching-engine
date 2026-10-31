@@ -121,9 +121,9 @@ describe('resolveSubjectModelPolicy', () => {
     expect(policy.policyVersion).toBe('r1-2026-09');
     expect(policy.primary).toMatchObject({
       role: 'primary',
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       thinking: { mode: 'enabled', effort: 'low' },
       thinkingLabel: 'low',
       counterKind: 'exact',
@@ -150,9 +150,9 @@ describe('resolveSubjectModelPolicy', () => {
     const policy = await resolveSubjectModelPolicy('MATH');
 
     expect(policy.primary).toMatchObject({
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       providerId: 'openai',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       thinking: { mode: 'enabled', effort: 'low' },
       thinkingLabel: 'low',
       counterKind: 'exact',
@@ -175,7 +175,7 @@ describe('resolveSubjectModelPolicy', () => {
 
     expect(english.subjectCode).toBe('ENGLISH');
     expect(english.primary).toMatchObject({
-      modelString: 'openai:gpt-5.6-luna',
+      modelString: 'openai:gpt-6-luna',
       thinking: { mode: 'enabled', effort: 'low' },
       thinkingLabel: 'low',
     });
@@ -236,7 +236,7 @@ describe('resolveSubjectModelPolicy', () => {
     const { resolveSubjectModelPolicy } =
       await import('@/lib/server/teaching-model/resolve-policy');
     const policy = await resolveSubjectModelPolicy('ARABIC');
-    expect(policy.primary.modelString).toBe('openai:gpt-5.6-luna');
+    expect(policy.primary.modelString).toBe('openai:gpt-6-luna');
     expect(policy.primary.providerId).toBe('openai');
     expect(policy.primary.thinking).toEqual({ mode: 'enabled', effort: 'low' });
     expect(policy.fallback.modelString).toBe('qwen:qwen3.7-flash');
@@ -318,7 +318,7 @@ describe('policy thinking → provider request body', () => {
     expect(bodies[0]).toMatchObject({ model: 'gpt-5-nano', reasoning_effort: 'minimal' });
   });
 
-  it('openai:gpt-5.6-luna low sends reasoning effort "low" on the Responses API', async () => {
+  it('openai:gpt-6-luna low sends reasoning effort "low" on the Responses API', async () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
     vi.stubEnv('QWEN_API_KEY', 'sk-qwen');
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -329,7 +329,7 @@ describe('policy thinking → provider request body', () => {
           object: 'response',
           created_at: 1,
           status: 'completed',
-          model: 'gpt-5.6-luna',
+          model: 'gpt-6-luna',
           output: [
             {
               id: 'msg_1',
@@ -361,10 +361,10 @@ describe('policy thinking → provider request body', () => {
       policy.primary.thinking,
     );
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' } });
+    expect(bodies[0]).toMatchObject({ model: 'gpt-6-luna', reasoning: { effort: 'low' } });
   });
 
-  it('openai:gpt-6-luna low uses the Responses API with low reasoning (provider integration, no longer routed)', async () => {
+  it('openai:gpt-6-luna resolves through resolveModel and callLLM on the Responses API (provider integration)', async () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
