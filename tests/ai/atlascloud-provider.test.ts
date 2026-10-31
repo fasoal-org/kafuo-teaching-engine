@@ -111,10 +111,11 @@ describe('Atlas Cloud provider', () => {
       name: 'DeepSeek V4 Pro',
       contextWindow: 1048576,
       outputWindow: 393216,
+      // Vision enabled deliberately in ff5c4049 (DeepSeek V4 Pro reads images).
       capabilities: {
         streaming: true,
         tools: true,
-        vision: false,
+        vision: true,
       },
     });
   });

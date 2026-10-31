@@ -36,6 +36,18 @@ const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   },
 ];
 
+/**
+ * Read-only exceptions, by file and by rule. The direct grounding reader and its
+ * config only READ the Postgres TLS CA certificate the deployment mounts (the
+ * security pre-review's M-1): no state is written, and every write rule still
+ * applies to them.
+ */
+const READ_ONLY_FS_IMPORT = 'a node:fs import — no local file I/O on the Kafuo path';
+const ALLOWED: Record<string, readonly string[]> = {
+  'lib/server/tutor/grounding/grounding-config.ts': [READ_ONLY_FS_IMPORT],
+  'lib/server/tutor/grounding/pg-grounding-reader.ts': [READ_ONLY_FS_IMPORT],
+};
+
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];
   let entries: string[];
@@ -65,9 +77,10 @@ describe('no local state on the Kafuo teaching path', () => {
   for (const file of files) {
     it(`${path.relative(process.cwd(), file)} touches no local filesystem state`, () => {
       const source = readFileSync(file, 'utf8');
-      const violations = FORBIDDEN.filter(({ pattern }) => pattern.test(source)).map(
-        ({ why }) => why,
-      );
+      const allowed = ALLOWED[path.relative(process.cwd(), file).split(path.sep).join('/')] ?? [];
+      const violations = FORBIDDEN.filter(({ pattern }) => pattern.test(source))
+        .map(({ why }) => why)
+        .filter((why) => !allowed.includes(why));
       expect(violations, `${file} uses: ${violations.join('; ')}`).toEqual([]);
     });
   }
