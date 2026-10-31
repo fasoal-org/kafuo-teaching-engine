@@ -99,7 +99,7 @@ export function annotateBookMarkers(text: string, book: KafuoBookStructure | und
   if (!book) return text;
   const byId = new Map(book.units.map((unit) => [unit.contentUnitId, unit] as const));
   return text.replace(
-    /\[\[CONTENT_UNIT id=(\S+)([^\]]*)\]\]/g,
+    /\[\[CONTENT_UNIT id=([^\s\]]+)([^\]]*)\]\]/g,
     (marker, id: string, rest: string) => {
       const unit = byId.get(id);
       if (!unit) return marker;

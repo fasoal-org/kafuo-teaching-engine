@@ -1119,6 +1119,7 @@ export function buildKafuoStartRequest(
       teachingSkillsContract: request.teachingSkillsContract ?? null,
       skillPolicyDigest: computeSkillPolicyDigest(request.teachingModel.flow),
       teachingFlow: request.teachingModel.flow,
+      ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
       contentResource: contentResourceSnapshotFacts(request.contentResource),
       ...(request.normalizedContentResource
         ? {

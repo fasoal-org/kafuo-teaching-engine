@@ -142,6 +142,20 @@ function body(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe('g5.v7 coverage in the correction re-diagnosis', () => {
+  it('keeps naming a missing element after an outline edit', async () => {
+    const { diagnoseCandidateOutlines } =
+      await import('@/lib/server/teaching-package/outline-correction');
+    const outlines = [slide('ex', ['12'], { contentRole: 'worked_example' })];
+    const context = { flow: [], contentUnitIds: null, sourceImages: [], governed: false };
+    const withBook = diagnoseCandidateOutlines(outlines, { ...context, bookStructure: BOOK });
+    const without = diagnoseCandidateOutlines(outlines, context);
+    // KC 11 has no slide; check 13 has neither a teaching slide nor a try-it slide.
+    expect(withBook.blocking.filter((d) => d.code === BOOK_COVERAGE_INCOMPLETE)).toHaveLength(3);
+    expect(without.blocking.some((d) => d.code === BOOK_COVERAGE_INCOMPLETE)).toBe(false);
+  });
+});
+
 describe('g5.v7 request fields', () => {
   it('parses objective units and the book map, and covers them in the digest', () => {
     const { request, aggregate } = parseKafuoGenerationRequest(body());

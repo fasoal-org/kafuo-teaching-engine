@@ -31,6 +31,7 @@ import {
   type TeachingScenePolicy,
 } from '@openmaic/generation';
 
+import { findBookCoverageDiagnostics } from '@/lib/server/teaching-package/book-coverage';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
@@ -41,6 +42,7 @@ import type {
   GenerationCheckpoint,
   GenerationCheckpointPhase,
   GenerationCheckpointSourceRefs,
+  KafuoBookStructure,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
 
@@ -104,6 +106,8 @@ export interface OutlineDiagnosisContext {
   governed: boolean;
   /** Test seam for the canonical Skill registry directory. */
   skillsDir?: string;
+  /** g5.v7: the book map whose required elements must each have a slide. */
+  bookStructure?: KafuoBookStructure;
 }
 
 const positionLabel = (flow: readonly TeachingFlowEntry[], outline: SceneOutline | undefined) => {
@@ -183,6 +187,9 @@ export function appOutlineDiagnostics(
       }
     }
   }
+  // g5.v7: a required book element without its slide (P-6). Here, in the one
+  // app-authority diagnosis, so a correction edit re-checks it like the runner.
+  diagnostics.push(...findBookCoverageDiagnostics(outlines, context.bookStructure));
   return diagnostics;
 }
 
@@ -220,8 +227,10 @@ export function diagnosisContextFromCheckpoint(
   checkpoint: Pick<GenerationCheckpoint, 'sourceRefs'>,
   flow: readonly TeachingFlowEntry[],
   governed: boolean,
+  bookStructure?: KafuoBookStructure,
 ): OutlineDiagnosisContext {
   return {
+    ...(bookStructure ? { bookStructure } : {}),
     flow,
     contentUnitIds: checkpoint.sourceRefs.contentUnitIds,
     sourceImages: checkpoint.sourceRefs.sourceImages.map((image) => ({

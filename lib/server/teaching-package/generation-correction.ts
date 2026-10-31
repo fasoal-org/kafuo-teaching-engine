@@ -253,7 +253,12 @@ export async function editGenerationCorrection(
     });
     const diagnosis = diagnoseCandidateOutlines(
       edited,
-      diagnosisContextFromCheckpoint(checkpoint, flow, isGoverned(attempt)),
+      diagnosisContextFromCheckpoint(
+        checkpoint,
+        flow,
+        isGoverned(attempt),
+        attempt.inputSnapshot.bookStructure,
+      ),
     );
     const now = Date.now();
     const updated = await applyCheckpointEdit(tx, attemptId, {
@@ -344,7 +349,12 @@ export async function resumeGenerationAttempt(
     const flow = flowOf(attempt);
     const diagnosis = diagnoseCandidateOutlines(
       checkpoint.outlines,
-      diagnosisContextFromCheckpoint(checkpoint, flow, isGoverned(attempt)),
+      diagnosisContextFromCheckpoint(
+        checkpoint,
+        flow,
+        isGoverned(attempt),
+        attempt.inputSnapshot.bookStructure,
+      ),
     );
     // A missing image / diagram teaching note is the TE's to write, not the
     // administrator's: the resumed run re-plans that slide's visual itself

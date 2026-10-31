@@ -49,6 +49,7 @@ import type {
   GenerationAttempt,
   GenerationExecutionInput,
   GenerationInputSnapshot,
+  KafuoBookStructure,
   LearningItemRef,
   LearningObjectiveRef,
   TeachingFlowEntry,
@@ -97,6 +98,8 @@ export interface StartGenerationAttemptRequest {
   skillPolicyDigest?: string | null;
   /** Ordered Kafuo Teaching Model Flow (identity `(flowIndex, stage)`). */
   teachingFlow?: TeachingFlowEntry[];
+  /** g5.v7: the book map, pinned on the input snapshot for correction re-checks. */
+  bookStructure?: KafuoBookStructure;
   /**
    * Secret-free resource identity/integrity facts. Presence marks the request
    * as Kafuo-shaped; the transient signed URL never reaches this type.
@@ -155,6 +158,7 @@ export function toGenerationInputSnapshot(
     requestedAt: Date.now(),
     ...(request.tenantId ? { tenantId: request.tenantId } : {}),
     ...(request.teachingFlow ? { teachingFlow: request.teachingFlow } : {}),
+    ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
     ...(request.contentResource ? { contentResource: request.contentResource } : {}),
     ...(request.normalizedContentResource
       ? { normalizedContentResource: request.normalizedContentResource }

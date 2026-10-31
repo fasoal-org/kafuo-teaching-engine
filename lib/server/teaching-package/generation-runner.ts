@@ -85,10 +85,7 @@ import {
   findUncoveredContentUnits,
   manifestContentUnitIds,
 } from '@/lib/server/teaching-package/outline-grounding';
-import {
-  annotateBookMarkers,
-  findBookCoverageDiagnostics,
-} from '@/lib/server/teaching-package/book-coverage';
+import { annotateBookMarkers } from '@/lib/server/teaching-package/book-coverage';
 import {
   appOutlineDiagnostics,
   isGenerationCorrectionRequired,
@@ -475,6 +472,9 @@ async function runKafuoAttempt(
     contentUnitIds,
     sourceImages: approvedVisionImages,
     governed: governedByTeachingSkills,
+    // g5.v7: a required book element without its slide pauses the run before
+    // any scene, naming the element (P-6). Absent for every earlier version.
+    ...(kafuo.bookStructure ? { bookStructure: kafuo.bookStructure } : {}),
   };
   const attemptRow = await readAttemptById(pool, attemptId);
   const sourceRefsFor = (run: number): GenerationCheckpointSourceRefs => ({
@@ -689,12 +689,8 @@ async function runKafuoAttempt(
         correction: {
           collectOutlineIssues: (outlines: SceneOutline[]) => {
             recordCoverageGaps(outlines);
-            // g5.v7: a required book element without its slide pauses the run
-            // before any scene, naming the element (P-6). No-op without a book map.
-            return [
-              ...appOutlineDiagnostics(outlines, diagnosisContext),
-              ...findBookCoverageDiagnostics(outlines, kafuo.bookStructure),
-            ];
+            // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.
+            return appOutlineDiagnostics(outlines, diagnosisContext);
           },
           ...(resume
             ? {

@@ -320,6 +320,8 @@ export interface GenerationInputSnapshot {
   tenantId?: string;
   /** The ordered Kafuo Teaching Model Flow when the request carried one. */
   teachingFlow?: TeachingFlowEntry[];
+  /** g5.v7: the book map, pinned so an outline edit re-checks book coverage. */
+  bookStructure?: KafuoBookStructure;
   /**
    * Stable resource identity/integrity lineage. NEVER carries `url` — the
    * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).
