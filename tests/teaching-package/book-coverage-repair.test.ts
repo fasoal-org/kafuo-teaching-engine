@@ -76,6 +76,7 @@ function context(plan: BookCoverageRepairContext['plan']): BookCoverageRepairCon
     skillOptions: null,
     language: 'ar-SA',
     languageDirective: '',
+    visuals: [],
     diagnose: (outlines) => ({
       outlines,
       blocking: findBookCoverageDiagnostics(outlines, BOOK),
@@ -168,6 +169,23 @@ describe('g5.v7 book coverage repair', () => {
       'explanation',
     ]);
     expect(result.blocking).toEqual([]);
+  });
+
+  it('offers the textbook visual linked to the unit and requires selecting it', async () => {
+    const visual = { id: 'src-7', src: 'data:image/png;base64,AA', sourceContentUnitIds: ['4032'] };
+    const other = { id: 'src-9', src: 'data:image/png;base64,AA', sourceContentUnitIds: ['5000'] };
+    const plan = planning('worked_example');
+    const ctx = { ...context(plan), visuals: [visual, other] };
+    const blocking = findBookCoverageDiagnostics(CANDIDATE, BOOK);
+
+    const result = await repairBookCoverageGaps(CANDIDATE, blocking, aiCall, ctx);
+
+    const input = plan.mock.calls[0]![0];
+    expect(input.eligibleVisuals.map((v) => v.id)).toEqual(['src-7']);
+    expect(input.visionImages?.map((v) => v.id)).toEqual(['src-7']);
+    // The fake selects no visual, so the check asks for it and nothing is inserted.
+    expect(input.check(CANDIDATE[1]!)).toMatchObject({ ok: false, fixable: true });
+    expect(result.inserted).toBe(0);
   });
 
   it('never repairs when another kind of issue also blocks', async () => {

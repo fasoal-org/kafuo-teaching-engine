@@ -44,6 +44,19 @@ export interface BookCoverageRepairContext {
   skillOptions: ((entry: TeachingFlowEntry) => PlannerSkillOption[]) | null;
   language: string;
   languageDirective: string;
+  /**
+   * The screened (approved) textbook visuals the outline model saw. A slide must
+   * select a visual linked to a unit it cites (`SOURCE_VISUAL_NOT_SELECTED`), so
+   * the planner is offered exactly those, with their bytes.
+   */
+  visuals: ReadonlyArray<{
+    id: string;
+    src: string;
+    width?: number;
+    height?: number;
+    description?: string;
+    sourceContentUnitIds?: readonly string[];
+  }>;
   /** The one full diagnosis of a candidate: normalized outlines + blocking findings. */
   diagnose: (outlines: SceneOutline[]) => {
     outlines: SceneOutline[];
@@ -142,15 +155,26 @@ export async function repairBookCoverageGaps(
       });
       if (!units.some((unit) => unit.id === unitId)) continue;
       const role = roleFor(gap);
-      const check = (outline: SceneOutline): PlanCheck =>
-        outline.contentRole === role && outline.slideType === 'content'
+      const linked = context.visuals.filter((visual) =>
+        (visual.sourceContentUnitIds ?? []).some((id) => unitIds.includes(String(id))),
+      );
+      const check = (outline: SceneOutline): PlanCheck => {
+        const messages: string[] = [];
+        if (outline.contentRole !== role || outline.slideType !== 'content') {
+          messages.push(`the slide must be a content slide with contentRole ${role}`);
+        }
+        const selected = new Set(outline.suggestedImageIds ?? []);
+        if (linked.length > 0 && !linked.some((visual) => selected.has(visual.id))) {
+          messages.push(
+            `set visualPlan.mode "image" and include one of these textbook visuals in suggestedImageIds: ${linked
+              .map((visual) => visual.id)
+              .join(', ')}`,
+          );
+        }
+        return messages.length === 0
           ? { ok: true, outline, repairs: [] }
-          : {
-              ok: false,
-              fixable: true,
-              code: 'INSERTION_PLAN_INVALID',
-              messages: [`the slide must be a content slide with contentRole ${role}`],
-            };
+          : { ok: false, fixable: true, code: 'INSERTION_PLAN_INVALID', messages };
+      };
       const result = await (context.plan ?? planInsertedSlide)({
         units,
         unitIds,
@@ -161,7 +185,16 @@ export async function repairBookCoverageGaps(
         nextTitle: outlines[gap.anchorIndex! + 1]?.title ?? null,
         language: context.language,
         languageDirective: context.languageDirective,
-        eligibleVisuals: [],
+        eligibleVisuals: linked.map((visual) => ({
+          id: visual.id,
+          ...(visual.description ? { description: visual.description } : {}),
+        })),
+        visionImages: linked.map((visual) => ({
+          id: visual.id,
+          src: visual.src,
+          ...(visual.width !== undefined ? { width: visual.width } : {}),
+          ...(visual.height !== undefined ? { height: visual.height } : {}),
+        })),
         instruction: instructionFor(gap),
         outlineId: `${anchor.id}-book-${gap.kind}-${unitId}-r${round}`,
         order: gap.anchorIndex! + 2,

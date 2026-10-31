@@ -723,6 +723,7 @@ async function runKafuoAttempt(
                       : null,
                     language: kafuo.language ?? 'ar-SA',
                     languageDirective: speechRegister?.directive ?? '',
+                    visuals: approvedVisionImages,
                     diagnose: (candidate) => {
                       const diagnosed = diagnoseCandidateOutlines(candidate, diagnosisContext);
                       recordCoverageGaps(diagnosed.outlines);
