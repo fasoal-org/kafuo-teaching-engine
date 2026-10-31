@@ -242,6 +242,9 @@ const PROJECTORS: Readonly<Record<string, Projector>> = {
   // g5.v6 is g5.v5 without the final learning game (Kafuo Release 1 defers
   // generated games): the opener and learning-map stages are v5's, unchanged.
   'g5@g5.v6': projectG5V3,
+  // g5.v7 keeps v6's opener and learning-map stage keys and slide types; only
+  // the planner's instructions and inputs differ (book-structured planner).
+  'g5@g5.v7': projectG5V3,
 };
 
 /** Pure projection; exported for tests. Throws on an unsupported flow or a blank field. */

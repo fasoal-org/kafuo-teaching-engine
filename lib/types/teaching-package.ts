@@ -207,6 +207,35 @@ export interface LearningObjectiveSnapshot {
 export interface LearningObjectiveRef {
   objectiveRef: string;
   snapshot: LearningObjectiveSnapshot;
+  /**
+   * g5.v7: the objective's part of the book, its content unit ids in book order.
+   * Absent on every other version, so their canonical digest is unchanged.
+   */
+  contentUnitIds?: string[];
+}
+
+/** One unit of the g5.v7 book map (`bookStructure.units[]`), in book order. */
+export interface KafuoBookStructureUnit {
+  contentUnitId: string;
+  /** The profile kind the book printed it as, e.g. `WORKED_EXAMPLE`. */
+  kind: string | null;
+  /** The Lesson Template element it becomes; `null` when the template does not name its kind. */
+  element: string | null;
+  /** Coverage requires a slide citing it (P-6). */
+  required: boolean;
+  /** Absent for opening, objective-source and ignored units. */
+  partIndex?: number;
+  /** For a try-it unit: the worked example printed before it. */
+  pairedExampleUnitId?: string;
+  /** For a supporting note: the element it explains. */
+  attachesToUnitId?: string;
+}
+
+/** The g5.v7 book map and Lesson Template Kafuo sends (`bookStructure`). */
+export interface KafuoBookStructure {
+  templateVersionId: string;
+  rules: Array<{ kind: string; element: string; required: boolean }>;
+  units: KafuoBookStructureUnit[];
 }
 
 /** Kafuo Learning Objective reference retained on a scene (app-layer field). */
@@ -672,6 +701,11 @@ export interface KafuoGenerationRequest {
    * routing table, and the canonical digest is byte-identical to before.
    */
   narration?: { ttsRoute: KafuoNarrationTtsRoute };
+  /**
+   * g5.v7 only: the lesson's book map and Lesson Template. Absent ⇒ every
+   * earlier version's planning and digest are unchanged.
+   */
+  bookStructure?: KafuoBookStructure;
 }
 
 /** `narration.ttsRoute` as Kafuo sends it; the model and language come from the TE catalogue. */

@@ -24,6 +24,7 @@ import {
 } from '@/lib/server/speech/teaching-route';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
+import { bookStructureRequirement } from '@/lib/server/teaching-package/book-coverage';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import type { StageTtsRoute } from '@/lib/types/stage';
@@ -32,6 +33,7 @@ import type {
   KafuoContentResource,
   KafuoGenerationRequest,
   KafuoNarrationTtsRoute,
+  KafuoBookStructure,
   KafuoNormalizedContentResource,
   KafuoSubjectOffering,
   LearningObjectiveRef,
@@ -738,7 +740,24 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
         `learningObjectives[${index}] requires objectiveRef and snapshot.statement`,
       );
     }
-    return { objectiveRef, snapshot: { statement: snapshot.statement } };
+    const contentUnitIds = record?.contentUnitIds;
+    if (
+      contentUnitIds !== undefined &&
+      (!Array.isArray(contentUnitIds) ||
+        contentUnitIds.some((id) => typeof id !== 'string' || id.trim() === ''))
+    ) {
+      throw new TeachingPackageError(
+        'INVALID_REQUEST',
+        `learningObjectives[${index}].contentUnitIds must be an array of unit ids when present`,
+      );
+    }
+    return {
+      objectiveRef,
+      snapshot: { statement: snapshot.statement },
+      ...(contentUnitIds !== undefined
+        ? { contentUnitIds: [...(contentUnitIds as string[])] }
+        : {}),
+    };
   });
 
   const teachingModelRaw = body.teachingModel as Record<string, unknown> | undefined;
@@ -812,6 +831,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   };
 
   const narration = parseNarration(body.narration, item.language);
+  const bookStructure = parseBookStructure(body.bookStructure);
 
   const request: KafuoGenerationRequest = {
     requestId,
@@ -828,6 +848,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     // marker's presence/absence is settled here and carried as a value.
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
     ...(narration ? { narration } : {}),
+    ...(bookStructure ? { bookStructure } : {}),
   };
   return {
     request,
@@ -843,6 +864,8 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
     learningObjectives: request.learningObjectives.map((o) => ({
       objectiveRef: o.objectiveRef,
       snapshot: { statement: o.snapshot.statement },
+      // g5.v7 (mirrored by the Backend): present only when sent.
+      ...(o.contentUnitIds !== undefined ? { contentUnitIds: o.contentUnitIds } : {}),
     })),
     teachingModel: {
       key: request.teachingModel.key,
@@ -887,7 +910,75 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
     const { providerId, voiceId, settingKey } = request.narration.ttsRoute;
     payload.narration = { ttsRoute: { providerId, voiceId, settingKey } };
   }
+  // g5.v7: the book map decides what is planned, so it is covered; absent stays absent.
+  if (request.bookStructure !== undefined) {
+    payload.bookStructure = request.bookStructure;
+  }
   return payload;
+}
+
+/**
+ * The optional g5.v7 `bookStructure` block. Parsed strictly and rebuilt key by
+ * key, so the digest covers exactly the shape the Backend hashes: optional unit
+ * keys are present only when sent.
+ */
+function parseBookStructure(raw: unknown): KafuoBookStructure | undefined {
+  if (raw === undefined) return undefined;
+  const invalid = (detail: string) =>
+    new TeachingPackageError('INVALID_REQUEST', `bookStructure ${detail}`);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('must be an object');
+  const record = raw as Record<string, unknown>;
+  const templateVersionId = record.templateVersionId;
+  if (typeof templateVersionId !== 'string' || templateVersionId === '') {
+    throw invalid('requires templateVersionId');
+  }
+  if (!Array.isArray(record.rules) || !Array.isArray(record.units)) {
+    throw invalid('requires rules and units arrays');
+  }
+  const rules = record.rules.map((rule, index) => {
+    const r = (rule ?? {}) as Record<string, unknown>;
+    if (
+      typeof r.kind !== 'string' ||
+      typeof r.element !== 'string' ||
+      typeof r.required !== 'boolean'
+    ) {
+      throw invalid(`rules[${index}] requires kind, element and required`);
+    }
+    return { kind: r.kind, element: r.element, required: r.required };
+  });
+  const optionalId = (value: unknown, path: string): string | undefined => {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || value === '') throw invalid(`${path} must be a unit id`);
+    return value;
+  };
+  const units = record.units.map((unit, index) => {
+    const u = (unit ?? {}) as Record<string, unknown>;
+    const path = `units[${index}]`;
+    if (typeof u.contentUnitId !== 'string' || u.contentUnitId === '') {
+      throw invalid(`${path}.contentUnitId is required`);
+    }
+    if (u.kind !== null && typeof u.kind !== 'string') throw invalid(`${path}.kind`);
+    if (u.element !== null && typeof u.element !== 'string') throw invalid(`${path}.element`);
+    if (typeof u.required !== 'boolean') throw invalid(`${path}.required`);
+    if (
+      u.partIndex !== undefined &&
+      (typeof u.partIndex !== 'number' || !Number.isInteger(u.partIndex) || u.partIndex < 1)
+    ) {
+      throw invalid(`${path}.partIndex must be a positive integer`);
+    }
+    const paired = optionalId(u.pairedExampleUnitId, `${path}.pairedExampleUnitId`);
+    const attaches = optionalId(u.attachesToUnitId, `${path}.attachesToUnitId`);
+    return {
+      contentUnitId: u.contentUnitId,
+      kind: u.kind as string | null,
+      element: u.element as string | null,
+      required: u.required,
+      ...(u.partIndex !== undefined ? { partIndex: u.partIndex as number } : {}),
+      ...(paired !== undefined ? { pairedExampleUnitId: paired } : {}),
+      ...(attaches !== undefined ? { attachesToUnitId: attaches } : {}),
+    };
+  });
+  return { templateVersionId, rules, units };
 }
 
 /**
@@ -992,6 +1083,8 @@ export interface KafuoGenerationContext {
    * routing table.
    */
   ttsRoute?: StageTtsRoute | null;
+  /** g5.v7: the book map the coverage gate and the source markers read. */
+  bookStructure?: KafuoBookStructure;
 }
 
 /** Assemble the StartGenerationAttemptRequest for a parsed Kafuo request. */
@@ -999,7 +1092,8 @@ export function buildKafuoStartRequest(
   request: KafuoGenerationRequest,
   aggregate: TeachingPackageAggregateKey,
 ): { start: StartGenerationAttemptRequestAlias; kafuo: KafuoGenerationContext } {
-  const requirement = buildKafuoRequirement(request);
+  // g5.v7 adds the book-structured planning rules; empty for every earlier version.
+  const requirement = `${buildKafuoRequirement(request)}${bookStructureRequirement(request.bookStructure)}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
   const execution: GenerationExecutionInput = {
@@ -1054,6 +1148,7 @@ export function buildKafuoStartRequest(
       subjectCode: subjectCodeOf(request),
       subjectOffering: request.learningItem.subjectOffering ?? null,
       ...(ttsRoute ? { ttsRoute } : {}),
+      ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
     },
   };
 }

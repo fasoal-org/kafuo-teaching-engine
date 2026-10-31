@@ -86,6 +86,10 @@ import {
   manifestContentUnitIds,
 } from '@/lib/server/teaching-package/outline-grounding';
 import {
+  annotateBookMarkers,
+  findBookCoverageDiagnostics,
+} from '@/lib/server/teaching-package/book-coverage';
+import {
   appOutlineDiagnostics,
   isGenerationCorrectionRequired,
   SCENE_REGENERATION_FIELD,
@@ -552,7 +556,8 @@ async function runKafuoAttempt(
       ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
       : `${kafuo.requirement}${withheldVisualsNote}`,
     pdfContent: {
-      text: source.text,
+      // g5.v7: markers carry each unit's book kind and part; unchanged otherwise.
+      text: annotateBookMarkers(source.text, kafuo.bookStructure),
       images: source.images,
       // Only screened-and-approved source visuals are ever offered.
       pdfImages: approvedVisionImages,
@@ -684,7 +689,12 @@ async function runKafuoAttempt(
         correction: {
           collectOutlineIssues: (outlines: SceneOutline[]) => {
             recordCoverageGaps(outlines);
-            return appOutlineDiagnostics(outlines, diagnosisContext);
+            // g5.v7: a required book element without its slide pauses the run
+            // before any scene, naming the element (P-6). No-op without a book map.
+            return [
+              ...appOutlineDiagnostics(outlines, diagnosisContext),
+              ...findBookCoverageDiagnostics(outlines, kafuo.bookStructure),
+            ];
           },
           ...(resume
             ? {
