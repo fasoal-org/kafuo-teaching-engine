@@ -8,14 +8,15 @@
  * and every book check paired with an example must have a try-it slide
  * (`check_understanding`) and, after it, a solution slide (`worked_example`)
  * citing it. A gap is returned as an admin-correctable diagnostic that names
- * the missing element, so the attempt pauses on the existing correction path
- * (the reviewer can add the slide) and never finishes as a green "succeeded".
+ * the missing element. A gap the plan can place is first re-planned
+ * (`book-coverage-repair.ts`, at most twice); what is left pauses the attempt on
+ * the existing correction path and never finishes as a green "succeeded".
  * v6 and earlier requests carry no `bookStructure` and are untouched.
  */
 import type { OutlineDiagnostic } from '@openmaic/generation';
 
 import type { SceneOutline } from '@/lib/types/generation';
-import type { KafuoBookStructure } from '@/lib/types/teaching-package';
+import type { KafuoBookStructure, KafuoBookStructureUnit } from '@/lib/types/teaching-package';
 
 export const BOOK_COVERAGE_INCOMPLETE = 'BOOK_COVERAGE_INCOMPLETE';
 
@@ -39,25 +40,65 @@ function describe(unit: { contentUnitId: string; kind: string | null; partIndex?
   return `${unit.kind ?? 'unit'} ${unit.contentUnitId}${part}`;
 }
 
-export function findBookCoverageDiagnostics(
+/** What a book element is missing, and where its slide belongs. */
+export type BookCoverageGapKind = 'missing_teaching' | 'missing_try_it' | 'missing_solution';
+
+export interface BookCoverageGap {
+  kind: BookCoverageGapKind;
+  unit: KafuoBookStructureUnit;
+  message: string;
+  /**
+   * The outline the missing slide goes right after, or `undefined` when no
+   * slide of the plan places it (then only a person can):
+   * - a solution goes after the check's try-it slide;
+   * - a try-it goes after the last slide teaching its paired example;
+   * - a teaching slide goes after the last slide citing an earlier unit of its part.
+   */
+  anchorIndex?: number;
+}
+
+function lastIndexWhere(
+  outlines: readonly SceneOutline[],
+  predicate: (outline: SceneOutline) => boolean,
+): number | undefined {
+  for (let index = outlines.length - 1; index >= 0; index -= 1) {
+    if (predicate(outlines[index]!)) return index;
+  }
+  return undefined;
+}
+
+/** Every book element the plan misses, in book order, with where its slide belongs. */
+export function findBookCoverageGaps(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure | undefined,
-): OutlineDiagnostic[] {
+): BookCoverageGap[] {
   if (!book) return [];
-  const diagnostics: OutlineDiagnostic[] = [];
-  const gap = (message: string): OutlineDiagnostic => ({
-    code: BOOK_COVERAGE_INCOMPLETE,
-    disposition: 'admin_correctable',
-    field: 'sourceContentUnitIds',
-    message,
-  });
+  const gaps: BookCoverageGap[] = [];
 
-  for (const unit of book.units) {
-    if (!unit.required) continue;
-    if (!outlines.some((outline) => teaches(outline) && cites(outline, unit.contentUnitId))) {
-      diagnostics.push(gap(`${describe(unit)} has no teaching slide`));
-    }
-  }
+  book.units.forEach((unit, position) => {
+    if (!unit.required) return;
+    if (outlines.some((outline) => teaches(outline) && cites(outline, unit.contentUnitId))) return;
+    const earlier = new Set(
+      book.units
+        .slice(0, position)
+        .filter((other) => other.partIndex !== undefined && other.partIndex === unit.partIndex)
+        .map((other) => other.contentUnitId),
+    );
+    gaps.push({
+      kind: 'missing_teaching',
+      unit,
+      message: `${describe(unit)} has no teaching slide`,
+      anchorIndex:
+        earlier.size > 0
+          ? lastIndexWhere(
+              outlines,
+              (outline) =>
+                teaches(outline) &&
+                (outline.sourceContentUnitIds ?? []).some((id) => earlier.has(String(id))),
+            )
+          : undefined,
+    });
+  });
 
   for (const unit of book.units) {
     if (unit.element !== 'try_it' || unit.pairedExampleUnitId === undefined) continue;
@@ -68,11 +109,16 @@ export function findBookCoverageDiagnostics(
         cites(outline, unit.contentUnitId),
     );
     if (tryIt < 0) {
-      diagnostics.push(
-        gap(
-          `${describe(unit)} (the check after example ${unit.pairedExampleUnitId}) has no try-it slide`,
+      const example = unit.pairedExampleUnitId;
+      gaps.push({
+        kind: 'missing_try_it',
+        unit,
+        message: `${describe(unit)} (the check after example ${example}) has no try-it slide`,
+        anchorIndex: lastIndexWhere(
+          outlines,
+          (outline) => teaches(outline) && cites(outline, example),
         ),
-      );
+      });
       continue;
     }
     const solved = outlines
@@ -84,10 +130,27 @@ export function findBookCoverageDiagnostics(
           cites(outline, unit.contentUnitId),
       );
     if (!solved) {
-      diagnostics.push(gap(`${describe(unit)} has a try-it slide but no solution slide after it`));
+      gaps.push({
+        kind: 'missing_solution',
+        unit,
+        message: `${describe(unit)} has a try-it slide but no solution slide after it`,
+        anchorIndex: tryIt,
+      });
     }
   }
-  return diagnostics;
+  return gaps;
+}
+
+export function findBookCoverageDiagnostics(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure | undefined,
+): OutlineDiagnostic[] {
+  return findBookCoverageGaps(outlines, book).map((gap) => ({
+    code: BOOK_COVERAGE_INCOMPLETE,
+    disposition: 'admin_correctable',
+    field: 'sourceContentUnitIds',
+    message: gap.message,
+  }));
 }
 
 /**

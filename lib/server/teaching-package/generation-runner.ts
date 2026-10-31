@@ -86,8 +86,11 @@ import {
   manifestContentUnitIds,
 } from '@/lib/server/teaching-package/outline-grounding';
 import { annotateBookMarkers } from '@/lib/server/teaching-package/book-coverage';
+import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import { plannerSkillOptions } from '@/lib/server/teaching-package/scene-insertion';
 import {
   appOutlineDiagnostics,
+  diagnoseCandidateOutlines,
   isGenerationCorrectionRequired,
   SCENE_REGENERATION_FIELD,
   type OutlineDiagnosisContext,
@@ -101,7 +104,7 @@ import type { NormalizedSourceImage } from '@/lib/server/teaching-package/source
 import type { ScreenedSourceImages } from '@/lib/server/teaching-package/source-visual-compliance';
 import type { ComplianceVerdict } from '@/lib/server/visual-compliance/types';
 import type { GenerationCorrectionOptions } from '@/lib/server/classroom-generation';
-import type { OutlineDiagnostic } from '@openmaic/generation';
+import type { AICallFn, OutlineDiagnostic } from '@openmaic/generation';
 import type {
   GenerationCheckpoint,
   GenerationCheckpointSourceRefs,
@@ -692,6 +695,46 @@ async function runKafuoAttempt(
             // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.
             return appOutlineDiagnostics(outlines, diagnosisContext);
           },
+          // g5.v7 (P-6): a slide the book-coverage gate found missing is
+          // re-planned before the run pauses for a person; anything still
+          // open after two rounds pauses exactly as before.
+          ...(kafuo.bookStructure && normalizedSource
+            ? {
+                repairOutlines: async (
+                  outlines: SceneOutline[],
+                  blocking: OutlineDiagnostic[],
+                  aiCall: AICallFn,
+                ) => {
+                  const repaired = await repairBookCoverageGaps(outlines, blocking, aiCall, {
+                    book: kafuo.bookStructure!,
+                    flow: kafuo.teachingFlow,
+                    units: retainableContentUnits({
+                      contentUnits: normalizedSource.manifest.contentUnits,
+                    }).map((unit) => ({
+                      id: unit.unitId,
+                      order: unit.orderIndex,
+                      role: unit.role,
+                      subtype: unit.subtype ?? null,
+                      title: unit.title ?? null,
+                      text: unit.normalizedText,
+                    })),
+                    skillOptions: governedByTeachingSkills
+                      ? (entry) => plannerSkillOptions(entry, kafuo.teachingFlow)
+                      : null,
+                    language: kafuo.language ?? 'ar-SA',
+                    languageDirective: speechRegister?.directive ?? '',
+                    diagnose: (candidate) => {
+                      const diagnosed = diagnoseCandidateOutlines(candidate, diagnosisContext);
+                      recordCoverageGaps(diagnosed.outlines);
+                      return { outlines: diagnosed.outlines, blocking: diagnosed.blocking };
+                    },
+                  });
+                  return repaired.inserted > 0
+                    ? { outlines: repaired.outlines, blocking: repaired.blocking }
+                    : null;
+                },
+              }
+            : {}),
           ...(resume
             ? {
                 resumeOutlines: {

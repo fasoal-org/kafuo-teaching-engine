@@ -727,6 +727,16 @@ export interface GenerationCorrectionOptions {
     outlines: SceneOutline[],
   ) => OutlineDiagnostic[] | Promise<OutlineDiagnostic[]>;
   /**
+   * g5.v7 (P-6): given the blocking findings, re-plan what the plan left out
+   * with the outline model and return the re-diagnosed candidate, or `null` to
+   * pause unchanged. Called once, before the run pauses for a person.
+   */
+  repairOutlines?: (
+    outlines: SceneOutline[],
+    blocking: OutlineDiagnostic[],
+    aiCall: AICallFn,
+  ) => Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
+  /**
    * Resume from a saved, administrator-corrected outline candidate: no
    * research and no outline generation; the candidate is revalidated with the
    * same analysis before anything is reserved.
@@ -1588,7 +1598,14 @@ export async function generateClassroom(
   // `scenes` checkpoint already passed this point once and is not re-paused here.
   if (correction && !resumeScenes) {
     const appIssues = (await correction.collectOutlineIssues?.(outlines)) ?? [];
-    const blocking = [...outlineBlocking, ...appIssues];
+    let blocking = [...outlineBlocking, ...appIssues];
+    if (blocking.length > 0 && correction.repairOutlines) {
+      const repaired = await correction.repairOutlines(outlines, blocking, outlineAiCall);
+      if (repaired) {
+        outlines = repaired.outlines;
+        blocking = repaired.blocking;
+      }
+    }
     if (blocking.length > 0) {
       log.warn(`Outline candidate paused for admin correction: ${blocking.length} issue(s)`);
       throw new GenerationCorrectionRequiredError({

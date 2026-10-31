@@ -5,6 +5,7 @@ import {
   BOOK_COVERAGE_INCOMPLETE,
   bookStructureRequirement,
   findBookCoverageDiagnostics,
+  findBookCoverageGaps,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
   buildKafuoStartRequest,
@@ -85,6 +86,31 @@ describe('g5.v7 book coverage gate', () => {
     ]);
     expect(diagnostics.every((d) => d.code === BOOK_COVERAGE_INCOMPLETE)).toBe(true);
     expect(diagnostics.every((d) => d.disposition === 'admin_correctable')).toBe(true);
+  });
+
+  it('places each gap after its anchor slide', () => {
+    const outlines = [
+      slide('kc', ['11']),
+      slide('ex', ['12'], { contentRole: 'worked_example' }),
+      slide('try', ['13'], { contentRole: 'check_understanding' }),
+    ];
+    const gaps = findBookCoverageGaps(outlines, BOOK);
+    expect(gaps.map((g) => [g.kind, g.unit.contentUnitId, g.anchorIndex])).toEqual([
+      ['missing_solution', '13', 2],
+    ]);
+
+    const noTryIt = findBookCoverageGaps(outlines.slice(0, 2), BOOK);
+    expect(noTryIt.map((g) => [g.kind, g.anchorIndex])).toEqual([
+      ['missing_teaching', 1],
+      ['missing_try_it', 1],
+    ]);
+
+    const noExample = findBookCoverageGaps([slide('kc', ['11'])], BOOK);
+    expect(noExample.map((g) => [g.kind, g.unit.contentUnitId, g.anchorIndex])).toEqual([
+      ['missing_teaching', '12', 0],
+      ['missing_teaching', '13', 0],
+      ['missing_try_it', '13', undefined],
+    ]);
   });
 
   it('is a no-op without a book map (v6 and earlier)', () => {

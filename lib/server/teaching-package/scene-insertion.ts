@@ -1087,7 +1087,7 @@ export async function insertGeneratedSlide(
 }
 
 /** The position's Skills, as the planner lists them (governed only). */
-function plannerSkillOptions(
+export function plannerSkillOptions(
   entry: TeachingFlowEntry,
   flow: readonly TeachingFlowEntry[],
 ): PlannerSkillOption[] {
