@@ -25,6 +25,7 @@ import {
   describeScenePolicy,
   flowHasScenePolicies,
   narrowDiagnosticsToPositionPolicy,
+  dropStructuralSlideRoles,
   normalizeSourceGroundedVisuals,
   teachingFlowDiagnostics,
 } from './teaching-flow-policy.js';
@@ -284,9 +285,12 @@ export function analyzeOutlines(
   const semanticRepair = repairOutlinesSlideSemantics(stripped);
   const flow =
     context.teachingFlow && context.teachingFlow.length > 0 ? context.teachingFlow : undefined;
-  const visualRepair = flow
-    ? normalizeSourceGroundedVisuals(semanticRepair.outlines, flow, context.sourceImages ?? [])
+  const roleRepair = flow
+    ? dropStructuralSlideRoles(semanticRepair.outlines, flow)
     : { outlines: semanticRepair.outlines, repairs: [] as OutlineDiagnostic[] };
+  const visualRepair = flow
+    ? normalizeSourceGroundedVisuals(roleRepair.outlines, flow, context.sourceImages ?? [])
+    : { outlines: roleRepair.outlines, repairs: [] as OutlineDiagnostic[] };
   const normalized = visualRepair.outlines;
 
   const semanticsRaw = outlineSemanticsDiagnostics(normalized);
@@ -307,7 +311,7 @@ export function analyzeOutlines(
 
   return {
     outlines: normalized,
-    repairs: [...semanticRepair.repairs, ...visualRepair.repairs],
+    repairs: [...semanticRepair.repairs, ...roleRepair.repairs, ...visualRepair.repairs],
     semantics,
     sceneConfig,
     widgets: prohibitedWidgetDiagnostics(normalized, context.prohibitedWidgetTypes),

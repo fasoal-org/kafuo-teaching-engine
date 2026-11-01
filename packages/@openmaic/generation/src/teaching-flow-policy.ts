@@ -237,6 +237,52 @@ function positionPolicy(
   return { policy: scenePolicyFor(entry), entry };
 }
 
+/** Diagnostic code recorded when a structural slide's disallowed `contentRole` is dropped. */
+export const STRUCTURAL_CONTENT_ROLE_DROPPED = 'STRUCTURAL_CONTENT_ROLE_DROPPED';
+
+/** Slides that frame the lesson and teach nothing themselves. */
+const STRUCTURAL_SLIDE_TYPES: readonly string[] = ['contents', 'transition', 'end'];
+
+/**
+ * A structural slide (contents, transition, end) needs no content role: it gets
+ * the structural guidance whatever the role. When the planner nevertheless gave
+ * it a role its position does not allow — lesson 306's part transitions came
+ * back as `orientation` — the role (and any kind) is dropped and recorded,
+ * instead of pausing the whole run on `CONTENT_ROLE_NOT_ALLOWED`. A content
+ * slide with a disallowed role is left alone: validation still reports it.
+ */
+export function dropStructuralSlideRoles(
+  outlines: readonly SceneOutline[],
+  flow: readonly TeachingFlowEntry[],
+): { outlines: SceneOutline[]; repairs: OutlineDiagnostic[] } {
+  const repairs: OutlineDiagnostic[] = [];
+  const normalized = outlines.map((outline, index) => {
+    if (outline.type !== 'slide' || !STRUCTURAL_SLIDE_TYPES.includes(String(outline.slideType))) {
+      return outline;
+    }
+    const { policy } = positionPolicy(outline, flow);
+    if (
+      !policy?.contentRoles ||
+      !isSlideContentRole(outline.contentRole) ||
+      policy.contentRoles.includes(outline.contentRole)
+    ) {
+      return outline;
+    }
+    const { contentRole, contentKind: _droppedKind, ...rest } = outline;
+    repairs.push({
+      code: STRUCTURAL_CONTENT_ROLE_DROPPED,
+      disposition: 'repaired',
+      outlineIndex: index,
+      ...(outline.id ? { outlineId: outline.id } : {}),
+      field: 'contentRole',
+      previousValue: contentRole,
+      message: `contentRole ${JSON.stringify(contentRole)} was dropped from ${outline.slideType} slide: a structural slide needs no content role and this position does not allow it`,
+    });
+    return rest as SceneOutline;
+  });
+  return { outlines: normalized, repairs };
+}
+
 /**
  * Deterministically complete the textbook-visual carrier of every outline at a
  * `visual: source_grounded` position, without ever choosing an image for the

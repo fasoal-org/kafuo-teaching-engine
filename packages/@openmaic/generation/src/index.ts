@@ -118,6 +118,8 @@ export {
   flowHasScenePolicies,
   narrowDiagnosticsToPositionPolicy,
   normalizeSourceGroundedVisuals,
+  dropStructuralSlideRoles,
+  STRUCTURAL_CONTENT_ROLE_DROPPED,
   parseTeachingScenePolicy,
   scenePolicyFor,
   teachingFlowDiagnostics,

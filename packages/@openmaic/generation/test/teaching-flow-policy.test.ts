@@ -219,6 +219,39 @@ describe('analyzeOutlines with position policies', () => {
     ]);
   });
 
+  test('a transition with a role its position forbids loses the role instead of pausing', () => {
+    // Lesson 306: the part transitions came back as `orientation`.
+    const transition = explanationSlide({
+      id: 'part-1',
+      slideType: 'transition',
+      contentRole: 'orientation',
+      contentKind: undefined,
+    });
+    const analysis = analyzeOutlines([transition], { teachingFlow: v5Flow });
+    expect(analysis.outlines[0]?.contentRole).toBeUndefined();
+    expect(analysis.repairs).toContainEqual(
+      expect.objectContaining({
+        code: 'STRUCTURAL_CONTENT_ROLE_DROPPED',
+        outlineId: 'part-1',
+        previousValue: 'orientation',
+      }),
+    );
+    expect(
+      blockingOutlineDiagnostics(analysis).filter((d) => d.code === 'CONTENT_ROLE_NOT_ALLOWED'),
+    ).toEqual([]);
+    // Idempotent: analysing its own output repairs nothing further.
+    const again = analyzeOutlines(analysis.outlines, { teachingFlow: v5Flow });
+    expect(again.repairs.filter((r) => r.code === 'STRUCTURAL_CONTENT_ROLE_DROPPED')).toEqual([]);
+  });
+
+  test('a transition with an allowed role keeps it', () => {
+    const analysis = analyzeOutlines(
+      [explanationSlide({ slideType: 'transition', contentRole: 'explanation' })],
+      { teachingFlow: v5Flow },
+    );
+    expect(analysis.outlines[0]?.contentRole).toBe('explanation');
+  });
+
   test('a missing role is offered only the roles its position allows', () => {
     const analysis = analyzeOutlines([explanationSlide({ contentRole: undefined })], {
       teachingFlow: v5Flow,
