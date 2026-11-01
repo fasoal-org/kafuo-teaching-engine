@@ -1331,7 +1331,11 @@ describe('Free Chat conversation routes', () => {
         SCOPE,
         { itemIds: ['612'] },
       ]);
-      expect(grounding.mocks.embed.mock.calls[0]![0]).toEqual({ ...EMBEDDING_GROUP, text: SAMPLE });
+      expect(grounding.mocks.embed.mock.calls[0]![0]).toEqual({
+        ...EMBEDDING_GROUP,
+        text: SAMPLE,
+        usageScope: expect.objectContaining({ tenantId: '1', subjectOfferingId: '10' }),
+      });
       expect(grounding.mocks.searchUnits.mock.calls[0]![1]).toMatchObject({
         targets: [{ learningItemId: '612', embeddingRunId: 'run-612' }],
         provider: 'openai',

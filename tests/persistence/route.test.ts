@@ -27,6 +27,9 @@ describe('embedded persistence route', () => {
     vi.doMock('@/lib/persistence/teaching-model-attempts', () => ({
       ensureTeachingModelAttemptsSchema: vi.fn().mockResolvedValue(undefined),
     }));
+    vi.doMock('@/lib/persistence/generation-usage', () => ({
+      ensureGenerationUsageSchema: vi.fn().mockResolvedValue(undefined),
+    }));
     vi.doMock('@/lib/persistence/tutor-runtime', () => ({
       ensureTutorRuntimeSchema: vi.fn().mockResolvedValue(undefined),
     }));
