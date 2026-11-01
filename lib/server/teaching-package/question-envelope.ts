@@ -17,13 +17,22 @@
  */
 import { z } from 'zod';
 
-const choiceId = z.enum(['A', 'B', 'C', 'D']);
+const choiceId = z.enum(['A', 'B', 'C', 'D', 'E', 'F']);
 
+/**
+ * `tqs.v2.typed.20261101` (one question source plan): the v1 single-choice question plus
+ * true/false, multiple-answer and short-answer slots. Shape only, like Kafuo's
+ * `_Question`; the per-type counts are checked by `typedQuestionViolations` here and by
+ * Kafuo's validator of record.
+ */
 const question = z.strictObject({
   question_text: z.string(),
-  question_type: z.literal('multiple_choice'),
-  choices: z.array(z.strictObject({ choice_id: choiceId, text: z.string() })).length(4),
-  correct_choice_id: choiceId,
+  question_type: z.enum(['multiple_choice', 'true_false', 'multiple_answer', 'short_answer']),
+  choices: z.array(z.strictObject({ choice_id: choiceId, text: z.string() })).max(6),
+  correct_choice_id: choiceId.nullable().optional(),
+  correct_choice_ids: z.array(choiceId).optional(),
+  model_answer: z.string().nullable().optional(),
+  grading_rubric: z.string().nullable().optional(),
   explanation: z.string(),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   concept_name: z.string(),
@@ -32,7 +41,7 @@ const question = z.strictObject({
   measurement_structure: z.strictObject({ signature: z.string(), description: z.string() }),
   diagnostic_hypotheses: z
     .array(z.strictObject({ choice_id: choiceId, label: z.string(), explanation: z.string() }))
-    .length(3),
+    .max(5),
   evidence_anchors: z.array(z.string()).min(1),
   validation_notes: z.strictObject({
     has_exactly_one_correct_answer: z.boolean(),
@@ -77,6 +86,55 @@ export function hasBareTex(text: string): boolean {
 }
 
 type QuestionEnvelope = z.infer<typeof questionEnvelopeSchema>;
+type EnvelopeQuestion = z.infer<typeof question>;
+
+const CHOICE_COUNT: Record<EnvelopeQuestion['question_type'], [number, number]> = {
+  multiple_choice: [4, 4],
+  true_false: [2, 2],
+  multiple_answer: [3, 6],
+  short_answer: [0, 0],
+};
+
+/** The correct ids a question names: the list form, or v1's single id. */
+export function correctChoiceIds(q: EnvelopeQuestion): string[] {
+  if (q.correct_choice_ids && q.correct_choice_ids.length > 0) return [...q.correct_choice_ids];
+  return q.correct_choice_id ? [q.correct_choice_id] : [];
+}
+
+/**
+ * Per-type counts the shape cannot express, so a drifting reply is retried here
+ * rather than refused whole by Kafuo. Never looser than Kafuo; paths and codes only.
+ */
+function typedQuestionViolations(envelope: QuestionEnvelope): EnvelopeViolation[] {
+  const violations: EnvelopeViolation[] = [];
+  envelope.slots.forEach((slot, slotIndex) => {
+    const q = slot.question;
+    if (!q) return;
+    const base = `$.slots[${slotIndex}].question`;
+    const [min, max] = CHOICE_COUNT[q.question_type];
+    if (q.choices.length < min || q.choices.length > max) {
+      violations.push({ path: `${base}.choices`, code: 'choice_count' });
+    }
+    const correct = correctChoiceIds(q);
+    if (q.question_type === 'short_answer') {
+      if (!q.model_answer?.trim() || !q.grading_rubric?.trim()) {
+        violations.push({ path: `${base}.model_answer`, code: 'model_answer_missing' });
+      }
+      return;
+    }
+    const ids = new Set<string>(q.choices.map((c) => c.choice_id));
+    const single = q.question_type !== 'multiple_answer';
+    if (
+      correct.length === 0 ||
+      correct.some((id) => !ids.has(id)) ||
+      (single && correct.length !== 1) ||
+      (!single && correct.length >= q.choices.length)
+    ) {
+      violations.push({ path: `${base}.correct_choice_ids`, code: 'correct_answer' });
+    }
+  });
+  return violations;
+}
 
 function bareTexViolations(envelope: QuestionEnvelope): EnvelopeViolation[] {
   const violations: EnvelopeViolation[] = [];
@@ -98,14 +156,34 @@ function bareTexViolations(envelope: QuestionEnvelope): EnvelopeViolation[] {
   return violations;
 }
 
+function rawChoiceCountViolations(envelope: unknown): EnvelopeViolation[] {
+  const slots = (envelope as { slots?: unknown } | null)?.slots;
+  if (!Array.isArray(slots)) return [];
+  const violations: EnvelopeViolation[] = [];
+  slots.forEach((slot, slotIndex) => {
+    const q = (slot as { question?: { question_type?: unknown; choices?: unknown } } | null)
+      ?.question;
+    if (!q || !Array.isArray(q.choices) || typeof q.question_type !== 'string') return;
+    const bounds = CHOICE_COUNT[q.question_type as EnvelopeQuestion['question_type']];
+    if (bounds && (q.choices.length < bounds[0] || q.choices.length > bounds[1])) {
+      violations.push({ path: `$.slots[${slotIndex}].question.choices`, code: 'choice_count' });
+    }
+  });
+  return violations;
+}
+
 /**
  * Every way `envelope` departs from the strict shape, plus learner-visible
  * text with bare TeX; empty when it conforms.
  */
 export function envelopeViolations(envelope: unknown): EnvelopeViolation[] {
   const result = questionEnvelopeSchema.safeParse(envelope);
-  if (result.success) return bareTexViolations(result.data);
-  const violations: EnvelopeViolation[] = [];
+  if (result.success) {
+    return [...typedQuestionViolations(result.data), ...bareTexViolations(result.data)];
+  }
+  // A drifted envelope still reports a wrong choice count for its type, as v1's exact
+  // `length(4)` did, so one retry fixes every departure at once.
+  const violations: EnvelopeViolation[] = rawChoiceCountViolations(envelope);
   for (const issue of result.error.issues) {
     const base = issue.path
       .map((part) => (typeof part === 'number' ? `[${part}]` : `.${String(part)}`))

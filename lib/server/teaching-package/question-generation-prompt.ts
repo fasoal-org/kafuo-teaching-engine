@@ -14,8 +14,42 @@
  * validator and the Question Bank authority.
  */
 
-export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v3.20261026';
-export const QUESTION_ENVELOPE_VERSION = 'tqs.v1.strict.20260817';
+export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v4.20261101';
+/**
+ * v2 (one question source plan, 1 Nov 2026): a targeted slot may be single choice,
+ * true/false, multiple answer or short answer. Kafuo sends v2 from W2 on; v1 is still
+ * accepted so a Kafuo deployed before it keeps generating single-choice sets.
+ */
+export const QUESTION_ENVELOPE_VERSION = 'tqs.v2.typed.20261101';
+export const ACCEPTED_ENVELOPE_VERSIONS = [
+  'tqs.v1.strict.20260817',
+  QUESTION_ENVELOPE_VERSION,
+] as const;
+
+/** Stored Kafuo tokens: `multiple_choice` is single choice. */
+export const QUESTION_TYPES = [
+  'multiple_choice',
+  'true_false',
+  'multiple_answer',
+  'short_answer',
+] as const;
+export type QuestionType = (typeof QUESTION_TYPES)[number];
+
+export function isQuestionType(value: unknown): value is QuestionType {
+  return typeof value === 'string' && (QUESTION_TYPES as readonly string[]).includes(value);
+}
+
+/** Mirrors Kafuo's `teaching_question_prompt_builder.QUESTION_TYPE_RULES`. */
+const QUESTION_TYPE_RULES: Record<QuestionType, string> = {
+  multiple_choice:
+    'question_type "multiple_choice": exactly four choices A, B, C, D and exactly one correct choice. Set correct_choice_id and correct_choice_ids to that one id. One diagnostic hypothesis for each of the three wrong choices.',
+  true_false:
+    'question_type "true_false": the question is one statement to judge. Exactly two choices: A is the word for true and B the word for false, in the requested language. Exactly one is correct; set correct_choice_id and correct_choice_ids to it. One diagnostic hypothesis for the wrong choice.',
+  multiple_answer:
+    'question_type "multiple_answer": four to six choices A, B, C, ... with at least two correct and at least one wrong. Say in the question text that more than one answer is correct. Set correct_choice_ids to every correct id and correct_choice_id to null. One diagnostic hypothesis for each wrong choice. The student must pick the exact set: there is no partial credit.',
+  short_answer:
+    'question_type "short_answer": the student writes a short answer of one to three sentences. No choices and no diagnostic hypotheses; correct_choice_id null and correct_choice_ids empty. Give model_answer (a complete correct answer) and grading_rubric (the points a correct answer must state, used to grade the student\'s text). The answer must be checkable from the approved material alone.',
+};
 
 export const TEACHING_ROLES = ['check_understanding', 're_check', 'mastery_check'] as const;
 export type TeachingRole = (typeof TEACHING_ROLES)[number];
@@ -80,7 +114,10 @@ GROUNDING IS ABSOLUTE
 WHAT TO PRODUCE
 - One result for each requested teaching role, no more and no fewer.
 - Each supported result is a multiple-choice question with exactly four choices
-  (A, B, C, D) and exactly one correct choice.
+  (A, B, C, D) and exactly one correct choice (question_type "multiple_choice"), unless
+  the request below names another question type for its one role.
+- Fill correct_choice_ids with the correct choice id(s); leave model_answer and
+  grading_rubric null unless the question type is "short_answer".
 - Write in the requested language only.
 - Choose the difficulty each question actually has. Difficulty is INDEPENDENT of the
   role: any role may be easy, medium, or hard. Do not map roles onto difficulty levels.
@@ -123,10 +160,13 @@ Return ONLY a JSON object with exactly this shape (no commentary, no markdown):
       "unsupported_reason": null | "<what is missing>",
       "question": null | {
         "question_text": "<text>",
-        "question_type": "multiple_choice",
+        "question_type": "multiple_choice" | "true_false" | "multiple_answer" | "short_answer",
         "choices": [{"choice_id": "A", "text": "<text>"}, {"choice_id": "B", "text": "<text>"},
                     {"choice_id": "C", "text": "<text>"}, {"choice_id": "D", "text": "<text>"}],
-        "correct_choice_id": "A" | "B" | "C" | "D",
+        "correct_choice_id": null | "A" | "B" | "C" | "D" | "E" | "F",
+        "correct_choice_ids": ["A"],
+        "model_answer": null | "<short answer only>",
+        "grading_rubric": null | "<short answer only>",
         "explanation": "<why the correct answer is correct>",
         "difficulty": "easy" | "medium" | "hard",
         "concept_name": "<concept>",
@@ -135,7 +175,7 @@ Return ONLY a JSON object with exactly this shape (no commentary, no markdown):
         "measurement_structure": {"signature": "<signature>", "description": "<one sentence>"},
         "diagnostic_hypotheses": [
           {"choice_id": "<a wrong choice>", "label": "<error pattern>", "explanation": "<why>"},
-          ... exactly one entry for each of the three wrong choices ...
+          ... exactly one entry for each wrong choice (none for a short answer) ...
         ],
         "evidence_anchors": ["C1", "S2"],
         "validation_notes": {
@@ -163,6 +203,8 @@ export interface QuestionPromptInput {
   sourceExcerpts: PromptSection[];
   bookQuestions: PromptSection[];
   targetRole: TeachingRole | null;
+  /** The targeted slot's type (one question source plan, O-2); null for the initial set. */
+  targetQuestionType?: QuestionType | null;
   findings: string[];
   siblingMeasurements: string[];
 }
@@ -214,6 +256,11 @@ export function buildQuestionUserPrompt(input: QuestionPromptInput): string {
     lines.push(`- \`${input.targetRole}\`: ${ROLE_DEFINITIONS[input.targetRole]}`);
     lines.push('');
     lines.push('Return exactly one result, for that role only. Do not return the other roles.');
+    if (input.targetQuestionType) {
+      lines.push('');
+      lines.push('### Question type for this slot');
+      lines.push(QUESTION_TYPE_RULES[input.targetQuestionType]);
+    }
     if (input.findings.length > 0) {
       lines.push('');
       lines.push('### What was wrong with the previous attempt');

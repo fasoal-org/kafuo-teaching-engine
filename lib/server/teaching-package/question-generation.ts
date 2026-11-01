@@ -42,6 +42,7 @@ import {
   TEACHING_ROLES,
   buildQuestionUserPrompt,
   type PromptSection,
+  type QuestionType,
   type TeachingRole,
 } from '@/lib/server/teaching-package/question-generation-prompt';
 import type { AppScene } from '@/lib/types/stage';
@@ -69,6 +70,8 @@ export interface QuestionSetGenerationRequest {
   flowStages: FlowStageScope[];
   language: string;
   targetRole: TeachingRole | null;
+  /** The targeted slot's question type (one question source plan, O-2). */
+  targetQuestionType?: QuestionType | null;
   findings: string[];
   siblingMeasurements: string[];
   bookQuestionReferences: BookQuestionReference[];
@@ -584,6 +587,7 @@ export async function generateTeachingQuestionSet(
     sourceExcerpts,
     bookQuestions,
     targetRole: request.targetRole,
+    targetQuestionType: request.targetRole ? (request.targetQuestionType ?? null) : null,
     findings: request.findings,
     siblingMeasurements: request.siblingMeasurements,
   });

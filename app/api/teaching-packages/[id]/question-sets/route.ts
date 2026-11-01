@@ -13,7 +13,8 @@
  *
  * Body: `{ tenantContext, learningItem:{type,id}, requestId,
  *   objective:{objectiveRef}, flowStages:[{key, scope:item|outcome}],
- *   policy:{ envelopeVersion, language, targetRole?, findings?, siblingMeasurements? } }`
+ *   policy:{ envelopeVersion, language, targetRole?, targetQuestionType?, findings?,
+ *   siblingMeasurements? } }` — `targetQuestionType` only with envelope v2.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -27,7 +28,11 @@ import {
   type FlowStageScope,
   type BookQuestionReference,
 } from '@/lib/server/teaching-package/question-generation';
-import { QUESTION_ENVELOPE_VERSION } from '@/lib/server/teaching-package/question-generation-prompt';
+import {
+  ACCEPTED_ENVELOPE_VERSIONS,
+  QUESTION_ENVELOPE_VERSION,
+  isQuestionType,
+} from '@/lib/server/teaching-package/question-generation-prompt';
 import {
   parseTenantContext,
   readJsonObject,
@@ -149,8 +154,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       invalid('objective.objectiveRef must be a non-empty string');
     }
     const policy = (body.policy ?? {}) as Record<string, unknown>;
-    if (policy.envelopeVersion !== QUESTION_ENVELOPE_VERSION) {
-      invalid(`policy.envelopeVersion must be ${QUESTION_ENVELOPE_VERSION}`);
+    if (!(ACCEPTED_ENVELOPE_VERSIONS as readonly unknown[]).includes(policy.envelopeVersion)) {
+      invalid(`policy.envelopeVersion must be one of ${ACCEPTED_ENVELOPE_VERSIONS.join(', ')}`);
+    }
+    // One question source plan (O-2): only a v2 caller may name a slot type.
+    if (
+      policy.targetQuestionType !== undefined &&
+      policy.targetQuestionType !== null &&
+      (policy.envelopeVersion !== QUESTION_ENVELOPE_VERSION ||
+        !isQuestionType(policy.targetQuestionType))
+    ) {
+      invalid('policy.targetQuestionType must be a known question type on a v2 request');
     }
     if (typeof policy.language !== 'string' || !policy.language) {
       invalid('policy.language must be a non-empty string');
@@ -176,6 +190,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       flowStages: flowStages(body.flowStages),
       language: policy.language as string,
       targetRole: isTeachingRole(policy.targetRole) ? policy.targetRole : null,
+      targetQuestionType: isQuestionType(policy.targetQuestionType)
+        ? policy.targetQuestionType
+        : null,
       findings: stringList(policy.findings, 'policy.findings'),
       siblingMeasurements: stringList(policy.siblingMeasurements, 'policy.siblingMeasurements'),
       bookQuestionReferences: bookQuestionReferences(body.bookQuestionReferences),

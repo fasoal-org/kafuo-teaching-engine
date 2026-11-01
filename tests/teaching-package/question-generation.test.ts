@@ -37,7 +37,10 @@ import {
   type QuestionModelPort,
   type QuestionSetGenerationRequest,
 } from '@/lib/server/teaching-package/question-generation';
-import { QUESTION_SYSTEM_PROMPT } from '@/lib/server/teaching-package/question-generation-prompt';
+import {
+  QUESTION_SYSTEM_PROMPT,
+  buildQuestionUserPrompt,
+} from '@/lib/server/teaching-package/question-generation-prompt';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { AppScene } from '@/lib/types/stage';
@@ -715,6 +718,73 @@ describe('the strict question envelope', () => {
     ]);
   });
 
+  describe('typed slots (one question source plan, envelope v2)', () => {
+    const typed = (overrides: Record<string, unknown>) =>
+      envelopeWith({ ...QUESTION, ...overrides });
+
+    it('accepts a true/false, a multiple-answer and a short-answer question', () => {
+      expect(
+        envelopeViolations(
+          typed({
+            question_type: 'true_false',
+            choices: ['A', 'B'].map((choice_id) => ({ choice_id, text: choice_id })),
+            correct_choice_id: 'A',
+            correct_choice_ids: ['A'],
+            diagnostic_hypotheses: [{ choice_id: 'B', label: 'l', explanation: 'x' }],
+          }),
+        ),
+      ).toEqual([]);
+      expect(
+        envelopeViolations(
+          typed({
+            question_type: 'multiple_answer',
+            correct_choice_id: null,
+            correct_choice_ids: ['A', 'B'],
+          }),
+        ),
+      ).toEqual([]);
+      expect(
+        envelopeViolations(
+          typed({
+            question_type: 'short_answer',
+            choices: [],
+            correct_choice_id: null,
+            correct_choice_ids: [],
+            model_answer: 'm',
+            grading_rubric: 'r',
+            diagnostic_hypotheses: [],
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('refuses a count or answer key that does not fit the type', () => {
+      expect(envelopeViolations(typed({ question_type: 'true_false' }))).toContainEqual({
+        path: '$.slots[0].question.choices',
+        code: 'choice_count',
+      });
+      expect(
+        envelopeViolations(
+          typed({ question_type: 'multiple_answer', correct_choice_ids: ['A', 'B', 'C', 'D'] }),
+        ),
+      ).toContainEqual({ path: '$.slots[0].question.correct_choice_ids', code: 'correct_answer' });
+      expect(
+        envelopeViolations(
+          typed({
+            question_type: 'short_answer',
+            choices: [],
+            correct_choice_id: null,
+            diagnostic_hypotheses: [],
+          }),
+        ),
+      ).toContainEqual({ path: '$.slots[0].question.model_answer', code: 'model_answer_missing' });
+    });
+
+    it('still accepts a v1 single-choice question with no list form', () => {
+      expect(envelopeViolations(envelopeWith(QUESTION))).toEqual([]);
+    });
+  });
+
   it('refuses a non-integer outcome echo', () => {
     expect(envelopeViolations({ ...ENVELOPE, learning_outcome_id: 'abc' })).toEqual([
       { path: '$.learning_outcome_id', code: 'invalid_type' },
@@ -811,6 +881,29 @@ describe('the question generation prompt', () => {
     expect(QUESTION_SYSTEM_PROMPT).not.toContain('\f');
     expect(QUESTION_SYSTEM_PROMPT).not.toContain('\b');
   });
+
+  it('states the slot type rule for a targeted typed slot, and none for the initial set', () => {
+    const input = {
+      lessonTitle: 't',
+      language: 'ar',
+      outcomeEchoToken: '42',
+      outcomeStatement: 's',
+      teachingScenes: [],
+      sourceExcerpts: [],
+      bookQuestions: [],
+      findings: [],
+      siblingMeasurements: [],
+    };
+    const targeted = buildQuestionUserPrompt({
+      ...input,
+      targetRole: 'mastery_check',
+      targetQuestionType: 'short_answer',
+    });
+    expect(targeted).toContain('### Question type for this slot');
+    expect(targeted).toContain('grading_rubric');
+    const initial = buildQuestionUserPrompt({ ...input, targetRole: null });
+    expect(initial).not.toContain('### Question type for this slot');
+  });
 });
 
 describe('pure helpers', () => {
@@ -905,6 +998,37 @@ describe('POST /api/teaching-packages/[id]/question-sets', () => {
       targetRole: null,
       bookQuestionReferences: [],
     });
+  });
+
+  it('accepts envelope v2 with a slot type and forwards it; v1 may not name one', async () => {
+    const service = vi.fn().mockResolvedValue({ requestId: 'req-1', envelope: {} });
+    const { POST } = await loadRoute(service);
+    const v2 = {
+      ...body,
+      policy: {
+        envelopeVersion: 'tqs.v2.typed.20261101',
+        language: 'en',
+        targetRole: 'mastery_check',
+        targetQuestionType: 'short_answer',
+      },
+    };
+    const ok = await POST(post(v2), { params: Promise.resolve({ id: 'tpv-1' }) });
+    expect(ok.status).toBe(200);
+    expect(service.mock.calls[0][1]).toMatchObject({
+      targetRole: 'mastery_check',
+      targetQuestionType: 'short_answer',
+    });
+    const v1WithType = {
+      ...body,
+      policy: { ...body.policy, targetRole: 'mastery_check', targetQuestionType: 'short_answer' },
+    };
+    const refused = await POST(post(v1WithType), { params: Promise.resolve({ id: 'tpv-1' }) });
+    expect(refused.status).toBe(400);
+    const unknown = await POST(
+      post({ ...v2, policy: { ...v2.policy, targetQuestionType: 'essay' } }),
+      { params: Promise.resolve({ id: 'tpv-1' }) },
+    );
+    expect(unknown.status).toBe(400);
   });
 
   it('accepts bounded Book Question references and rejects unknown roles', async () => {
