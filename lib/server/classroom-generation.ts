@@ -404,6 +404,11 @@ export interface GenerateClassroomInput {
    */
   prohibitedWidgetTypes?: readonly WidgetType[];
   /**
+   * Quizzes carry only machine-gradable questions (Kafuo: the learner app grades
+   * keyed answers only, so an open short answer would never be scored).
+   */
+  keyedQuizzesOnly?: boolean;
+  /**
    * `pdfContent.text` is an approved Kafuo normalized package projected as
    * Content Units (never Blocks). Propagated to the outline prompt, which then
    * requires `sourceContentUnitIds` on every outline. Absent → prompts and
@@ -1372,6 +1377,7 @@ export async function generateClassroom(
       ...(input.prohibitedWidgetTypes?.length
         ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
         : {}),
+      ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
     });
     outlines = analysis.outlines;
     outlineRepairs = analysis.repairs;
@@ -1403,6 +1409,7 @@ export async function generateClassroom(
           ...(input.prohibitedWidgetTypes?.length
             ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
             : {}),
+          ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
           // W1: the outline contract boolean DERIVES from the single governed-mode
           // predicate — no second discriminator exists anywhere in the pipeline.
           ...(input.governed ? { skillPolicy: true } : {}),
@@ -1476,6 +1483,7 @@ export async function generateClassroom(
         ...(input.prohibitedWidgetTypes?.length
           ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
           : {}),
+        ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
       });
     const reasonsById = new Map<string, string[]>();
     // Outlines whose image SELECTION is in question (not only its notes).

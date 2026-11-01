@@ -79,6 +79,8 @@ export interface OutlinePromptContext {
    * is byte-identical and nothing is checked.
    */
   prohibitedWidgetTypes?: readonly WidgetType[];
+  /** See {@link OutlineAnalysisContext.keyedQuizzesOnly}. */
+  keyedQuizzesOnly?: boolean;
   /**
    * The rejection reason of the previous attempt, fed back on a bounded
    * re-roll so the model corrects that answer instead of repeating it.
@@ -237,6 +239,42 @@ export interface OutlineAnalysisContext {
   sourceImages?: readonly PdfImage[];
   /** Widget types the run must never build (`WIDGET_TYPE_PROHIBITED`). */
   prohibitedWidgetTypes?: readonly WidgetType[];
+  /**
+   * Every quiz question must be machine-gradable: the learner app grades only
+   * keyed questions, so an open `text` (short answer) type is removed from each
+   * quiz's `questionTypes` (`QUIZ_OPEN_ANSWER_REMOVED`). Absent → unchanged.
+   */
+  keyedQuizzesOnly?: boolean;
+}
+
+/** Diagnostic code recorded when an open-answer type is removed from a quiz plan. */
+export const QUIZ_OPEN_ANSWER_REMOVED = 'QUIZ_OPEN_ANSWER_REMOVED';
+
+function keepKeyedQuizTypes(outlines: readonly SceneOutline[]): {
+  outlines: SceneOutline[];
+  repairs: OutlineDiagnostic[];
+} {
+  const repairs: OutlineDiagnostic[] = [];
+  const next = outlines.map((outline, index): SceneOutline => {
+    const types = outline.quizConfig?.questionTypes;
+    if (outline.type !== 'quiz' || !types?.includes('text')) return outline;
+    const kept: ('single' | 'multiple' | 'text')[] = types.filter((type) => type !== 'text');
+    repairs.push({
+      code: QUIZ_OPEN_ANSWER_REMOVED,
+      disposition: 'repaired',
+      outlineIndex: index,
+      ...(outline.id ? { outlineId: outline.id } : {}),
+      field: 'quizConfig',
+      previousValue: types,
+      message:
+        'the open-answer question type was removed: the learner app can grade only keyed questions',
+    });
+    return {
+      ...outline,
+      quizConfig: { ...outline.quizConfig!, questionTypes: kept.length ? kept : ['single'] },
+    };
+  });
+  return { outlines: next, repairs };
 }
 
 /**
@@ -282,7 +320,10 @@ export function analyzeOutlines(
   context: OutlineAnalysisContext = {},
 ): OutlineAnalysis {
   const stripped = outlines.map((outline) => stripEmptyOutlineSemantics(outline));
-  const semanticRepair = repairOutlinesSlideSemantics(stripped);
+  const quizRepair = context.keyedQuizzesOnly
+    ? keepKeyedQuizTypes(stripped)
+    : { outlines: stripped, repairs: [] as OutlineDiagnostic[] };
+  const semanticRepair = repairOutlinesSlideSemantics(quizRepair.outlines);
   const flow =
     context.teachingFlow && context.teachingFlow.length > 0 ? context.teachingFlow : undefined;
   const roleRepair = flow
@@ -311,7 +352,12 @@ export function analyzeOutlines(
 
   return {
     outlines: normalized,
-    repairs: [...semanticRepair.repairs, ...roleRepair.repairs, ...visualRepair.repairs],
+    repairs: [
+      ...quizRepair.repairs,
+      ...semanticRepair.repairs,
+      ...roleRepair.repairs,
+      ...visualRepair.repairs,
+    ],
     semantics,
     sceneConfig,
     widgets: prohibitedWidgetDiagnostics(normalized, context.prohibitedWidgetTypes),
@@ -559,6 +605,7 @@ export async function generateSceneOutlinesFromRequirements(
       ...(context.prohibitedWidgetTypes?.length
         ? { prohibitedWidgetTypes: context.prohibitedWidgetTypes }
         : {}),
+      ...(context.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
     });
     const enriched = analysis.outlines;
     for (const repair of analysis.repairs) {

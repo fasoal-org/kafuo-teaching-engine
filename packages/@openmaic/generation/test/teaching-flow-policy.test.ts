@@ -267,6 +267,32 @@ describe('analyzeOutlines with position policies', () => {
     expect(again.repairs.filter((r) => r.code === 'STRUCTURAL_CONTENT_ROLE_DROPPED')).toEqual([]);
   });
 
+  test('a keyed-only run removes the open-answer type from every quiz plan', () => {
+    // Lesson 306: each outcome quiz had a short answer worth 3 of 5 that never scored.
+    const quiz = {
+      id: 'quiz-1',
+      type: 'quiz',
+      title: 'Check',
+      description: 'Check the part',
+      keyPoints: [],
+      order: 1,
+      quizConfig: { questionCount: 3, difficulty: 'medium', questionTypes: ['single', 'text'] },
+    } as SceneOutline;
+    const keyed = analyzeOutlines([quiz], { keyedQuizzesOnly: true });
+    expect(keyed.outlines[0]?.quizConfig?.questionTypes).toEqual(['single']);
+    expect(keyed.repairs.map((r) => r.code)).toEqual(['QUIZ_OPEN_ANSWER_REMOVED']);
+    const onlyText = analyzeOutlines(
+      [{ ...quiz, quizConfig: { ...quiz.quizConfig!, questionTypes: ['text'] } }],
+      { keyedQuizzesOnly: true },
+    );
+    expect(onlyText.outlines[0]?.quizConfig?.questionTypes).toEqual(['single']);
+    // Without the option nothing changes.
+    expect(analyzeOutlines([quiz]).outlines[0]?.quizConfig?.questionTypes).toEqual([
+      'single',
+      'text',
+    ]);
+  });
+
   test('a transition with an allowed role keeps it', () => {
     const analysis = analyzeOutlines(
       [explanationSlide({ slideType: 'transition', contentRole: 'explanation' })],

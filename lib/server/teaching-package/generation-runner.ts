@@ -571,6 +571,8 @@ async function runKafuoAttempt(
     // reported on its outline, and a Scene that would still build one is
     // refused before any widget call — initial, corrected and resumed runs alike.
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
+    // The learner app grades keyed answers only: no open short answer in a quiz.
+    keyedQuizzesOnly: true,
     // The authoritative lesson language (`learningItem.language`): generation
     // stamps it on the Stage with the base text direction resolved from it.
     language: kafuo.language,

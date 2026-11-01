@@ -94,6 +94,7 @@ export {
   DEFAULT_LANGUAGE_DIRECTIVE,
   OUTLINE_TEACHING_FLOW_ERROR,
   analyzeOutlines,
+  QUIZ_OPEN_ANSWER_REMOVED,
   applyOutlineFallbacks,
   blockingOutlineDiagnostics,
   resolveImageTextPolicyText,
