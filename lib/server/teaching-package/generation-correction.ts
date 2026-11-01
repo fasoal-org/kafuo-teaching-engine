@@ -54,6 +54,9 @@ import {
   buildCorrectionView,
   diagnoseCandidateOutlines,
   diagnosisContextFromCheckpoint,
+  diagnosticKey,
+  ignoredIssueKeys,
+  withoutIgnoredIssues,
   type CorrectionCandidate,
   type CorrectionOperation,
   type CorrectionView,
@@ -260,7 +263,19 @@ export async function editGenerationCorrection(
       // exactly the gap the diagnosis reports.
       ...(diagnosisContext.bookStructure ? { bookStructure: diagnosisContext.bookStructure } : {}),
     });
+    // An ignore names an issue that is open now; it is never a blank waiver.
+    const open = new Set(checkpoint.diagnostics.map(diagnosticKey));
+    for (const [index, operation] of command.operations.entries()) {
+      if (operation.op === 'ignore_issue' && !open.has(operation.issueKey)) {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          `operations[${index}] ignores an issue that is not open; reload the correction`,
+        );
+      }
+    }
+    const ignored = ignoredIssueKeys(checkpoint.editLog, command.operations);
     const diagnosis = diagnoseCandidateOutlines(edited, diagnosisContext);
+    diagnosis.blocking = withoutIgnoredIssues(diagnosis.blocking, ignored);
     const now = Date.now();
     const updated = await applyCheckpointEdit(tx, attemptId, {
       tenantId: command.tenantId,
@@ -361,9 +376,11 @@ export async function resumeGenerationAttempt(
     // administrator's: the resumed run re-plans that slide's visual itself
     // (slide image plan D-1/D-3), so it never holds a resume back — an older
     // checkpoint saved before notes existed resumes like any other.
-    const blocking = diagnosis.blocking.filter(
-      (issue) => issue.code !== VISUAL_TEACHING_NOTE_MISSING,
-    );
+    // An issue a person ignored on this checkpoint no longer holds it back.
+    const blocking = withoutIgnoredIssues(
+      diagnosis.blocking,
+      ignoredIssueKeys(checkpoint.editLog),
+    ).filter((issue) => issue.code !== VISUAL_TEACHING_NOTE_MISSING);
     if (blocking.length > 0) {
       throw new TeachingPackageError(
         'CORRECTION_INCOMPLETE',

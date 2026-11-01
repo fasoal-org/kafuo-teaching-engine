@@ -46,6 +46,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationAttempt,
   GenerationCheckpoint,
+  GenerationCheckpointLogEntry,
   GenerationCheckpointPhase,
   GenerationCheckpointSourceRefs,
   KafuoBookStructure,
@@ -300,7 +301,51 @@ export type CorrectionOperation =
    * slide (`outlineId`). The server builds the outline from the gap the
    * diagnosis itself finds — no model call; the resume writes the Scene.
    */
-  | { op: 'insert_book_slide'; outlineId: string; unitId: string; title?: string };
+  | { op: 'insert_book_slide'; outlineId: string; unitId: string; title?: string }
+  /**
+   * A person accepts one open issue as it is (owner decision, 1 Nov 2026): it
+   * no longer blocks the edit, the resume or the resumed run's outline gate.
+   * Recorded in the edit log, which is where it is read back from.
+   */
+  | { op: 'ignore_issue'; issueKey: string };
+
+/**
+ * One diagnostic's identity across diagnoses: the outline id, never its index,
+ * so an issue keeps its key when another slide is added or removed.
+ */
+export function diagnosticKey(diagnostic: OutlineDiagnostic): string {
+  return JSON.stringify([
+    diagnostic.code,
+    diagnostic.outlineId ?? null,
+    diagnostic.field ?? null,
+    diagnostic.message.replace(/#\d+/g, '#'),
+  ]);
+}
+
+/** The issue keys a person has ignored on this checkpoint, from its edit log. */
+export function ignoredIssueKeys(
+  editLog: readonly GenerationCheckpointLogEntry[],
+  operations: readonly CorrectionOperation[] = [],
+): Set<string> {
+  const keys = new Set<string>();
+  const ops = [...editLog.flatMap((entry) => entry.operations ?? []), ...operations];
+  for (const op of ops) {
+    const record = op && typeof op === 'object' ? (op as Record<string, unknown>) : null;
+    if (record?.op === 'ignore_issue' && typeof record.issueKey === 'string') {
+      keys.add(record.issueKey);
+    }
+  }
+  return keys;
+}
+
+export function withoutIgnoredIssues<T extends OutlineDiagnostic>(
+  diagnostics: readonly T[],
+  ignored: ReadonlySet<string>,
+): T[] {
+  return ignored.size === 0
+    ? [...diagnostics]
+    : diagnostics.filter((diagnostic) => !ignored.has(diagnosticKey(diagnostic)));
+}
 
 const MAX_INSERTED_TITLE = 120;
 
@@ -345,6 +390,12 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
   }
   return raw.map((entry, index) => {
     const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+    if (record?.op === 'ignore_issue') {
+      if (typeof record.issueKey !== 'string' || record.issueKey.trim() === '') {
+        invalid(`operations[${index}].issueKey must name an open issue`);
+      }
+      return { op: 'ignore_issue', issueKey: record.issueKey as string };
+    }
     if (!record || typeof record.outlineId !== 'string' || record.outlineId.trim() === '') {
       invalid(`operations[${index}] must name an outlineId`);
     }
@@ -385,7 +436,9 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
       if (!('value' in record)) invalid(`operations[${index}].value is required (null clears)`);
       return { op: 'set', outlineId, field: record.field as CorrectionField, value: record.value };
     }
-    invalid(`operations[${index}].op must be "set", "remove", "move" or "insert_book_slide"`);
+    invalid(
+      `operations[${index}].op must be "set", "remove", "move", "insert_book_slide" or "ignore_issue"`,
+    );
   });
 }
 
@@ -567,6 +620,8 @@ export function applyCorrectionOperations(
   let next = outlines.map((outline) => ({ ...outline }));
   const pending = new Set(context.pendingOutlineIds ?? []);
   for (const [index, operation] of operations.entries()) {
+    // Changes no outline: the caller checks the key and filters the diagnosis.
+    if (operation.op === 'ignore_issue') continue;
     const position = next.findIndex((outline) => outline.id === operation.outlineId);
     if (position < 0) {
       invalid(
@@ -717,7 +772,18 @@ export interface CorrectionView {
   pendingOutlineIds: string[] | null;
   editableFields: string[];
   outlines: Array<Record<string, unknown>>;
-  blockingIssues: GenerationCheckpoint['diagnostics'];
+  /** Open issues, each with the `key` an `ignore_issue` names. */
+  blockingIssues: Array<GenerationCheckpoint['diagnostics'][number] & { key: string }>;
+  /** Issues a person accepted as they are, with who and when. */
+  ignoredIssues: Array<{
+    key: string;
+    code: string;
+    outlineId: string | null;
+    field: string | null;
+    message: string;
+    actorRef: string;
+    at: number;
+  }>;
   /** Missing book slides a person can add with `insert_book_slide` (outline phase). */
   insertableBookSlides: Array<{
     kind: BookCoverageGap['kind'];
@@ -745,6 +811,35 @@ export interface CorrectionView {
     }>;
   };
   editLog: GenerationCheckpoint['editLog'];
+}
+
+function ignoredIssueList(
+  editLog: readonly GenerationCheckpointLogEntry[],
+): CorrectionView['ignoredIssues'] {
+  const list: CorrectionView['ignoredIssues'] = [];
+  for (const entry of editLog) {
+    for (const key of ignoredIssueKeys([entry])) {
+      if (list.some((item) => item.key === key)) continue;
+      let parts: unknown;
+      try {
+        parts = JSON.parse(key);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(parts) || parts.length !== 4) continue;
+      const [code, outlineId, field, message] = parts as unknown[];
+      list.push({
+        key,
+        code: String(code),
+        outlineId: typeof outlineId === 'string' ? outlineId : null,
+        field: typeof field === 'string' ? field : null,
+        message: String(message),
+        actorRef: entry.actorRef,
+        at: entry.at,
+      });
+    }
+  }
+  return list;
 }
 
 /** The admin read model of a paused attempt (no source text, no URL, no bytes). */
@@ -798,7 +893,11 @@ export function buildCorrectionView(
       teachingSkills: outline.teachingSkills ?? null,
       editable: checkpoint.phase === 'outline' || pending.has(outline.id),
     })),
-    blockingIssues: checkpoint.diagnostics,
+    blockingIssues: checkpoint.diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+      key: diagnosticKey(diagnostic),
+    })),
+    ignoredIssues: ignoredIssueList(checkpoint.editLog),
     insertableBookSlides:
       checkpoint.phase === 'outline'
         ? insertableBookGaps(

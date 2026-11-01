@@ -760,6 +760,8 @@ export interface GenerationCorrectionOptions {
   collectOutlineIssues?: (
     outlines: SceneOutline[],
   ) => OutlineDiagnostic[] | Promise<OutlineDiagnostic[]>;
+  /** A finding a person ignored on the resumed checkpoint: it never pauses the run. */
+  isIgnoredIssue?: (issue: OutlineDiagnostic) => boolean;
   /**
    * g5.v7 (P-6): given the blocking findings, re-plan what the plan left out
    * with the outline model and return the re-diagnosed candidate, or `null` to
@@ -1647,12 +1649,15 @@ export async function generateClassroom(
   // `scenes` checkpoint already passed this point once and is not re-paused here.
   if (correction && !resumeScenes) {
     const appIssues = (await correction.collectOutlineIssues?.(outlines)) ?? [];
-    let blocking = [...outlineBlocking, ...appIssues];
+    const isIgnored = correction.isIgnoredIssue;
+    const open = (issues: OutlineDiagnostic[]) =>
+      isIgnored ? issues.filter((issue) => !isIgnored(issue)) : issues;
+    let blocking = open([...outlineBlocking, ...appIssues]);
     if (blocking.length > 0 && correction.repairOutlines) {
       const repaired = await correction.repairOutlines(outlines, blocking, outlineAiCall);
       if (repaired) {
         outlines = repaired.outlines;
-        blocking = repaired.blocking;
+        blocking = open(repaired.blocking);
       }
     }
     if (blocking.length > 0) {

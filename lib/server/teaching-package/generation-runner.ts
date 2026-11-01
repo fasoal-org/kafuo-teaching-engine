@@ -94,6 +94,8 @@ import { plannerSkillOptions } from '@/lib/server/teaching-package/scene-inserti
 import {
   appOutlineDiagnostics,
   diagnoseCandidateOutlines,
+  diagnosticKey,
+  ignoredIssueKeys,
   isGenerationCorrectionRequired,
   SCENE_REGENERATION_FIELD,
   type OutlineDiagnosisContext,
@@ -702,6 +704,15 @@ async function runKafuoAttempt(
         // admin-correctable: a candidate that fails them pauses the attempt
         // (plan §3.2) instead of failing it, still before any reservation.
         correction: {
+          // An issue a person ignored on the checkpoint this run resumes.
+          ...(resume
+            ? {
+                isIgnoredIssue: (() => {
+                  const ignored = ignoredIssueKeys(resume.editLog);
+                  return (issue: OutlineDiagnostic) => ignored.has(diagnosticKey(issue));
+                })(),
+              }
+            : {}),
           collectOutlineIssues: (outlines: SceneOutline[]) => {
             recordCoverageGaps(outlines);
             // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.

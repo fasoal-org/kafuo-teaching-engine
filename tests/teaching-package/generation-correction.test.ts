@@ -550,6 +550,63 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
     });
   });
 
+  it('(b) an ignored issue no longer blocks: the edit, the resume and the resumed run accept it', async () => {
+    answerWith([introOutline(), visualOutline({ contentRole: 'procedure' })]);
+    const { attemptId, execution, context } = await startAndRun({
+      flow: flowV4(),
+      teachingModel: { key: 'g5', version: 'g5.v4' },
+    });
+    const { getGenerationCorrection, editGenerationCorrection, resumeGenerationAttempt } =
+      await correction();
+    const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+    const [issue] = view.blockingIssues;
+    expect(issue).toMatchObject({ code: 'CONTENT_ROLE_NOT_ALLOWED', key: expect.any(String) });
+
+    // A key that is not open is refused, never stored as a blank waiver.
+    await expect(
+      editGenerationCorrection(txPool(), attemptId, {
+        tenantId: TENANT,
+        actorRef: 'kafuo:admin-1',
+        expectedRevision: 1,
+        operations: [{ op: 'ignore_issue', issueKey: '["NOPE",null,null,"x"]' }],
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+
+    const edited = await editGenerationCorrection(txPool(), attemptId, {
+      tenantId: TENANT,
+      actorRef: 'kafuo:admin-1',
+      expectedRevision: 1,
+      operations: [{ op: 'ignore_issue', issueKey: issue!.key }],
+    });
+    expect(edited).toMatchObject({ revision: 2, blockingIssues: [], canResume: true });
+    expect(edited.ignoredIssues).toEqual([
+      expect.objectContaining({
+        key: issue!.key,
+        code: 'CONTENT_ROLE_NOT_ALLOWED',
+        outlineId: 'o-visual',
+        actorRef: 'kafuo:admin-1',
+      }),
+    ]);
+
+    await resumeGenerationAttempt(txPool(), attemptId, {
+      tenantId: TENANT,
+      actorRef: 'kafuo:admin-1',
+      expectedRevision: 2,
+      requestDigest: DIGEST,
+      learningItem: context.aggregate.learningItem,
+    });
+    const runner = await import('@/lib/server/teaching-package/generation-runner');
+    await runner.runGenerationAttempt(attemptId, execution, context, { resume: true });
+
+    // The resumed run's outline gate did not pause on the ignored issue again.
+    const done = await attempt(attemptId);
+    expect(done.status).not.toBe('awaiting_admin_correction');
+    const { document } = await currentStageOf(attemptId);
+    expect(outlinesOf(document).find((outline) => outline.id === 'o-visual')!.contentRole).toBe(
+      'procedure',
+    );
+  });
+
   // -------------------------------------------------------------------------
   // (a) the reported case
   // -------------------------------------------------------------------------
