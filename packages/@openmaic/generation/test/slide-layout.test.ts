@@ -141,6 +141,50 @@ describe('arrangeGeneratedSlideLayout', () => {
     expect(generatedSlideLayoutIssue(arranged)).toBeNull();
   });
 
+  it('separates the stored, already-overlapping warning line from the boxes (slide 4 as saved)', () => {
+    const slide = [
+      text('title', 60, 55, 880, 68, '<p style="font-size:32px;">من الأمثلة إلى التخمين</p>'),
+      shape('def1', 60, 365, 430, 104),
+      text('def1-text', 80, 379, 390, 68, '<p style="font-size:16px;">التبرير</p>'),
+      shape('def2', 510, 365, 430, 104),
+      text('def2-text', 530, 379, 390, 68, '<p style="font-size:16px;">التخمين</p>'),
+      text('warning', 60, 448.5, 880, 44, '<p style="font-size:16px;">تنبيه</p>'),
+    ];
+    const arranged = normalizeGeneratedSlideLayout(arrangeGeneratedSlideLayout(slide));
+    const warning = byId(arranged, 'warning');
+    for (const id of ['def1', 'def2']) {
+      expect(warning.top).toBeGreaterThanOrEqual(bottomOf(byId(arranged, id)));
+      // The box still holds its text.
+      expect(bottomOf(byId(arranged, id))).toBeGreaterThanOrEqual(
+        bottomOf(byId(arranged, `${id}-text`)),
+      );
+    }
+    expect(bottomOf(byId(arranged, 'def1'))).toBe(bottomOf(byId(arranged, 'def2')));
+    expect(bottomOf(warning)).toBeLessThanOrEqual(512.5);
+  });
+
+  it('keeps slide 21 number line and moves its reminder line under the cards', () => {
+    const slide = [
+      shape('right', 510, 125, 430, 375),
+      shape('left', 60, 125, 430, 375),
+      text('right-body', 530, 185, 390, 116, '<p style="font-size:16px;">• عند ن = ١</p>'),
+      line('axis', 555, 395, [0, 0], [320, 0], ['arrow', 'arrow']),
+      line('tick0', 715, 385, [0, 0], [0, 20]),
+      text('zero', 685, 405, 60, 44, '<p style="font-size:14px; text-align:center;">٠</p>'),
+      text('left-body', 80, 185, 390, 116, '<p style="font-size:16px;">• ارسم</p>'),
+      line('ray', 175, 435, [0, 0], [0, -70]),
+      text('reminder', 80, 455, 840, 44, '<p style="font-size:16px;">تذكّر</p>'),
+    ];
+    const arranged = normalizeGeneratedSlideLayout(arrangeGeneratedSlideLayout(slide));
+    expect(byId(arranged, 'axis')).toBe(slide[3]);
+    const reminder = byId(arranged, 'reminder');
+    expect(reminder.top).toBeGreaterThanOrEqual(bottomOf(byId(arranged, 'right')));
+    expect(bottomOf(byId(arranged, 'right'))).toBeGreaterThanOrEqual(
+      bottomOf(byId(arranged, 'zero')),
+    );
+    expect(bottomOf(reminder)).toBeLessThanOrEqual(512.5);
+  });
+
   it('shrinks the last row font only down to 14px when gaps are not enough', () => {
     const shrink = (height: number) => {
       const slide = [

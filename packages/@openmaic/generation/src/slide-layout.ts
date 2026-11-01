@@ -140,6 +140,7 @@ type Line = PPTElement & {
 };
 
 const MIN_ROW_GAP = 8;
+const FIT_TOLERANCE = 2;
 const ARROW_GAP_PADDING = 4;
 const MIN_FONT_PX = 14;
 const LABEL_MAX_CHARS = 6;
@@ -288,13 +289,92 @@ function smallestFontSize(html: string): number | null {
   return sizes.length > 0 ? Math.min(...sizes) : null;
 }
 
+function intersects(a: Box, b: Box, margin = 2): boolean {
+  return (
+    Math.min(a.right, b.right) - Math.max(a.left, b.left) > margin &&
+    Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > margin
+  );
+}
+
+const CONTAINER_BOTTOM_PADDING = 4;
+
+/**
+ * A (first step). A free text block that starts inside the lower part of a box
+ * it does not belong to (a clamp or the model pushed it up) is put below that
+ * box: the boxes it overlaps lose the empty space under their own contents
+ * (all to the same bottom, so a row stays even), and the text goes under them.
+ */
+function separateFreeText(elements: PPTElement[]): PPTElement[] {
+  const next = [...elements];
+  const groups = layoutGroups(elements);
+  // Only boxes with contents of their own: text over a lone decorative shape stays.
+  const boxGroups = groups.filter(
+    (group) =>
+      group.members.length > 1 &&
+      group.members.some((member) => elements[member]!.type === 'shape'),
+  );
+  for (const group of groups) {
+    if (group.members.length !== 1) continue;
+    const index = group.members[0]!;
+    const textElement = next[index] as PositionedElement;
+    if (textElement.type !== 'text' || !hasFiniteBox(textElement)) continue;
+    const textBox = boxOf(textElement)!;
+    const overlapped = boxGroups.filter(
+      (candidate) => intersects(textBox, candidate.box) && textBox.top > candidate.box.top + 1,
+    );
+    if (overlapped.length === 0) continue;
+
+    let rowBottom = 0;
+    const roots: number[] = [];
+    for (const candidate of overlapped) {
+      const root = candidate.members.find((member) => {
+        const box = boxOf(elements[member]!);
+        return (
+          elements[member]!.type === 'shape' &&
+          box !== null &&
+          box.top === candidate.box.top &&
+          box.bottom === candidate.box.bottom
+        );
+      });
+      const contentBottom = Math.max(
+        candidate.box.top,
+        ...candidate.members
+          .filter((member) => member !== root)
+          .map((member) => boxOf(next[member]!)?.bottom ?? candidate.box.top),
+      );
+      if (root !== undefined) roots.push(root);
+      rowBottom = Math.max(
+        rowBottom,
+        root === undefined ? candidate.box.bottom : contentBottom + CONTAINER_BOTTOM_PADDING,
+      );
+    }
+    for (const root of roots) {
+      const shape = next[root] as PositionedElement & { top: number; height: number };
+      if (shape.top + shape.height > rowBottom) {
+        next[root] = { ...shape, height: rowBottom - shape.top } as PPTElement;
+      }
+    }
+    const top = rowBottom + MIN_ROW_GAP;
+    if (top > textElement.top!) next[index] = shiftVertically(textElement, top - textElement.top!);
+  }
+  return next;
+}
+
 /** A. Fit content taller than the safe area by closing row gaps, then shrinking the last row's text. */
 function fitRowsVertically(elements: PPTElement[]): PPTElement[] {
   const maxBottom = SLIDE_CANVAS_HEIGHT - SLIDE_SAFE_MARGIN;
   const rows = layoutRows(layoutGroups(elements));
   if (rows.length === 0) return elements;
-  let overflow = rows[rows.length - 1]!.box.bottom - maxBottom;
-  if (overflow <= 0) return elements;
+  // Only readable content overflows: a decorative bar may run to the edge.
+  const contentBottom = Math.max(
+    0,
+    ...elements
+      .filter((element) => SAFE_AREA_CONTENT_TYPES.has(element.type))
+      .map((element) => boxOf(element)?.bottom ?? 0),
+  );
+  let overflow = contentBottom - maxBottom;
+  // A pixel or two is the clamp's to absorb; re-flowing the slide for it is noise.
+  if (overflow <= FIT_TOLERANCE) return elements;
 
   const next = [...elements];
   const gaps = rows
@@ -306,7 +386,8 @@ function fitRowsVertically(elements: PPTElement[]): PPTElement[] {
     let shift = 0;
     rows.forEach((row, index) => {
       if (index > 0) shift += gaps[index - 1]! * ratio;
-      for (const member of row.members) next[member] = shiftVertically(next[member]!, -shift);
+      const rounded = Math.ceil(shift * 2) / 2;
+      for (const member of row.members) next[member] = shiftVertically(next[member]!, -rounded);
     });
     overflow -= available * ratio;
   }
@@ -336,8 +417,22 @@ function recenterArrows(elements: PPTElement[]): PPTElement[] {
   const groups = layoutGroups(elements).filter(
     (group) => !(group.members.length === 1 && isLine(elements[group.members[0]!]!)),
   );
+  const containers = elements
+    .map((element) => ({ element, box: boxOf(element) }))
+    .filter(
+      (entry): entry is { element: PPTElement; box: Box } =>
+        entry.element.type === 'shape' &&
+        entry.box !== null &&
+        !isBackground(entry.element, entry.box),
+    )
+    .map((entry) => entry.box);
   return elements.map((element) => {
     if (!isLine(element) || !element.points?.includes('arrow')) return element;
+    // A connector joins boxes: a double-headed axis, or any line drawn inside a
+    // box (a number line, a diagram), is never one.
+    if (element.points[0] === 'arrow' && element.points[1] === 'arrow') return element;
+    const lineBox = boxOf(element)!;
+    if (containers.some((box) => contains(box, lineBox))) return element;
     const shaped = element as {
       broken?: unknown;
       broken2?: unknown;
@@ -370,11 +465,21 @@ function recenterArrows(elements: PPTElement[]): PPTElement[] {
       const centreBefore = (before.from + before.to) / 2;
       const centreAfter = (after.from + after.to) / 2;
       if (along < centreBefore || along > centreAfter) continue;
+      // The arrow must actually reach into the gap between the two boxes.
+      const [lineFrom, lineTo] = horizontal
+        ? [lineBox.left, lineBox.right]
+        : [lineBox.top, lineBox.bottom];
+      if (lineFrom > after.from || lineTo < before.to) return element;
+      // Already inside the gap: a sound arrow keeps its place and length.
+      if (lineFrom >= before.to && lineTo <= after.from) return element;
       const gapStart = before.to + ARROW_GAP_PADDING;
       const gapEnd = after.from - ARROW_GAP_PADDING;
       if (gapEnd - gapStart < 4) return element;
+      const length = Math.min(lineTo - lineFrom, gapEnd - gapStart);
+      const middle = (gapStart + gapEnd) / 2;
       const forward = horizontal ? x2 > x1 : y2 > y1;
-      const [from, to] = forward ? [gapStart, gapEnd] : [gapEnd, gapStart];
+      const [low, high] = [middle - length / 2, middle + length / 2];
+      const [from, to] = forward ? [low, high] : [high, low];
       if (horizontal) {
         const left = Math.min(from, to);
         return {
@@ -476,6 +581,9 @@ function clearDiagramLabels(elements: PPTElement[]): PPTElement[] {
     }
     const text = plainText(label.content);
     if (text.length === 0 || [...text].length > LABEL_MAX_CHARS) return element;
+    // Measures and tick values only («٤٥°», «−١»): a point's letter label sits
+    // on its vertex by design.
+    if (!/[0-9٠-٩°]/.test(text)) return element;
     const typed = label as Label;
     const glyphs = labelGlyphBox(typed, text);
     const hit = segments.find(([a, b]) => segmentHitsBox(a, b, glyphs));
@@ -556,5 +664,5 @@ function clearDiagramLabels(elements: PPTElement[]): PPTElement[] {
  * back with every element unchanged.
  */
 export function arrangeGeneratedSlideLayout(elements: readonly PPTElement[]): PPTElement[] {
-  return clearDiagramLabels(recenterArrows(fitRowsVertically([...elements])));
+  return clearDiagramLabels(recenterArrows(fitRowsVertically(separateFreeText([...elements]))));
 }
