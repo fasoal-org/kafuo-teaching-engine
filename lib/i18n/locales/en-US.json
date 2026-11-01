@@ -895,7 +895,14 @@
     "aiGrading": "AI is grading...",
     "aiGradingWait": "Please wait, analyzing your answers",
     "quizReport": "Quiz Report",
-    "retry": "Retry"
+    "retry": "Retry",
+    "bankPending": "Questions are prepared after approval",
+    "bankUnavailable": "The questions could not be loaded",
+    "gradingUnavailable": "Grading is unavailable right now. Please try again.",
+    "trueFalse": "True / False",
+    "questionOf": "Question {{current}} of {{total}}",
+    "next": "Next",
+    "previous": "Previous"
   },
   "roundtable": {
     "teacher": "TEACHER",

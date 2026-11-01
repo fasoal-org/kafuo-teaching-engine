@@ -67,6 +67,9 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   ['POST', '/api/stages/:id/scene-insertions'], // i3 start (same-origin only)
   ['GET', '/api/stages/:id/scene-insertions'], // i4 status by `?key=`
   ['GET', '/api/stages/:id/scene-insertions/:id'], // i5 status by insertion id
+  // W6 one question source (1 Nov 2026): the classroom's bank quiz.
+  ['GET', '/api/stages/:id/bank-quiz'], // b1 questions by `?sceneId=`
+  ['POST', '/api/stages/:id/bank-quiz'], // b2 grade (same-origin only; read-only grant)
 ];
 
 /** The handler file behind each reviewed Stage path (`app/api/…`). */
@@ -88,6 +91,7 @@ const STAGE_ROUTE_FILES: Readonly<Record<string, string>> = {
   '/api/stages/:id/content-units': 'stages/[id]/content-units/route.ts',
   '/api/stages/:id/scene-insertions': 'stages/[id]/scene-insertions/route.ts',
   '/api/stages/:id/scene-insertions/:id': 'stages/[id]/scene-insertions/[insertionId]/route.ts',
+  '/api/stages/:id/bank-quiz': 'stages/[id]/bank-quiz/route.ts',
 };
 const PERSISTENCE_ROUTE_FILE = 'persistence/[...path]/route.ts';
 
@@ -485,6 +489,7 @@ describe('editor-grant exemption (O1)', () => {
           `/api/stages/${S}/scenes/${CHILD}/regenerate`,
           `/api/stages/${S}/scenes/${CHILD}/narration-audio`,
           `/api/stages/${S}/scene-insertions`,
+          `/api/stages/${S}/bank-quiz`,
         ]);
       });
 
@@ -721,7 +726,12 @@ describe('editor-grant exemption table (structural pin)', () => {
       }
       if (isStageRoute) {
         expect(source, label).toMatch(/readEditorGrant|resolveRegenerationGrant/);
-        if (method !== 'GET') {
+        if (path === '/api/stages/:id/bank-quiz') {
+          // W6: grading writes no TE state, so a read-only (learner / preview)
+          // grant may POST; a learner grant is re-validated with Kafuo.
+          expect(source, label).toMatch(/resolveRegenerationGrant\([^)]*requireWrite: false/);
+          expect(source, label).toMatch(/evaluateLearnerGrantAccess\(/);
+        } else if (method !== 'GET') {
           expect(source, label).toMatch(/capability !== 'write'|requireWrite: true/);
         }
       } else {

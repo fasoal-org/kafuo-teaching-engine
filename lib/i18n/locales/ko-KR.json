@@ -895,7 +895,14 @@
     "aiGrading": "AI가 채점 중...",
     "aiGradingWait": "잠시만 기다려주세요, 답변을 분석하고 있어요",
     "quizReport": "퀴즈 결과",
-    "retry": "다시 풀기"
+    "retry": "다시 풀기",
+    "bankPending": "문제는 승인 후에 준비됩니다",
+    "bankUnavailable": "문제를 불러오지 못했습니다",
+    "gradingUnavailable": "지금은 채점할 수 없습니다. 다시 시도해 주세요.",
+    "trueFalse": "참 / 거짓",
+    "questionOf": "{{total}}문제 중 {{current}}번",
+    "next": "다음",
+    "previous": "이전"
   },
   "roundtable": {
     "teacher": "선생님",

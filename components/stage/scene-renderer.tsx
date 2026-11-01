@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import type { Scene, StageMode } from '@/lib/types/stage';
 import { SlideEditor as SlideRenderer } from '../slide-renderer/Editor';
 import { QuizView } from '../scene-renderers/quiz-view';
+import { BankQuizView } from '../scene-renderers/bank-quiz-view';
 import { InteractiveRenderer } from '../scene-renderers/interactive-renderer';
 import { PBLRenderer } from '../scene-renderers/pbl-renderer';
 
@@ -25,6 +26,17 @@ export function SceneRenderer({ scene, mode }: SceneRendererProps) {
         return <SlideRenderer mode={mode} />;
       case 'quiz':
         if (scene.content.type !== 'quiz') return <div>Invalid quiz content</div>;
+        // W6: a bank quiz shows the approved Kafuo question-bank questions.
+        if (scene.questionSource === 'bank') {
+          return (
+            <BankQuizView
+              key={scene.id}
+              questions={scene.content.questions}
+              sceneId={scene.id}
+              stageId={scene.stageId}
+            />
+          );
+        }
         return (
           <QuizView
             key={scene.id}

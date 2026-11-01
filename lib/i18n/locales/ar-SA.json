@@ -895,7 +895,14 @@
     "aiGrading": "الذكاء الاصطناعي يصحح...",
     "aiGradingWait": "يرجى الانتظار، جارٍ تحليل إجاباتك",
     "quizReport": "تقرير الاختبار",
-    "retry": "إعادة المحاولة"
+    "retry": "إعادة المحاولة",
+    "bankPending": "تُجهَّز الأسئلة بعد الاعتماد",
+    "bankUnavailable": "تعذّر تحميل الأسئلة",
+    "gradingUnavailable": "التصحيح غير متاح الآن. حاول مرة أخرى.",
+    "trueFalse": "صح / خطأ",
+    "questionOf": "السؤال {{current}} من {{total}}",
+    "next": "التالي",
+    "previous": "السابق"
   },
   "roundtable": {
     "teacher": "المعلم",

@@ -895,7 +895,14 @@
     "aiGrading": "AI đang chấm…",
     "aiGradingWait": "Vui lòng đợi, đang phân tích câu trả lời của bạn",
     "quizReport": "Báo cáo kết quả",
-    "retry": "Làm lại"
+    "retry": "Làm lại",
+    "bankPending": "Câu hỏi sẽ được chuẩn bị sau khi phê duyệt",
+    "bankUnavailable": "Không thể tải câu hỏi",
+    "gradingUnavailable": "Hiện không thể chấm điểm. Vui lòng thử lại.",
+    "trueFalse": "Đúng / Sai",
+    "questionOf": "Câu {{current}} / {{total}}",
+    "next": "Tiếp",
+    "previous": "Trước"
   },
   "roundtable": {
     "teacher": "GIẢNG VIÊN",

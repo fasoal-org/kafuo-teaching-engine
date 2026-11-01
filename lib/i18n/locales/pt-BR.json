@@ -895,7 +895,14 @@
     "aiGrading": "A IA está corrigindo...",
     "aiGradingWait": "Aguarde, analisando suas respostas",
     "quizReport": "Relatório do Questionário",
-    "retry": "Tentar novamente"
+    "retry": "Tentar novamente",
+    "bankPending": "As perguntas são preparadas após a aprovação",
+    "bankUnavailable": "Não foi possível carregar as perguntas",
+    "gradingUnavailable": "A correção não está disponível agora. Tente novamente.",
+    "trueFalse": "Verdadeiro / Falso",
+    "questionOf": "Pergunta {{current}} de {{total}}",
+    "next": "Próxima",
+    "previous": "Anterior"
   },
   "roundtable": {
     "teacher": "PROFESSOR",

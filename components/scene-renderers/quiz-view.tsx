@@ -53,7 +53,7 @@ interface QuizViewProps {
   readonly stageId: string;
 }
 
-const QuizMathText = memo(function QuizMathText({
+export const QuizMathText = memo(function QuizMathText({
   text,
   className,
   allowDisplayMode = false,

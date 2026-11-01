@@ -130,6 +130,14 @@ export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string,
   ['POST', '/api/stages/:id/scene-insertions'],
   ['GET', '/api/stages/:id/scene-insertions'],
   ['GET', '/api/stages/:id/scene-insertions/:id'],
+  // W6 one question source (1 Nov 2026): the classroom's bank quiz. The
+  // handler runs `resolveRegenerationGrant` first (a signed grant for this
+  // Stage whose version still names it, else a plain 404); a learner grant is
+  // re-validated with Kafuo. Every purpose may read and grade — learners are
+  // its main users, so there is no access-cookie refusal. The POST row is
+  // same-origin only, like every POST row.
+  ['GET', '/api/stages/:id/bank-quiz'],
+  ['POST', '/api/stages/:id/bank-quiz'],
 ];
 
 /** Literal segments are lowercase words; `:id` becomes one `STAGE_ID` segment. */

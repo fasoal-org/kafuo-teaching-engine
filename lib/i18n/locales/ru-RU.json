@@ -895,7 +895,14 @@
     "aiGrading": "AI проверяет...",
     "aiGradingWait": "Пожалуйста подождите, анализируем ваши ответы",
     "quizReport": "Результаты теста",
-    "retry": "Повторить"
+    "retry": "Повторить",
+    "bankPending": "Вопросы готовятся после утверждения",
+    "bankUnavailable": "Не удалось загрузить вопросы",
+    "gradingUnavailable": "Проверка сейчас недоступна. Попробуйте ещё раз.",
+    "trueFalse": "Верно / Неверно",
+    "questionOf": "Вопрос {{current}} из {{total}}",
+    "next": "Далее",
+    "previous": "Назад"
   },
   "roundtable": {
     "teacher": "УЧИТЕЛЬ",

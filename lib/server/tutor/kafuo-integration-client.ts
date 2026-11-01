@@ -5,6 +5,7 @@
  * e.g. `https://api.kafuo.example/api/v2/integrations/teaching-engine`):
  * `POST /meters/reserve`, `POST /meters/finalize`, `POST /grounding/search` and
  * `POST /learner-access/check` (ET-16 c, G2: learner grant re-validation).
+ * W6 adds `POST /quiz-questions` and `POST /quiz-grades` (bank quiz Scenes).
  *
  * Auth is the webhook scheme in the other direction — the SAME secret
  * (`TEACHING_ENGINE_WEBHOOK_SECRET` = Kafuo `teaching_engine_webhook_secret`)
@@ -202,6 +203,118 @@ export interface GroundingSearchResponse {
   units: GroundingUnit[];
   lessonMatch: { lessonId: string; lessonTitle: string; confidence: number } | null;
   truncated: boolean;
+}
+
+/**
+ * W6 one question source (status doc "W6 contract" item 3):
+ * `POST /quiz-questions` and `POST /quiz-grades`. The scope comes from the TE
+ * grant only. `studentRef` is sent for a learner grant (the session's pinned
+ * approval); without it (admin preview) Kafuo reads the current approved set.
+ */
+export interface BankQuizScope {
+  tenantId: string;
+  learningItemId: string;
+  versionId: string;
+  sceneId: string;
+  studentRef?: string;
+}
+
+export type BankQuizQuestionType =
+  | 'single_choice'
+  | 'true_false'
+  | 'multiple_answer'
+  | 'short_answer';
+
+const BANK_QUIZ_QUESTION_TYPES: ReadonlySet<string> = new Set<BankQuizQuestionType>([
+  'single_choice',
+  'true_false',
+  'multiple_answer',
+  'short_answer',
+]);
+
+export interface BankQuizAsset {
+  url: string;
+  alt: string | null;
+}
+
+/** The learner-safe projection: never a key, a model answer or a rubric. */
+export interface BankQuizQuestion {
+  id: string;
+  questionType: BankQuizQuestionType;
+  text: string;
+  choices: { id: string; text: string }[];
+  assets: BankQuizAsset[];
+  points: number;
+}
+
+export type BankQuizQuestionsStatus = 'ready' | 'pending_approval' | 'not_bank';
+
+export interface BankQuizQuestionsResult {
+  status: BankQuizQuestionsStatus;
+  questions: BankQuizQuestion[];
+}
+
+/** Answer per `bank:` id: a choice id, a list of choice ids, or the typed text. */
+export type BankQuizAnswer = string | string[];
+
+export interface BankQuizGradeResult {
+  questionId: string;
+  status: string;
+  earned: number;
+  possible: number;
+  correctAnswer: string[] | null;
+  explanation: string | null;
+}
+
+export interface BankQuizGradesResult {
+  results: BankQuizGradeResult[];
+  earned: number;
+  possible: number;
+  pendingPossible: number;
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** Allowlist projection of one bank question; anything else Kafuo sends is dropped. */
+function bankQuizQuestionOf(raw: unknown): BankQuizQuestion | null {
+  if (!isRecord(raw)) return null;
+  const { id, question_type: questionType, text } = raw;
+  if (typeof id !== 'string' || !id.startsWith('bank:')) return null;
+  if (typeof questionType !== 'string' || !BANK_QUIZ_QUESTION_TYPES.has(questionType)) return null;
+  if (typeof text !== 'string' || text === '') return null;
+  const choices: { id: string; text: string }[] = [];
+  for (const choice of Array.isArray(raw.choices) ? raw.choices : []) {
+    if (isRecord(choice) && typeof choice.id === 'string' && typeof choice.text === 'string') {
+      choices.push({ id: choice.id, text: choice.text });
+    }
+  }
+  const assets: BankQuizAsset[] = [];
+  for (const asset of Array.isArray(raw.assets) ? raw.assets : []) {
+    if (!isRecord(asset)) continue;
+    const url = typeof asset.url === 'string' ? asset.url : null;
+    if (!url || !/^(https:\/\/|\/)/.test(url)) continue;
+    assets.push({ url, alt: typeof asset.alt === 'string' ? asset.alt : null });
+  }
+  return {
+    id,
+    questionType: questionType as BankQuizQuestionType,
+    text,
+    choices,
+    assets,
+    points: Math.max(0, finiteNumber(raw.points, 1)),
+  };
+}
+
+function bankQuizBody(scope: BankQuizScope): Record<string, unknown> {
+  return {
+    tenantId: scope.tenantId,
+    learningItemId: scope.learningItemId,
+    versionId: scope.versionId,
+    sceneId: scope.sceneId,
+    ...(scope.studentRef ? { studentRef: scope.studentRef } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +555,72 @@ export class KafuoIntegrationClient {
     }
     throw new KafuoIntegrationError(
       `Kafuo learner access check refused with HTTP ${status}`,
+      status,
+      errorCodeOf(body),
+    );
+  }
+
+  /**
+   * `POST /quiz-questions` (W6 contract item 3): a bank quiz Scene's approved
+   * questions, keys stripped. An unknown `status` reads as `not_bank` (the
+   * Scene's own questions are shown). Any 4xx throws `KafuoIntegrationError`.
+   */
+  async quizQuestions(scope: BankQuizScope): Promise<BankQuizQuestionsResult> {
+    const { status, body } = await this.post('/quiz-questions', bankQuizBody(scope));
+    if (status === 200 && isRecord(body) && typeof body.status === 'string') {
+      const answer: BankQuizQuestionsStatus =
+        body.status === 'ready' || body.status === 'pending_approval' ? body.status : 'not_bank';
+      const questions =
+        answer === 'ready' && Array.isArray(body.questions)
+          ? body.questions
+              .map(bankQuizQuestionOf)
+              .filter((question): question is BankQuizQuestion => question !== null)
+          : [];
+      return { status: answer, questions };
+    }
+    throw new KafuoIntegrationError(
+      `Kafuo quiz questions refused with HTTP ${status}`,
+      status,
+      errorCodeOf(body),
+    );
+  }
+
+  /**
+   * `POST /quiz-grades` (W6 contract items 2–3): Kafuo grades `bank:` answers.
+   * `503 teaching_answer_grading_unavailable` surfaces as `KafuoUnreachableError`
+   * (every 5xx does); any 4xx throws `KafuoIntegrationError`.
+   */
+  async quizGrades(
+    scope: BankQuizScope,
+    answers: Record<string, BankQuizAnswer>,
+  ): Promise<BankQuizGradesResult> {
+    const { status, body } = await this.post('/quiz-grades', { ...bankQuizBody(scope), answers });
+    if (status === 200 && isRecord(body) && Array.isArray(body.results)) {
+      const results: BankQuizGradeResult[] = [];
+      for (const raw of body.results) {
+        if (!isRecord(raw) || typeof raw.question_id !== 'string' || typeof raw.status !== 'string')
+          continue;
+        const correct = raw.correct_answer;
+        results.push({
+          questionId: raw.question_id,
+          status: raw.status,
+          earned: finiteNumber(raw.earned, 0),
+          possible: finiteNumber(raw.possible, 0),
+          correctAnswer: Array.isArray(correct)
+            ? correct.filter((value): value is string => typeof value === 'string')
+            : null,
+          explanation: typeof raw.explanation === 'string' ? raw.explanation : null,
+        });
+      }
+      return {
+        results,
+        earned: finiteNumber(body.earned, 0),
+        possible: finiteNumber(body.possible, 0),
+        pendingPossible: finiteNumber(body.pending_possible, 0),
+      };
+    }
+    throw new KafuoIntegrationError(
+      `Kafuo quiz grades refused with HTTP ${status}`,
       status,
       errorCodeOf(body),
     );

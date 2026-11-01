@@ -895,7 +895,14 @@
     "aiGrading": "AIが採点中...",
     "aiGradingWait": "回答を分析しています。お待ちください",
     "quizReport": "クイズレポート",
-    "retry": "やり直す"
+    "retry": "やり直す",
+    "bankPending": "問題は承認後に用意されます",
+    "bankUnavailable": "問題を読み込めませんでした",
+    "gradingUnavailable": "現在採点できません。もう一度お試しください。",
+    "trueFalse": "正誤",
+    "questionOf": "{{total}} 問中 {{current}} 問目",
+    "next": "次へ",
+    "previous": "前へ"
   },
   "roundtable": {
     "teacher": "教師",

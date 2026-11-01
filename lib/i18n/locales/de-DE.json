@@ -895,7 +895,14 @@
     "aiGrading": "Die KI wertet aus...",
     "aiGradingWait": "Bitte warten, deine Antworten werden ausgewertet",
     "quizReport": "Quizbericht",
-    "retry": "Erneut versuchen"
+    "retry": "Erneut versuchen",
+    "bankPending": "Die Fragen werden nach der Freigabe vorbereitet",
+    "bankUnavailable": "Die Fragen konnten nicht geladen werden",
+    "gradingUnavailable": "Die Bewertung ist gerade nicht verfügbar. Bitte erneut versuchen.",
+    "trueFalse": "Richtig / Falsch",
+    "questionOf": "Frage {{current}} von {{total}}",
+    "next": "Weiter",
+    "previous": "Zurück"
   },
   "roundtable": {
     "teacher": "LEHRKRAFT",

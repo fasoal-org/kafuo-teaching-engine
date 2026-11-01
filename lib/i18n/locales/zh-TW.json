@@ -880,7 +880,14 @@
     "aiGrading": "AI 正在批改中...",
     "aiGradingWait": "請稍候，正在分析你的答案",
     "quizReport": "答題報告",
-    "retry": "重新答題"
+    "retry": "重新答題",
+    "bankPending": "題目將在審核通過後準備",
+    "bankUnavailable": "無法載入題目",
+    "gradingUnavailable": "評分暫時無法使用，請重試。",
+    "trueFalse": "是非",
+    "questionOf": "第 {{current}} 題，共 {{total}} 題",
+    "next": "下一題",
+    "previous": "上一題"
   },
   "roundtable": {
     "teacher": "教師",
