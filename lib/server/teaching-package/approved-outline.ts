@@ -92,11 +92,77 @@ export function projectOutlineScenes(scenes: AppScene[]): OutlineScene[] {
     });
 }
 
-/** Read the version's outline. Tenant- and item-scoped; approved or superseded only. */
-export async function readApprovedOutline(
-  pool: Queryable,
-  request: ApprovedOutlineRequest,
-): Promise<ApprovedOutlineResult> {
+/** One quiz Scene of an approved version, WITH its answer keys (server to server only). */
+export interface ApprovedQuizScene {
+  sceneId: string;
+  order: number;
+  stageKey: string | null;
+  flowIndex: number | null;
+  /** `'bank'` on a W6 placeholder (no questions of its own); null otherwise. */
+  questionSource: string | null;
+  questions: Array<{
+    id: string;
+    type: string;
+    question: string;
+    options: Array<{ value: string; label: string }>;
+    answer: string[];
+    analysis?: string;
+    points?: number;
+  }>;
+}
+
+export interface ApprovedQuizzesResult {
+  versionId: string;
+  stageId: string;
+  scenes: ApprovedQuizScene[];
+}
+
+/** Pure projection; exported for tests. Quiz Scenes only, sorted by `order`. */
+export function projectQuizScenes(scenes: AppScene[]): ApprovedQuizScene[] {
+  return [...scenes]
+    .sort((a, b) => a.order - b.order)
+    .filter((scene) => (scene as { content?: { type?: string } }).content?.type === 'quiz')
+    .map((scene) => {
+      const content = (scene as { content: { questions?: unknown[] } }).content;
+      const source = (scene as { questionSource?: unknown }).questionSource;
+      return {
+        sceneId: scene.id,
+        order: scene.order,
+        stageKey: scene.teachingStage?.key ?? null,
+        flowIndex: scene.teachingStage?.flowIndex ?? null,
+        questionSource: typeof source === 'string' ? source : null,
+        questions: (content.questions ?? []).flatMap((raw) => {
+          const q = raw as Record<string, unknown>;
+          if (typeof q.id !== 'string' || typeof q.question !== 'string') return [];
+          return [
+            {
+              id: q.id,
+              type: String(q.type ?? 'single'),
+              question: q.question,
+              options: Array.isArray(q.options)
+                ? q.options.flatMap((option) => {
+                    const o = option as Record<string, unknown>;
+                    return typeof o.value === 'string' && typeof o.label === 'string'
+                      ? [{ value: o.value, label: o.label }]
+                      : [];
+                  })
+                : [],
+              answer: Array.isArray(q.answer)
+                ? q.answer.filter((value): value is string => typeof value === 'string')
+                : [],
+              ...(typeof q.analysis === 'string' && q.analysis.trim() !== ''
+                ? { analysis: q.analysis }
+                : {}),
+              ...(typeof q.points === 'number' ? { points: q.points } : {}),
+            },
+          ];
+        }),
+      };
+    });
+}
+
+/** The approved version and its live Stage document, after the scope checks. */
+async function loadApprovedVersionDocument(pool: Queryable, request: ApprovedOutlineRequest) {
   const version = await readVersion(pool, request.versionId, { tenantId: request.tenantId });
   if (
     !version ||
@@ -119,6 +185,33 @@ export async function readApprovedOutline(
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the approved version’s stage is not live');
   }
+  return { version, document };
+}
+
+/**
+ * The quiz Scenes of an approved version with their questions and answer keys,
+ * for the Backend to save the reviewed check questions in its question bank at
+ * approval (slide-questions plan rev 2). Same scope and status rules as the
+ * outline. Keys leave the TE only on this service-authenticated read.
+ */
+export async function readApprovedQuizzes(
+  pool: Queryable,
+  request: ApprovedOutlineRequest,
+): Promise<ApprovedQuizzesResult> {
+  const { version, document } = await loadApprovedVersionDocument(pool, request);
+  return {
+    versionId: version.id,
+    stageId: version.currentStageId,
+    scenes: projectQuizScenes(document.scenes as AppScene[]),
+  };
+}
+
+/** Read the version's outline. Tenant- and item-scoped; approved or superseded only. */
+export async function readApprovedOutline(
+  pool: Queryable,
+  request: ApprovedOutlineRequest,
+): Promise<ApprovedOutlineResult> {
+  const { version, document } = await loadApprovedVersionDocument(pool, request);
   const context = await readRetainedVersionContext(pool, version.id, {
     tenantId: request.tenantId,
   });

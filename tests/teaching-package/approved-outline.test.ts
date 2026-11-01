@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   projectOutlineScenes,
   readApprovedOutline,
+  readApprovedQuizzes,
 } from '@/lib/server/teaching-package/approved-outline';
 import type { AppScene } from '@/lib/types/stage';
 import type { TeachingPackageVersion } from '@/lib/types/teaching-package';
@@ -162,5 +163,93 @@ describe('readApprovedOutline', () => {
     await expect(readApprovedOutline({} as never, REQUEST)).rejects.toMatchObject({
       code: 'STAGE_NOT_LIVE',
     });
+  });
+});
+
+describe('readApprovedQuizzes (Backend saves the reviewed check questions)', () => {
+  beforeEach(() => {
+    mocks.readVersion.mockReset();
+    mocks.loadDocument.mockReset();
+  });
+
+  it('returns the quiz Scenes only, with their keys, in order', async () => {
+    const placeholder = {
+      ...(makeSlideScene('q0', 'stage-1', 2, 'bank') as AppScene),
+      content: { type: 'quiz', questions: [] },
+      questionSource: 'bank',
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 2 },
+    } as unknown as AppScene;
+    const quiz = {
+      ...(makeSlideScene('q1', 'stage-1', 5, 'check') as AppScene),
+      content: {
+        type: 'quiz',
+        questions: [
+          {
+            id: 'q_1',
+            type: 'single',
+            question: 'Which?',
+            options: [
+              { value: 'A', label: 'one' },
+              { value: 'B', label: 'two' },
+            ],
+            answer: ['B'],
+            analysis: 'because',
+            points: 2,
+          },
+          { type: 'single', question: 'no id' },
+        ],
+      },
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 4 },
+    } as unknown as AppScene;
+    mocks.readVersion.mockResolvedValue(version());
+    mocks.loadDocument.mockResolvedValue({
+      scenes: [quiz, slide('s1', 1, 'lesson_opener', 0), placeholder],
+    });
+
+    const result = await readApprovedQuizzes({} as never, REQUEST);
+
+    expect(result).toEqual({
+      versionId: 'tpv-approved0001',
+      stageId: 'stage-1',
+      scenes: [
+        {
+          sceneId: 'q0',
+          order: 2,
+          stageKey: 'outcome_check_understanding',
+          flowIndex: 2,
+          questionSource: 'bank',
+          questions: [],
+        },
+        {
+          sceneId: 'q1',
+          order: 5,
+          stageKey: 'outcome_check_understanding',
+          flowIndex: 4,
+          questionSource: null,
+          questions: [
+            {
+              id: 'q_1',
+              type: 'single',
+              question: 'Which?',
+              options: [
+                { value: 'A', label: 'one' },
+                { value: 'B', label: 'two' },
+              ],
+              answer: ['B'],
+              analysis: 'because',
+              points: 2,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it.each(['draft', 'in_review'] as const)('refuses a %s version', async (status) => {
+    mocks.readVersion.mockResolvedValue(version({ status }));
+    await expect(readApprovedQuizzes({} as never, REQUEST)).rejects.toMatchObject({
+      code: 'TEACHING_PACKAGE_NOT_APPROVED',
+    });
+    expect(mocks.loadDocument).not.toHaveBeenCalled();
   });
 });
