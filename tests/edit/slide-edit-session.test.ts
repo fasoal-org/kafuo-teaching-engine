@@ -11,8 +11,10 @@ import type { SlideContent } from '@/lib/types/stage';
 const updateScene = vi.fn();
 // The Stage ids whose editing lock an AI slide insertion holds (plan §5.1).
 const lockedStages = new Set<string>();
+// The live scenes the write-through reads Actions from.
+const scenes: Array<{ id: string; actions?: unknown[] }> = [];
 vi.mock('@/lib/store/stage', () => ({
-  useStageStore: { getState: () => ({ updateScene, stage: { id: 'stage-1' } }) },
+  useStageStore: { getState: () => ({ updateScene, stage: { id: 'stage-1' }, scenes }) },
   isStageEditingLocked: (stageId: string | null | undefined) =>
     Boolean(stageId) && lockedStages.has(stageId!),
 }));
@@ -35,6 +37,43 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     useSlideEditSession.getState().end();
     updateScene.mockClear();
     lockedStages.clear();
+    scenes.length = 0;
+  });
+
+  it('deleting an element also removes the spotlight/laser Actions that pointed at it', () => {
+    scenes.push({
+      id: 'scene-1',
+      actions: [
+        { id: 'a-speech', type: 'speech', text: 'hello' },
+        { id: 'a-spot', type: 'spotlight', elementId: 'text-1' },
+        { id: 'a-laser', type: 'laser', elementId: 'text-1' },
+        { id: 'a-other', type: 'spotlight', elementId: 'kept' },
+      ],
+    });
+    useSlideEditSession.getState().seed('scene-1', makeContent());
+    useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+      origin: 'toolbar',
+      history: 'record',
+      operations: [{ type: 'element.delete', elementId: 'text-1' }],
+    });
+
+    const [, patch] = updateScene.mock.calls.at(-1)!;
+    expect(patch.actions.map((action: { id: string }) => action.id)).toEqual(['a-speech']);
+  });
+
+  it('writes no Actions when none point at a missing element', () => {
+    scenes.push({
+      id: 'scene-1',
+      actions: [{ id: 'a-spot', type: 'spotlight', elementId: 'text-1' }],
+    });
+    useSlideEditSession.getState().seed('scene-1', makeContent());
+    useSlideEditSession.getState().applyOp({
+      type: 'element.update',
+      elementId: 'text-1',
+      patch: { rotate: 30 },
+    });
+    const [, patch] = updateScene.mock.calls.at(-1)!;
+    expect(patch).not.toHaveProperty('actions');
   });
 
   it('refuses every history move while an AI insertion holds the Stage (no history change, no write)', () => {

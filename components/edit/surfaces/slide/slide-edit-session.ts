@@ -27,6 +27,7 @@ import {
   type EditorOperation,
   type EditorTransaction,
 } from '@openmaic/editor/core';
+import { withoutDanglingElementActions } from '@/lib/edit/dangling-element-actions';
 import { commitSlideEdit } from '@/lib/edit/scene-edit-bridge';
 import { migrateSlideContent } from '@/lib/edit/slide-schema';
 import type { SlideEditHistory } from '@/lib/edit/slide-ops';
@@ -88,7 +89,14 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
   const writeThrough = (next: SlideContent) => {
     const { sceneId } = get();
     if (!sceneId) return;
-    useStageStore.getState().updateScene(sceneId, { content: next });
+    const store = useStageStore.getState();
+    // A deleted element takes its spotlight/laser Actions with it; otherwise
+    // Submit refuses the package for an Action pointing at nothing.
+    const actions = withoutDanglingElementActions(
+      store.scenes.find((scene) => scene.id === sceneId)?.actions,
+      new Set(next.canvas.elements.map((element) => element.id)),
+    );
+    store.updateScene(sceneId, actions ? { content: next, actions } : { content: next });
   };
 
   const replace = (history: EditorHistory) => {
