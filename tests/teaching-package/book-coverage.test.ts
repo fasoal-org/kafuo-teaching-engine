@@ -6,6 +6,7 @@ import {
   bookStructureRequirement,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  requireEssentialUntypedUnits,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
   buildKafuoStartRequest,
@@ -147,6 +148,31 @@ describe('g5.v7 book coverage gate', () => {
     expect(annotateBookMarkers('[[CONTENT_UNIT id=99 order=9 role=X]]', BOOK)).toBe(
       '[[CONTENT_UNIT id=99 order=9 role=X]]',
     );
+  });
+
+  it('requires an untyped part unit only when its role makes it essential', () => {
+    const book: KafuoBookStructure = {
+      ...BOOK,
+      units: [
+        ...BOOK.units,
+        { contentUnitId: '14', kind: null, element: null, required: false, partIndex: 1 },
+        { contentUnitId: '15', kind: null, element: null, required: false, partIndex: 1 },
+        { contentUnitId: '16', kind: 'HOOK', element: 'ignore', required: false },
+      ],
+    };
+    const effective = requireEssentialUntypedUnits(book, ['11', '12', '14', '16']);
+    const required = effective!.units.filter((unit) => unit.required).map((u) => u.contentUnitId);
+    expect(required).toEqual(['11', '12', '13', '14']);
+    const outlines = [
+      slide('kc', ['11']),
+      slide('ex', ['12'], { contentRole: 'worked_example' }),
+      slide('try', ['13'], { contentRole: 'check_understanding' }),
+      slide('sol', ['13'], { contentRole: 'worked_example' }),
+    ];
+    expect(findBookCoverageGaps(outlines, effective).map((gap) => gap.message)).toEqual([
+      'unit 14 in part 1 has no teaching slide',
+    ]);
+    expect(requireEssentialUntypedUnits(book, null)).toBe(book);
   });
 });
 

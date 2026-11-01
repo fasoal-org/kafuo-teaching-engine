@@ -162,6 +162,32 @@ export function findBookCoverageGaps(
   return gaps;
 }
 
+/**
+ * The book map as the coverage gate reads it: a unit inside a part that the
+ * template could not name (no kind, or a kind it does not map) is required when
+ * its own role makes it an essential section (`essentialContentUnitIds`). Without
+ * this the planner could drop it unnoticed and Submit alone would refuse the
+ * package (`ESSENTIAL_SECTION_UNCOVERED`), after every scene was paid for.
+ */
+export function requireEssentialUntypedUnits(
+  book: KafuoBookStructure | undefined,
+  essentialIds: readonly string[] | null | undefined,
+): KafuoBookStructure | undefined {
+  if (!book || !essentialIds?.length) return book;
+  const essential = new Set(essentialIds.map(String));
+  return {
+    ...book,
+    units: book.units.map((unit) =>
+      !unit.required &&
+      unit.element === null &&
+      unit.partIndex !== undefined &&
+      essential.has(unit.contentUnitId)
+        ? { ...unit, required: true }
+        : unit,
+    ),
+  };
+}
+
 export function findBookCoverageDiagnostics(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure | undefined,

@@ -85,7 +85,10 @@ import {
   findUncoveredContentUnits,
   manifestContentUnitIds,
 } from '@/lib/server/teaching-package/outline-grounding';
-import { annotateBookMarkers } from '@/lib/server/teaching-package/book-coverage';
+import {
+  annotateBookMarkers,
+  requireEssentialUntypedUnits,
+} from '@/lib/server/teaching-package/book-coverage';
 import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
 import { plannerSkillOptions } from '@/lib/server/teaching-package/scene-insertion';
 import {
@@ -461,6 +464,9 @@ async function runKafuoAttempt(
   const essentialUnitIds = normalizedSource
     ? essentialContentUnitIds(normalizedSource.manifest, kafuo.bookStructure)
     : null;
+  // The coverage gate's book map: untyped units with an essential role are
+  // required too, so the planner re-plans them before any scene is paid for.
+  const coverageBook = requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds);
   // Essential sections the plan left untaught. They do NOT pause the run: the
   // package finishes as a draft and Submit refuses it until each one has a
   // slide generated for it (`assertEssentialSectionsCovered`). Sticky across a
@@ -477,7 +483,7 @@ async function runKafuoAttempt(
     governed: governedByTeachingSkills,
     // g5.v7: a required book element without its slide pauses the run before
     // any scene, naming the element (P-6). Absent for every earlier version.
-    ...(kafuo.bookStructure ? { bookStructure: kafuo.bookStructure } : {}),
+    ...(coverageBook ? { bookStructure: coverageBook } : {}),
   };
   const attemptRow = await readAttemptById(pool, attemptId);
   const sourceRefsFor = (run: number): GenerationCheckpointSourceRefs => ({
@@ -700,7 +706,7 @@ async function runKafuoAttempt(
           // g5.v7 (P-6): a slide the book-coverage gate found missing is
           // re-planned before the run pauses for a person; anything still
           // open after two rounds pauses exactly as before.
-          ...(kafuo.bookStructure && normalizedSource
+          ...(coverageBook && normalizedSource
             ? {
                 repairOutlines: async (
                   outlines: SceneOutline[],
@@ -708,7 +714,7 @@ async function runKafuoAttempt(
                   aiCall: AICallFn,
                 ) => {
                   const repaired = await repairBookCoverageGaps(outlines, blocking, aiCall, {
-                    book: kafuo.bookStructure!,
+                    book: coverageBook!,
                     flow: kafuo.teachingFlow,
                     units: retainableContentUnits({
                       contentUnits: normalizedSource.manifest.contentUnits,

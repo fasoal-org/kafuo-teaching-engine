@@ -31,7 +31,10 @@ import {
   type TeachingScenePolicy,
 } from '@openmaic/generation';
 
-import { findBookCoverageDiagnostics } from '@/lib/server/teaching-package/book-coverage';
+import {
+  findBookCoverageDiagnostics,
+  requireEssentialUntypedUnits,
+} from '@/lib/server/teaching-package/book-coverage';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
@@ -230,8 +233,12 @@ export function diagnosisContextFromCheckpoint(
   governed: boolean,
   bookStructure?: KafuoBookStructure,
 ): OutlineDiagnosisContext {
+  const coverageBook = requireEssentialUntypedUnits(
+    bookStructure,
+    checkpoint.sourceRefs.essentialContentUnitIds,
+  );
   return {
-    ...(bookStructure ? { bookStructure } : {}),
+    ...(coverageBook ? { bookStructure: coverageBook } : {}),
     flow,
     contentUnitIds: checkpoint.sourceRefs.contentUnitIds,
     sourceImages: checkpoint.sourceRefs.sourceImages.map((image) => ({
