@@ -119,7 +119,7 @@ Every image a slide shows is taught, so deliver each one with its own teaching n
 {{/if}}{{#if hasLegacyFlowVisualRule}}
 For every outline at Teaching Model Flow stage `outcome_visual_explanations`, the visual is mandatory and textbook-grounded:
 
-- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
+- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit; when one unit is taught over several slides, show its image once, on the slide it illustrates, and give the others a native diagram;
 - otherwise use `visualPlan: { "mode": "native", "diagram": { "shows": "…", "teachingPoint": "…" } }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
 - never add an AI image request to `mediaGenerations` for this stage, and never use decorative filler as its visual.
 {{/if}}{{#if hasScenePolicies}}
@@ -127,7 +127,7 @@ A flow position that lists a `policy` constrains every outline at that position,
 
 For every outline at a position whose policy says `visual: textbook-grounded`, the visual is mandatory and textbook-grounded, whatever its `contentRole`:
 
-- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit;
+- use `visualPlan: { "mode": "image" }` and select a relevant Available Image in `suggestedImageIds` when the textbook supplies one for the same Content Unit; when one unit is taught over several slides, show its image once, on the slide it illustrates, and give the others a native diagram;
 - otherwise use `visualPlan: { "mode": "native", "diagram": { "shows": "…", "teachingPoint": "…" } }` so the canvas builds a diagram only from that outline's authoritative source facts, relationships and sequence;
 - never add an AI image request to `mediaGenerations` at such a position, and never use decorative filler as its visual.
 {{/if}}

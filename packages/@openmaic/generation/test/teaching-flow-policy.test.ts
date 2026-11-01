@@ -128,6 +128,29 @@ describe('analyzeOutlines with position policies', () => {
     expect(blockingOutlineDiagnostics(analysis)[1]?.allowedValues).toEqual(['src-1']);
   });
 
+  test('a unit split over several slides shows its image once; the others may be native', () => {
+    // Lesson 306: check 4025's Sierpinski image was forced onto all six slides.
+    const sourceImages = [{ id: 'src-3', src: '', pageNumber: 2, sourceContentUnitIds: ['cu-1'] }];
+    const withImage = explanationSlide({
+      id: 'try-3',
+      sourceContentUnitIds: ['cu-1'],
+      visualPlan: { mode: 'image' },
+      suggestedImageIds: ['src-3'],
+      imagePlans: [{ imageId: 'src-3', shows: 'three stages', teachingPoint: 'where to look' }],
+    });
+    const native = explanationSlide({ id: 'try-1', sourceContentUnitIds: ['cu-1'] });
+    const split = analyzeOutlines([native, withImage], { teachingFlow: v5Flow, sourceImages });
+    expect(
+      blockingOutlineDiagnostics(split).filter((d) => d.code === 'SOURCE_VISUAL_NOT_SELECTED'),
+    ).toEqual([]);
+
+    // No slide shows the image: still refused.
+    const none = analyzeOutlines([native], { teachingFlow: v5Flow, sourceImages });
+    expect(blockingOutlineDiagnostics(none).map((d) => d.code)).toContain(
+      'SOURCE_VISUAL_NOT_SELECTED',
+    );
+  });
+
   test("keeps the planner's own linked image with its note, dropping unlinked extras", () => {
     const sourceImages = [
       { id: 'src-1', src: '', pageNumber: 1, sourceContentUnitIds: ['cu-1'] },

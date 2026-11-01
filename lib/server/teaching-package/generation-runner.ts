@@ -459,7 +459,7 @@ async function runKafuoAttempt(
     ? [...manifestContentUnitIds(normalizedSource.manifest)]
     : null;
   const essentialUnitIds = normalizedSource
-    ? essentialContentUnitIds(normalizedSource.manifest)
+    ? essentialContentUnitIds(normalizedSource.manifest, kafuo.bookStructure)
     : null;
   // Essential sections the plan left untaught. They do NOT pause the run: the
   // package finishes as a draft and Submit refuses it until each one has a

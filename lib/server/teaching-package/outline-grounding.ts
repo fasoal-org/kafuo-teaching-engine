@@ -17,6 +17,7 @@ import { createLogger } from '@/lib/logger';
 import { retainableUnitText } from '@/lib/server/teaching-package/content-units';
 import type { NormalizedLessonManifest } from '@/lib/server/teaching-package/normalized-content-resource';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { KafuoBookStructure } from '@/lib/types/teaching-package';
 
 const log = createLogger('TeachingPackageGeneration');
 
@@ -82,10 +83,21 @@ export const NON_TEACHING_SLIDE_ROLES: ReadonlySet<string> = new Set([
  * uses, so a unit the model never read is never required) that the approved
  * structure did not exclude block by block.
  */
-export function essentialContentUnitIds(manifest: NormalizedLessonManifest): string[] {
+export function essentialContentUnitIds(
+  manifest: NormalizedLessonManifest,
+  bookStructure?: KafuoBookStructure,
+): string[] {
+  // g5.v7: the book map decides. The opener («لماذا؟») and the goal list are
+  // cover material (P-7), never a section that needs its own teaching slide.
+  const notTaught = new Set(
+    (bookStructure?.units ?? [])
+      .filter((unit) => unit.element === 'ignore' || unit.element === 'objective_source')
+      .map((unit) => String(unit.contentUnitId)),
+  );
   return [...manifest.contentUnits]
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .filter((unit) => {
+      if (notTaught.has(asKey(unit.id))) return false;
       if (!ESSENTIAL_CONTENT_UNIT_ROLES.has(unit.role?.toUpperCase())) return false;
       if (!retainableUnitText(unit)) return false;
       const blocks = unit.blocks ?? [];

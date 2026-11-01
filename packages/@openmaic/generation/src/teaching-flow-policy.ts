@@ -420,6 +420,9 @@ export function teachingFlowDiagnostics(
   sourceImages: readonly PdfImage[] = [],
 ): OutlineDiagnostic[] {
   const diagnostics: OutlineDiagnostic[] = [];
+  // Textbook images some slide already shows: a unit split over several slides
+  // shows its image once, on the slide it illustrates (lesson 306's check 4025).
+  const selectedImageIds = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
   if (outlines.length === 0) {
     return [
       {
@@ -562,7 +565,9 @@ export function teachingFlowDiagnostics(
       }
     }
     if (policy.visual === 'source_grounded') {
-      diagnostics.push(...sourceGroundedVisualDiagnostics(outline, label, at, sourceImages));
+      diagnostics.push(
+        ...sourceGroundedVisualDiagnostics(outline, label, at, sourceImages, selectedImageIds),
+      );
     }
   }
 
@@ -667,6 +672,7 @@ function sourceGroundedVisualDiagnostics(
   label: string,
   at: Pick<OutlineDiagnostic, 'disposition' | 'outlineIndex' | 'outlineId' | 'flowIndex' | 'stage'>,
   sourceImages: readonly PdfImage[],
+  selectedElsewhere: ReadonlySet<string> = new Set(),
 ): OutlineDiagnostic[] {
   const stage = at.stage;
   if (outline.mediaGenerations?.some((request) => request.type === 'image')) {
@@ -685,7 +691,13 @@ function sourceGroundedVisualDiagnostics(
   );
   const suggested = new Set(outline.suggestedImageIds ?? []);
   const selectedBookImages = sourceImages.filter((image) => suggested.has(image.id));
-  if (groundedBookImages.length > 0) {
+  // Another slide on the same unit already shows its image: this one may use a
+  // native diagram (or another selected image) and is checked as such below.
+  const shownElsewhere =
+    groundedBookImages.length > 0 &&
+    groundedBookImages.every((image) => selectedElsewhere.has(image.id)) &&
+    !groundedBookImages.some((image) => suggested.has(image.id));
+  if (groundedBookImages.length > 0 && !shownElsewhere) {
     const selectedGrounded = groundedBookImages.some((image) => suggested.has(image.id));
     if (outline.visualPlan?.mode !== 'image' || !selectedGrounded) {
       return [

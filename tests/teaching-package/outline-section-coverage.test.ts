@@ -7,6 +7,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import type { KafuoBookStructure } from '@/lib/types/teaching-package';
+
 import {
   computeContentUnitCoverage,
   findUntaughtEssentialSections,
@@ -111,6 +113,23 @@ const rows = (ids: string[]): ContentUnitRow[] =>
 describe('essential sections of the approved source', () => {
   it('keeps only instructional, text-bearing, non-excluded units', () => {
     expect(essentialContentUnitIds(MANIFEST)).toEqual(ESSENTIAL);
+  });
+
+  it('g5.v7: a unit the book map ignores (the «لماذا؟» opener) is never essential', () => {
+    const book = {
+      templateVersionId: '2',
+      rules: [],
+      units: [
+        { contentUnitId: '10', kind: 'LESSON_OPENER', element: 'ignore', required: false },
+        {
+          contentUnitId: '11',
+          kind: 'LEARNING_GOALS',
+          element: 'objective_source',
+          required: false,
+        },
+      ],
+    } as KafuoBookStructure;
+    expect(essentialContentUnitIds(MANIFEST, book)).toEqual(['12']);
   });
 
   it('detects a section the generated plan left untaught (the recorded gap)', () => {
