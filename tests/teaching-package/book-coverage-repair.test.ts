@@ -188,6 +188,24 @@ describe('g5.v7 book coverage repair', () => {
     expect(result.inserted).toBe(0);
   });
 
+  it('leaves a check solved before its try-it to a person', async () => {
+    const plan = planning('worked_example');
+    const candidate = [
+      slide('ex3', ['4030', '4032'], { contentRole: 'worked_example' }),
+      ...CANDIDATE.slice(1),
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, BOOK);
+    expect(blocking.map((d) => d.message)).toEqual([
+      'UNDERSTANDING_CHECK 4032 in part 3 is solved on a slide before its try-it slide',
+      'UNDERSTANDING_CHECK 4032 in part 3 has a try-it slide but no solution slide after it',
+    ]);
+
+    const result = await repairBookCoverageGaps(candidate, blocking, aiCall, context(plan));
+
+    expect(plan).not.toHaveBeenCalled();
+    expect(result.blocking).toEqual(blocking);
+  });
+
   it('never repairs when another kind of issue also blocks', async () => {
     const plan = planning('worked_example');
     const blocking = [

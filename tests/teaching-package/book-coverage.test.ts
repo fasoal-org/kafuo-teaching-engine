@@ -113,6 +113,24 @@ describe('g5.v7 book coverage gate', () => {
     ]);
   });
 
+  it('flags a check solved before its try-it, with no anchor to re-plan from', () => {
+    // Lesson 306: the example's slide also worked its check, ahead of the try-it.
+    const outlines = [
+      slide('kc', ['11']),
+      slide('ex', ['12', '13'], { contentRole: 'worked_example' }),
+      slide('try', ['13'], { contentRole: 'check_understanding' }),
+      slide('sol', ['13'], { contentRole: 'worked_example' }),
+    ];
+    const gaps = findBookCoverageGaps(outlines, BOOK);
+    expect(gaps.map((g) => [g.kind, g.unit.contentUnitId, g.anchorIndex])).toEqual([
+      ['solution_before_try_it', '13', undefined],
+    ]);
+    expect(findBookCoverageDiagnostics(outlines, BOOK).map((d) => d.message)).toEqual([
+      'UNDERSTANDING_CHECK 13 in part 1 is solved on a slide before its try-it slide',
+    ]);
+    expect(bookStructureRequirement(BOOK)).toContain('Never solve a try_it unit before');
+  });
+
   it('is a no-op without a book map (v6 and earlier)', () => {
     expect(findBookCoverageDiagnostics([], undefined)).toEqual([]);
     expect(bookStructureRequirement(undefined)).toBe('');

@@ -7,7 +7,7 @@
  * (cover, contents, transition, end) citing a unit never counts as teaching it —
  * and every book check paired with an example must have a try-it slide
  * (`check_understanding`) and, after it, a solution slide (`worked_example`)
- * citing it. A gap is returned as an admin-correctable diagnostic that names
+ * citing it, and no solution slide may come before that try-it. A gap is returned as an admin-correctable diagnostic that names
  * the missing element. A gap the plan can place is first re-planned
  * (`book-coverage-repair.ts`, at most twice); what is left pauses the attempt on
  * the existing correction path and never finishes as a green "succeeded".
@@ -41,7 +41,11 @@ function describe(unit: { contentUnitId: string; kind: string | null; partIndex?
 }
 
 /** What a book element is missing, and where its slide belongs. */
-export type BookCoverageGapKind = 'missing_teaching' | 'missing_try_it' | 'missing_solution';
+export type BookCoverageGapKind =
+  | 'missing_teaching'
+  | 'missing_try_it'
+  | 'missing_solution'
+  | 'solution_before_try_it';
 
 export interface BookCoverageGap {
   kind: BookCoverageGapKind;
@@ -121,6 +125,23 @@ export function findBookCoverageGaps(
       });
       continue;
     }
+    // A check worked before the learner tries it gives the answer away; moving
+    // or splitting that slide is a person's call, so it has no anchor.
+    const early = outlines
+      .slice(0, tryIt)
+      .some(
+        (outline) =>
+          teaches(outline) &&
+          outline.contentRole === 'worked_example' &&
+          cites(outline, unit.contentUnitId),
+      );
+    if (early) {
+      gaps.push({
+        kind: 'solution_before_try_it',
+        unit,
+        message: `${describe(unit)} is solved on a slide before its try-it slide`,
+      });
+    }
     const solved = outlines
       .slice(tryIt + 1)
       .some(
@@ -185,6 +206,8 @@ export function bookStructureRequirement(book: KafuoBookStructure | undefined): 
     'Plan in the book order: every required unit gets its own instructional slide that cites',
     'it; every try_it unit gets a try-it slide (contentRole check_understanding) without the',
     'answer, followed by a solution slide (contentRole worked_example) that cites it too.',
+    "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
+    'the example, not the check that follows it.',
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }
