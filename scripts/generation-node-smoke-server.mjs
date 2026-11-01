@@ -23,6 +23,9 @@ const outlinePayload = JSON.stringify({
       description: 'Confirms outline generation through an OpenAI-compatible endpoint.',
       keyPoints: ['Package import', 'HTTP model seam', 'Outline validation'],
       order: 1,
+      // The outline gate requires every slide's classification.
+      slideType: 'content',
+      contentRole: 'explanation',
     },
   ],
 });
