@@ -127,6 +127,7 @@ export {
 } from './teaching-flow-policy.js';
 export { changeOutlineType } from './outline-type.js';
 export {
+  arrangeGeneratedSlideLayout,
   generatedSlideLayoutIssue,
   normalizeGeneratedSlideLayout,
   SLIDE_CANVAS_HEIGHT,

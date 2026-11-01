@@ -313,6 +313,8 @@ Correct — proper gap and stroke:
 
 Minimum recommended gap between elements for connector arrows: **60-80px**. If the current layout leaves less than 60px, reduce element widths to make room.
 
+**Diagram labels**: an angle's label sits inside the angle, between its two rays, never on a ray; draw every angle at its stated measure.
+
 ---
 
 ### ChartElement

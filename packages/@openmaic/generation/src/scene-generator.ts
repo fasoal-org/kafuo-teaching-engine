@@ -95,7 +95,11 @@ import {
 } from './source-unit-context.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
-import { generatedSlideLayoutIssue, normalizeGeneratedSlideLayout } from './slide-layout.js';
+import {
+  arrangeGeneratedSlideLayout,
+  generatedSlideLayoutIssue,
+  normalizeGeneratedSlideLayout,
+} from './slide-layout.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
 
@@ -1389,13 +1393,16 @@ async function generateSlideContent(
   );
   log.debug(`After video reference normalization: ${videoNormalizedElements.length} elements`);
 
-  // Process elements, assign unique IDs
+  // Process elements, assign unique IDs; re-arrange deterministically (no model
+  // call) before the safe-area clamp, so the clamp never pushes one element onto another.
   const processedElements = normalizeGeneratedSlideLayout(
-    videoNormalizedElements.map((el) => ({
-      ...el,
-      id: `${el.type}_${nanoid(8)}`,
-      rotate: 0,
-    })) as PPTElement[],
+    arrangeGeneratedSlideLayout(
+      videoNormalizedElements.map((el) => ({
+        ...el,
+        id: `${el.type}_${nanoid(8)}`,
+        rotate: 0,
+      })) as PPTElement[],
+    ),
   );
 
   const layoutIssue = generatedSlideLayoutIssue(processedElements);
