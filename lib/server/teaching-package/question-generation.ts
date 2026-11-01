@@ -597,7 +597,15 @@ export async function generateTeachingQuestionSet(
   const conforms = (candidate: string): boolean => {
     const json = parseJsonResponse<Record<string, unknown>>(candidate);
     if (!json || typeof json !== 'object' || !Array.isArray(json.slots)) return false;
-    return envelopeViolations(normalizeEnvelope(json, request.objectiveRef)).length === 0;
+    if (envelopeViolations(normalizeEnvelope(json, request.objectiveRef)).length > 0) return false;
+    // A targeted typed slot must come back as that type; Kafuo refuses any other.
+    const wanted = request.targetRole ? request.targetQuestionType : null;
+    return (
+      !wanted ||
+      (json.slots as Array<{ question?: { question_type?: unknown } | null }>).every(
+        (slot) => !slot?.question || slot.question.question_type === wanted,
+      )
+    );
   };
   const { text, model } = await port.generate(QUESTION_SYSTEM_PROMPT, userPrompt, conforms);
   const parsed = parseJsonResponse<Record<string, unknown>>(text);
