@@ -46,7 +46,9 @@ jobs:
   check:
     name: Lint, Typecheck & Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A full green run takes ~16 min (root unit tests alone ~10); 15 cut the
+    # last step (storage tests) once every earlier step passed.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
         with:
