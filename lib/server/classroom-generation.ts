@@ -1534,6 +1534,8 @@ export async function generateClassroom(
     const addReason = (outlineId: string, reason: string) =>
       reasonsById.set(outlineId, [...(reasonsById.get(outlineId) ?? []), reason]);
     for (const diagnostic of outlineBlocking) {
+      // A visual issue a person ignored is left as it is: no re-plan call.
+      if (correction?.isIgnoredIssue?.(diagnostic)) continue;
       if (diagnostic.outlineId && VISUAL_REPLAN_CODES.has(diagnostic.code)) {
         addReason(diagnostic.outlineId, diagnostic.message);
         if (diagnostic.code !== 'VISUAL_TEACHING_NOTE_MISSING') reselect.add(diagnostic.outlineId);

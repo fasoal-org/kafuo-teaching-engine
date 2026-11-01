@@ -307,19 +307,56 @@ export type CorrectionOperation =
    * no longer blocks the edit, the resume or the resumed run's outline gate.
    * Recorded in the edit log, which is where it is read back from.
    */
-  | { op: 'ignore_issue'; issueKey: string };
+  | {
+      op: 'ignore_issue';
+      issueKey: string;
+      /** Filled by the server from the open issue, for the record (never trusted from the request). */
+      message?: string;
+    };
 
 /**
- * One diagnostic's identity across diagnoses: the outline id, never its index,
- * so an issue keeps its key when another slide is added or removed.
+ * One diagnostic's identity across diagnoses. An issue about a slide is its
+ * code, slide id and field — never its index or wording, which change when a
+ * slide is added or a repair runs. An issue about the whole outline (a book
+ * coverage gap) is told apart by its message, which names the book element.
  */
 export function diagnosticKey(diagnostic: OutlineDiagnostic): string {
   return JSON.stringify([
     diagnostic.code,
     diagnostic.outlineId ?? null,
     diagnostic.field ?? null,
-    diagnostic.message.replace(/#\d+/g, '#'),
+    diagnostic.outlineId ? null : diagnostic.message.replace(/#\d+/g, '#'),
   ]);
+}
+
+/**
+ * Issues an ignore would only postpone: the run still generates every Scene,
+ * then the exact-flow check fails the attempt (review, 1 Nov 2026). They are
+ * fixed with remove / move / teaching stage instead.
+ */
+const NOT_IGNORABLE_CODES: ReadonlySet<string> = new Set([
+  'TEACHING_STAGE_MISSING',
+  'TEACHING_STAGE_MISMATCH',
+  'TEACHING_STAGE_INVALID',
+  'POSITION_CARDINALITY',
+  'FLOW_SEQUENCE_INVALID',
+  'SCENE_CONFIG_INVALID',
+  'WIDGET_TYPE_PROHIBITED',
+  'NO_OUTLINES',
+]);
+
+/**
+ * Whether a person may ignore an issue: not a structure/order issue, and not
+ * one that never blocks a resume anyway (a missing visual note, a Scene the
+ * resume regenerates).
+ */
+export function isIgnorableIssue(diagnostic: OutlineDiagnostic): boolean {
+  return (
+    !NOT_IGNORABLE_CODES.has(diagnostic.code) &&
+    diagnostic.field !== 'teachingStage' &&
+    diagnostic.field !== SCENE_REGENERATION_FIELD &&
+    diagnostic.code !== VISUAL_TEACHING_NOTE_MISSING
+  );
 }
 
 /** The issue keys a person has ignored on this checkpoint, from its edit log. */
@@ -772,8 +809,10 @@ export interface CorrectionView {
   pendingOutlineIds: string[] | null;
   editableFields: string[];
   outlines: Array<Record<string, unknown>>;
-  /** Open issues, each with the `key` an `ignore_issue` names. */
-  blockingIssues: Array<GenerationCheckpoint['diagnostics'][number] & { key: string }>;
+  /** Open issues, each with the `key` an `ignore_issue` names and whether it may be ignored. */
+  blockingIssues: Array<
+    GenerationCheckpoint['diagnostics'][number] & { key: string; ignorable: boolean }
+  >;
   /** Issues a person accepted as they are, with who and when. */
   ignoredIssues: Array<{
     key: string;
@@ -818,7 +857,10 @@ function ignoredIssueList(
 ): CorrectionView['ignoredIssues'] {
   const list: CorrectionView['ignoredIssues'] = [];
   for (const entry of editLog) {
-    for (const key of ignoredIssueKeys([entry])) {
+    for (const op of entry.operations ?? []) {
+      const record = op && typeof op === 'object' ? (op as Record<string, unknown>) : null;
+      if (record?.op !== 'ignore_issue' || typeof record.issueKey !== 'string') continue;
+      const key = record.issueKey;
       if (list.some((item) => item.key === key)) continue;
       let parts: unknown;
       try {
@@ -827,13 +869,19 @@ function ignoredIssueList(
         continue;
       }
       if (!Array.isArray(parts) || parts.length !== 4) continue;
-      const [code, outlineId, field, message] = parts as unknown[];
+      const [code, outlineId, field, keyMessage] = parts as unknown[];
       list.push({
         key,
         code: String(code),
         outlineId: typeof outlineId === 'string' ? outlineId : null,
         field: typeof field === 'string' ? field : null,
-        message: String(message),
+        // The wording recorded when it was ignored; the key's own text otherwise.
+        message:
+          typeof record.message === 'string'
+            ? record.message
+            : typeof keyMessage === 'string'
+              ? keyMessage
+              : String(code),
         actorRef: entry.actorRef,
         at: entry.at,
       });
@@ -896,6 +944,7 @@ export function buildCorrectionView(
     blockingIssues: checkpoint.diagnostics.map((diagnostic) => ({
       ...diagnostic,
       key: diagnosticKey(diagnostic),
+      ignorable: isIgnorableIssue(diagnostic),
     })),
     ignoredIssues: ignoredIssueList(checkpoint.editLog),
     insertableBookSlides:

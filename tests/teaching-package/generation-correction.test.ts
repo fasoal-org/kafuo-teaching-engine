@@ -560,7 +560,11 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
       await correction();
     const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
     const [issue] = view.blockingIssues;
-    expect(issue).toMatchObject({ code: 'CONTENT_ROLE_NOT_ALLOWED', key: expect.any(String) });
+    expect(issue).toMatchObject({
+      code: 'CONTENT_ROLE_NOT_ALLOWED',
+      key: expect.any(String),
+      ignorable: true,
+    });
 
     // A key that is not open is refused, never stored as a blank waiver.
     await expect(
@@ -584,6 +588,8 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
         key: issue!.key,
         code: 'CONTENT_ROLE_NOT_ALLOWED',
         outlineId: 'o-visual',
+        // The wording when it was ignored, recorded by the server.
+        message: issue!.message,
         actorRef: 'kafuo:admin-1',
       }),
     ]);

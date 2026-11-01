@@ -56,6 +56,7 @@ import {
   diagnosisContextFromCheckpoint,
   diagnosticKey,
   ignoredIssueKeys,
+  isIgnorableIssue,
   withoutIgnoredIssues,
   type CorrectionCandidate,
   type CorrectionOperation,
@@ -264,16 +265,29 @@ export async function editGenerationCorrection(
       ...(diagnosisContext.bookStructure ? { bookStructure: diagnosisContext.bookStructure } : {}),
     });
     // An ignore names an issue that is open now; it is never a blank waiver.
-    const open = new Set(checkpoint.diagnostics.map(diagnosticKey));
-    for (const [index, operation] of command.operations.entries()) {
-      if (operation.op === 'ignore_issue' && !open.has(operation.issueKey)) {
+    // A structure/order issue cannot be ignored: the run would only fail later.
+    const open = new Map(
+      checkpoint.diagnostics.map((diagnostic) => [diagnosticKey(diagnostic), diagnostic] as const),
+    );
+    const operations = command.operations.map((operation, index) => {
+      if (operation.op !== 'ignore_issue') return operation;
+      const issue = open.get(operation.issueKey);
+      if (!issue) {
         throw new TeachingPackageError(
           'INVALID_REQUEST',
           `operations[${index}] ignores an issue that is not open; reload the correction`,
         );
       }
-    }
-    const ignored = ignoredIssueKeys(checkpoint.editLog, command.operations);
+      if (!isIgnorableIssue(issue)) {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          `operations[${index}]: a ${issue.code} issue cannot be ignored; fix it with remove, move or the teaching stage`,
+        );
+      }
+      // The wording at the time, for the record (the key leaves it out).
+      return { op: 'ignore_issue' as const, issueKey: operation.issueKey, message: issue.message };
+    });
+    const ignored = ignoredIssueKeys(checkpoint.editLog, operations);
     const diagnosis = diagnoseCandidateOutlines(edited, diagnosisContext);
     diagnosis.blocking = withoutIgnoredIssues(diagnosis.blocking, ignored);
     const now = Date.now();
@@ -287,7 +301,7 @@ export async function editGenerationCorrection(
         event: 'edited',
         actorRef,
         at: now,
-        operations: command.operations,
+        operations,
         blockingCount: diagnosis.blocking.length,
       },
       now,
