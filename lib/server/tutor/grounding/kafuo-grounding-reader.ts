@@ -265,6 +265,7 @@ export interface KafuoGroundingReader {
 // ---------------------------------------------------------------------------
 
 export interface QueryEmbeddingRequest {
+  usageScope?: GroundingReaderScope;
   /** The selected run's provider; only the Teaching Engine allowlist (`openai`) is served. */
   provider: string;
   model: string;

@@ -12,6 +12,8 @@
  * profile and request shape: nothing is rendered, segmented or retried beyond
  * what the caller already did (goal-prompt constraint 4, DEC-002).
  */
+import { randomUUID } from 'node:crypto';
+import { startGenerationUsage, finishGenerationUsage } from '@/lib/persistence/generation-usage';
 import { createHash } from 'node:crypto';
 
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
@@ -330,6 +332,7 @@ export interface SynthesisRequest {
   persist: NarrationPersistTarget;
   /** Record usage per provider call (B-3 batch; route always; agent only when not `off`). */
   recordUsage: boolean;
+  usageScope?: import('@/lib/persistence/generation-usage').UsageScope;
   /** Total attempts for transient provider errors (429/5xx/timeout). 1 = no retry. */
   transientAttempts?: number;
   signal?: AbortSignal;
@@ -471,12 +474,31 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
   let exactUsage = governedStream;
   let preparedChars = 0;
 
+  const usageRequestId = randomUUID();
   for (const segment of plan.segments) {
+    let usageAttempt = 0;
     let completionRetry = true;
     let transientLeft = attempts - 1;
     for (;;) {
+      const usageEvent = req.recordUsage
+        ? await startGenerationUsage({
+            scope: req.usageScope,
+            stageId: req.stageId,
+            category: req.entry === 'dynamic' ? 'runtime' : 'production',
+            feature: req.entry === 'dynamic' ? 'dynamic_tts' : 'lesson_narration',
+            provider: profile.providerId,
+            model: config.modelId ?? profile.providerId,
+            requestId: usageRequestId,
+            retry: usageAttempt++ > 0,
+            characters: segment.text.length,
+          })
+        : null;
+      let providerCompleted = false;
+      let reportedUsage: { inputTokens: number; outputTokens: number } | undefined;
       try {
         const result = await generateTTS(config, segment.text);
+        providerCompleted = true;
+        reportedUsage = result.usage;
         format = result.format || format;
         if (governedStream && result.completed === false) {
           throw new NarrationSynthesisError(
@@ -493,6 +515,7 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
             );
           }
         }
+        await finishGenerationUsage(usageEvent, 'succeeded', reportedUsage);
         parts.push(result.audio);
         preparedChars += segment.text.length;
         if (result.usage) {
@@ -533,6 +556,11 @@ export async function synthesizeNarration(req: SynthesisRequest): Promise<Synthe
         }
         break;
       } catch (error) {
+        await finishGenerationUsage(
+          usageEvent,
+          providerCompleted ? 'unusable_output' : 'provider_error',
+          reportedUsage,
+        );
         if (req.signal?.aborted) throw error;
         if (error instanceof NarrationSynthesisError && completionRetry) {
           completionRetry = false;

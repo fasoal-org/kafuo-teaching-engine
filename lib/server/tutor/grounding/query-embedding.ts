@@ -18,6 +18,8 @@
  *  - No database connection is held here (the reader released it), and the
  *    text and the vector are never logged (RET-07).
  */
+import { randomUUID } from 'node:crypto';
+import { startGenerationUsage, finishGenerationUsage } from '@/lib/persistence/generation-usage';
 import { createLogger } from '@/lib/logger';
 import { resolveApiKey, resolveBaseUrl } from '@/lib/server/provider-config';
 import { proxyFetch } from '@/lib/server/proxy-fetch';
@@ -78,7 +80,7 @@ export function createQueryEmbedder(options: QueryEmbedderOptions = {}): QueryEm
     apiKey: string,
     baseUrl: string,
     timeoutMs: number,
-  ): Promise<{ vector: number[]; tokens: number | null }> {
+  ): Promise<{ vector: number[]; tokens: number | null; model: string | null }> {
     let response: Response;
     try {
       response = await doFetch(`${baseUrl.replace(/\/+$/, '')}/embeddings`, {
@@ -110,6 +112,7 @@ export function createQueryEmbedder(options: QueryEmbedderOptions = {}): QueryEm
     }
     const record = (body ?? {}) as {
       data?: Array<{ embedding?: unknown }>;
+      model?: unknown;
       usage?: { prompt_tokens?: unknown; total_tokens?: unknown };
     };
     const embedding = record.data?.[0]?.embedding;
@@ -123,6 +126,7 @@ export function createQueryEmbedder(options: QueryEmbedderOptions = {}): QueryEm
     const tokens = record.usage?.prompt_tokens ?? record.usage?.total_tokens;
     return {
       vector: embedding as number[],
+      model: typeof record.model === 'string' ? record.model : null,
       tokens: typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : null,
     };
   }
@@ -143,9 +147,19 @@ export function createQueryEmbedder(options: QueryEmbedderOptions = {}): QueryEm
       const { attemptTimeoutMs, budgetMs } = timeouts();
       const startedAt = clock();
       let lastKind = 'error';
+      const usageRequestId = randomUUID();
       for (let tries = 0; tries < 2; tries += 1) {
         const remaining = budgetMs - (clock() - startedAt);
         if (tries > 0 && remaining < MIN_RETRY_WINDOW_MS) break;
+        const usageEvent = startGenerationUsage({
+          scope: request.usageScope,
+          category: 'runtime',
+          feature: 'query_embeddings',
+          provider,
+          model: null,
+          requestId: usageRequestId,
+          retry: tries > 0,
+        });
         try {
           const result = await attempt(
             request,
@@ -153,8 +167,17 @@ export function createQueryEmbedder(options: QueryEmbedderOptions = {}): QueryEm
             baseUrl || OPENAI_DEFAULT_BASE_URL,
             Math.max(1, Math.min(attemptTimeoutMs, remaining)),
           );
+          void usageEvent.then((event) =>
+            finishGenerationUsage(
+              event,
+              'succeeded',
+              result.tokens === null ? undefined : { inputTokens: result.tokens, outputTokens: 0 },
+              result.model,
+            ),
+          );
           return { outcome: 'ok', vector: result.vector, tokens: result.tokens };
         } catch (error) {
+          void usageEvent.then((event) => finishGenerationUsage(event, 'provider_error'));
           lastKind =
             error instanceof RetryableEmbeddingError || error instanceof FinalEmbeddingError
               ? error.kind

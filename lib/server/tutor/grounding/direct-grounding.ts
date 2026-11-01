@@ -473,7 +473,7 @@ async function searchItems(
     if (vector === null || embeddedGroup !== groupKey(current.group)) {
       const embedded = await clock.time('embed', () =>
         direct.embedder
-          .embed({ ...current.group, text })
+          .embed({ ...current.group, text, usageScope: scope })
           .catch(() => ({ outcome: 'embedding_unavailable' as const })),
       );
       if (embedded.outcome === 'embedding_provider_unsupported') {

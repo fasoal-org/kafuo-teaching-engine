@@ -5,6 +5,8 @@
  * writes them to disk, and returns serving URL mappings.
  */
 
+import { randomUUID } from 'node:crypto';
+import { observeMediaCall, type UsageScope } from '@/lib/persistence/generation-usage';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/lib/logger';
@@ -108,6 +110,7 @@ function mediaServingUrl(baseUrl: string, classroomId: string, subPath: string):
 const MAX_COMPLIANCE_REGENERATIONS = 2;
 
 export interface ClassroomMediaOptions {
+  usageScope?: UsageScope;
   /** Embedded-text policy resolved from the Stage's authoritative direction. */
   textPolicy?: ImageTextPolicy;
   /**
@@ -173,18 +176,33 @@ export async function generateMediaForClassroom(
         // failure mode.
         const model = resolveImageModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
+        const usageRequestId = randomUUID();
         let approved: { buf: Buffer; ext: string } | undefined;
         for (let attempt = 0; attempt <= MAX_COMPLIANCE_REGENERATIONS && !approved; attempt += 1) {
-          const result = await generateImage(
-            { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
-            resolveImageSize(
-              applyImagePromptPolicy(
-                { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
-                textPolicy,
-                attempt > 0,
+          const result = await observeMediaCall(
+            {
+              scope: options.usageScope,
+              stageId: classroomId,
+              category: 'production',
+              feature: 'package_image',
+              provider: providerId,
+              model: model ?? null,
+              requestId: usageRequestId,
+              retry: attempt > 0,
+              images: 1,
+            },
+            () =>
+              generateImage(
+                { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
+                resolveImageSize(
+                  applyImagePromptPolicy(
+                    { prompt: req.prompt, aspectRatio: req.aspectRatio || '16:9' },
+                    textPolicy,
+                    attempt > 0,
+                  ),
+                  { providerId, modelId: model },
+                ),
               ),
-              { providerId, modelId: model },
-            ),
           );
 
           let buf: Buffer;
@@ -251,9 +269,22 @@ export async function generateMediaForClassroom(
           aspectRatio: (req.aspectRatio as '16:9' | '4:3' | '1:1' | '9:16') || '16:9',
         });
 
-        const result = await generateVideo(
-          { providerId, apiKey, baseUrl: resolveVideoBaseUrl(providerId), model },
-          normalized,
+        const result = await observeMediaCall(
+          {
+            scope: options.usageScope,
+            stageId: classroomId,
+            category: 'production',
+            feature: 'package_video',
+            provider: providerId,
+            model: model ?? null,
+            requestId: randomUUID(),
+            retry: false,
+          },
+          () =>
+            generateVideo(
+              { providerId, apiKey, baseUrl: resolveVideoBaseUrl(providerId), model },
+              normalized,
+            ),
         );
 
         if (options.withholdUnscreenedVideo) {
@@ -360,7 +391,10 @@ export async function generateTTSForClassroom(
   scenes: Scene[],
   classroomId: string,
   baseUrl: string,
-  options: { stage?: ClassroomTtsStage | null } = {},
+  options: {
+    stage?: ClassroomTtsStage | null;
+    usageScope?: import('@/lib/persistence/generation-usage').UsageScope;
+  } = {},
 ): Promise<ClassroomTtsSummary | void> {
   const audioDir = path.join(CLASSROOMS_DIR, classroomId, 'audio');
   await ensureDir(audioDir);
@@ -525,6 +559,7 @@ export async function generateTTSForClassroom(
           persist: { kind: 'audio-dir' },
           // B-3 (approved): the batch path records usage.
           recordUsage: true,
+          usageScope: options.usageScope,
           // B-2 (approved): bounded retry for 429/5xx/timeout.
           transientAttempts: 2,
           routeId: route?.routeId,

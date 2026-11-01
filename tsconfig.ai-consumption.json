@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "types": ["node", "react", "react-dom"],
+    "typeRoots": ["./node_modules/@types"]
+  },
+  "include": [
+    "next-env.d.ts",
+    "types/**/*.d.ts",
+    "lib/server/consumption/report.ts",
+    "lib/persistence/generation-usage.ts",
+    "app/api/teaching-packages/consumption/route.ts",
+    "lib/persistence/server-provider.ts",
+    "lib/server/speech/narration-synthesis.ts",
+    "lib/server/tutor/grounding/query-embedding.ts",
+    "lib/server/tutor/grounding/direct-grounding.ts",
+    "lib/server/classroom-media-generation.ts",
+    "lib/server/classroom-generation.ts"
+  ],
+  "exclude": ["node_modules", "tests"]
+}

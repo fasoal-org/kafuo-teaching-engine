@@ -1,3 +1,4 @@
+import { ensureGenerationUsageSchema } from '@/lib/persistence/generation-usage';
 import { PgAssetStore, ensureAssetSchema } from '@openmaic/storage/asset/pg';
 import { PgDocumentStore, ensureDocumentSchema } from '@openmaic/storage/document/pg';
 import { PgRuntimeStore, ensureSchema } from '@openmaic/storage/runtime/pg';
@@ -62,6 +63,7 @@ async function createServerPersistenceProvider(
     // Kafuo R1 teaching model ledger (attempts, worker heartbeats, calibration).
     // Standalone tables — no FK into the package tables — so order is free.
     await ensureTeachingModelAttemptsSchema(queryable);
+    await ensureGenerationUsageSchema(queryable);
     // Kafuo R1 student runtime (conversations, messages, help sessions,
     // groundings). After the package schema: help sessions reference
     // teaching_package_versions.

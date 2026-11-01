@@ -2148,6 +2148,13 @@ export async function generateClassroom(
           // Embedded-text policy from the Stage's AUTHORITATIVE direction only.
           textPolicy: resolveImageTextPolicy(stage.textDirection),
           withholdUnscreenedVideo: Boolean(input.governed),
+          usageScope: input.attribution
+            ? {
+                tenantId: input.attribution.tenantId,
+                learningItemId: input.attribution.learningItemId,
+                generationAttemptId: input.attribution.generationAttemptId,
+              }
+            : undefined,
         });
         replaceMediaPlaceholders(scenes, mediaMap);
         log.info(`Media generation complete: ${Object.keys(mediaMap).length} files`);
@@ -2283,6 +2290,13 @@ export async function generateClassroom(
       try {
         const ttsSummary = await generateTTSForClassroom(freshScenes, stageId, options.baseUrl, {
           stage,
+          usageScope: input.attribution
+            ? {
+                tenantId: input.attribution.tenantId,
+                learningItemId: input.attribution.learningItemId,
+                generationAttemptId: input.attribution.generationAttemptId,
+              }
+            : undefined,
         });
         log.info('TTS generation complete', ttsSummary ? JSON.stringify(ttsSummary) : '');
       } catch (err) {
