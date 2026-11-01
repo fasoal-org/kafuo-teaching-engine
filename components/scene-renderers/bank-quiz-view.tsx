@@ -227,7 +227,11 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
     void fetchBankQuestions(stageId, sceneId)
       .then((response) => {
         if (cancelled) return;
-        if (response.status === 'not_bank') return setLoad({ kind: 'not_bank' });
+        // A marked bank Scene has no questions of its own, so `not_bank` here means Kafuo
+        // could not resolve it: show the retry rather than an empty quiz (W6 review).
+        if (response.status === 'not_bank') {
+          return setLoad(sceneQuestions.length > 0 ? { kind: 'not_bank' } : { kind: 'error' });
+        }
         if (response.status === 'pending_approval' || response.questions.length === 0) {
           return setLoad({ kind: 'pending' });
         }
@@ -240,7 +244,7 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
     return () => {
       cancelled = true;
     };
-  }, [reloadVersion, sceneId, stageId]);
+  }, [reloadVersion, sceneId, stageId, sceneQuestions.length]);
 
   const bankQuestions = useMemo(() => (load.kind === 'ready' ? load.questions : []), [load]);
   const allAnswered = bankQuestions.every((question) =>

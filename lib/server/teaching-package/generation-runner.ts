@@ -579,9 +579,10 @@ async function runKafuoAttempt(
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
     // W6 one question source (1 Nov 2026): the check quiz shows the approved
     // Kafuo bank questions, so it is a deterministic placeholder — no quiz
-    // questions are generated. (`keyedQuizzesOnly` is no longer set: the bank,
-    // not the planner's quizConfig, decides question types.)
+    // questions are generated. `keyedQuizzesOnly` stays for any other Kafuo
+    // quiz position, which still needs gradable keys (W6 review).
     bankCheckQuizzes: true,
+    keyedQuizzesOnly: true,
     // The authoritative lesson language (`learningItem.language`): generation
     // stamps it on the Stage with the base text direction resolved from it.
     language: kafuo.language,

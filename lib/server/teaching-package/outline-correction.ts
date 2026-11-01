@@ -213,6 +213,8 @@ export function diagnoseCandidateOutlines(
     // Correction exists only for Kafuo attempts: Kafuo Release 1 defers games,
     // so an edit that plans one is reported and blocks the resume.
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
+    // Restored after the W6 review: a non-check Kafuo quiz still needs gradable keys.
+    keyedQuizzesOnly: true,
   });
   const normalized = analysis.outlines.map((outline, index) => ({ ...outline, order: index + 1 }));
   return {
