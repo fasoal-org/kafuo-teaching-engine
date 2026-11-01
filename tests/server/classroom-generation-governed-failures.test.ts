@@ -336,6 +336,38 @@ describe('generateClassroom — Scene content is prefetched concurrently (1 Nov 
     expect(maxInFlight).toBe(1);
   });
 
+  it('starts no further Scene once a Scene content call has failed the run', async () => {
+    vi.stubEnv('TE_SCENE_CONTENT_CONCURRENCY', '2');
+    const many = Array.from({ length: 6 }, (_unused, index) => ({
+      ...outlines[1]!,
+      id: `w2m${index + 1}`,
+      title: `Scene ${index + 1}`,
+      order: index + 1,
+      teachingStage: { key: 'outcome_teaching_cards', flowIndex: 1 },
+    }));
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'English.', outlines: many },
+    });
+    const startedTitles: string[] = [];
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+        const system = String(request.messages.find((m) => m.role === 'system')?.content ?? '');
+        if (ACTIONS_PROMPT.test(system)) return { text: ACTIONS_CANONICAL };
+        const user = String(request.messages.find((m) => m.role === 'user')?.content ?? '');
+        startedTitles.push(user.includes('Scene 1') ? 'Scene 1' : 'other');
+        if (user.includes('Scene 1')) throw new Error('unexpected provider crash');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { text: CONTENT_OK(2) };
+      },
+    );
+
+    await expect(runGoverned(governedInput)).rejects.toThrow();
+    // The serial loop stopped at the failing Scene; the prefetch may have had at most
+    // the pool's other slot in flight, never all six.
+    expect(startedTitles.length).toBeLessThanOrEqual(2);
+  });
+
   it('clamps the setting to between 1 and 8', async () => {
     const { sceneContentConcurrency } = await import('@/lib/server/classroom-generation');
     expect(sceneContentConcurrency(undefined)).toBe(4);

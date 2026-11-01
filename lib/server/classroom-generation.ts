@@ -1816,6 +1816,9 @@ export async function generateClassroom(
       };
     });
 
+    // Set when the loop exits (normally or by throwing) or a Scene's content rejects.
+    let contentStopped = false;
+
     // One Scene's content, with no dependency on any other Scene: each content call
     // reads only its own outline and the run's fixed inputs. That is what makes the
     // prefetch safe — actions, which read `previousSpeeches`, stay in the serial loop.
@@ -1832,9 +1835,16 @@ export async function generateClassroom(
         const nextAttempt = Math.min(event.attempt + 1, event.maxAttempts);
         const message = `Retrying scene ${index + 1}/${outlines.length} content (${nextAttempt}/${event.maxAttempts}): ${safeOutline.title}`;
         log.warn(`${message} — ${event.reason}`);
+        // A prefetched Scene runs ahead of the loop, so the bar follows the Scenes the
+        // loop has finished (never this Scene's own position, which would move it
+        // backwards), and nothing is reported once the run has stopped.
+        if (contentStopped) return;
         await options.onProgress?.({
           step: 'generating_scenes',
-          progress: Math.max(30 + Math.floor((index / Math.max(outlines.length, 1)) * 60), 31),
+          progress: Math.max(
+            30 + Math.floor((generatedScenes / Math.max(outlines.length, 1)) * 60),
+            31,
+          ),
           message,
           scenesGenerated: generatedScenes,
           totalScenes: outlines.length,
@@ -1971,265 +1981,281 @@ export async function generateClassroom(
         const ready = prepared[index];
         return ready ? produceSceneContent(index, ready.safeOutline) : null;
       },
-      { shouldContinue: () => routeFailure === null },
+      // Once the run is stopping for ANY reason (the loop threw, a Scene's content
+      // rejected, the route failed), no further Scene starts: the serial loop never
+      // spent past the Scene that failed, and the prefetch must not either.
+      { shouldContinue: () => routeFailure === null && !contentStopped },
     );
-    // A run that stops early must not leave a later Scene's rejection unobserved.
-    for (const pending of sceneContents) pending.catch(() => undefined);
+    // A run that stops early must not leave a later Scene's rejection unobserved, and
+    // a rejected Scene stops the pool from starting any more.
+    for (const pending of sceneContents) {
+      pending.catch(() => {
+        contentStopped = true;
+      });
+    }
 
     let refusedScenes = 0;
     let firstRefusal: TeachingModelUnavailableError | undefined;
-    for (const [index, outline] of outlines.entries()) {
-      const retained = retainedByOutline.get(outline.id);
-      if (retained) {
-        store.setState({ scenes: [...store.getState().scenes, retained] });
-        retainedSceneIds.add(retained.id);
-        generatedScenes += 1;
-        previousSpeeches = spokenTexts(retained.actions ?? []);
-        continue;
-      }
-      const safeOutline = prepared[index]!.safeOutline;
-      const sceneRefusals: TeachingModelUnavailableError[] = [];
-      sceneRefusalScope =
-        input.governed && isReviewerRegenerable(safeOutline.type)
-          ? { refusals: sceneRefusals }
-          : null;
-      const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
+    try {
+      for (const [index, outline] of outlines.entries()) {
+        const retained = retainedByOutline.get(outline.id);
+        if (retained) {
+          store.setState({ scenes: [...store.getState().scenes, retained] });
+          retainedSceneIds.add(retained.id);
+          generatedScenes += 1;
+          previousSpeeches = spokenTexts(retained.actions ?? []);
+          continue;
+        }
+        const safeOutline = prepared[index]!.safeOutline;
+        const sceneRefusals: TeachingModelUnavailableError[] = [];
+        sceneRefusalScope =
+          input.governed && isReviewerRegenerable(safeOutline.type)
+            ? { refusals: sceneRefusals }
+            : null;
+        const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
 
-      await options.onProgress?.({
-        step: 'generating_scenes',
-        progress: Math.max(progressStart, 31),
-        message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
-        scenesGenerated: generatedScenes,
-        totalScenes: outlines.length,
-      });
-
-      const reportSceneRetry = async (
-        phase: 'content' | 'actions',
-        event: { attempt: number; maxAttempts: number; reason: string },
-      ) => {
-        const nextAttempt = Math.min(event.attempt + 1, event.maxAttempts);
-        const message = `Retrying scene ${index + 1}/${outlines.length} ${phase} (${nextAttempt}/${event.maxAttempts}): ${safeOutline.title}`;
-        log.warn(`${message} — ${event.reason}`);
         await options.onProgress?.({
           step: 'generating_scenes',
           progress: Math.max(progressStart, 31),
-          message,
+          message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
           scenesGenerated: generatedScenes,
           totalScenes: outlines.length,
         });
-      };
 
-      // The content was started by the prefetch pool above (at most
-      // `SCENE_CONTENT_CONCURRENCY` Scenes at once); the loop waits for THIS Scene's
-      // result in order, while actions stay strictly serial for `previousSpeeches`.
-      const produced = await sceneContents[index];
-      assertRouteAvailable();
-      if (!produced) continue; // only when a route failure stopped the pool (thrown above)
-      const { bankQuiz, contentFailure, sceneIssues } = produced;
-      let content = produced.content;
-      sceneRefusals.push(...produced.contentRefusals);
-      const flowContext = prepared[index]!.flowContext;
-      const regenerable = isReviewerRegenerable(safeOutline.type);
-      if (!content && input.governed && regenerable) {
-        // 3 Oct 2026: a slide or quiz can be regenerated by the reviewer, so it
-        // never fails the package. Its flow position is kept with a placeholder
-        // built from the outline alone, and the scene is marked for regeneration.
-        const failureReason = contentFailure
-          ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
-          : 'no scene content was returned';
-        sceneIssues.push({
-          code:
-            contentFailure?.code === 'model-refused'
-              ? 'TEACHING_MODEL_REFUSED'
-              : 'GOVERNED_SCENE_GENERATION_FAILED',
-          message: `the ${safeOutline.type} could not be generated (${failureReason}); a placeholder was kept`,
-        });
-        log.warn(
-          `Scene ${index + 1}/${outlines.length} could not be generated (${failureReason}); keeping a placeholder: ${safeOutline.title}`,
-        );
-        content = placeholderContentFor(safeOutline, textDirection);
-      }
-      if (!content) {
-        // Module 3/4 W2 (TAE-RQ-017): on a governed run a dropped Scene is a
-        // dropped Flow position. Skipping it here would surface later as a
-        // misattributed TEACHING_MODEL_FLOW_MISMATCH; refuse with the
-        // Scene-generation code instead. Non-governed runs keep the skip.
-        // (A governed *slide* never reaches here: it is kept as a placeholder
-        // above. Quiz / interactive / PBL positions have no reviewer remedy yet.)
-        if (input.governed) {
+        const reportSceneRetry = async (
+          phase: 'content' | 'actions',
+          event: { attempt: number; maxAttempts: number; reason: string },
+        ) => {
+          const nextAttempt = Math.min(event.attempt + 1, event.maxAttempts);
+          const message = `Retrying scene ${index + 1}/${outlines.length} ${phase} (${nextAttempt}/${event.maxAttempts}): ${safeOutline.title}`;
+          log.warn(`${message} — ${event.reason}`);
+          await options.onProgress?.({
+            step: 'generating_scenes',
+            progress: Math.max(progressStart, 31),
+            message,
+            scenesGenerated: generatedScenes,
+            totalScenes: outlines.length,
+          });
+        };
+
+        // The content was started by the prefetch pool above (at most
+        // `SCENE_CONTENT_CONCURRENCY` Scenes at once); the loop waits for THIS Scene's
+        // result in order, while actions stay strictly serial for `previousSpeeches`.
+        const produced = await sceneContents[index];
+        assertRouteAvailable();
+        if (!produced) continue; // only when a route failure stopped the pool (thrown above)
+        const { bankQuiz, contentFailure, sceneIssues } = produced;
+        let content = produced.content;
+        sceneRefusals.push(...produced.contentRefusals);
+        const flowContext = prepared[index]!.flowContext;
+        const regenerable = isReviewerRegenerable(safeOutline.type);
+        if (!content && input.governed && regenerable) {
+          // 3 Oct 2026: a slide or quiz can be regenerated by the reviewer, so it
+          // never fails the package. Its flow position is kept with a placeholder
+          // built from the outline alone, and the scene is marked for regeneration.
           const failureReason = contentFailure
             ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
             : 'no scene content was returned';
-          throw new TeachingPackageError(
-            'GOVERNED_SCENE_GENERATION_FAILED',
-            `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) could not be generated: ${failureReason}`,
-            {
-              outlineId: safeOutline.id,
-              teachingStage: safeOutline.teachingStage,
-              failureCode: contentFailure?.code,
-              failureDetail: contentFailure?.detail,
-            },
+          sceneIssues.push({
+            code:
+              contentFailure?.code === 'model-refused'
+                ? 'TEACHING_MODEL_REFUSED'
+                : 'GOVERNED_SCENE_GENERATION_FAILED',
+            message: `the ${safeOutline.type} could not be generated (${failureReason}); a placeholder was kept`,
+          });
+          log.warn(
+            `Scene ${index + 1}/${outlines.length} could not be generated (${failureReason}); keeping a placeholder: ${safeOutline.title}`,
           );
+          content = placeholderContentFor(safeOutline, textDirection);
         }
-        log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
-        continue;
-      }
+        if (!content) {
+          // Module 3/4 W2 (TAE-RQ-017): on a governed run a dropped Scene is a
+          // dropped Flow position. Skipping it here would surface later as a
+          // misattributed TEACHING_MODEL_FLOW_MISMATCH; refuse with the
+          // Scene-generation code instead. Non-governed runs keep the skip.
+          // (A governed *slide* never reaches here: it is kept as a placeholder
+          // above. Quiz / interactive / PBL positions have no reviewer remedy yet.)
+          if (input.governed) {
+            const failureReason = contentFailure
+              ? `${contentFailure.code}${contentFailure.detail ? `: ${contentFailure.detail}` : ''}`
+              : 'no scene content was returned';
+            throw new TeachingPackageError(
+              'GOVERNED_SCENE_GENERATION_FAILED',
+              `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) could not be generated: ${failureReason}`,
+              {
+                outlineId: safeOutline.id,
+                teachingStage: safeOutline.teachingStage,
+                failureCode: contentFailure?.code,
+                failureDetail: contentFailure?.detail,
+              },
+            );
+          }
+          log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
+          continue;
+        }
 
-      const actionsAiCall = bankQuiz ? null : await getSceneActionsAiCall();
-      // Module 3/4 W2 (TAE-RQ-017): a governed run must never bind a fallback
-      // Action sequence — the defaults are model-free, so they cannot be a
-      // governed pedagogical result. The observer records whether THIS attempt
-      // fell back; shouldRetryResult re-rolls while it did, and a fallback
-      // surviving the full budget refuses with the run's own code below.
-      // Non-governed callers keep today's contract exactly: first result wins.
-      // Page position + the previous page's speech, so first/last-page cues,
-      // same-session continuity and topic signposting exist on the server path.
-      const sceneCtx = {
-        pageIndex: index + 1,
-        totalPages: outlines.length,
-        allTitles: outlines.map((planned) => planned.title),
-        previousSpeeches,
-      };
-      let actionsFellBack = false;
-      // W6: the bank placeholder's narration is model-free and deterministic —
-      // a successful Scene, never a fallback and never marked for review.
-      const actions = !actionsAiCall
-        ? bankQuizActions(input.language, input.subjectCode)
-        : await generateRegisterCompliantActions(
-            async (correctiveContext) => {
-              let attemptProducedFallback = false;
-              const generated = await withGenerationRetry(
-                () => {
-                  attemptProducedFallback = false;
-                  return generateSceneActions(safeOutline, content, actionsAiCall, {
-                    ctx: sceneCtx,
-                    agents,
-                    languageDirective,
-                    ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
-                    ...(spokenScript ? { spokenScript } : {}),
-                    ...(correctiveContext ? { correctiveContext } : {}),
-                    // W1: the ONE resolved Flow position — the generator never sees the
-                    // array and never performs the lookup itself.
-                    ...(flowContext ? { flowContext } : {}),
-                    ...(resolvedSkills ? { resolvedSkills } : {}),
-                    ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
-                    ...(safeOutline.type === 'slide' && hasSourceVisuals
-                      ? {
-                          imageNotes: buildNarrationImageNotes(
-                            safeOutline,
-                            sourceImages,
-                            sourceServingMapping,
-                          ),
-                        }
-                      : {}),
+        const actionsAiCall = bankQuiz ? null : await getSceneActionsAiCall();
+        // Module 3/4 W2 (TAE-RQ-017): a governed run must never bind a fallback
+        // Action sequence — the defaults are model-free, so they cannot be a
+        // governed pedagogical result. The observer records whether THIS attempt
+        // fell back; shouldRetryResult re-rolls while it did, and a fallback
+        // surviving the full budget refuses with the run's own code below.
+        // Non-governed callers keep today's contract exactly: first result wins.
+        // Page position + the previous page's speech, so first/last-page cues,
+        // same-session continuity and topic signposting exist on the server path.
+        const sceneCtx = {
+          pageIndex: index + 1,
+          totalPages: outlines.length,
+          allTitles: outlines.map((planned) => planned.title),
+          previousSpeeches,
+        };
+        let actionsFellBack = false;
+        // W6: the bank placeholder's narration is model-free and deterministic —
+        // a successful Scene, never a fallback and never marked for review.
+        const actions = !actionsAiCall
+          ? bankQuizActions(input.language, input.subjectCode)
+          : await generateRegisterCompliantActions(
+              async (correctiveContext) => {
+                let attemptProducedFallback = false;
+                const generated = await withGenerationRetry(
+                  () => {
+                    attemptProducedFallback = false;
+                    return generateSceneActions(safeOutline, content, actionsAiCall, {
+                      ctx: sceneCtx,
+                      agents,
+                      languageDirective,
+                      ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+                      ...(spokenScript ? { spokenScript } : {}),
+                      ...(correctiveContext ? { correctiveContext } : {}),
+                      // W1: the ONE resolved Flow position — the generator never sees the
+                      // array and never performs the lookup itself.
+                      ...(flowContext ? { flowContext } : {}),
+                      ...(resolvedSkills ? { resolvedSkills } : {}),
+                      ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                      ...(safeOutline.type === 'slide' && hasSourceVisuals
+                        ? {
+                            imageNotes: buildNarrationImageNotes(
+                              safeOutline,
+                              sourceImages,
+                              sourceServingMapping,
+                            ),
+                          }
+                        : {}),
+                      ...(input.governed
+                        ? {
+                            onFallback: (info: SceneActionsFallback) => {
+                              attemptProducedFallback = true;
+                              log.warn(
+                                `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
+                              );
+                            },
+                          }
+                        : {}),
+                    });
+                  },
+                  {
+                    label: `scene ${index + 1}/${outlines.length} actions`,
+                    ...(input.governed ? { maxRetries: 0 } : {}),
                     ...(input.governed
                       ? {
-                          onFallback: (info: SceneActionsFallback) => {
-                            attemptProducedFallback = true;
-                            log.warn(
-                              `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
-                            );
-                          },
+                          shouldRetryResult: () => attemptProducedFallback && routeFailure === null,
                         }
                       : {}),
-                  });
-                },
-                {
-                  label: `scene ${index + 1}/${outlines.length} actions`,
-                  ...(input.governed ? { maxRetries: 0 } : {}),
-                  ...(input.governed
-                    ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
-                    : {}),
-                  onRetry: (event) => reportSceneRetry('actions', event),
-                },
-              );
-              // The Action generator falls back to a model-free sequence on a call
-              // failure; on a routed run a failed ROUTE must fail the run instead.
-              assertRouteAvailable();
-              // 3 Oct 2026: a governed fallback no longer fails the package — the
-              // model-free sequence is kept and the scene is marked for the reviewer.
-              actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
-              return generated;
-            },
-            registerPolicy,
-            { title: safeOutline.title, outlineId: safeOutline.id },
-            { outline: safeOutline, ctx: sceneCtx },
-            input.governed
-              ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
-              : undefined,
-          );
-      if (actionsFellBack) {
-        sceneIssues.push({
-          code: 'GOVERNED_ACTION_GENERATION_FAILED',
-          message: 'the narration and actions could not be generated; a default narration was kept',
-        });
-      }
-      log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
-
-      let sceneId: string | null = null;
-      let assemblyFailure: string | undefined;
-      try {
-        sceneId = createSceneWithActions(safeOutline, content, actions, api);
-      } catch (error) {
-        // A governed slide/quiz whose generated content cannot be assembled
-        // (e.g. invalid slide semantics) is kept as a placeholder instead of
-        // failing the package; anything else keeps today's contract.
-        if (!input.governed || !regenerable) throw error;
-        assemblyFailure = error instanceof Error ? error.message : String(error);
-      }
-      if (!sceneId && input.governed && regenerable) {
-        sceneIssues.push({
-          code: 'GOVERNED_SCENE_GENERATION_FAILED',
-          message: `the generated ${safeOutline.type} could not be assembled (${assemblyFailure ?? 'scene creation failed'}); a placeholder was kept`,
-        });
-        log.warn(
-          `Scene "${safeOutline.title}" could not be assembled; keeping a placeholder for review`,
-        );
-        sceneId = createSceneWithActions(
-          safeOutline,
-          placeholderContentFor(safeOutline, textDirection),
-          actions,
-          api,
-        );
-      }
-      if (!sceneId) {
-        log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
-        continue;
-      }
-      if (bankQuiz) markBankQuizScene(store, sceneId);
-
-      if (sceneRefusals.length > 0) {
-        refusedScenes += 1;
-        firstRefusal ??= sceneRefusals[0];
-        if (!sceneIssues.some((issue) => issue.code === 'TEACHING_MODEL_REFUSED')) {
+                    onRetry: (event) => reportSceneRetry('actions', event),
+                  },
+                );
+                // The Action generator falls back to a model-free sequence on a call
+                // failure; on a routed run a failed ROUTE must fail the run instead.
+                assertRouteAvailable();
+                // 3 Oct 2026: a governed fallback no longer fails the package — the
+                // model-free sequence is kept and the scene is marked for the reviewer.
+                actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
+                return generated;
+              },
+              registerPolicy,
+              { title: safeOutline.title, outlineId: safeOutline.id },
+              { outline: safeOutline, ctx: sceneCtx },
+              input.governed
+                ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
+                : undefined,
+            );
+        if (actionsFellBack) {
           sceneIssues.push({
-            code: 'TEACHING_MODEL_REFUSED',
-            message: `the AI refused part of this ${safeOutline.type} (${sceneRefusals[0]!.message}); defaults were kept`,
+            code: 'GOVERNED_ACTION_GENERATION_FAILED',
+            message:
+              'the narration and actions could not be generated; a default narration was kept',
           });
         }
-      }
-      sceneRefusalScope = null;
-      if (sceneIssues.length > 0) {
-        markSceneIssues(store, sceneId, sceneIssues);
-        log.warn(
-          `Scene "${safeOutline.title}" kept with ${sceneIssues.length} generation issue(s) for review: ${sceneIssues
-            .map((issue) => issue.code)
-            .join(', ')}`,
-        );
-      }
+        log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
-      generatedScenes += 1;
-      previousSpeeches = actions.flatMap((action) =>
-        action.type === 'speech' && typeof action.text === 'string' ? [action.text] : [],
-      );
-      const progressEnd = 30 + Math.floor(((index + 1) / Math.max(outlines.length, 1)) * 60);
-      await options.onProgress?.({
-        step: 'generating_scenes',
-        progress: Math.min(progressEnd, 90),
-        message: `Generated ${generatedScenes}/${outlines.length} scenes`,
-        scenesGenerated: generatedScenes,
-        totalScenes: outlines.length,
-      });
+        let sceneId: string | null = null;
+        let assemblyFailure: string | undefined;
+        try {
+          sceneId = createSceneWithActions(safeOutline, content, actions, api);
+        } catch (error) {
+          // A governed slide/quiz whose generated content cannot be assembled
+          // (e.g. invalid slide semantics) is kept as a placeholder instead of
+          // failing the package; anything else keeps today's contract.
+          if (!input.governed || !regenerable) throw error;
+          assemblyFailure = error instanceof Error ? error.message : String(error);
+        }
+        if (!sceneId && input.governed && regenerable) {
+          sceneIssues.push({
+            code: 'GOVERNED_SCENE_GENERATION_FAILED',
+            message: `the generated ${safeOutline.type} could not be assembled (${assemblyFailure ?? 'scene creation failed'}); a placeholder was kept`,
+          });
+          log.warn(
+            `Scene "${safeOutline.title}" could not be assembled; keeping a placeholder for review`,
+          );
+          sceneId = createSceneWithActions(
+            safeOutline,
+            placeholderContentFor(safeOutline, textDirection),
+            actions,
+            api,
+          );
+        }
+        if (!sceneId) {
+          log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
+          continue;
+        }
+        if (bankQuiz) markBankQuizScene(store, sceneId);
+
+        if (sceneRefusals.length > 0) {
+          refusedScenes += 1;
+          firstRefusal ??= sceneRefusals[0];
+          if (!sceneIssues.some((issue) => issue.code === 'TEACHING_MODEL_REFUSED')) {
+            sceneIssues.push({
+              code: 'TEACHING_MODEL_REFUSED',
+              message: `the AI refused part of this ${safeOutline.type} (${sceneRefusals[0]!.message}); defaults were kept`,
+            });
+          }
+        }
+        sceneRefusalScope = null;
+        if (sceneIssues.length > 0) {
+          markSceneIssues(store, sceneId, sceneIssues);
+          log.warn(
+            `Scene "${safeOutline.title}" kept with ${sceneIssues.length} generation issue(s) for review: ${sceneIssues
+              .map((issue) => issue.code)
+              .join(', ')}`,
+          );
+        }
+
+        generatedScenes += 1;
+        previousSpeeches = actions.flatMap((action) =>
+          action.type === 'speech' && typeof action.text === 'string' ? [action.text] : [],
+        );
+        const progressEnd = 30 + Math.floor(((index + 1) / Math.max(outlines.length, 1)) * 60);
+        await options.onProgress?.({
+          step: 'generating_scenes',
+          progress: Math.min(progressEnd, 90),
+          message: `Generated ${generatedScenes}/${outlines.length} scenes`,
+          scenesGenerated: generatedScenes,
+          totalScenes: outlines.length,
+        });
+      }
+    } finally {
+      // Normal end or a throw out of the loop: no prefetched Scene starts after it.
+      contentStopped = true;
     }
 
     sceneRefusalScope = null;
