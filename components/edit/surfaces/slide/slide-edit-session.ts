@@ -27,7 +27,10 @@ import {
   type EditorOperation,
   type EditorTransaction,
 } from '@openmaic/editor/core';
-import { withoutDanglingElementActions } from '@/lib/edit/dangling-element-actions';
+import {
+  deletedElementIds,
+  withoutActionsOnDeletedElements,
+} from '@/lib/edit/dangling-element-actions';
 import { commitSlideEdit } from '@/lib/edit/scene-edit-bridge';
 import { migrateSlideContent } from '@/lib/edit/slide-schema';
 import type { SlideEditHistory } from '@/lib/edit/slide-ops';
@@ -86,25 +89,32 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
    * (SceneProvider reads via `currentSlideContent`) see the new content as
    * soon as React processes the next batch.
    */
-  const writeThrough = (next: SlideContent) => {
-    const { sceneId } = get();
+  /** `manual`: a person's own canvas/toolbar edit (not undo/redo, an agent or a reflow). */
+  const writeThrough = (next: SlideContent, manual = false) => {
+    const { sceneId, history } = get();
     if (!sceneId) return;
     const store = useStageStore.getState();
-    // A deleted element takes its spotlight/laser Actions with it; otherwise
-    // Submit refuses the package for an Action pointing at nothing.
-    const actions = withoutDanglingElementActions(
-      store.scenes.find((scene) => scene.id === sceneId)?.actions,
-      new Set(next.canvas.elements.map((element) => element.id)),
-    );
+    // An element a person deletes takes its spotlight/laser Actions with it;
+    // otherwise Submit refuses the package for an Action pointing at nothing.
+    const actions =
+      manual && history
+        ? withoutActionsOnDeletedElements(
+            store.scenes?.find((scene) => scene.id === sceneId)?.actions,
+            deletedElementIds(history.present.canvas.elements, next.canvas.elements),
+          )
+        : null;
     store.updateScene(sceneId, actions ? { content: next, actions } : { content: next });
   };
 
-  const replace = (history: EditorHistory) => {
+  const replace = (history: EditorHistory, manual = false) => {
     const { history: prev } = get();
     if (history === prev || editingLocked()) return;
-    writeThrough(history.present);
+    writeThrough(history.present, manual);
     set({ history });
   };
+
+  const isManual = (transaction: EditorTransaction) =>
+    transaction.origin === 'canvas' || transaction.origin === 'toolbar';
 
   return {
     sceneId: null,
@@ -143,19 +153,20 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
           history: 'record',
           operations: [op],
         }),
+        true,
       );
     },
 
     applyTransaction: (transaction) => {
       const { history } = get();
       if (!history) return;
-      replace(applyEditorTransaction(history, transaction));
+      replace(applyEditorTransaction(history, transaction), isManual(transaction));
     },
 
     applyTransactionForScene: (sceneId, transaction) => {
       const { history, sceneId: currentSceneId } = get();
       if (!history || currentSceneId !== sceneId) return;
-      replace(applyEditorTransaction(history, transaction));
+      replace(applyEditorTransaction(history, transaction), isManual(transaction));
     },
 
     commitContent: (next, isUserEdit) => {
@@ -180,6 +191,7 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
       // to that fallback until its React surface moves into @openmaic/editor.
       replace(
         commitSlideEdit(history as unknown as SlideEditHistory, next) as unknown as EditorHistory,
+        true,
       );
     },
 

@@ -40,16 +40,16 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     scenes.length = 0;
   });
 
-  it('deleting an element also removes the spotlight/laser Actions that pointed at it', () => {
-    scenes.push({
-      id: 'scene-1',
-      actions: [
-        { id: 'a-speech', type: 'speech', text: 'hello' },
-        { id: 'a-spot', type: 'spotlight', elementId: 'text-1' },
-        { id: 'a-laser', type: 'laser', elementId: 'text-1' },
-        { id: 'a-other', type: 'spotlight', elementId: 'kept' },
-      ],
-    });
+  const pointerActions = () => [
+    { id: 'a-speech', type: 'speech', text: 'hello' },
+    { id: 'a-spot', type: 'spotlight', elementId: 'text-1' },
+    { id: 'a-laser', type: 'laser', elementId: 'text-1' },
+    // Already dangling before this edit: only a manual deletion removes Actions.
+    { id: 'a-other', type: 'spotlight', elementId: 'gone-earlier' },
+  ];
+
+  it('a manual delete also removes the spotlight/laser Actions on that element', () => {
+    scenes.push({ id: 'scene-1', actions: pointerActions() });
     useSlideEditSession.getState().seed('scene-1', makeContent());
     useSlideEditSession.getState().applyTransactionForScene('scene-1', {
       origin: 'toolbar',
@@ -58,7 +58,32 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     });
 
     const [, patch] = updateScene.mock.calls.at(-1)!;
-    expect(patch.actions.map((action: { id: string }) => action.id)).toEqual(['a-speech']);
+    expect(patch.actions.map((action: { id: string }) => action.id)).toEqual([
+      'a-speech',
+      'a-other',
+    ]);
+  });
+
+  it('an agent delete and an undo remove no Action', () => {
+    scenes.push({ id: 'scene-1', actions: pointerActions() });
+    const content = makeContent();
+    useSlideEditSession.getState().seed('scene-1', content);
+    useSlideEditSession.getState().applyTransaction({
+      origin: 'agent',
+      history: 'record',
+      operations: [{ type: 'element.delete', elementId: 'text-1' }],
+    });
+    expect(updateScene.mock.calls.at(-1)![1]).not.toHaveProperty('actions');
+
+    // An undo that takes an added element away is not a manual deletion either.
+    useSlideEditSession.getState().undo();
+    useSlideEditSession.getState().applyTransaction({
+      origin: 'toolbar',
+      history: 'record',
+      operations: [{ type: 'element.update', elementId: 'text-1', patch: { rotate: 5 } }],
+    });
+    useSlideEditSession.getState().undo();
+    expect(updateScene.mock.calls.at(-1)![1]).not.toHaveProperty('actions');
   });
 
   it('writes no Actions when none point at a missing element', () => {
