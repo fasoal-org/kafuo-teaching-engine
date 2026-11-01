@@ -245,21 +245,22 @@ export async function editGenerationCorrection(
       );
     }
     const flow = flowOf(attempt);
+    const diagnosisContext = diagnosisContextFromCheckpoint(
+      checkpoint,
+      flow,
+      isGoverned(attempt),
+      attempt.inputSnapshot.bookStructure,
+    );
     const edited = applyCorrectionOperations(checkpoint.outlines, command.operations, {
       phase: checkpoint.phase,
       flow,
       sourceRefs: checkpoint.sourceRefs,
       pendingOutlineIds: checkpoint.pendingOutlineIds,
+      // The same book map the diagnosis checks, so an inserted slide answers
+      // exactly the gap the diagnosis reports.
+      ...(diagnosisContext.bookStructure ? { bookStructure: diagnosisContext.bookStructure } : {}),
     });
-    const diagnosis = diagnoseCandidateOutlines(
-      edited,
-      diagnosisContextFromCheckpoint(
-        checkpoint,
-        flow,
-        isGoverned(attempt),
-        attempt.inputSnapshot.bookStructure,
-      ),
-    );
+    const diagnosis = diagnoseCandidateOutlines(edited, diagnosisContext);
     const now = Date.now();
     const updated = await applyCheckpointEdit(tx, attemptId, {
       tenantId: command.tenantId,

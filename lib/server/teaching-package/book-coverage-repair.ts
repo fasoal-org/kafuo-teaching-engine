@@ -81,7 +81,8 @@ function roleFor(gap: BookCoverageGap): string {
   return 'explanation';
 }
 
-function instructionFor(gap: BookCoverageGap): string {
+/** The planner instruction for a gap; also the description of an admin-inserted slide. */
+export function instructionFor(gap: BookCoverageGap): string {
   const id = gap.unit.contentUnitId;
   const example = gap.unit.pairedExampleUnitId;
   if (gap.kind === 'missing_solution') {
@@ -203,7 +204,12 @@ export async function repairBookCoverageGaps(
         aiCall,
       });
       if (!result.ok) {
-        log.warn(`book coverage repair could not plan a ${gap.kind} slide (${result.code})`);
+        // The reason, with any non-ASCII run (lesson text) blanked, so the
+        // template wording of a validator or provider failure stays readable.
+        const reason = result.message.replace(/[^\x20-\x7E]+/g, '…').slice(0, 400);
+        log.warn(
+          `book coverage repair could not plan a ${gap.kind} slide (${result.code}): ${reason}`,
+        );
         continue;
       }
       outlines.splice(gap.anchorIndex! + 1, 0, result.outline);

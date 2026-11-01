@@ -11,7 +11,7 @@
  * execution failures (provider outage, unresolvable authority) never reach it.
  *
  * Edits are a constrained operation list (`set` on a whitelisted field,
- * `remove`, `move`) — never a free-form document write — so a person can only
+ * `remove`, `move`, `insert_book_slide`) — never a free-form document write — so a person can only
  * choose among values the policy names, and every edit is revalidated before
  * it is stored.
  */
@@ -33,8 +33,11 @@ import {
 
 import {
   findBookCoverageDiagnostics,
+  findBookCoverageGaps,
   requireEssentialUntypedUnits,
+  type BookCoverageGap,
 } from '@/lib/server/teaching-package/book-coverage';
+import { instructionFor } from '@/lib/server/teaching-package/book-coverage-repair';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
@@ -291,7 +294,15 @@ export type CorrectionField = (typeof OUTLINE_PHASE_EDITABLE_FIELDS)[number];
 export type CorrectionOperation =
   | { op: 'set'; outlineId: string; field: CorrectionField; value: unknown }
   | { op: 'remove'; outlineId: string }
-  | { op: 'move'; outlineId: string; toIndex: number };
+  | { op: 'move'; outlineId: string; toIndex: number }
+  /**
+   * Add the solution slide a book check is missing, right after its try-it
+   * slide (`outlineId`). The server builds the outline from the gap the
+   * diagnosis itself finds — no model call; the resume writes the Scene.
+   */
+  | { op: 'insert_book_slide'; outlineId: string; unitId: string; title?: string };
+
+const MAX_INSERTED_TITLE = 120;
 
 const MAX_OPERATIONS = 50;
 const SCENE_TYPES = ['slide', 'quiz', 'interactive', 'pbl'] as const;
@@ -339,6 +350,27 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
     }
     const outlineId = record.outlineId as string;
     if (record.op === 'remove') return { op: 'remove', outlineId };
+    if (record.op === 'insert_book_slide') {
+      if (typeof record.unitId !== 'string' || record.unitId.trim() === '') {
+        invalid(`operations[${index}].unitId must name the book check's Content Unit`);
+      }
+      const title = record.title;
+      if (
+        title !== undefined &&
+        title !== null &&
+        (typeof title !== 'string' || title.trim() === '' || title.length > MAX_INSERTED_TITLE)
+      ) {
+        invalid(
+          `operations[${index}].title must be a non-empty string of at most ${MAX_INSERTED_TITLE} characters`,
+        );
+      }
+      return {
+        op: 'insert_book_slide',
+        outlineId,
+        unitId: record.unitId as string,
+        ...(typeof title === 'string' ? { title: title.trim() } : {}),
+      };
+    }
     if (record.op === 'move') {
       if (!Number.isInteger(record.toIndex))
         invalid(`operations[${index}].toIndex must be an integer`);
@@ -353,7 +385,7 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
       if (!('value' in record)) invalid(`operations[${index}].value is required (null clears)`);
       return { op: 'set', outlineId, field: record.field as CorrectionField, value: record.value };
     }
-    invalid(`operations[${index}].op must be "set", "remove" or "move"`);
+    invalid(`operations[${index}].op must be "set", "remove", "move" or "insert_book_slide"`);
   });
 }
 
@@ -362,6 +394,8 @@ export interface CorrectionEditContext {
   flow: readonly TeachingFlowEntry[];
   sourceRefs: GenerationCheckpointSourceRefs;
   pendingOutlineIds: readonly string[] | null;
+  /** The book map the diagnosis checks coverage against (`insert_book_slide`). */
+  bookStructure?: KafuoBookStructure;
 }
 
 function setField(
@@ -554,6 +588,20 @@ export function applyCorrectionOperations(
         });
       }
     }
+    if (operation.op === 'insert_book_slide') {
+      const gap = insertableBookGaps(next, context.bookStructure).find(
+        (candidate) =>
+          candidate.unit.contentUnitId === operation.unitId &&
+          next[candidate.anchorIndex!]?.id === operation.outlineId,
+      );
+      if (!gap) {
+        invalid(
+          `operations[${index}]: no missing solution slide for unit ${JSON.stringify(operation.unitId)} after outline ${JSON.stringify(operation.outlineId)}`,
+        );
+      }
+      next.splice(position + 1, 0, insertedBookSlide(next, gap, operation.title, context));
+      continue;
+    }
     if (operation.op === 'remove') {
       if (next.length === 1) invalid('the last outline cannot be removed');
       next = next.filter((_, i) => i !== position);
@@ -570,6 +618,56 @@ export function applyCorrectionOperations(
     next[position] = setField(next[position]!, operation.field, operation.value, context);
   }
   return next.map((outline, index) => ({ ...outline, order: index + 1 }));
+}
+
+/**
+ * The book gaps a person can fill with `insert_book_slide`: a check's missing
+ * solution slide, which always has its try-it slide as the anchor.
+ */
+export function insertableBookGaps(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure | undefined,
+): BookCoverageGap[] {
+  return findBookCoverageGaps(outlines, book).filter(
+    (gap) => gap.kind === 'missing_solution' && gap.anchorIndex !== undefined,
+  );
+}
+
+/**
+ * The solution slide for a gap, at the try-it slide's flow position with its
+ * Skills. It cites only the check's unit (so the gate counts it), selects the
+ * textbook visuals linked to that unit (`SOURCE_VISUAL_NOT_SELECTED`), and
+ * carries the try-it's items as its key points: the slide solves exactly them.
+ * Its visual teaching notes are planned by the resume, as for any slide.
+ */
+function insertedBookSlide(
+  outlines: readonly SceneOutline[],
+  gap: BookCoverageGap,
+  title: string | undefined,
+  context: CorrectionEditContext,
+): SceneOutline {
+  const anchor = outlines[gap.anchorIndex!]!;
+  const unitId = gap.unit.contentUnitId;
+  const base = `${anchor.id}-book-${gap.kind}-${unitId}`;
+  let id = base;
+  for (let n = 2; outlines.some((outline) => outline.id === id); n += 1) id = `${base}-${n}`;
+  const linked = context.sourceRefs.sourceImages
+    .filter((image) => (image.sourceContentUnitIds ?? []).some((ref) => String(ref) === unitId))
+    .map((image) => image.id);
+  return {
+    id,
+    type: 'slide',
+    slideType: 'content',
+    contentRole: 'worked_example',
+    title: title ?? anchor.title,
+    description: instructionFor(gap),
+    keyPoints: [...(anchor.keyPoints ?? [])],
+    order: gap.anchorIndex! + 2,
+    ...(anchor.teachingStage ? { teachingStage: { ...anchor.teachingStage } } : {}),
+    sourceContentUnitIds: [unitId],
+    ...(linked.length > 0 ? { suggestedImageIds: linked, visualPlan: { mode: 'image' } } : {}),
+    ...(anchor.teachingSkills ? { teachingSkills: anchor.teachingSkills } : {}),
+  } as SceneOutline;
 }
 
 // ---------------------------------------------------------------------------
@@ -600,6 +698,15 @@ export interface CorrectionView {
   editableFields: string[];
   outlines: Array<Record<string, unknown>>;
   blockingIssues: GenerationCheckpoint['diagnostics'];
+  /** Missing book slides a person can add with `insert_book_slide` (outline phase). */
+  insertableBookSlides: Array<{
+    kind: BookCoverageGap['kind'];
+    unitId: string;
+    unitKind: string | null;
+    anchorOutlineId: string;
+    anchorTitle: string;
+    message: string;
+  }>;
   repairs: GenerationCheckpoint['repairs'];
   flow: CorrectionFlowPosition[];
   choices: {
@@ -672,6 +779,26 @@ export function buildCorrectionView(
       editable: checkpoint.phase === 'outline' || pending.has(outline.id),
     })),
     blockingIssues: checkpoint.diagnostics,
+    insertableBookSlides:
+      checkpoint.phase === 'outline'
+        ? insertableBookGaps(
+            checkpoint.outlines,
+            requireEssentialUntypedUnits(
+              attempt.inputSnapshot.bookStructure,
+              checkpoint.sourceRefs.essentialContentUnitIds,
+            ),
+          ).map((gap) => {
+            const anchor = checkpoint.outlines[gap.anchorIndex!]!;
+            return {
+              kind: gap.kind,
+              unitId: gap.unit.contentUnitId,
+              unitKind: gap.unit.kind ?? null,
+              anchorOutlineId: anchor.id,
+              anchorTitle: anchor.title,
+              message: gap.message,
+            };
+          })
+        : [],
     repairs: checkpoint.repairs,
     flow: flow.map((entry, flowIndex) => {
       const policy = scenePolicyFor(entry) ?? null;
