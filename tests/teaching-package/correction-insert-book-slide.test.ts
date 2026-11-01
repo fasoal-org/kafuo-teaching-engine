@@ -4,6 +4,7 @@ import { findBookCoverageDiagnostics } from '@/lib/server/teaching-package/book-
 import {
   applyCorrectionOperations,
   buildCorrectionView,
+  diagnoseCandidateOutlines,
   insertableBookGaps,
   parseCorrectionOperations,
   type CorrectionEditContext,
@@ -45,8 +46,19 @@ const BOOK: KafuoBookStructure = {
 };
 
 const STAGE = { key: 'outcome_visual_explanations', flowIndex: 0 };
+// Lesson 306's own policy at this position (the legacy stage rule allows only
+// `explanation`, where no solution slide could be inserted).
 const FLOW = [
-  { stage: 'outcome_visual_explanations', instructions: 'Teach the part.' },
+  {
+    stage: 'outcome_visual_explanations',
+    instructions: 'Teach the part.',
+    scenePolicy: {
+      visual: 'source_grounded',
+      sceneTypes: ['slide'],
+      cardinality: 'one_or_more',
+      contentRoles: ['explanation', 'worked_example', 'check_understanding'],
+    },
+  },
 ] as unknown as TeachingFlowEntry[];
 const SKILLS = {
   primary: { skillId: 'understanding-by-design', version: 'v1' },
@@ -137,7 +149,7 @@ describe('insert_book_slide correction', () => {
     });
     expect(inserted.description).toContain('solution slide (contentRole worked_example)');
     expect(findBookCoverageDiagnostics(edited, BOOK)).toEqual([]);
-    expect(insertableBookGaps(edited, BOOK)).toEqual([]);
+    expect(insertableBookGaps(edited, BOOK, FLOW)).toEqual([]);
   });
 
   it("uses the person's title when given", () => {
@@ -149,11 +161,14 @@ describe('insert_book_slide correction', () => {
     expect(edited[2]!.title).toBe('الحل: تخمينات');
   });
 
-  it('selects no visual when none is linked to the check', () => {
+  it('selects no visual when none is linked and the position requires none', () => {
+    const { visual: _visual, ...noVisual } = (FLOW[0] as unknown as { scenePolicy: object })
+      .scenePolicy as Record<string, unknown>;
+    const flow = [{ ...FLOW[0], scenePolicy: noVisual }] as unknown as TeachingFlowEntry[];
     const edited = applyCorrectionOperations(
       CANDIDATE,
       [INSERT],
-      context({ sourceRefs: { ...SOURCE_REFS, sourceImages: [] } }),
+      context({ flow, sourceRefs: { ...SOURCE_REFS, sourceImages: [] } }),
     );
     expect(edited[2]!.suggestedImageIds).toBeUndefined();
     expect(edited[2]!.visualPlan).toBeUndefined();
@@ -171,6 +186,68 @@ describe('insert_book_slide correction', () => {
     ).toThrow(/no missing solution slide/);
     // A second insert for the same check finds the gap already closed.
     expect(() => applyCorrectionOperations(CANDIDATE, [INSERT, INSERT], context())).toThrow(
+      /no missing solution slide/,
+    );
+  });
+
+  it('passes the full diagnosis: only the picture note the resume writes stays open', () => {
+    const diagnosisContext = {
+      flow: FLOW,
+      contentUnitIds: ['4026', '4028', '9999'],
+      sourceImages: [
+        { id: 'src-5', src: '', pageNumber: 2, sourceContentUnitIds: ['4028'] },
+        { id: 'src-9', src: '', pageNumber: 3, sourceContentUnitIds: ['4026'] },
+      ],
+      governed: false,
+      bookStructure: BOOK,
+    };
+    const before = diagnoseCandidateOutlines(CANDIDATE, diagnosisContext).blocking;
+    const after = diagnoseCandidateOutlines(
+      applyCorrectionOperations(CANDIDATE, [INSERT], context()),
+      diagnosisContext,
+    ).blocking;
+    const insertedId = 'try2-book-missing_solution-4028';
+    expect(before.some((d) => d.code === 'BOOK_COVERAGE_INCOMPLETE')).toBe(true);
+    expect(after.some((d) => d.code === 'BOOK_COVERAGE_INCOMPLETE')).toBe(false);
+    expect(
+      after
+        .filter((d) => d.outlineId === insertedId)
+        .filter((d) => d.code !== 'VISUAL_TEACHING_NOTE_MISSING'),
+    ).toEqual([]);
+  });
+
+  it('plans a native diagram where the position requires a visual and none is linked', () => {
+    const flow = [
+      {
+        ...FLOW[0],
+        scenePolicy: {
+          sceneTypes: ['slide'],
+          visual: 'source_grounded',
+          cardinality: 'one_or_more',
+        },
+      },
+    ] as unknown as TeachingFlowEntry[];
+    const edited = applyCorrectionOperations(
+      CANDIDATE,
+      [INSERT],
+      context({ flow, sourceRefs: { ...SOURCE_REFS, sourceImages: [] } }),
+    );
+    expect(edited[2]!.visualPlan).toEqual({ mode: 'native' });
+  });
+
+  it('offers no insert where the position does not allow a worked example', () => {
+    const flow = [
+      {
+        ...FLOW[0],
+        scenePolicy: {
+          sceneTypes: ['slide'],
+          contentRoles: ['check_understanding'],
+          cardinality: 'one_or_more',
+        },
+      },
+    ] as unknown as TeachingFlowEntry[];
+    expect(insertableBookGaps(CANDIDATE, BOOK, flow)).toEqual([]);
+    expect(() => applyCorrectionOperations(CANDIDATE, [INSERT], context({ flow }))).toThrow(
       /no missing solution slide/,
     );
   });

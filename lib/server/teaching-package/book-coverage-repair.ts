@@ -204,9 +204,16 @@ export async function repairBookCoverageGaps(
         aiCall,
       });
       if (!result.ok) {
-        // The reason, with any non-ASCII run (lesson text) blanked, so the
-        // template wording of a validator or provider failure stays readable.
-        const reason = result.message.replace(/[^\x20-\x7E]+/g, '…').slice(0, 400);
+        // The reason's template wording only: quoted values and any non-ASCII
+        // run (lesson text) are blanked, and a provider's own error text is cut.
+        const reason = result.message
+          .replace(
+            /the slide could not be planned \(.*$/s,
+            'the slide could not be planned (model call failed)',
+          )
+          .replace(/"[^"]*"/g, '"…"')
+          .replace(/[^\x20-\x7E]+/g, '…')
+          .slice(0, 400);
         log.warn(
           `book coverage repair could not plan a ${gap.kind} slide (${result.code}): ${reason}`,
         );

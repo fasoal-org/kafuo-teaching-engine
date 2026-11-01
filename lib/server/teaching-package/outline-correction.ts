@@ -589,7 +589,7 @@ export function applyCorrectionOperations(
       }
     }
     if (operation.op === 'insert_book_slide') {
-      const gap = insertableBookGaps(next, context.bookStructure).find(
+      const gap = insertableBookGaps(next, context.bookStructure, context.flow).find(
         (candidate) =>
           candidate.unit.contentUnitId === operation.unitId &&
           next[candidate.anchorIndex!]?.id === operation.outlineId,
@@ -622,15 +622,28 @@ export function applyCorrectionOperations(
 
 /**
  * The book gaps a person can fill with `insert_book_slide`: a check's missing
- * solution slide, which always has its try-it slide as the anchor.
+ * solution slide, which always has its try-it slide as the anchor — when the
+ * anchor's flow position allows a worked example (else the slide could never pass).
  */
 export function insertableBookGaps(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure | undefined,
+  flow: readonly TeachingFlowEntry[],
 ): BookCoverageGap[] {
-  return findBookCoverageGaps(outlines, book).filter(
-    (gap) => gap.kind === 'missing_solution' && gap.anchorIndex !== undefined,
-  );
+  return findBookCoverageGaps(outlines, book).filter((gap) => {
+    if (gap.kind !== 'missing_solution' || gap.anchorIndex === undefined) return false;
+    const roles = anchorPolicy(outlines[gap.anchorIndex], flow)?.contentRoles;
+    return !roles || roles.includes('worked_example');
+  });
+}
+
+function anchorPolicy(
+  anchor: SceneOutline | undefined,
+  flow: readonly TeachingFlowEntry[],
+): TeachingScenePolicy | undefined {
+  const stage = anchor?.teachingStage;
+  const entry = stage ? flow[stage.flowIndex] : undefined;
+  return entry && entry.stage === stage!.key ? scenePolicyFor(entry) : undefined;
 }
 
 /**
@@ -654,6 +667,9 @@ function insertedBookSlide(
   const linked = context.sourceRefs.sourceImages
     .filter((image) => (image.sourceContentUnitIds ?? []).some((ref) => String(ref) === unitId))
     .map((image) => image.id);
+  // A position that requires a visual gets a native diagram when no textbook
+  // visual belongs to the check (the resume plans its teaching note).
+  const visualRequired = anchorPolicy(anchor, context.flow)?.visual !== undefined;
   return {
     id,
     type: 'slide',
@@ -665,8 +681,12 @@ function insertedBookSlide(
     order: gap.anchorIndex! + 2,
     ...(anchor.teachingStage ? { teachingStage: { ...anchor.teachingStage } } : {}),
     sourceContentUnitIds: [unitId],
-    ...(linked.length > 0 ? { suggestedImageIds: linked, visualPlan: { mode: 'image' } } : {}),
-    ...(anchor.teachingSkills ? { teachingSkills: anchor.teachingSkills } : {}),
+    ...(linked.length > 0
+      ? { suggestedImageIds: linked, visualPlan: { mode: 'image' } }
+      : visualRequired
+        ? { visualPlan: { mode: 'native' } }
+        : {}),
+    ...(anchor.teachingSkills ? { teachingSkills: structuredClone(anchor.teachingSkills) } : {}),
   } as SceneOutline;
 }
 
@@ -787,6 +807,7 @@ export function buildCorrectionView(
               attempt.inputSnapshot.bookStructure,
               checkpoint.sourceRefs.essentialContentUnitIds,
             ),
+            flow,
           ).map((gap) => {
             const anchor = checkpoint.outlines[gap.anchorIndex!]!;
             return {
