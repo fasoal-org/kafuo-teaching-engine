@@ -87,8 +87,9 @@ function instructionFor(gap: BookCoverageGap): string {
   if (gap.kind === 'missing_solution') {
     return (
       `Plan the solution slide (contentRole worked_example) for the book check in content unit ${id}: ` +
-      `work each of its items step by step with this part's decision rule` +
-      (example ? `, the way the book's example in unit ${example} is solved.` : '.')
+      `work each of its items step by step to a final answer with this part's decision rule` +
+      (example ? `, the way the book's example in unit ${example} is solved.` : '.') +
+      ' The book prints no answer, so work it from the given data; a guess or prediction item gets a reasoned number stated as an estimate.'
     );
   }
   if (gap.kind === 'missing_try_it') {

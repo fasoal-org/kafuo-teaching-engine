@@ -129,6 +129,7 @@ describe('g5.v7 book coverage gate', () => {
       'UNDERSTANDING_CHECK 13 in part 1 is solved on a slide before its try-it slide',
     ]);
     expect(bookStructureRequirement(BOOK)).toContain('Never solve a try_it unit before');
+    expect(bookStructureRequirement(BOOK)).toContain('stated as an estimate');
   });
 
   it('is a no-op without a book map (v6 and earlier)', () => {

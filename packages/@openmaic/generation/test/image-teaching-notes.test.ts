@@ -11,6 +11,7 @@ import {
   type AICallFn,
   type SceneOutline,
 } from '../src/index.js';
+import { buildSlideRoleContext } from '../src/slide-role-guidance.js';
 import { slideOutline } from './scene-fixtures.js';
 
 const ACTIONS_RESPONSE = JSON.stringify([{ type: 'text', content: 'Look at the two figures.' }]);
@@ -108,5 +109,46 @@ describe('narration image notes', () => {
     expect(store.user).toContain(
       "The slide's diagram shows vapour, cloud and rain in a loop; explain it and point the learner to what to notice: water moves in a cycle.",
     );
+  });
+
+  it('never hands a try-it the finding its image note names', async () => {
+    // Lesson 306: the try-it narration said "the parts triple" from the note.
+    const store: { user?: string } = {};
+    const tryIt: SceneOutline = { ...outline, contentRole: 'check_understanding' };
+    await generateSceneActions(tryIt, content, capture(store), {
+      imageNotes: buildNarrationImageNotes(tryIt, SOURCE_IMAGES, SERVING),
+    });
+    expect(store.user).toContain('shows: many examples leading to one rule');
+    expect(store.user).not.toContain('the learner should notice');
+    expect(store.user).not.toContain('induction goes from examples to a rule');
+    expect(store.user).toContain('is part of the question');
+    expect(store.user).toContain('Never state the pattern, relationship, rule or result');
+    expect(store.user).toContain('Pose the question');
+  });
+
+  it('never tells the canvas of a try-it what its diagram must show the learner', () => {
+    const context = buildSlideRoleContext({
+      slideType: 'content',
+      contentRole: 'check_understanding',
+      visualPlan: {
+        mode: 'native',
+        diagram: { shows: 'stages with 1, 3 and 9 parts', teachingPoint: 'the parts triple' },
+      },
+    });
+    expect(context.roleGuidance).toContain('stages with 1, 3 and 9 parts');
+    expect(context.roleGuidance).not.toContain('the parts triple');
+    expect(context.roleGuidance).toContain('never draw or label the pattern');
+  });
+
+  it('asks a worked example for its final answer, and an estimate for a prediction', async () => {
+    const store: { user?: string } = {};
+    await generateSceneActions(
+      { ...outline, contentRole: 'worked_example' },
+      content,
+      capture(store),
+      { imageNotes: buildNarrationImageNotes(outline, SOURCE_IMAGES, SERVING) },
+    );
+    expect(store.user).toContain('to its final answer');
+    expect(store.user).toContain('say it is an estimate');
   });
 });

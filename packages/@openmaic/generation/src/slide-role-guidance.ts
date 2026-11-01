@@ -87,11 +87,18 @@ export function buildSlideRoleContext(input: SlideRoleGuidanceInput): SlideRoleC
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   const diagram = input.visualPlan?.mode === 'native' ? input.visualPlan.diagram : undefined;
+  // A try-it, practice task or activity leaves the finding to the learner, so its
+  // diagram shows the question's data and never labels the result.
+  const withholdFinding = ['check_understanding', 'practice', 'activity'].includes(
+    String(input.contentRole ?? ''),
+  );
   const visual =
     VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? ''] &&
-    (diagram?.shows?.trim() && diagram.teachingPoint?.trim()
-      ? `${VISUAL_PLAN_GUIDANCE.native} The planner's note for this diagram: it shows ${diagram.shows.trim()}; the learner should notice ${diagram.teachingPoint.trim()}.`
-      : VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? '']);
+    (diagram?.shows?.trim() && withholdFinding
+      ? `${VISUAL_PLAN_GUIDANCE.native} The planner's note for this diagram: it shows ${diagram.shows.trim()}. It is the data of the question: never draw or label the pattern, relationship or result the learner is asked to find.`
+      : diagram?.shows?.trim() && diagram.teachingPoint?.trim()
+        ? `${VISUAL_PLAN_GUIDANCE.native} The planner's note for this diagram: it shows ${diagram.shows.trim()}; the learner should notice ${diagram.teachingPoint.trim()}.`
+        : VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? '']);
   const sourceGrounding =
     input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
   return {
@@ -139,6 +146,8 @@ const NARRATION_RULES: Readonly<Record<string, string>> = {
     'Present the task and ask the learner to reason and justify. Do NOT state the conclusion, the judgement, or the justification.',
   check_understanding:
     'Pose the question and give the learner time to think. You MUST NOT reveal or explain the answer, and never mention scores, points, attempts or grades.',
+  worked_example:
+    'Work the problem step by step to its final answer and say that answer clearly. When the item asks to guess, estimate or predict, give a reasoned value derived from the given data and say it is an estimate.',
   summary: 'Consolidate what was taught. Introduce NO new concept.',
   structural:
     'Keep narration brief and orienting; do not add teaching content this slide does not show.',

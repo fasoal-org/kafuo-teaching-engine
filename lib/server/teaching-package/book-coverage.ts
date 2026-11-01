@@ -208,6 +208,9 @@ export function bookStructureRequirement(book: KafuoBookStructure | undefined): 
     'answer, followed by a solution slide (contentRole worked_example) that cites it too.',
     "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
     'the example, not the check that follows it.',
+    'The book prints no answer to a check: its solution slide works every item to a final',
+    'answer from the given data; an item that asks to guess or predict gets a reasoned number',
+    '(for example from the average change), stated as an estimate.',
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }

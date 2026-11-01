@@ -1168,7 +1168,11 @@ async function generateSlideContent(
     } else {
       assignedImagesText = sorted.map((img) => formatImageDescription(img)).join('\n');
     }
-    const notes = formatImageTeachingNotes(guidance.imagePlans, assignedImages);
+    const notes = formatImageTeachingNotes(
+      guidance.imagePlans,
+      assignedImages,
+      withholdsFinding(guidance),
+    );
     if (notes) {
       assignedImagesText += `\n\nThe planner's teaching note for each image (planner-only — never print it on the slide; place each image beside the content its note says it teaches):\n${notes}`;
     }
@@ -2277,7 +2281,7 @@ export async function generateSceneActions(
   if (outline.type === 'slide' && 'elements' in content) {
     // Format element list for AI to select from
     const elementsText =
-      formatElementsForPrompt(content.elements, options.imageNotes) +
+      formatElementsForPrompt(content.elements, options.imageNotes, withholdsFinding(outline)) +
       visualNarrationDirective(content.elements, outline, options.imageNotes);
 
     // Typed boundary: narration is built from the visible canvas and the
@@ -2501,6 +2505,7 @@ const NARRATION_VISIBLE_TEXT_BUDGET = 6000;
 function formatImageTeachingNotes(
   plans: readonly ImagePlan[] | undefined,
   images: readonly Pick<PdfImage, 'id' | 'figureLabel' | 'caption'>[],
+  withholdFinding = false,
 ): string {
   const byId = new Map(images.map((image) => [image.id, image] as const));
   return (plans ?? [])
@@ -2511,7 +2516,10 @@ function formatImageTeachingNotes(
         image.figureLabel ? `figure ${image.figureLabel}` : '',
         image.caption ? `caption "${image.caption}"` : '',
       ].filter(Boolean);
-      return `- ${plan.imageId}${source.length ? ` (${source.join(', ')})` : ''}: shows ${plan.shows.trim()}; the learner should notice ${plan.teachingPoint.trim()}`;
+      const notice = withholdFinding
+        ? ''
+        : `; the learner should notice ${plan.teachingPoint.trim()}`;
+      return `- ${plan.imageId}${source.length ? ` (${source.join(', ')})` : ''}: shows ${plan.shows.trim()}${notice}`;
     })
     .join('\n');
 }
@@ -2557,13 +2565,34 @@ export function buildNarrationImageNotes(
   return notes;
 }
 
-function formatImageElementSummary(note: NarrationImageNote | undefined): string {
+/**
+ * Slides whose narration must leave the finding to the learner (a try-it, a
+ * practice task, an activity). Their image notes can name that finding — the
+ * Sierpinski "the parts triple" on lesson 306's try-it — so it is never handed
+ * to the narration as "what to notice".
+ */
+const FINDING_WITHHELD_ROLES: ReadonlySet<string> = new Set([
+  'check_understanding',
+  'practice',
+  'activity',
+]);
+
+function withholdsFinding(outline: Pick<SceneOutline, 'contentRole'>): boolean {
+  return FINDING_WITHHELD_ROLES.has(String(outline.contentRole ?? ''));
+}
+
+function formatImageElementSummary(
+  note: NarrationImageNote | undefined,
+  withholdFinding = false,
+): string {
   if (!note) return 'Image element';
   const parts = [
     note.figureLabel ? `figure ${note.figureLabel}` : '',
     note.caption ? `caption "${note.caption}"` : '',
     note.shows ? `shows: ${note.shows.trim()}` : '',
-    note.teachingPoint ? `the learner should notice: ${note.teachingPoint.trim()}` : '',
+    note.teachingPoint && !withholdFinding
+      ? `the learner should notice: ${note.teachingPoint.trim()}`
+      : '',
   ].filter(Boolean);
   return parts.length ? `Textbook image — ${parts.join('; ')}` : 'Image element';
 }
@@ -2584,13 +2613,22 @@ function visualNarrationDirective(
     return el.type === 'image' && typeof src === 'string' && imageNotes?.[src]?.shows;
   });
   const lines: string[] = [];
-  if (notedImages.length > 0) {
+  const ids = notedImages.map((el) => `"${el.id}"`).join(', ');
+  if (notedImages.length > 0 && withholdsFinding(outline)) {
     lines.push(
-      `Every textbook image above (${notedImages.map((el) => `"${el.id}"`).join(', ')}) is part of what this slide teaches: for EACH one, point the learner to it (spotlight its id) and explain what it shows and what to notice, in the order the slide teaches them. Describe only what its note says the image shows.`,
+      `Every textbook image above (${ids}) is part of the question: for EACH one, point the learner to it (spotlight its id) and say what it shows, as the data the learner works from. Never state the pattern, relationship, rule or result the learner is asked to find — not even as a hint about what to notice. Describe only what its note says the image shows.`,
+    );
+  } else if (notedImages.length > 0) {
+    lines.push(
+      `Every textbook image above (${ids}) is part of what this slide teaches: for EACH one, point the learner to it (spotlight its id) and explain what it shows and what to notice, in the order the slide teaches them. Describe only what its note says the image shows.`,
     );
   }
   const diagram = outline.visualPlan?.mode === 'native' ? outline.visualPlan.diagram : undefined;
-  if (diagram?.shows?.trim() && diagram.teachingPoint?.trim()) {
+  if (diagram?.shows?.trim() && withholdsFinding(outline)) {
+    lines.push(
+      `The slide's diagram shows ${diagram.shows.trim()}; point the learner to it as the data of the question, without stating what they are asked to find.`,
+    );
+  } else if (diagram?.shows?.trim() && diagram.teachingPoint?.trim()) {
     lines.push(
       `The slide's diagram shows ${diagram.shows.trim()}; explain it and point the learner to what to notice: ${diagram.teachingPoint.trim()}.`,
     );
@@ -2601,6 +2639,7 @@ function visualNarrationDirective(
 function formatElementsForPrompt(
   elements: PPTElement[],
   imageNotes?: Readonly<Record<string, NarrationImageNote>>,
+  withholdFinding = false,
 ): string {
   let remaining = NARRATION_VISIBLE_TEXT_BUDGET;
   const excerpt = (text: string): string => {
@@ -2625,6 +2664,7 @@ function formatElementsForPrompt(
         const src = (el as { src?: unknown }).src;
         summary = formatImageElementSummary(
           typeof src === 'string' ? imageNotes?.[src] : undefined,
+          withholdFinding,
         );
       } else if (el.type === 'shape' && 'shapeName' in el) {
         summary = `Shape: ${el.shapeName || 'unknown'}`;
