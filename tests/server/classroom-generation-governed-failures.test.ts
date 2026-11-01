@@ -278,13 +278,70 @@ describe('generateClassroom — W2 governed failure policy', () => {
 
     expect(result.scenes).toHaveLength(outlines.length);
     expect(contentCalls).toBe(outlines.length + 1);
+    // Scene content is prefetched concurrently, so call order across Scenes is not
+    // fixed: the first call is still the unusable one, and exactly one later call is
+    // the re-ask carrying the correction.
     expect(contentPrompts[0]).not.toContain('Correction Required');
-    expect(contentPrompts[1]).toContain('Correction Required');
-    expect(contentPrompts[1]).toContain('not a valid JSON object with an "elements" array');
-    // Only the re-asked scene carries the correction.
-    expect(contentPrompts.slice(2).some((prompt) => prompt.includes('Correction Required'))).toBe(
-      false,
+    const corrected = contentPrompts.filter((prompt) => prompt.includes('Correction Required'));
+    expect(corrected).toHaveLength(1);
+    expect(corrected[0]).toContain('not a valid JSON object with an "elements" array');
+  });
+});
+
+describe('generateClassroom — Scene content is prefetched concurrently (1 Nov 2026)', () => {
+  it('runs content calls at the same time but keeps Scenes in outline order', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+        const system = String(request.messages.find((m) => m.role === 'system')?.content ?? '');
+        if (ACTIONS_PROMPT.test(system)) return { text: ACTIONS_CANONICAL };
+        const user = String(request.messages.find((m) => m.role === 'user')?.content ?? '');
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // The FIRST Scene answers last, so a serial loop would have shown max 1.
+        await new Promise((resolve) => setTimeout(resolve, user.includes('Opening') ? 30 : 5));
+        inFlight -= 1;
+        return { text: CONTENT_OK(user.includes('Opening') ? 1 : 2) };
+      },
     );
+
+    const result = await runGoverned(governedInput);
+
+    expect(maxInFlight).toBe(2);
+    expect(result.scenes.map((scene: { title: string }) => scene.title)).toEqual([
+      'Opening',
+      'Cards',
+    ]);
+  });
+
+  it('runs one at a time when TE_SCENE_CONTENT_CONCURRENCY=1', async () => {
+    vi.stubEnv('TE_SCENE_CONTENT_CONCURRENCY', '1');
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+        const system = String(request.messages.find((m) => m.role === 'system')?.content ?? '');
+        if (ACTIONS_PROMPT.test(system)) return { text: ACTIONS_CANONICAL };
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return { text: CONTENT_OK(1) };
+      },
+    );
+
+    await runGoverned(governedInput);
+
+    expect(maxInFlight).toBe(1);
+  });
+
+  it('clamps the setting to between 1 and 8', async () => {
+    const { sceneContentConcurrency } = await import('@/lib/server/classroom-generation');
+    expect(sceneContentConcurrency(undefined)).toBe(4);
+    expect(sceneContentConcurrency('0')).toBe(1);
+    expect(sceneContentConcurrency('99')).toBe(8);
+    expect(sceneContentConcurrency('x')).toBe(4);
   });
 });
 

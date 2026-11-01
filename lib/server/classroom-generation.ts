@@ -1,4 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { callLLM } from '@/lib/ai/llm';
+import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createStageAPI } from '@/lib/api/stage-api';
 import type { StageStore } from '@/lib/api/stage-api-types';
 import {
@@ -120,6 +123,19 @@ import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agen
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
 
 const log = createLogger('Classroom');
+
+/**
+ * How many Scenes' content is generated at once (1 Nov 2026, generation latency).
+ * Content calls are independent per Scene, so the ~26 serial calls of a 21-Scene
+ * lesson (about 6 of its 12 minutes) run 4 at a time; actions stay serial. The
+ * call count and cost are unchanged. `TE_SCENE_CONTENT_CONCURRENCY=1` restores the
+ * old one-at-a-time order. Clamped to [1, 8].
+ */
+export function sceneContentConcurrency(raw = process.env.TE_SCENE_CONTENT_CONCURRENCY): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(parsed)) return 4;
+  return Math.min(8, Math.max(1, parsed));
+}
 
 /**
  * A scene's Action generation, attempts in total, under a spoken-language
@@ -897,6 +913,16 @@ export async function generateClassroom(
   // keeps a marked placeholder / default narration, and the run continues. A
   // retryable failure (the route is down) still fails the run as before.
   let sceneRefusalScope: { refusals: TeachingModelUnavailableError[] } | null = null;
+  // Scene content is prefetched concurrently (see `SCENE_CONTENT_CONCURRENCY`), so a
+  // content call cannot read the one shared `sceneRefusalScope`: it would record its
+  // refusal on whichever Scene the loop happens to be on. Each prefetched content call
+  // runs inside its own Scene's scope here; the loop's serial action calls still use
+  // `sceneRefusalScope`.
+  // `scope: null` is an explicit "no Scene scope" (a refusal then fails the run), so a
+  // prefetched call never falls through to the loop's scope for a different Scene.
+  const contentRefusalScopes = new AsyncLocalStorage<{
+    scope: { refusals: TeachingModelUnavailableError[] } | null;
+  }>();
   const teachingContext = (stage: string): TeachingCallContext => ({
     tenantId: routed!.attribution.tenantId,
     capability: 'package_generation',
@@ -938,7 +964,9 @@ export async function generateClassroom(
       return result.text;
     } catch (error) {
       if (error instanceof TeachingModelUnavailableError) {
-        if (!error.retryable && sceneRefusalScope) sceneRefusalScope.refusals.push(error);
+        const holder = contentRefusalScopes.getStore();
+        const refusalScope = holder ? holder.scope : sceneRefusalScope;
+        if (!error.retryable && refusalScope) refusalScope.refusals.push(error);
         else routeFailure ??= error;
         // The generation package's retry helper reads `isRetryable` first:
         // the executor already spent the whole route, so a per-call retry
@@ -1762,6 +1790,192 @@ export async function generateClassroom(
     }
     const retainedSceneIds = new Set<string>();
 
+    // Pre-pass, before ANY content spend (the prefetch below starts calls at once):
+    // a caller-prohibited widget (Kafuo Release 1 defers games) is refused, and on a
+    // governed run each Scene's exact Flow entry is resolved fail-closed (W1,
+    // TAE-RQ-009) — exactly the two refusals the loop used to make per Scene first.
+    const prepared = outlines.map((outline, index) => {
+      if (retainedByOutline.has(outline.id)) return null;
+      const safeOutline = applyOutlineFallbacks(outline, true, {
+        allowProceduralSkill: vocationalActive,
+      });
+      if (isProhibitedWidgetOutline(safeOutline, input.prohibitedWidgetTypes)) {
+        throw new TeachingPackageError(
+          'GAME_GENERATION_DEFERRED',
+          `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) would generate a "${interactiveWidgetTypeOf(safeOutline)}" widget, which this generation may not create (Kafuo Release 1 defers learning games)`,
+          {
+            outlineId: safeOutline.id,
+            teachingStage: safeOutline.teachingStage,
+            widgetType: interactiveWidgetTypeOf(safeOutline),
+          },
+        );
+      }
+      return {
+        safeOutline,
+        flowContext: resolveGovernedSceneFlowContext(input.governed, safeOutline),
+      };
+    });
+
+    // One Scene's content, with no dependency on any other Scene: each content call
+    // reads only its own outline and the run's fixed inputs. That is what makes the
+    // prefetch safe — actions, which read `previousSpeeches`, stay in the serial loop.
+    const produceSceneContent = async (index: number, safeOutline: SceneOutline) => {
+      const contentRefusals: TeachingModelUnavailableError[] = [];
+      // 3 Oct 2026: while ONE governed slide/quiz is generated, a non-retryable
+      // refusal is that Scene's problem (see `sceneRefusalScope`).
+      const governedScope = input.governed && isReviewerRegenerable(safeOutline.type);
+      const reportContentRetry = async (event: {
+        attempt: number;
+        maxAttempts: number;
+        reason: string;
+      }) => {
+        const nextAttempt = Math.min(event.attempt + 1, event.maxAttempts);
+        const message = `Retrying scene ${index + 1}/${outlines.length} content (${nextAttempt}/${event.maxAttempts}): ${safeOutline.title}`;
+        log.warn(`${message} — ${event.reason}`);
+        await options.onProgress?.({
+          step: 'generating_scenes',
+          progress: Math.max(30 + Math.floor((index / Math.max(outlines.length, 1)) * 60), 31),
+          message,
+          scenesGenerated: generatedScenes,
+          totalScenes: outlines.length,
+        });
+      };
+      const run = async () => {
+        // Resolve this scene's content model lazily, per outline type. The package
+        // gets the provider-bound AICallFn and the app injects its agentic PBL loop
+        // as the classified fallback, preserving single-call → loop routing.
+        // W6: a bank check quiz needs no content model and no narration model.
+        const bankQuiz = Boolean(input.bankCheckQuizzes) && isBankCheckQuizOutline(safeOutline);
+        const contentCall = bankQuiz ? null : await resolveSceneContentCall(safeOutline.type);
+        // The outline's assigned source visuals (slide scenes only): a visual
+        // need the model fills by referencing the image id, resolved onto the
+        // serving path after generation.
+        const outlineAssignedImages =
+          hasSourceVisuals && safeOutline.type === 'slide'
+            ? (sourceImages?.filter((image) => safeOutline.suggestedImageIds?.includes(image.id)) ??
+              [])
+            : undefined;
+        let contentFailure: { code: string; detail?: string } | undefined;
+        // 3 Oct 2026: a governed slide problem is recorded on the scene and the
+        // package keeps going — the reviewer regenerates the slide afterwards.
+        const sceneIssues: SceneGenerationIssue[] = [];
+        const generateContent = async (correctiveNote?: string) => {
+          if (!contentCall) return null;
+          try {
+            return await withGenerationRetry(
+              () =>
+                generateSceneContent(safeOutline, contentCall.aiCall, {
+                  agents,
+                  languageDirective,
+                  ...(textDirection !== undefined ? { textDirection } : {}),
+                  allowProceduralSkill: vocationalActive,
+                  ...(input.prohibitedWidgetTypes?.length
+                    ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
+                    : {}),
+                  ...(resolvedSkills ? { resolvedSkills } : {}),
+                  ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                  ...(outlineAssignedImages && outlineAssignedImages.length > 0
+                    ? {
+                        assignedImages: outlineAssignedImages,
+                        imageMapping: sourceServingMapping,
+                        visionEnabled: true,
+                        resolvedVisionImages: outlineAssignedImages.map((image) => ({
+                          id: image.id,
+                          src: sourceImageMapping[image.id] ?? image.src,
+                          width: image.width,
+                          height: image.height,
+                        })),
+                      }
+                    : {}),
+                  ...(safeOutline.type === 'pbl'
+                    ? {
+                        pblLoopFallback: (input) =>
+                          generatePBLV2Project(
+                            input,
+                            contentCall.model,
+                            callLLM,
+                            { logger: log },
+                            contentCall.thinking,
+                          ),
+                      }
+                    : {}),
+                  ...(correctiveNote ? { correctiveNote } : {}),
+                  ...(input.governed
+                    ? { onVisualIssue: (issue) => void sceneIssues.push(issue) }
+                    : {}),
+                  logger: log,
+                  onFailure: (failure) => {
+                    contentFailure = failure;
+                  },
+                }),
+              {
+                label: `scene ${index + 1}/${outlines.length} content`,
+                // Governed package generation is intentionally single-shot per
+                // scene. A rejected result must surface immediately instead of
+                // silently multiplying model cost.
+                ...(input.governed ? { maxRetries: 0 } : {}),
+                // A null from a routed call whose route failed is not re-rolled
+                // per call (plan §7.4): the run fails at the checkpoint below.
+                shouldRetryResult: (result) => result === null && routeFailure === null,
+                onRetry: (event) => reportContentRetry(event),
+              },
+            );
+          } catch (error) {
+            assertRouteAvailable();
+            if (
+              governedScope &&
+              error instanceof TeachingModelUnavailableError &&
+              !error.retryable
+            ) {
+              // Recorded on the scene below; the run continues.
+              contentFailure = { code: 'model-refused', detail: error.message };
+              return null;
+            }
+            return containPBLGenerationError(error, safeOutline.title);
+          }
+        };
+        let content = bankQuiz ? bankQuizContent() : await generateContent();
+        assertRouteAvailable();
+        // Governed runs stay single-shot per scene, with ONE exception: an answer
+        // that could not even be parsed (`invalid-model-output`) is re-asked once,
+        // for THIS scene only and with a correction — one extra call instead of
+        // losing every Scene already generated for the package.
+        if (
+          !content &&
+          input.governed &&
+          contentFailure?.code === 'invalid-model-output' &&
+          routeFailure === null
+        ) {
+          log.warn(
+            `Scene ${index + 1}/${outlines.length} content was not usable JSON; re-asking once: ${safeOutline.title}`,
+          );
+          await reportContentRetry({ attempt: 1, maxAttempts: 2, reason: 'invalid-model-output' });
+          contentFailure = undefined;
+          content = await generateContent(INVALID_SCENE_OUTPUT_CORRECTION);
+          assertRouteAvailable();
+        }
+        return { bankQuiz, content, contentFailure, sceneIssues, contentRefusals };
+      };
+      return contentRefusalScopes.run(
+        { scope: governedScope ? { refusals: contentRefusals } : null },
+        run,
+      );
+    };
+
+    // Up to SCENE_CONTENT_CONCURRENCY Scenes' content in flight at once, results awaited
+    // in order by the loop. Once a route failure is recorded no new Scene starts.
+    const sceneContents = lazyBoundedMap(
+      outlines,
+      sceneContentConcurrency(),
+      async (_outline, index) => {
+        const ready = prepared[index];
+        return ready ? produceSceneContent(index, ready.safeOutline) : null;
+      },
+      { shouldContinue: () => routeFailure === null },
+    );
+    // A run that stops early must not leave a later Scene's rejection unobserved.
+    for (const pending of sceneContents) pending.catch(() => undefined);
+
     let refusedScenes = 0;
     let firstRefusal: TeachingModelUnavailableError | undefined;
     for (const [index, outline] of outlines.entries()) {
@@ -1773,9 +1987,7 @@ export async function generateClassroom(
         previousSpeeches = spokenTexts(retained.actions ?? []);
         continue;
       }
-      const safeOutline = applyOutlineFallbacks(outline, true, {
-        allowProceduralSkill: vocationalActive,
-      });
+      const safeOutline = prepared[index]!.safeOutline;
       const sceneRefusals: TeachingModelUnavailableError[] = [];
       sceneRefusalScope =
         input.governed && isReviewerRegenerable(safeOutline.type)
@@ -1807,144 +2019,16 @@ export async function generateClassroom(
         });
       };
 
-      // A caller-prohibited widget (Kafuo Release 1 defers games) is refused
-      // before any content spend — including one inferred from a legacy config,
-      // and one in retained-scene resumes that reach generation.
-      if (isProhibitedWidgetOutline(safeOutline, input.prohibitedWidgetTypes)) {
-        throw new TeachingPackageError(
-          'GAME_GENERATION_DEFERRED',
-          `scene ${index + 1} (${JSON.stringify(safeOutline.title)}) would generate a "${interactiveWidgetTypeOf(safeOutline)}" widget, which this generation may not create (Kafuo Release 1 defers learning games)`,
-          {
-            outlineId: safeOutline.id,
-            teachingStage: safeOutline.teachingStage,
-            widgetType: interactiveWidgetTypeOf(safeOutline),
-          },
-        );
-      }
-
-      // Resolve this scene's content model lazily, per outline type. The package
-      // gets the provider-bound AICallFn and the app injects its agentic PBL loop
-      // as the classified fallback, preserving single-call → loop routing.
-      // W6: a bank check quiz needs no content model and no narration model.
-      const bankQuiz = Boolean(input.bankCheckQuizzes) && isBankCheckQuizOutline(safeOutline);
-      const contentCall = bankQuiz ? null : await resolveSceneContentCall(safeOutline.type);
-      // W1 (TAE-RQ-009): orchestration resolves this Scene's exact authoritative
-      // Flow entry ONCE, before any generation spend. On a governed run the
-      // resolution is fail-closed — an unresolvable context throws here rather
-      // than letting a governed Scene be generated with the Flow block silently
-      // omitted. Legacy runs resolve to undefined and pass no context.
-      const flowContext = resolveGovernedSceneFlowContext(input.governed, safeOutline);
-      // The outline's assigned source visuals (slide scenes only): a visual
-      // need the model fills by referencing the image id, resolved onto the
-      // serving path after generation.
-      const outlineAssignedImages =
-        hasSourceVisuals && safeOutline.type === 'slide'
-          ? (sourceImages?.filter((image) => safeOutline.suggestedImageIds?.includes(image.id)) ??
-            [])
-          : undefined;
-      let contentFailure: { code: string; detail?: string } | undefined;
-      // 3 Oct 2026: a governed slide problem is recorded on the scene and the
-      // package keeps going — the reviewer regenerates the slide afterwards.
-      const sceneIssues: SceneGenerationIssue[] = [];
-      const generateContent = async (correctiveNote?: string) => {
-        if (!contentCall) return null;
-        try {
-          return await withGenerationRetry(
-            () =>
-              generateSceneContent(safeOutline, contentCall.aiCall, {
-                agents,
-                languageDirective,
-                ...(textDirection !== undefined ? { textDirection } : {}),
-                allowProceduralSkill: vocationalActive,
-                ...(input.prohibitedWidgetTypes?.length
-                  ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
-                  : {}),
-                ...(resolvedSkills ? { resolvedSkills } : {}),
-                ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
-                ...(outlineAssignedImages && outlineAssignedImages.length > 0
-                  ? {
-                      assignedImages: outlineAssignedImages,
-                      imageMapping: sourceServingMapping,
-                      visionEnabled: true,
-                      resolvedVisionImages: outlineAssignedImages.map((image) => ({
-                        id: image.id,
-                        src: sourceImageMapping[image.id] ?? image.src,
-                        width: image.width,
-                        height: image.height,
-                      })),
-                    }
-                  : {}),
-                ...(safeOutline.type === 'pbl'
-                  ? {
-                      pblLoopFallback: (input) =>
-                        generatePBLV2Project(
-                          input,
-                          contentCall.model,
-                          callLLM,
-                          { logger: log },
-                          contentCall.thinking,
-                        ),
-                    }
-                  : {}),
-                ...(correctiveNote ? { correctiveNote } : {}),
-                ...(input.governed
-                  ? { onVisualIssue: (issue) => void sceneIssues.push(issue) }
-                  : {}),
-                logger: log,
-                onFailure: (failure) => {
-                  contentFailure = failure;
-                },
-              }),
-            {
-              label: `scene ${index + 1}/${outlines.length} content`,
-              // Governed package generation is intentionally single-shot per
-              // scene. A rejected result must surface immediately instead of
-              // silently multiplying model cost.
-              ...(input.governed ? { maxRetries: 0 } : {}),
-              // A null from a routed call whose route failed is not re-rolled
-              // per call (plan §7.4): the run fails at the checkpoint below.
-              shouldRetryResult: (result) => result === null && routeFailure === null,
-              onRetry: (event) => reportSceneRetry('content', event),
-            },
-          );
-        } catch (error) {
-          assertRouteAvailable();
-          if (
-            sceneRefusalScope &&
-            error instanceof TeachingModelUnavailableError &&
-            !error.retryable
-          ) {
-            // Recorded on the scene below; the run continues.
-            contentFailure = { code: 'model-refused', detail: error.message };
-            return null;
-          }
-          return containPBLGenerationError(error, safeOutline.title);
-        }
-      };
-      let content = bankQuiz ? bankQuizContent() : await generateContent();
+      // The content was started by the prefetch pool above (at most
+      // `SCENE_CONTENT_CONCURRENCY` Scenes at once); the loop waits for THIS Scene's
+      // result in order, while actions stay strictly serial for `previousSpeeches`.
+      const produced = await sceneContents[index];
       assertRouteAvailable();
-      // Governed runs stay single-shot per scene, with ONE exception: an answer
-      // that could not even be parsed (`invalid-model-output`) is re-asked once,
-      // for THIS scene only and with a correction — one extra call instead of
-      // losing every Scene already generated for the package.
-      if (
-        !content &&
-        input.governed &&
-        contentFailure?.code === 'invalid-model-output' &&
-        routeFailure === null
-      ) {
-        log.warn(
-          `Scene ${index + 1}/${outlines.length} content was not usable JSON; re-asking once: ${safeOutline.title}`,
-        );
-        await reportSceneRetry('content', {
-          attempt: 1,
-          maxAttempts: 2,
-          reason: 'invalid-model-output',
-        });
-        contentFailure = undefined;
-        content = await generateContent(INVALID_SCENE_OUTPUT_CORRECTION);
-        assertRouteAvailable();
-      }
+      if (!produced) continue; // only when a route failure stopped the pool (thrown above)
+      const { bankQuiz, contentFailure, sceneIssues } = produced;
+      let content = produced.content;
+      sceneRefusals.push(...produced.contentRefusals);
+      const flowContext = prepared[index]!.flowContext;
       const regenerable = isReviewerRegenerable(safeOutline.type);
       if (!content && input.governed && regenerable) {
         // 3 Oct 2026: a slide or quiz can be regenerated by the reviewer, so it
