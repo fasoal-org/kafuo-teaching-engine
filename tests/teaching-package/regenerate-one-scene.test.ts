@@ -328,6 +328,19 @@ describe('regenerateOneScene — quiz', () => {
     const { result } = await run('not json', { pre: quizPre(), outline: quizOutline() });
     expect(result).toMatchObject({ ok: false, code: 'SCENE_CONTENT_GENERATION_FAILED' });
   });
+
+  // W6: a bank quiz shows Kafuo question-bank questions; nothing is generated.
+  it('refuses a bank quiz Scene before any model call', async () => {
+    const bank = {
+      ...quizPre(),
+      content: { type: 'quiz', questions: [] },
+      questionSource: 'bank',
+      generationIssues: undefined,
+    } as unknown as AppScene;
+    const { result, prompts } = await run(QUESTIONS, { pre: bank, outline: quizOutline() });
+    expect(result).toMatchObject({ ok: false, code: 'BANK_QUIZ_NOT_REGENERABLE' });
+    expect(prompts).toEqual([]);
+  });
 });
 
 // 4 Oct 2026: package Scenes are stored without `sourceContentUnitIds` while

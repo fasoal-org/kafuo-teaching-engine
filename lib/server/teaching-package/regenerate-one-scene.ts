@@ -54,6 +54,7 @@ import {
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
+import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene, Scene } from '@/lib/types/stage';
 
@@ -173,6 +174,13 @@ export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
   const pre = input.scene;
+  if (isBankQuizScene(pre)) {
+    // W6: the questions live in the Kafuo question bank; nothing is generated.
+    return failure(
+      'BANK_QUIZ_NOT_REGENERABLE',
+      'this quiz shows the approved question-bank questions; it cannot be regenerated',
+    );
+  }
   if (pre.type === 'quiz' && pre.content.type === 'quiz') return regenerateQuizScene(input);
   if (pre.type !== 'slide' || pre.content.type !== 'slide') {
     return failure('SCENE_TYPE_NOT_REGENERABLE', 'only slides and quizzes can be regenerated');

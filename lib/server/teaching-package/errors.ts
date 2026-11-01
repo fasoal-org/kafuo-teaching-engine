@@ -276,6 +276,12 @@ export type TeachingPackageErrorCode =
   | 'SCENE_NOT_FOUND'
   /** Only `slide` Scenes are regenerable by a reviewer (quiz / interactive / PBL are not). */
   | 'SCENE_TYPE_NOT_REGENERABLE'
+  /** W6: a bank quiz Scene shows Kafuo question-bank questions; it has nothing to regenerate. */
+  | 'BANK_QUIZ_NOT_REGENERABLE'
+  /** W6: Kafuo could not be reached (or could not grade) for a bank quiz; retryable. */
+  | 'BANK_QUIZ_UNAVAILABLE'
+  /** W6: Kafuo refused a bank quiz read or grade (a definitive 4xx). */
+  | 'BANK_QUIZ_REFUSED'
   /** The slide plans a textbook visual, but none of its selected ids resolves in the manifest. */
   | 'SOURCE_VISUAL_UNRESOLVED'
   /** Slide content generation produced nothing usable. */
@@ -479,6 +485,9 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   READ_ONLY_GRANT: 403,
   SCENE_NOT_FOUND: 404,
   SCENE_TYPE_NOT_REGENERABLE: 422,
+  BANK_QUIZ_NOT_REGENERABLE: 422,
+  BANK_QUIZ_UNAVAILABLE: 503,
+  BANK_QUIZ_REFUSED: 502,
   SOURCE_VISUAL_UNRESOLVED: 422,
   SCENE_CONTENT_GENERATION_FAILED: 502,
   SCENE_ACTION_GENERATION_FAILED: 422,

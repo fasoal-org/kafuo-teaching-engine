@@ -130,6 +130,7 @@ export function sceneRegenerationActorRef(stageId: string): string {
 
 const KNOWN_FAILURE_CODES = new Set<string>([
   'SCENE_TYPE_NOT_REGENERABLE',
+  'BANK_QUIZ_NOT_REGENERABLE',
   'SOURCE_VISUAL_UNRESOLVED',
   'ORIENTATION_VISUAL_MISSING',
   'GOVERNED_FLOW_CONTEXT_UNRESOLVED',

@@ -74,6 +74,12 @@ import {
   placeholderSlideContent,
 } from '@/lib/server/teaching-package/placeholder-slide';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
+import {
+  bankQuizActions,
+  bankQuizContent,
+  isBankCheckQuizOutline,
+  markBankQuizScene,
+} from '@/lib/server/teaching-package/bank-quiz-scene';
 import type {
   SourceVisualManifestEntry,
   TeachingFlowEntry as AppTeachingFlowEntry,
@@ -408,6 +414,13 @@ export interface GenerateClassroomInput {
    * keyed answers only, so an open short answer would never be scored).
    */
   keyedQuizzesOnly?: boolean;
+  /**
+   * W6 one question source (Kafuo package runs): a quiz at an objective's
+   * `outcome_check_understanding` position is a deterministic bank placeholder
+   * (`{ questions: [] }`, `questionSource: 'bank'`, a model-free narration) —
+   * no quiz-content call and no quiz-narration call. Absent → unchanged.
+   */
+  bankCheckQuizzes?: boolean;
   /**
    * `pdfContent.text` is an approved Kafuo normalized package projected as
    * Content Units (never Blocks). Propagated to the outline prompt, which then
@@ -1812,7 +1825,9 @@ export async function generateClassroom(
       // Resolve this scene's content model lazily, per outline type. The package
       // gets the provider-bound AICallFn and the app injects its agentic PBL loop
       // as the classified fallback, preserving single-call → loop routing.
-      const contentCall = await resolveSceneContentCall(safeOutline.type);
+      // W6: a bank check quiz needs no content model and no narration model.
+      const bankQuiz = Boolean(input.bankCheckQuizzes) && isBankCheckQuizOutline(safeOutline);
+      const contentCall = bankQuiz ? null : await resolveSceneContentCall(safeOutline.type);
       // W1 (TAE-RQ-009): orchestration resolves this Scene's exact authoritative
       // Flow entry ONCE, before any generation spend. On a governed run the
       // resolution is fail-closed — an unresolvable context throws here rather
@@ -1832,6 +1847,7 @@ export async function generateClassroom(
       // package keeps going — the reviewer regenerates the slide afterwards.
       const sceneIssues: SceneGenerationIssue[] = [];
       const generateContent = async (correctiveNote?: string) => {
+        if (!contentCall) return null;
         try {
           return await withGenerationRetry(
             () =>
@@ -1905,7 +1921,7 @@ export async function generateClassroom(
           return containPBLGenerationError(error, safeOutline.title);
         }
       };
-      let content = await generateContent();
+      let content = bankQuiz ? bankQuizContent() : await generateContent();
       assertRouteAvailable();
       // Governed runs stay single-shot per scene, with ONE exception: an answer
       // that could not even be parsed (`invalid-model-output`) is re-asked once,
@@ -1975,7 +1991,7 @@ export async function generateClassroom(
         continue;
       }
 
-      const actionsAiCall = await getSceneActionsAiCall();
+      const actionsAiCall = bankQuiz ? null : await getSceneActionsAiCall();
       // Module 3/4 W2 (TAE-RQ-017): a governed run must never bind a fallback
       // Action sequence — the defaults are model-free, so they cannot be a
       // governed pedagogical result. The observer records whether THIS attempt
@@ -1991,69 +2007,73 @@ export async function generateClassroom(
         previousSpeeches,
       };
       let actionsFellBack = false;
-      const actions = await generateRegisterCompliantActions(
-        async (correctiveContext) => {
-          let attemptProducedFallback = false;
-          const generated = await withGenerationRetry(
-            () => {
-              attemptProducedFallback = false;
-              return generateSceneActions(safeOutline, content, actionsAiCall, {
-                ctx: sceneCtx,
-                agents,
-                languageDirective,
-                ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
-                ...(spokenScript ? { spokenScript } : {}),
-                ...(correctiveContext ? { correctiveContext } : {}),
-                // W1: the ONE resolved Flow position — the generator never sees the
-                // array and never performs the lookup itself.
-                ...(flowContext ? { flowContext } : {}),
-                ...(resolvedSkills ? { resolvedSkills } : {}),
-                ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
-                ...(safeOutline.type === 'slide' && hasSourceVisuals
-                  ? {
-                      imageNotes: buildNarrationImageNotes(
-                        safeOutline,
-                        sourceImages,
-                        sourceServingMapping,
-                      ),
-                    }
-                  : {}),
-                ...(input.governed
-                  ? {
-                      onFallback: (info: SceneActionsFallback) => {
-                        attemptProducedFallback = true;
-                        log.warn(
-                          `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
-                        );
-                      },
-                    }
-                  : {}),
-              });
+      // W6: the bank placeholder's narration is model-free and deterministic —
+      // a successful Scene, never a fallback and never marked for review.
+      const actions = !actionsAiCall
+        ? bankQuizActions(input.language, input.subjectCode)
+        : await generateRegisterCompliantActions(
+            async (correctiveContext) => {
+              let attemptProducedFallback = false;
+              const generated = await withGenerationRetry(
+                () => {
+                  attemptProducedFallback = false;
+                  return generateSceneActions(safeOutline, content, actionsAiCall, {
+                    ctx: sceneCtx,
+                    agents,
+                    languageDirective,
+                    ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
+                    ...(spokenScript ? { spokenScript } : {}),
+                    ...(correctiveContext ? { correctiveContext } : {}),
+                    // W1: the ONE resolved Flow position — the generator never sees the
+                    // array and never performs the lookup itself.
+                    ...(flowContext ? { flowContext } : {}),
+                    ...(resolvedSkills ? { resolvedSkills } : {}),
+                    ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                    ...(safeOutline.type === 'slide' && hasSourceVisuals
+                      ? {
+                          imageNotes: buildNarrationImageNotes(
+                            safeOutline,
+                            sourceImages,
+                            sourceServingMapping,
+                          ),
+                        }
+                      : {}),
+                    ...(input.governed
+                      ? {
+                          onFallback: (info: SceneActionsFallback) => {
+                            attemptProducedFallback = true;
+                            log.warn(
+                              `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
+                            );
+                          },
+                        }
+                      : {}),
+                  });
+                },
+                {
+                  label: `scene ${index + 1}/${outlines.length} actions`,
+                  ...(input.governed ? { maxRetries: 0 } : {}),
+                  ...(input.governed
+                    ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
+                    : {}),
+                  onRetry: (event) => reportSceneRetry('actions', event),
+                },
+              );
+              // The Action generator falls back to a model-free sequence on a call
+              // failure; on a routed run a failed ROUTE must fail the run instead.
+              assertRouteAvailable();
+              // 3 Oct 2026: a governed fallback no longer fails the package — the
+              // model-free sequence is kept and the scene is marked for the reviewer.
+              actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
+              return generated;
             },
-            {
-              label: `scene ${index + 1}/${outlines.length} actions`,
-              ...(input.governed ? { maxRetries: 0 } : {}),
-              ...(input.governed
-                ? { shouldRetryResult: () => attemptProducedFallback && routeFailure === null }
-                : {}),
-              onRetry: (event) => reportSceneRetry('actions', event),
-            },
+            registerPolicy,
+            { title: safeOutline.title, outlineId: safeOutline.id },
+            { outline: safeOutline, ctx: sceneCtx },
+            input.governed
+              ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
+              : undefined,
           );
-          // The Action generator falls back to a model-free sequence on a call
-          // failure; on a routed run a failed ROUTE must fail the run instead.
-          assertRouteAvailable();
-          // 3 Oct 2026: a governed fallback no longer fails the package — the
-          // model-free sequence is kept and the scene is marked for the reviewer.
-          actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
-          return generated;
-        },
-        registerPolicy,
-        { title: safeOutline.title, outlineId: safeOutline.id },
-        { outline: safeOutline, ctx: sceneCtx },
-        input.governed
-          ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
-          : undefined,
-      );
       if (actionsFellBack) {
         sceneIssues.push({
           code: 'GOVERNED_ACTION_GENERATION_FAILED',
@@ -2092,6 +2112,7 @@ export async function generateClassroom(
         log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
         continue;
       }
+      if (bankQuiz) markBankQuizScene(store, sceneId);
 
       if (sceneRefusals.length > 0) {
         refusedScenes += 1;

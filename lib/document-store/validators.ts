@@ -137,6 +137,20 @@ function validateGenerationIssues(value: Record<string, unknown>, errors: Valida
 }
 
 /**
+ * Validate the app-layer `questionSource` marker (W6, 1 Nov 2026): absent →
+ * untouched; present → exactly `'bank'`, and only on a quiz Scene.
+ */
+function validateQuestionSource(value: Record<string, unknown>, errors: ValidationIssue[]): void {
+  if (value.questionSource === undefined) return;
+  if (value.questionSource !== 'bank' || value.type !== 'quiz') {
+    errors.push({
+      path: '/questionSource',
+      message: '`questionSource` must be "bank" on a quiz scene when present',
+    });
+  }
+}
+
+/**
  * Validate the contract's `sourceContentUnitIds` binding (Kafuo R1 plan
  * §5.1) on the app write boundary for the scene kinds the DSL validator does
  * not see here (interactive / PBL): absent → untouched (unknown, never
@@ -254,6 +268,7 @@ export const validateAppScene: SceneValidator = (scene) => {
     validateTeachingStage(value, errors);
     validateAlignmentBaseline(value, errors);
     validateGenerationIssues(value, errors);
+    validateQuestionSource(value, errors);
     return errors.length === 0 ? { valid: true } : { valid: false, errors };
   }
 
@@ -385,6 +400,7 @@ export const validateAppScene: SceneValidator = (scene) => {
   validateAlignmentBaseline(value, errors);
   validateSourceContentUnitIds(value, errors);
   validateGenerationIssues(value, errors);
+  validateQuestionSource(value, errors);
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };
 };

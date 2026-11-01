@@ -215,6 +215,9 @@ describe('teaching package service auth', () => {
       // Single-slide regeneration.
       SCENE_NOT_FOUND: 404,
       SCENE_TYPE_NOT_REGENERABLE: 422,
+      BANK_QUIZ_NOT_REGENERABLE: 422,
+      BANK_QUIZ_UNAVAILABLE: 503,
+      BANK_QUIZ_REFUSED: 502,
       SOURCE_VISUAL_UNRESOLVED: 422,
       SCENE_CONTENT_GENERATION_FAILED: 502,
       SCENE_ACTION_GENERATION_FAILED: 422,

@@ -57,6 +57,7 @@ import {
   runningSceneInsertionId,
 } from '@/lib/server/teaching-package/stage-generation-mutex';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
+import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import type { ReviewEventType, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -516,6 +517,15 @@ async function startOnce(
       return refused(
         'SCENE_TYPE_NOT_REGENERABLE',
         `only slides and quizzes can be regenerated; this scene is a ${live.scene.type}`,
+        true,
+        versionStatus,
+      );
+    }
+    if (isBankQuizScene(live.scene)) {
+      // W6: its questions come from the Kafuo question bank, not from generation.
+      return refused(
+        'BANK_QUIZ_NOT_REGENERABLE',
+        'this quiz shows the approved question-bank questions; it cannot be regenerated',
         true,
         versionStatus,
       );

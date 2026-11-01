@@ -175,6 +175,7 @@ describe('slide regeneration routes', () => {
         makeSlideScene('scene-2', STAGE, 2),
         quizScene('scene-q', STAGE, 3),
         interactiveScene('scene-i', STAGE, 4),
+        { ...quizScene('scene-b', STAGE, 5), questionSource: 'bank' } as AppScene,
       ]),
     );
     await store.saveDocument(
@@ -398,6 +399,19 @@ describe('slide regeneration routes', () => {
     expect(interactive.status).toBe(422);
     await expect(interactive.json()).resolves.toMatchObject({
       error: { code: 'SCENE_TYPE_NOT_REGENERABLE' },
+    });
+    expect(await rows()).toHaveLength(0);
+    expect((await events()).map((event) => event.event_type)).toEqual([
+      'scene_regeneration_refused',
+    ]);
+    expect(mocks.regenerate).not.toHaveBeenCalled();
+  });
+
+  it('W6: a bank quiz scene → 422 BANK_QUIZ_NOT_REGENERABLE; nothing generated', async () => {
+    const bank = await post('scene-b', body());
+    expect(bank.status).toBe(422);
+    await expect(bank.json()).resolves.toMatchObject({
+      error: { code: 'BANK_QUIZ_NOT_REGENERABLE' },
     });
     expect(await rows()).toHaveLength(0);
     expect((await events()).map((event) => event.event_type)).toEqual([
@@ -818,6 +832,7 @@ describe('slide regeneration routes', () => {
       'scene-2',
       'scene-q',
       'scene-i',
+      'scene-b',
     ]);
     expect(manifest.rev).toBeGreaterThan(0);
     expect((await call('')).status).toBe(404);

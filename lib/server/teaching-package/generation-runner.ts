@@ -577,8 +577,11 @@ async function runKafuoAttempt(
     // reported on its outline, and a Scene that would still build one is
     // refused before any widget call — initial, corrected and resumed runs alike.
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
-    // The learner app grades keyed answers only: no open short answer in a quiz.
-    keyedQuizzesOnly: true,
+    // W6 one question source (1 Nov 2026): the check quiz shows the approved
+    // Kafuo bank questions, so it is a deterministic placeholder — no quiz
+    // questions are generated. (`keyedQuizzesOnly` is no longer set: the bank,
+    // not the planner's quizConfig, decides question types.)
+    bankCheckQuizzes: true,
     // The authoritative lesson language (`learningItem.language`): generation
     // stamps it on the Stage with the base text direction resolved from it.
     language: kafuo.language,

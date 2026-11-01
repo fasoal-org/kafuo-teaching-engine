@@ -205,8 +205,20 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * single-slide regeneration builds a fresh scene without it.
    */
   generationIssues?: SceneGenerationIssue[];
+  /**
+   * W6 one question source (1 Nov 2026): `'bank'` on a Kafuo quiz Scene at an
+   * objective's `outcome_check_understanding` position. Its content carries no
+   * questions (`{ questions: [] }`); the classroom reads the objective's
+   * approved Kafuo question-bank questions and grades through Kafuo. Such a
+   * Scene is never regenerated. App-layer, optional, additive: absent on every
+   * older and non-Kafuo quiz, which keep their own questions.
+   */
+  questionSource?: SceneQuestionSource;
 };
 export type Scene = AppScene;
+
+/** Where a quiz Scene's questions come from (see `AppScene.questionSource`). */
+export type SceneQuestionSource = 'bank';
 
 /** One problem package generation recorded on a scene it kept. */
 export interface SceneGenerationIssue {
