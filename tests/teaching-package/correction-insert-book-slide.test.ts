@@ -7,6 +7,7 @@ import {
   diagnoseCandidateOutlines,
   insertableBookGaps,
   parseCorrectionOperations,
+  solutionTitle,
   type CorrectionEditContext,
 } from '@/lib/server/teaching-package/outline-correction';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -111,6 +112,12 @@ function context(extra: Partial<CorrectionEditContext> = {}): CorrectionEditCont
 const INSERT = { op: 'insert_book_slide', outlineId: 'try2', unitId: '4028' } as const;
 
 describe('insert_book_slide correction', () => {
+  it("titles the solution in the lesson's language, never the admin page's", () => {
+    expect(solutionTitle('جرّب: تخمينات جبرية')).toBe('الحل: تخمينات جبرية');
+    expect(solutionTitle('تخمينات')).toBe('الحل: تخمينات');
+    expect(solutionTitle('Try it: conjectures')).toBe('Solution: conjectures');
+  });
+
   it('parses the operation and its optional title', () => {
     expect(parseCorrectionOperations([{ ...INSERT, title: '  الحل  ' }])).toEqual([
       { ...INSERT, title: 'الحل' },
@@ -139,7 +146,8 @@ describe('insert_book_slide correction', () => {
       type: 'slide',
       slideType: 'content',
       contentRole: 'worked_example',
-      title: 'جرّب: تخمينات جبرية وهندسية',
+      // In the lesson's language, read from the try-it title.
+      title: 'الحل: تخمينات جبرية وهندسية',
       keyPoints: ['item one', 'item two'],
       teachingStage: STAGE,
       sourceContentUnitIds: ['4028'],

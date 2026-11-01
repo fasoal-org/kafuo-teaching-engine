@@ -579,11 +579,11 @@ async function runKafuoAttempt(
     // reported on its outline, and a Scene that would still build one is
     // refused before any widget call — initial, corrected and resumed runs alike.
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
-    // W6 one question source (1 Nov 2026): the check quiz shows the approved
-    // Kafuo bank questions, so it is a deterministic placeholder — no quiz
-    // questions are generated. `keyedQuizzesOnly` stays for any other Kafuo
-    // quiz position, which still needs gradable keys (W6 review).
-    bankCheckQuizzes: true,
+    // Owner decision (1 Nov 2026, slide-questions plan rev 2): the check quiz
+    // generates its questions like any slide; the reviewer edits them, and the
+    // backend saves them in the question bank at approval. So no bank
+    // placeholder (`bankCheckQuizzes` is not set); every Kafuo quiz keeps
+    // gradable keys.
     keyedQuizzesOnly: true,
     // The authoritative lesson language (`learningItem.language`): generation
     // stamps it on the Stage with the base text direction resolved from it.

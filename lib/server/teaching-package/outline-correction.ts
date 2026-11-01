@@ -745,6 +745,17 @@ function anchorPolicy(
  * carries the try-it's items as its key points: the slide solves exactly them.
  * Its visual teaching notes are planned by the resume, as for any slide.
  */
+/**
+ * The solution slide's title in the lesson's own language, read from the
+ * try-it title it follows: «جرّب: تخمينات» → «الحل: تخمينات». Never the
+ * admin page's language (a reviewer's English UI once titled an Arabic slide
+ * "Solution: …").
+ */
+export function solutionTitle(tryItTitle: string): string {
+  const topic = tryItTitle.replace(/^[^:：]{1,20}[:：]\s*/, '').trim() || tryItTitle;
+  return /[؀-ۿ]/.test(tryItTitle) ? `الحل: ${topic}` : `Solution: ${topic}`;
+}
+
 function insertedBookSlide(
   outlines: readonly SceneOutline[],
   gap: BookCoverageGap,
@@ -767,7 +778,7 @@ function insertedBookSlide(
     type: 'slide',
     slideType: 'content',
     contentRole: 'worked_example',
-    title: title ?? anchor.title,
+    title: title ?? solutionTitle(anchor.title),
     description: instructionFor(gap),
     keyPoints: [...(anchor.keyPoints ?? [])],
     order: gap.anchorIndex! + 2,
