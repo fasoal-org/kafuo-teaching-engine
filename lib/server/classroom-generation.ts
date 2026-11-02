@@ -1603,7 +1603,25 @@ export async function generateClassroom(
         const selected = outline.suggestedImageIds ?? [];
         const keepSelection = !reselect.has(outlineId) && selected.length > 0;
         const unitIds = new Set(outline.sourceContentUnitIds ?? []);
-        const excluded = withoutImages.get(outlineId);
+        let excluded = withoutImages.get(outlineId);
+        // g5.v8 (I-4.3): an image another slide of the same unit already shows
+        // (and keeps) is never offered again, so a re-plan cannot re-add it to
+        // every slide of a split unit (lesson 306's check 4028).
+        const shownOnUnit = new Map<string, string>();
+        if (input.findDuplicateSourceVisuals && !keepSelection) {
+          current.forEach((entry, at) => {
+            if (at === index || entry.type !== 'slide' || !entry.id) return;
+            if (!(entry.sourceContentUnitIds ?? []).some((id) => unitIds.has(id))) return;
+            for (const id of entry.suggestedImageIds ?? []) {
+              if (!withoutImages.get(entry.id)?.has(id) && !shownOnUnit.has(id)) {
+                shownOnUnit.set(id, entry.id);
+              }
+            }
+          });
+          if (shownOnUnit.size > 0) {
+            excluded = new Set([...(excluded ?? []), ...shownOnUnit.keys()]);
+          }
+        }
         const linkedImages = keepSelection
           ? selected
               .map((id) => (sourceImages ?? []).find((image) => image.id === id))
@@ -1622,7 +1640,15 @@ export async function generateClassroom(
           imageSrc: (image) => sourceImageMapping[image.id] ?? image.src,
           sourceText: buildSceneSourceContext(outline, input.sourceUnits).sourceContextText,
           languageDirective,
-          reasons,
+          reasons: [
+            ...reasons,
+            ...[...shownOnUnit]
+              .filter(([id]) => !withoutImages.get(outlineId)?.has(id))
+              .map(
+                ([id, keptOn]) =>
+                  `the textbook image ${id} is already shown on ${keptOn}, another slide of this unit; do not show ${id} here: plan a native diagram of this slide's own content (or another listed image)`,
+              ),
+          ],
           check: (candidate) => [
             ...blockingOutlineDiagnostics(
               analyze(current.map((entry, at) => (at === index ? candidate : entry))),
