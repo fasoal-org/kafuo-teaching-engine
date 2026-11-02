@@ -42,6 +42,7 @@ import {
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
+import { CURRENT_SLIDE_CONTENT_SCHEMA_VERSION, migrateScene } from '@/lib/edit/slide-schema';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
@@ -546,6 +547,13 @@ describe('W15 durable confirmation', () => {
         .canvas.elements[0],
     ).not.toHaveProperty('rotate');
     expect(deriveSceneAlignment(savedGoverned)).toMatchObject({ state: 'current', aligned: true });
+    // Lesson 306: the editor store runs `migrateScene` on load and writes the
+    // result back. The generated slide already carries that migration, so the
+    // editor's write-back is a material no-op and the Scene stays current.
+    expect((savedGoverned.content as unknown as { schemaVersion?: number }).schemaVersion).toBe(
+      CURRENT_SLIDE_CONTENT_SCHEMA_VERSION,
+    );
+    expect(migrateScene(savedGoverned)).toBe(savedGoverned);
     expect('alignmentBaseline' in savedLegacy).toBe(false);
     // Unclassified: no baseline, honest validation-required — never a
     // self-invalidating stale/classification-change.

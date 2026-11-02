@@ -18,6 +18,7 @@ import { migrate } from '@openmaic/dsl';
 import type { ClassroomPersistenceSink } from '@/lib/server/classroom-generation';
 import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { stampGenerationAlignmentBaselines } from '@/lib/server/teaching-package/alignment';
+import { migrateScene } from '@/lib/edit/slide-schema';
 import { StageAccessError } from '@/lib/persistence/stage-meta';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
@@ -114,8 +115,14 @@ export function createTeachingPackagePersistenceSink(
         // intent (plan §K ordering requirement). Only governed Scenes (those
         // carrying a teachingSkills carrier) are stamped; legacy Scenes stay
         // untouched.
+        //
+        // The editor's store runs `migrateScene` on every Scene it loads
+        // (it stamps slide `content.schemaVersion`) and writes that back on
+        // its first save. Apply the same pure, idempotent migration here so
+        // the baseline already covers it and opening an untouched package
+        // in the editor does not turn its Scenes stale.
         const scenesToSave = stampGenerationAlignmentBaselines(
-          migratedCore.scenes as AppScene[],
+          (migratedCore.scenes as AppScene[]).map(migrateScene),
           now,
         );
         const document: AppDocument = {
