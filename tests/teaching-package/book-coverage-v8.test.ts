@@ -14,6 +14,7 @@ import {
   bookStructureRequirement,
   bookUnitFactsOf,
   EXERCISE_CAP_EXCEEDED,
+  EXERCISE_TOO_FEW,
   EXERCISE_UNUSABLE_CITED,
   EXERCISES_MISPLACED,
   findBookCoverageDiagnostics,
@@ -249,6 +250,17 @@ function slide(id: string, units: string[], extra: Partial<SceneOutline> = {}): 
 const v8Book = (): CoverageBookStructure =>
   teacherParityBook(V8_BOOK, V8, bookUnitFactsOf(V8_BOOK, TEXTS))!;
 
+/** The g5.v8 book with the exercises block minimum (owner, 2 Nov 2026). */
+const minBook = (minExercises: number, minExerciseSlides: number): CoverageBookStructure =>
+  teacherParityBook(
+    {
+      ...V8_BOOK,
+      exercisePolicy: { maxExercises: 10, maxExerciseSlides: 3, minExercises, minExerciseSlides },
+    },
+    V8,
+    bookUnitFactsOf(V8_BOOK, TEXTS),
+  )!;
+
 const MONTHS_WORKED = [
   'محرم = 1، صفر = 2، … شوال = 10، ذو القعدة = 11، ذو الحجة = 12',
   'شوال (10) ← ذو الحجة (12) ← صفر (2): يتقدم شهرين، فالتالي ربيع الآخر',
@@ -301,6 +313,87 @@ describe('g5.v8 book-map contract', () => {
     });
     expect(plain.bookStructure).not.toHaveProperty('exercisePolicy');
     expect(canonicalRequestDigest(request)).not.toBe(canonicalRequestDigest(plain));
+  });
+
+  it('parses the optional exercise minimums; their absence keeps the parse and digest', () => {
+    const withMin = {
+      ...V8_BOOK,
+      exercisePolicy: {
+        maxExercises: 10,
+        maxExerciseSlides: 3,
+        minExercises: 6,
+        minExerciseSlides: 2,
+      },
+    };
+    const { request } = parseKafuoGenerationRequest(body({ bookStructure: withMin }));
+    expect(request.bookStructure?.exercisePolicy).toEqual(withMin.exercisePolicy);
+    const caps = { ...V8_BOOK, exercisePolicy: { maxExercises: 10, maxExerciseSlides: 3 } };
+    const { request: older } = parseKafuoGenerationRequest(body({ bookStructure: caps }));
+    expect(older.bookStructure?.exercisePolicy).toEqual({ maxExercises: 10, maxExerciseSlides: 3 });
+    expect(Object.keys(older.bookStructure!.exercisePolicy!)).toEqual([
+      'maxExercises',
+      'maxExerciseSlides',
+    ]);
+    expect(canonicalRequestDigest(request)).not.toBe(canonicalRequestDigest(older));
+  });
+
+  it.each([
+    [
+      { exercisePolicy: { maxExercises: 10, maxExerciseSlides: 3, minExercises: 6 } },
+      'must be sent together',
+    ],
+    [
+      { exercisePolicy: { maxExercises: 10, maxExerciseSlides: 3, minExerciseSlides: 2 } },
+      'must be sent together',
+    ],
+    [
+      {
+        exercisePolicy: {
+          maxExercises: 10,
+          maxExerciseSlides: 3,
+          minExercises: 0,
+          minExerciseSlides: 1,
+        },
+      },
+      'exercisePolicy.minExercises must be a positive integer',
+    ],
+    [
+      {
+        exercisePolicy: {
+          maxExercises: 10,
+          maxExerciseSlides: 3,
+          minExercises: 6,
+          minExerciseSlides: '2',
+        },
+      },
+      'exercisePolicy.minExerciseSlides must be a positive integer',
+    ],
+    [
+      {
+        exercisePolicy: {
+          maxExercises: 5,
+          maxExerciseSlides: 3,
+          minExercises: 6,
+          minExerciseSlides: 2,
+        },
+      },
+      'must not exceed their caps',
+    ],
+    [
+      {
+        exercisePolicy: {
+          maxExercises: 10,
+          maxExerciseSlides: 1,
+          minExercises: 6,
+          minExerciseSlides: 2,
+        },
+      },
+      'must not exceed their caps',
+    ],
+  ])('refuses a malformed exercise minimum', (overrides, message) => {
+    expect(() =>
+      parseKafuoGenerationRequest(body({ bookStructure: { ...V8_BOOK, ...overrides } })),
+    ).toThrow(message);
   });
 
   it.each([
@@ -369,6 +462,14 @@ describe('g5.v8 switch and planner text', () => {
     expect(kafuo.requirement).toContain('RECALL');
     expect(kafuo.requirement).toContain('`ordered_named_set`');
     expect(kafuo.requirement).toContain('at most\n1 exercise slides');
+    // An older wire without the minimum states none.
+    expect(kafuo.requirement).not.toContain('AT LEAST');
+    expect(bookStructureRequirement(minBook(6, 2), { teacherParity: true }).split('\n')).toEqual(
+      expect.arrayContaining([
+        'The block is not optional: it holds AT LEAST 6 usable exercise units',
+        'on AT LEAST 2 exercise slides. Prefer one item per pattern or',
+      ]),
+    );
     // The same map under g5.v7 keeps the g5.v7 text.
     const v7 = parseKafuoGenerationRequest(body({ bookStructure: V8_BOOK }));
     expect(buildKafuoStartRequest(v7.request, v7.aggregate).kafuo.requirement).toContain(
@@ -525,6 +626,37 @@ describe('g5.v8 coverage gates', () => {
     const book = v8Book();
     book.units = [...book.units, { ...book.units[7]!, contentUnitId: '4062' }];
     expect(codes(findBookCoverageDiagnostics(more, book))).toEqual([EXERCISE_CAP_EXCEEDED]);
+  });
+
+  it('raises EXERCISE_TOO_FEW below the minimum units or slides, never without one', () => {
+    // completePlan: 2 usable units (4040, 4060) on 1 exercise slide.
+    expect(codes(findBookCoverageDiagnostics(completePlan(), v8Book()))).toEqual([]);
+    expect(codes(findBookCoverageDiagnostics(completePlan(), minBook(2, 1)))).toEqual([]);
+    const found = findBookCoverageDiagnostics(completePlan(), minBook(3, 2));
+    expect(found.map((d) => [d.code, d.field, d.disposition])).toEqual([
+      [EXERCISE_TOO_FEW, 'sourceContentUnitIds', 'admin_correctable'],
+      [EXERCISE_TOO_FEW, 'sourceContentUnitIds', 'admin_correctable'],
+    ]);
+    expect(found.map((d) => d.message)).toEqual([
+      'the exercises block cites 2 usable exercise units, fewer than 3',
+      'the exercises block has 1 exercise slides, fewer than 2',
+    ]);
+    expect(found.every(isIgnorableIssue)).toBe(true);
+    // Only the cited usable units count: the instruction line (4038) does not.
+    const units = completePlan().map((outline) =>
+      outline.id === 'exercises' ? { ...outline, sourceContentUnitIds: ['4038', '4040'] } : outline,
+    );
+    expect(codes(findBookCoverageDiagnostics(units, minBook(2, 1)))).toEqual([EXERCISE_TOO_FEW]);
+    // No exercise slide at all is the missing_exercises gap alone.
+    const none = completePlan().filter((outline) => outline.id !== 'exercises');
+    expect(codes(findBookCoverageDiagnostics(none, minBook(3, 2)))).toEqual([
+      BOOK_COVERAGE_INCOMPLETE,
+    ]);
+    // The same map under g5.v7 is never checked for it.
+    const v7 = { ...V8_BOOK, exercisePolicy: minBook(3, 2).exercisePolicy };
+    expect(codes(findBookCoverageDiagnostics(completePlan(), teacherParityBook(v7, V7)))).toEqual(
+      [],
+    );
   });
 
   it('asks for the exercises block when no slide solves an exercise', () => {
@@ -689,6 +821,21 @@ describe('g5.v8 coverage repair', () => {
       [BOOK_COVERAGE_INCOMPLETE, 'the exercises block is missing'],
       [WORKING_STEP_MISSING, expect.any(String)],
     ]);
+  });
+
+  it('places the item slides and leaves EXERCISE_TOO_FEW open for a person', async () => {
+    const book = minBook(3, 2);
+    const candidate = completePlan().filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!));
+    const blocking = findBookCoverageDiagnostics(candidate, book);
+    expect(new Set(codes(blocking))).toEqual(new Set([BOOK_COVERAGE_INCOMPLETE, EXERCISE_TOO_FEW]));
+    const repaired = await repairBookCoverageGaps(
+      candidate,
+      blocking,
+      vi.fn(),
+      contextFor(book, planner()),
+    );
+    expect(repaired.inserted).toBe(2);
+    expect(codes(repaired.blocking)).toEqual([EXERCISE_TOO_FEW, EXERCISE_TOO_FEW]);
   });
 
   it('gives an extra item slide a native diagram when the check image is already shown', async () => {

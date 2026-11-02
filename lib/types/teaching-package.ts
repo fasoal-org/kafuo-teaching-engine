@@ -257,6 +257,13 @@ export type KafuoExerciseUnusableReason = (typeof KAFUO_EXERCISE_UNUSABLE_REASON
 export interface KafuoExercisePolicy {
   maxExercises: number;
   maxExerciseSlides: number;
+  /**
+   * The block's effective minimum (owner, 2 Nov 2026): `min(6, usable)` exercise
+   * units on at least `minExerciseSlides` slides (2 when 6+ are usable, else 1).
+   * Both present or both absent; absent on older wires and when none is usable.
+   */
+  minExercises?: number;
+  minExerciseSlides?: number;
 }
 
 /** The g5.v7 book map and Lesson Template Kafuo sends (`bookStructure`). */

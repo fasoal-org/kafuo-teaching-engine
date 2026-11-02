@@ -16,7 +16,7 @@
  * g5.v8 (teacher-parity plan, 2 Nov 2026) adds, ONLY when the attempt's
  * Teaching Model is `g5@g5.v8` ({@link isTeacherParityModel}, marked on the
  * coverage book as `teacherParity`): the recall slide, one solution slide per
- * check item, the exercises block and its caps, and the visible working of the
+ * check item, the exercises block with its caps and its minimum, and the visible working of the
  * detectable hidden-step types. A g5.v7 attempt — new, resumed or corrected —
  * never carries the mark, so it is checked exactly as before.
  */
@@ -34,6 +34,8 @@ import type { KafuoBookStructure, KafuoBookStructureUnit } from '@/lib/types/tea
 export const BOOK_COVERAGE_INCOMPLETE = 'BOOK_COVERAGE_INCOMPLETE';
 /** g5.v8: more exercise units or exercise slides than `exercisePolicy` allows. */
 export const EXERCISE_CAP_EXCEEDED = 'EXERCISE_CAP_EXCEEDED';
+/** g5.v8: fewer exercise units or exercise slides than `exercisePolicy`'s minimum. */
+export const EXERCISE_TOO_FEW = 'EXERCISE_TOO_FEW';
 /** g5.v8: a slide cites an exercise unit whose item did not survive the parse. */
 export const EXERCISE_UNUSABLE_CITED = 'EXERCISE_UNUSABLE_CITED';
 /** g5.v8: an exercise slide outside the end of the last part (before its summary). */
@@ -422,6 +424,29 @@ function teacherParityDiagnostics(
         message: `the exercises block has more than ${policy.maxExerciseSlides} exercise slides`,
       });
     }
+    // The minimum (owner, 2 Nov 2026). A plan with no exercise slide at all is
+    // already the `missing_exercises` coverage gap, so it is not reported twice.
+    if (exerciseSlides.length > 0 && policy.minExercises !== undefined) {
+      if (counted < policy.minExercises) {
+        diagnostics.push({
+          code: EXERCISE_TOO_FEW,
+          disposition: 'admin_correctable',
+          field: 'sourceContentUnitIds',
+          message: `the exercises block cites ${counted} usable exercise units, fewer than ${policy.minExercises}`,
+        });
+      }
+      if (
+        policy.minExerciseSlides !== undefined &&
+        exerciseSlides.length < policy.minExerciseSlides
+      ) {
+        diagnostics.push({
+          code: EXERCISE_TOO_FEW,
+          disposition: 'admin_correctable',
+          field: 'sourceContentUnitIds',
+          message: `the exercises block has ${exerciseSlides.length} exercise slides, fewer than ${policy.minExerciseSlides}`,
+        });
+      }
+    }
   }
   for (const unit of exercises) {
     if (
@@ -642,6 +667,14 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
           'items it solves, states each item and solves it with compact visible working. Never',
           'cite a unit marked exerciseUsable=false, except a reason=instructions_only unit, which',
           'is only the instruction line of the exercises paired with the same example.',
+          ...(policy.minExercises !== undefined && policy.minExerciseSlides !== undefined
+            ? [
+                `The block is not optional: it holds AT LEAST ${policy.minExercises} usable exercise units`,
+                `on AT LEAST ${policy.minExerciseSlides} exercise slides. Prefer one item per pattern or`,
+                'hidden-step type not yet solved and each paired example once, then add further',
+                'usable items until the minimum is reached.',
+              ]
+            : []),
         ]
       : []),
     'Transition slides never count as teaching a unit.',

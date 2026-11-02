@@ -1010,7 +1010,11 @@ function parseBookStructure(raw: unknown): KafuoBookStructure | undefined {
   return { templateVersionId, rules, units, ...(exercisePolicy ? { exercisePolicy } : {}) };
 }
 
-/** g5.v8 `bookStructure.exercisePolicy`: exactly the two positive integer caps. */
+/**
+ * g5.v8 `bookStructure.exercisePolicy`: the two positive integer caps, and
+ * optionally the two minimums (both or neither, positive, each at most its cap).
+ * Absent minimums stay absent, so an older wire parses — and digests — as before.
+ */
 function parseExercisePolicy(
   raw: unknown,
   invalid: (detail: string) => TeachingPackageError,
@@ -1020,14 +1024,27 @@ function parseExercisePolicy(
     throw invalid('exercisePolicy must be an object');
   }
   const policy = raw as Record<string, unknown>;
-  const cap = (key: 'maxExercises' | 'maxExerciseSlides'): number => {
+  const cap = (
+    key: 'maxExercises' | 'maxExerciseSlides' | 'minExercises' | 'minExerciseSlides',
+  ): number => {
     const value = policy[key];
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
       throw invalid(`exercisePolicy.${key} must be a positive integer`);
     }
     return value;
   };
-  return { maxExercises: cap('maxExercises'), maxExerciseSlides: cap('maxExerciseSlides') };
+  const caps = { maxExercises: cap('maxExercises'), maxExerciseSlides: cap('maxExerciseSlides') };
+  const hasMin = policy.minExercises !== undefined;
+  if (hasMin !== (policy.minExerciseSlides !== undefined)) {
+    throw invalid('exercisePolicy.minExercises and minExerciseSlides must be sent together');
+  }
+  if (!hasMin) return caps;
+  const minExercises = cap('minExercises');
+  const minExerciseSlides = cap('minExerciseSlides');
+  if (minExercises > caps.maxExercises || minExerciseSlides > caps.maxExerciseSlides) {
+    throw invalid('exercisePolicy minimums must not exceed their caps');
+  }
+  return { ...caps, minExercises, minExerciseSlides };
 }
 
 /**

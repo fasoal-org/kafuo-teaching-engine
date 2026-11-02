@@ -19,6 +19,7 @@ import { createLogger } from '@/lib/logger';
 import {
   BOOK_COVERAGE_INCOMPLETE,
   EXERCISE_CAP_EXCEEDED,
+  EXERCISE_TOO_FEW,
   EXERCISE_UNUSABLE_CITED,
   EXERCISES_MISPLACED,
   findBookCoverageGaps,
@@ -163,6 +164,7 @@ function repairableGaps(
 
 const TEACHER_PARITY_FINDINGS: ReadonlySet<string> = new Set([
   EXERCISE_CAP_EXCEEDED,
+  EXERCISE_TOO_FEW,
   EXERCISE_UNUSABLE_CITED,
   EXERCISES_MISPLACED,
   WORKING_STEP_MISSING,
