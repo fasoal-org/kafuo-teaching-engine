@@ -574,6 +574,161 @@ describe('generateClassroom source visuals', () => {
     ]);
   });
 
+  describe('g5.v8: lesson 306 example 4021 (bus times, then segments; one image of the segments)', () => {
+    /**
+     * Neither slide planned src-1 (both SOURCE_VISUAL_NOT_SELECTED); the bus
+     * slide comes first. The re-plan model shows the image whenever offered —
+     * except on the slides listed in `declineOn` — and writes its note from it.
+     */
+    async function runExample(options: { description?: string; declineOn?: string[] }) {
+      const { findSplitUnitDuplicateImages } =
+        await import('@/lib/server/teaching-package/split-unit-images');
+      const image = {
+        ...pdfImage('src-1'),
+        sourceContentUnitIds: ['4021'],
+        ...(options.description ? { description: options.description } : {}),
+      };
+      const flow = [
+        {
+          stage: 'outcome_visual_explanations',
+          instructions: 'i',
+          scenePolicy: {
+            sceneTypes: ['slide'],
+            visual: 'source_grounded',
+            cardinality: 'one_or_more',
+          },
+        },
+      ] as GenerateClassroomInput['teachingFlow'];
+      const slideOf = (id: string, order: number, title: string, keyPoints: string[]) => ({
+        id,
+        type: 'slide',
+        title,
+        description: '',
+        keyPoints,
+        order,
+        slideType: 'content',
+        contentRole: 'worked_example',
+        teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
+        sourceContentUnitIds: ['4021'],
+        visualPlan: { mode: 'native' },
+      });
+      const outlines = [
+        slideOf('bus', 1, 'مثال ١: مواعيد الحافلة', ['10:15', '11:00', '11:45']),
+        slideOf('seg', 2, 'مثال ١: نمط أعداد القطع', ['4، 10، 18', '28، 40', 'الفرق يزيد 2']),
+      ];
+      mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+        success: true,
+        data: {
+          languageDirective: 'Arabic.',
+          outlines,
+          diagnostics: outlines.map((outline, at) => ({
+            code: 'SOURCE_VISUAL_NOT_SELECTED',
+            disposition: 'admin_correctable',
+            outlineIndex: at,
+            outlineId: outline.id,
+            field: 'suggestedImageIds',
+            message: `${outline.id} has a textbook visual linked to the same Content Unit but did not select it`,
+          })),
+        },
+      });
+      // A model that shows the image whenever it is offered.
+      const prompts: string[] = [];
+      mocks.callLLM.mockImplementation(
+        async (params: { messages: Array<{ content: unknown }> }) => {
+          const system = String(params.messages[0]!.content);
+          if (!system.startsWith('You re-plan the VISUAL')) return { text: 'ok' };
+          const user = params.messages[1]!.content;
+          const prompt = Array.isArray(user)
+            ? user.map((part: { text?: string }) => part.text ?? '').join('\n')
+            : String(user);
+          prompts.push(prompt);
+          const declined = (options.declineOn ?? []).some((title) => prompt.includes(title));
+          const offered = /\n- src-1\b/.test(prompt) && !declined;
+          // The re-plan keeps the slide's own teaching content.
+          const keyPoints = outlines.find((outline) => prompt.includes(outline.title))!.keyPoints;
+          return {
+            text: JSON.stringify(
+              offered
+                ? {
+                    suggestedImageIds: ['src-1'],
+                    imagePlans: [
+                      {
+                        imageId: 'src-1',
+                        shows: 'أشكال من قطع مستقيمة وتحتها الأعداد ٤، ١٠، ١٨، ٢٨، ٤٠',
+                        teachingPoint: 'pattern',
+                      },
+                    ],
+                    visualPlan: { mode: 'image' },
+                    keyPoints,
+                  }
+                : {
+                    suggestedImageIds: [],
+                    visualPlan: {
+                      mode: 'native',
+                      diagram: { shows: 'timeline', teachingPoint: 'p' },
+                    },
+                    keyPoints,
+                  },
+            ),
+          };
+        },
+      );
+      const materialize = vi.fn(async (_stageId: string, selected: Array<{ id: string }>) => ({
+        servingMapping: Object.fromEntries(selected.map((entry) => [entry.id, `/m/${entry.id}`])),
+        manifest: selected.map((entry) => ({ id: entry.id })),
+        failedIds: [] as string[],
+      }));
+      await generate({
+        input: {
+          pdfContent: { text: 'pdf', images: [], pdfImages: [image] },
+          teachingFlow: flow,
+          findDuplicateSourceVisuals: findSplitUnitDuplicateImages,
+        },
+        materialize: { images: [image], materialize } as unknown as SourceVisualChannel,
+      });
+
+      const holders = mocks.generateSceneContent.mock.calls
+        .map((call) => call[0] as { id: string; suggestedImageIds?: string[] })
+        .filter((outline) => outline.suggestedImageIds?.includes('src-1'))
+        .map((outline) => outline.id);
+      return { holders, prompts };
+    }
+
+    it('the image text names the segments: it lands on the segments slide, not the first re-planned', async () => {
+      const { holders, prompts } = await runExample({
+        description: 'Segment shapes with 4, 10, 18, 28, 40 segments',
+      });
+      expect(holders).toEqual(['seg']);
+      // The segments slide is re-planned first and offered the image; the bus
+      // slide is never offered it and is told which slide keeps it.
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain('نمط أعداد القطع');
+      expect(prompts[0]).toMatch(/\n- src-1\b/);
+      expect(prompts[1]).toContain('مواعيد الحافلة');
+      expect(prompts[1]).not.toMatch(/\n- src-1\b/);
+      expect(prompts[1]).toContain('src-1 is already shown on seg');
+    });
+
+    it('no image text: both are offered it, and the notes written from it give it to the segments slide', async () => {
+      const { holders, prompts } = await runExample({});
+      expect(holders).toEqual(['seg']);
+      expect(prompts).toHaveLength(3);
+      expect(prompts.slice(0, 2).every((prompt) => /\n- src-1\b/.test(prompt))).toBe(true);
+      expect(prompts[2]).toContain('مواعيد الحافلة');
+      expect(prompts[2]).not.toMatch(/\n- src-1\b/);
+      expect(prompts[2]).toContain('src-1 is already shown on seg');
+    });
+
+    it('the keeper declines the image: the bus slide is still offered it, so it is not lost', async () => {
+      const { holders, prompts } = await runExample({
+        description: 'Segment shapes with 4, 10, 18, 28, 40 segments',
+        declineOn: ['نمط أعداد القطع'],
+      });
+      expect(holders).toEqual(['bus']);
+      expect(prompts[prompts.length - 1]).toMatch(/\n- src-1\b/);
+    });
+  });
+
   describe('g5.v8: lesson 306 check 4028 (one try-it + three solutions, one image)', () => {
     const image = { ...pdfImage('src-5'), sourceContentUnitIds: ['4028'] };
     const flow = [
@@ -712,9 +867,12 @@ describe('generateClassroom source visuals', () => {
           ]),
       );
       expect(assigned).toEqual({ 'try-it': ['src-5'], 'sol-a': [], 'sol-b': [], 'sol-c': [] });
-      // Each solution is told why the image is not offered.
-      expect(prompts).toHaveLength(4);
-      for (const prompt of prompts.slice(1)) {
+      // Nothing in the image's own text tells the four apart, so each is first
+      // offered it; the notes they wrote from it tie, the earliest (try-it)
+      // keeps it, and each solution is re-planned once more without it, told why.
+      expect(prompts).toHaveLength(7);
+      expect(prompts.slice(0, 4).every((prompt) => /\n- src-5\b/.test(prompt))).toBe(true);
+      for (const prompt of prompts.slice(4)) {
         expect(prompt).toContain('Textbook images linked to this slide: none');
         expect(prompt).toContain('src-5 is already shown on try-it');
       }

@@ -120,6 +120,7 @@ import {
 import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
 import { GenerationCorrectionRequiredError } from '@/lib/server/teaching-package/outline-correction';
 import { replanSlideVisuals } from '@/lib/server/teaching-package/replan-slide-visuals';
+import { chooseSplitUnitImageKeepers } from '@/lib/server/teaching-package/split-unit-images';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
@@ -1671,17 +1672,19 @@ export async function generateClassroom(
     // g5.v8 (I-4.3): a split unit's image stays on the slide it illustrates;
     // every other slide of that unit showing it is re-planned without it.
     const withoutImages = new Map<string, Set<string>>();
-    if (!resumeOutlines && hasSourceVisuals && input.findDuplicateSourceVisuals) {
-      for (const duplicate of input.findDuplicateSourceVisuals(outlines, sourceImages ?? [])) {
-        addReason(
-          duplicate.outlineId,
-          `the textbook image ${duplicate.imageId} is shown on the slide it illustrates (${duplicate.keptOnOutlineId}); this slide teaches another part of the same unit, so do not show ${duplicate.imageId} here: plan a native diagram of this slide's own content (or another listed image)`,
-        );
-        reselect.add(duplicate.outlineId);
-        const excluded = withoutImages.get(duplicate.outlineId) ?? new Set<string>();
-        excluded.add(duplicate.imageId);
-        withoutImages.set(duplicate.outlineId, excluded);
-      }
+    const duplicates =
+      !resumeOutlines && hasSourceVisuals && input.findDuplicateSourceVisuals
+        ? input.findDuplicateSourceVisuals(outlines, sourceImages ?? [])
+        : [];
+    for (const duplicate of duplicates) {
+      addReason(
+        duplicate.outlineId,
+        `the textbook image ${duplicate.imageId} is shown on the slide it illustrates (${duplicate.keptOnOutlineId}); this slide teaches another part of the same unit, so do not show ${duplicate.imageId} here: plan a native diagram of this slide's own content (or another listed image)`,
+      );
+      reselect.add(duplicate.outlineId);
+      const excluded = withoutImages.get(duplicate.outlineId) ?? new Set<string>();
+      excluded.add(duplicate.imageId);
+      withoutImages.set(duplicate.outlineId, excluded);
     }
     if (!resumeOutlines && hasSourceVisuals) {
       const seen = new Set(
@@ -1700,13 +1703,69 @@ export async function generateClassroom(
         }
       }
     }
+    // g5.v8 (I-4.3): each image of a unit taught over several slides has ONE
+    // keeper, decided here before any re-plan — the slide it illustrates best,
+    // never whichever slide is re-planned first. Once the keeper shows it, no
+    // other slide of the unit is offered it; a keeper lacking it is re-planned
+    // (first) when a sibling would otherwise have been offered it, so the image
+    // is not lost. When nothing tells the slides apart (no image text to
+    // match), every re-planned slide of the unit is offered the image and the
+    // slides that took it are settled afterwards on the notes they wrote from it.
+    const keptElsewhere = new Map<string, Map<string, string>>();
+    const keeperIds = new Set<string>();
+    const openImages = new Map<string, Set<string>>();
+    if (!resumeOutlines && hasSourceVisuals && input.findDuplicateSourceVisuals) {
+      const decided = new Map<string, string>();
+      for (const duplicate of duplicates) {
+        if (!decided.has(duplicate.imageId)) {
+          decided.set(duplicate.imageId, duplicate.keptOnOutlineId);
+        }
+      }
+      const keepers = chooseSplitUnitImageKeepers(outlines, sourceImages ?? [], {
+        decided,
+        keepsImage: (outline, imageId) =>
+          !reselect.has(outline.id) && !withoutImages.get(outline.id)?.has(imageId),
+      });
+      for (const { imageId, keeperId, otherIds, decisive } of keepers) {
+        if (!decisive) {
+          openImages.set(imageId, new Set([keeperId, ...otherIds]));
+          continue;
+        }
+        keeperIds.add(keeperId);
+        for (const otherId of otherIds) {
+          if (withoutImages.get(otherId)?.has(imageId)) continue;
+          const kept = keptElsewhere.get(otherId) ?? new Map<string, string>();
+          kept.set(imageId, keeperId);
+          keptElsewhere.set(otherId, kept);
+        }
+        const keeper = outlines.find((outline) => outline.id === keeperId);
+        if (
+          keeper &&
+          !(keeper.suggestedImageIds ?? []).includes(imageId) &&
+          !reasonsById.has(keeperId) &&
+          otherIds.some((id) => reselect.has(id))
+        ) {
+          addReason(
+            keeperId,
+            `the textbook image ${imageId} illustrates this slide best among the slides of its unit; show ${imageId} here (visualPlan.mode "image") and write its note from what it shows`,
+          );
+          reselect.add(keeperId);
+        }
+      }
+    }
     if (reasonsById.size > 0) {
       const { aiCall: replanAiCall } = await resolveSceneContentCall('slide');
       let current = outlines;
-      for (const [outlineId, reasons] of reasonsById) {
+      // Keepers first (g5.v8), so a sibling's check already sees the image shown.
+      const replanOrder = [...reasonsById.keys()];
+      const orderedIds = [
+        ...replanOrder.filter((id) => keeperIds.has(id)),
+        ...replanOrder.filter((id) => !keeperIds.has(id)),
+      ];
+      const replanOne = async (outlineId: string, reasons: readonly string[]) => {
         const index = current.findIndex((outline) => outline.id === outlineId);
         const outline = current[index];
-        if (!outline) continue;
+        if (!outline) return;
         // Only the notes are missing (e.g. an administrator chose the images,
         // D-3): the re-plan keeps exactly the selected images and writes their
         // notes. Otherwise it re-chooses among the slide's linked images.
@@ -1714,6 +1773,16 @@ export async function generateClassroom(
         const keepSelection = !reselect.has(outlineId) && selected.length > 0;
         const unitIds = new Set(outline.sourceContentUnitIds ?? []);
         let excluded = withoutImages.get(outlineId);
+        // g5.v8 (I-4.3): the image's keeper already shows it, so it is not
+        // offered here. A keeper that did not take it leaves it to the rule below.
+        const keptOnKeeper = [...(keptElsewhere.get(outlineId) ?? [])].filter(([id, keeperId]) =>
+          current.some(
+            (entry) => entry.id === keeperId && (entry.suggestedImageIds ?? []).includes(id),
+          ),
+        );
+        if (keptOnKeeper.length > 0) {
+          excluded = new Set([...(excluded ?? []), ...keptOnKeeper.map(([id]) => id)]);
+        }
         // g5.v8 (I-4.3): an image another slide of the same unit already shows
         // (and keeps) is never offered again, so a re-plan cannot re-add it to
         // every slide of a split unit (lesson 306's check 4028).
@@ -1723,7 +1792,12 @@ export async function generateClassroom(
             if (at === index || entry.type !== 'slide' || !entry.id) return;
             if (!(entry.sourceContentUnitIds ?? []).some((id) => unitIds.has(id))) return;
             for (const id of entry.suggestedImageIds ?? []) {
-              if (!withoutImages.get(entry.id)?.has(id) && !shownOnUnit.has(id)) {
+              if (
+                !withoutImages.get(entry.id)?.has(id) &&
+                !keptElsewhere.get(entry.id)?.has(id) &&
+                !openImages.has(id) &&
+                !shownOnUnit.has(id)
+              ) {
                 shownOnUnit.set(id, entry.id);
               }
             }
@@ -1752,8 +1826,16 @@ export async function generateClassroom(
           languageDirective,
           reasons: [
             ...reasons,
+            ...keptOnKeeper.map(
+              ([id, keptOn]) =>
+                `the textbook image ${id} is already shown on ${keptOn}, the slide of this unit it illustrates best; do not show ${id} here: plan a native diagram of this slide's own content (or another listed image)`,
+            ),
             ...[...shownOnUnit]
-              .filter(([id]) => !withoutImages.get(outlineId)?.has(id))
+              .filter(
+                ([id]) =>
+                  !withoutImages.get(outlineId)?.has(id) &&
+                  !keptOnKeeper.some(([kept]) => kept === id),
+              )
               .map(
                 ([id, keptOn]) =>
                   `the textbook image ${id} is already shown on ${keptOn}, another slide of this unit; do not show ${id} here: plan a native diagram of this slide's own content (or another listed image)`,
@@ -1786,6 +1868,25 @@ export async function generateClassroom(
             `Slide "${outline.title}" visual re-plan failed: ${replanned.messages.join('; ')}`,
           );
         }
+      };
+      for (const outlineId of orderedIds) await replanOne(outlineId, reasonsById.get(outlineId)!);
+      // g5.v8 (I-4.3): an image nothing could place in advance stays on the
+      // slide its notes (written from the image itself) match best; every other
+      // slide of the unit that took it is re-planned once more without it.
+      if (openImages.size > 0 && input.findDuplicateSourceVisuals) {
+        const late = new Map<string, string[]>();
+        for (const duplicate of input.findDuplicateSourceVisuals(current, sourceImages ?? [])) {
+          if (!openImages.get(duplicate.imageId)?.has(duplicate.outlineId)) continue;
+          const excluded = withoutImages.get(duplicate.outlineId) ?? new Set<string>();
+          excluded.add(duplicate.imageId);
+          withoutImages.set(duplicate.outlineId, excluded);
+          reselect.add(duplicate.outlineId);
+          late.set(duplicate.outlineId, [
+            ...(late.get(duplicate.outlineId) ?? []),
+            `the textbook image ${duplicate.imageId} is already shown on ${duplicate.keptOnOutlineId}, the slide of this unit it illustrates best; do not show ${duplicate.imageId} here: plan a native diagram of this slide's own content (or another listed image)`,
+          ]);
+        }
+        for (const [outlineId, reasons] of late) await replanOne(outlineId, reasons);
       }
       const analysis = analyze(current);
       outlines = analysis.outlines;

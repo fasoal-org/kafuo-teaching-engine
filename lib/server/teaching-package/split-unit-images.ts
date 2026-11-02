@@ -126,3 +126,95 @@ export function findSplitUnitDuplicateImages(
   }
   return duplicates;
 }
+
+export interface SplitUnitImageKeeper {
+  imageId: string;
+  /** The one slide of the unit that may show the image. */
+  keeperId: string;
+  /** Every other slide of the unit: never offered the image. */
+  otherIds: string[];
+  /**
+   * False when nothing tells the slides apart (the best match score is tied):
+   * the keeper is then only the earliest slide, and the caller lets the visual
+   * re-plan look at the image before deciding.
+   */
+  decisive: boolean;
+}
+
+/**
+ * The keeper of every textbook image linked to a unit taught over several
+ * slides, decided BEFORE any visual re-plan so the image lands on the slide it
+ * illustrates, not on whichever slide is re-planned first (lesson 306's
+ * example 4021: bus times, then the 4, 10, 18, 28, 40 segments).
+ *
+ * In order: the keeper `decided` already (the split-unit duplicate step); else
+ * the earliest slide that shows the image and keeps its selection
+ * (`keepsImage`); else the slide whose title and key points best match the
+ * image's caption, figure label, description and the other slides' `shows`
+ * notes (numbers count double; a tie keeps the earliest and is not
+ * `decisive`). Pure and deterministic.
+ */
+export function chooseSplitUnitImageKeepers(
+  outlines: readonly SceneOutline[],
+  sourceImages: readonly PdfImage[],
+  options: {
+    decided?: ReadonlyMap<string, string>;
+    keepsImage?: (outline: SceneOutline, imageId: string) => boolean;
+  } = {},
+): SplitUnitImageKeeper[] {
+  const keepers: SplitUnitImageKeeper[] = [];
+  const slides = outlines.filter(
+    (outline) => outline.type === 'slide' && typeof outline.id === 'string',
+  );
+  for (const image of sourceImages) {
+    const units = new Set((image.sourceContentUnitIds ?? []).map(String));
+    if (units.size === 0) continue;
+    const unitSlides = slides.filter((outline) =>
+      [...citedUnits(outline)].some((id) => units.has(id)),
+    );
+    if (unitSlides.length < 2) continue;
+    const decidedId = options.decided?.get(image.id);
+    let keeper = unitSlides.find((outline) => outline.id === decidedId);
+    keeper ??= unitSlides.find(
+      (outline) =>
+        (outline.suggestedImageIds ?? []).includes(image.id) &&
+        (options.keepsImage?.(outline, image.id) ?? false),
+    );
+    let decisive = keeper !== undefined;
+    if (!keeper) {
+      const imageTextFor = (scored: SceneOutline) =>
+        [
+          image.caption ?? '',
+          image.figureLabel ?? '',
+          image.description ?? '',
+          ...unitSlides
+            .filter((outline) => outline !== scored)
+            .flatMap((outline) =>
+              (outline.imagePlans ?? [])
+                .filter((plan) => plan.imageId === image.id)
+                .map((plan) => plan.shows ?? ''),
+            ),
+        ].join('\n');
+      let best = -1;
+      let runnerUp = -1;
+      for (const candidate of unitSlides) {
+        const score = imageMatchScore(candidate, imageTextFor(candidate));
+        if (score > best) {
+          keeper = candidate;
+          runnerUp = best;
+          best = score;
+        } else if (score > runnerUp) {
+          runnerUp = score;
+        }
+      }
+      decisive = best > runnerUp;
+    }
+    keepers.push({
+      imageId: image.id,
+      keeperId: keeper!.id!,
+      otherIds: unitSlides.filter((outline) => outline !== keeper).map((outline) => outline.id!),
+      decisive,
+    });
+  }
+  return keepers;
+}
