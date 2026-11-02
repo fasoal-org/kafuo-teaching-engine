@@ -363,12 +363,21 @@ export function captureOutlineAnswer(
   report: OutlineAnswerReport,
 ): OutlineAnswerCapture {
   const cut = raw.length > OUTLINE_ANSWER_KEEP_WHOLE;
+  // Never split a surrogate pair: a lone surrogate is refused by Postgres JSONB.
+  const isHigh = (at: number) => /[\uD800-\uDBFF]/.test(raw.charAt(at));
+  const isLow = (at: number) => /[\uDC00-\uDFFF]/.test(raw.charAt(at));
+  const headEnd = isHigh(OUTLINE_ANSWER_KEEP_EACH_END - 1)
+    ? OUTLINE_ANSWER_KEEP_EACH_END - 1
+    : OUTLINE_ANSWER_KEEP_EACH_END;
+  const tailStart = isLow(raw.length - OUTLINE_ANSWER_KEEP_EACH_END)
+    ? raw.length - OUTLINE_ANSWER_KEEP_EACH_END + 1
+    : raw.length - OUTLINE_ANSWER_KEEP_EACH_END;
   return {
     parse: report.parse ? { ...report.parse } : null,
     malformed: [...report.malformed],
     rawLength: raw.length,
-    rawHead: cut ? raw.slice(0, OUTLINE_ANSWER_KEEP_EACH_END) : raw,
-    rawTail: cut ? raw.slice(raw.length - OUTLINE_ANSWER_KEEP_EACH_END) : '',
+    rawHead: cut ? raw.slice(0, headEnd) : raw,
+    rawTail: cut ? raw.slice(tailStart) : '',
   };
 }
 
