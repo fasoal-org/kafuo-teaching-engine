@@ -432,7 +432,8 @@ function teacherParityDiagnostics(
           code: EXERCISE_TOO_FEW,
           disposition: 'admin_correctable',
           field: 'sourceContentUnitIds',
-          message: `the exercises block cites ${counted} usable exercise units, fewer than ${policy.minExercises}`,
+          // No live count in the message: an ignore keys on it and must survive edits.
+          message: `the exercises block cites fewer than ${policy.minExercises} usable exercise units`,
         });
       }
       if (
@@ -443,7 +444,7 @@ function teacherParityDiagnostics(
           code: EXERCISE_TOO_FEW,
           disposition: 'admin_correctable',
           field: 'sourceContentUnitIds',
-          message: `the exercises block has ${exerciseSlides.length} exercise slides, fewer than ${policy.minExerciseSlides}`,
+          message: `the exercises block has fewer than ${policy.minExerciseSlides} exercise slides`,
         });
       }
     }

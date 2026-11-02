@@ -638,8 +638,8 @@ describe('g5.v8 coverage gates', () => {
       [EXERCISE_TOO_FEW, 'sourceContentUnitIds', 'admin_correctable'],
     ]);
     expect(found.map((d) => d.message)).toEqual([
-      'the exercises block cites 2 usable exercise units, fewer than 3',
-      'the exercises block has 1 exercise slides, fewer than 2',
+      'the exercises block cites fewer than 3 usable exercise units',
+      'the exercises block has fewer than 2 exercise slides',
     ]);
     expect(found.every(isIgnorableIssue)).toBe(true);
     // Only the cited usable units count: the instruction line (4038) does not.
