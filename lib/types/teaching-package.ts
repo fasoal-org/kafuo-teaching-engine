@@ -396,6 +396,14 @@ export interface GenerationInputSnapshot {
     selected: number;
     materialized: number;
   };
+  /**
+   * Diagnosis only (lesson 306, F-1), patched in by the runner: the attempt's
+   * outline answers that needed a JSON repair, could not be parsed, or were
+   * refused as broken — in call order, the latest few — each a size-capped
+   * copy of the model's raw text. Model output only: no prompt, key or
+   * student data. Absent while every answer was read without a repair.
+   */
+  outlineAnswerDiagnostics?: Array<OutlineAnswerCapture & { generationRun: number; at: number }>;
 }
 
 export interface TeachingPackageVersion {
@@ -546,6 +554,25 @@ export interface GenerationCheckpointSourceRefs {
   };
   /** Approved source visuals offered to the planner (metadata only). */
   sourceImages: CheckpointSourceImage[];
+}
+
+/** One outline answer kept for diagnosis (see `outlineAnswerDiagnostics`). */
+export interface OutlineAnswerCapture {
+  /** How the JSON reader read it; `null` = not parseable at all. */
+  parse: {
+    extraction: string;
+    repair: string;
+    reasoningPrefixStripped: boolean;
+    exact: boolean;
+  } | null;
+  /** The structural findings that refused it (empty = it was only repaired). */
+  malformed: string[];
+  /** Length of the whole raw text, in UTF-16 code units (JS string length). */
+  rawLength: number;
+  /** The raw text when it fits in 16,384 code units, else its first 8,192. */
+  rawHead: string;
+  /** The last 8,192 code units when the text was cut, else empty. */
+  rawTail: string;
 }
 
 export interface GenerationCheckpointLogEntry {

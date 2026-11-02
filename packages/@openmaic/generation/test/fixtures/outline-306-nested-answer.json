@@ -1,0 +1,140 @@
+{
+  "_note": "Lesson 306, attempt tpa-zM1HF6zhLvOU (2 Nov 2026): the outline answer as the JSON reader accepted it, trimmed to the first 3 of the 14 nested slides. Entry 0 is a whole answer object nested as a slide; entry 1 is the one real slide that survived.",
+  "parsed": [
+    {
+      "languageDirective": "يُقدَّم الدرس بالعربية الأكاديمية الواضحة في النصوص الظاهرة على الشرائح، وبلهجة سعودية بيضاء مهذبة وطبيعية في الشرح المنطوق. تُستخدم المصطلحات الرياضية السعودية المعيارية، وتُقرأ الرموز والأعداد والوحدات بالعربية في الكلام المنطوق. تُعرض المصطلحات الإنجليزية الواردة في المصدر بمقابلها العربي، ولا تُستخدم كتابة لاتينية في النص المنطوق.",
+      "courseTitle": "التبرير الاستقرائي والتخمين",
+      "outlines": [
+        {
+          "id": "scene_1",
+          "type": "slide",
+          "order": 1,
+          "title": "التبرير الاستقرائي والتخمين",
+          "keyPoints": [
+            "العنوان: التبرير الاستقرائي والتخمين.",
+            "فيما سبق: استُخدمت البيانات لإيجاد أنماط والتوصل إلى توقعات.",
+            "لماذا؟ كيف تساعد أنماط إجابات الأشخاص عن منتج على الوصول إلى نتيجة؟",
+            "والآن: أكتب تخمينات مبنية على التبرير الاستقرائي، وأجد أمثلة مضادة.",
+            "المفردات: التبرير الاستقرائي، التخمين، المثال المضاد."
+          ],
+          "slideType": "cover",
+          "visualPlan": {
+            "mode": "native",
+            "diagram": {
+              "shows": "مسار من إجابات استبيان منتج إلى ملاحظة نمط ثم نتيجة",
+              "teachingPoint": "يوضح أن الملاحظة والاستقراء يقودان إلى تخمين، دون شرح أهداف الدرس."
+            }
+          },
+          "contentRole": "orientation",
+          "description": "افتتاح من مادة الكتاب في شريحة غلاف واحدة: عنوان الدرس، المعرفة السابقة، سؤال «لماذا؟»، أهداف الدرس ومفرداته. يقتصر التمهيد على تسمية فكرة الاستقراء.",
+          "teachingStage": {
+            "key": "lesson_opener",
+            "flowIndex": 0
+          },
+          "teachingSkills": {
+            "primary": {
+              "skillId": "understanding-by-design",
+              "version": "v1"
+            },
+            "classification": "instructional"
+          },
+          "sourceContentUnitIds": ["4013", "4015", "4017", "4018", "4019", "4020"]
+        },
+        {
+          "id": "scene_2",
+          "type": "slide",
+          "order": 2,
+          "title": "رحلة التعلّم",
+          "keyPoints": [
+            "أكتب تخمينًا من نمط في أمثلة أو بيانات، وأستخدمه لتوقع الحد التالي.",
+            "أختبر التخمينات العددية والهندسية بأمثلة.",
+            "أجد مثالًا مضادًا واحدًا يكفي لإظهار أن التخمين غير صحيح.",
+            "المسار: ملاحظة النمط، صياغة التخمين، ثم اختبار صحته."
+          ],
+          "slideType": "content",
+          "contentRole": "orientation",
+          "description": "تحدد الشريحة الهدفين المعتمدين بلغة واضحة، وتعرض مسار الدرس دون البدء في التدريس.",
+          "teachingStage": {
+            "key": "lesson_learning_map",
+            "flowIndex": 1
+          },
+          "teachingSkills": {
+            "primary": {
+              "skillId": "understanding-by-design",
+              "version": "v1"
+            },
+            "classification": "instructional"
+          },
+          "sourceContentUnitIds": ["4017"]
+        },
+        {
+          "id": "scene_3",
+          "type": "slide",
+          "order": 3,
+          "title": "كتابة تخمينات بالتبرير الاستقرائي",
+          "keyPoints": ["الهدف: كتابة تخمينات مبنية على ملاحظة الأنماط."],
+          "slideType": "transition",
+          "visualPlan": {
+            "mode": "native",
+            "diagram": {
+              "shows": "عنوان الهدف يتبعه مسار موجز من الملاحظة إلى التخمين",
+              "teachingPoint": "يمهد لخطوات بناء التخمين الواردة في أمثلة الكتاب."
+            }
+          },
+          "contentRole": "orientation",
+          "description": "انتقال يفتتح الجزء الأول ويسمي هدفه التعليمي.",
+          "teachingStage": {
+            "key": "outcome_visual_explanations",
+            "flowIndex": 2
+          },
+          "teachingSkills": {
+            "primary": {
+              "skillId": "understanding-by-design",
+              "version": "v1"
+            },
+            "classification": "instructional"
+          },
+          "sourceContentUnitIds": ["4017"]
+        }
+      ]
+    },
+    {
+      "id": "scene_15",
+      "type": "slide",
+      "title": "مثال ٣: بيانات صالون الحلاقة",
+      "keyPoints": [
+        "لأن المسألة تبحث عن نمط مرتبط بالزمن، فالتمثيل الملائم شكل انتشار: الأشهر أفقيًا وعدد الزبائن رأسيًا.",
+        "يُمثل كل يوم بلون مستقل، ويضاف مفتاح للرسم.",
+        "تظهر البيانات اتجاهًا عامًا صاعدًا للزبائن والمجموع عبر الأشهر.",
+        "التخمين: يزداد العمل في الأيام الثلاثة الأخيرة من الأسبوع؛ لذلك قد يحتاج الصالون إلى زيادة عدد الحلاقين.",
+        "البيانات تؤيد التخمين ولا تضمن استمرار الزيادة."
+      ],
+      "slideType": "content",
+      "imagePlans": [
+        {
+          "shows": "مخطط الانتشار الأصلي لأعداد زبائن الصالون في الخميس والجمعة والسبت والمجموع خلال الأشهر الستة.",
+          "imageId": "src-6",
+          "teachingPoint": "يتتبع المتعلم اتجاه النقاط والمجموع لتقييم التخمين المرتبط بزيادة العمل."
+        }
+      ],
+      "visualPlan": {
+        "mode": "image"
+      },
+      "contentRole": "worked_example",
+      "description": "يختار التمثيل الملائم للبيانات ويستنتج تخمينًا من الاتجاه الظاهر في الأشهر الستة.",
+      "teachingStage": {
+        "key": "outcome_visual_explanations",
+        "flowIndex": 2
+      },
+      "teachingSkills": {
+        "primary": {
+          "skillId": "feynman-learning",
+          "version": "v1"
+        },
+        "classification": "instructional"
+      },
+      "suggestedImageIds": ["src-6"],
+      "sourceContentUnitIds": ["4030"]
+    }
+  ]
+}

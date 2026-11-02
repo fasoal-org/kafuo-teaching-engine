@@ -647,3 +647,38 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }
+
+/** Elements never taught one slide each: cover/ignored material and rule-placed blocks. */
+const NOT_ONE_SLIDE_EACH: ReadonlySet<string> = new Set([
+  'ignore',
+  'objective_source',
+  'prior_knowledge',
+  'exercise',
+]);
+
+/**
+ * Lesson 306 (F-2): the required book units the outline planner could SEE —
+ * the denominator of the "cites fewer than half" broken-answer rule. A unit
+ * counts only when it is required, is not recall / exercise / cover material,
+ * and its `[[CONTENT_UNIT id=…]]` marker lies inside the source text the
+ * prompt actually carries (`plannerText`, already cut to the prompt's limit).
+ * A unit without retainable text has no marker, so it never counts either.
+ */
+export function plannerVisibleRequiredUnitIds(
+  book: KafuoBookStructure | undefined,
+  plannerText: string,
+): string[] {
+  if (!book) return [];
+  const seen = new Set<string>();
+  for (const match of plannerText.matchAll(/\[\[CONTENT_UNIT id=([^\s\]]+)/g)) {
+    seen.add(match[1]!);
+  }
+  return book.units
+    .filter(
+      (unit) =>
+        unit.required &&
+        !NOT_ONE_SLIDE_EACH.has(String(unit.element ?? '')) &&
+        seen.has(String(unit.contentUnitId)),
+    )
+    .map((unit) => String(unit.contentUnitId));
+}

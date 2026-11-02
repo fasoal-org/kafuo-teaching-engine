@@ -6,6 +6,7 @@ import {
   bookStructureRequirement,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
@@ -263,5 +264,30 @@ describe('g5.v7 request fields', () => {
     ],
   ])('refuses a malformed v7 field', (overrides, message) => {
     expect(() => parseKafuoGenerationRequest(body(overrides))).toThrow(message);
+  });
+});
+
+describe('plannerVisibleRequiredUnitIds (lesson 306, F-2 denominator)', () => {
+  const book: KafuoBookStructure = {
+    ...BOOK,
+    units: [
+      ...BOOK.units,
+      { contentUnitId: '14', kind: 'RECALL', element: 'prior_knowledge', required: true },
+      { contentUnitId: '15', kind: 'EXERCISES', element: 'exercise', required: true },
+      { contentUnitId: '16', kind: 'KEY_CONCEPT', element: 'key_concept', required: true },
+    ],
+  };
+  const marker = (id: string) =>
+    `[[CONTENT_UNIT id=${id} order=1 role=TEXT]]\ntext\n[[/CONTENT_UNIT]]`;
+
+  it('counts required, one-slide-each units whose marker the planner text carries', () => {
+    const text = ['10', '11', '12', '13', '14', '15'].map(marker).join('\n');
+    // 10 is not required; 14/15 are rule-placed; 16 was cut from the prompt.
+    expect(plannerVisibleRequiredUnitIds(book, text)).toEqual(['11', '12', '13']);
+  });
+
+  it('is empty without a book or without markers (pdf fallback)', () => {
+    expect(plannerVisibleRequiredUnitIds(undefined, marker('11'))).toEqual([]);
+    expect(plannerVisibleRequiredUnitIds(book, 'plain pdf text')).toEqual([]);
   });
 });

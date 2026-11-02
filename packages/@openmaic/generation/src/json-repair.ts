@@ -40,19 +40,81 @@ function logJsonParseError(
   logger.warn(`${stage} parse error: ${message}`);
 }
 
+/**
+ * Where the parsed JSON was found in the response:
+ * - `exact`: the whole (trimmed) response was valid JSON as it stands;
+ * - `code-block`: a fenced markdown block;
+ * - `balanced-block`: the first bracket-balanced `{…}` / `[…]` block;
+ * - `whole-response`: the whole response, after a repair below.
+ */
+export type JsonParseExtraction = 'exact' | 'code-block' | 'balanced-block' | 'whole-response';
+
+/**
+ * Which repair the parsed text needed:
+ * - `none`: it parsed as extracted;
+ * - `truncation-fix`: the common fixes (quoted property fragments, LaTeX /
+ *   invalid escapes, a closed truncated array or object);
+ * - `jsonrepair`: the `jsonrepair` library rewrote it;
+ * - `control-char`: raw control characters were escaped or removed.
+ */
+export type JsonParseRepair = 'none' | 'truncation-fix' | 'jsonrepair' | 'control-char';
+
+/** How {@link parseJsonResponseWithInfo} read a response. */
+export interface JsonParseInfo {
+  extraction: JsonParseExtraction;
+  repair: JsonParseRepair;
+  /** A `</think>`-style reasoning prefix was cut before parsing. */
+  reasoningPrefixStripped: boolean;
+  /** True only for `exact`: the model's text was valid JSON with nothing cut or fixed. */
+  exact: boolean;
+}
+
+export interface JsonParseOutcome<T> {
+  value: T | null;
+  /** `null` when nothing could be parsed. */
+  info: JsonParseInfo | null;
+}
+
 export function parseJsonResponse<T>(response: string, options: JsonParsingOptions = {}): T | null {
+  return parseJsonResponseWithInfo<T>(response, options).value;
+}
+
+/**
+ * {@link parseJsonResponse} plus HOW the value was read, so a caller can tell an
+ * answer that was valid as written from one a fallback strategy rebuilt. The
+ * value, the strategies, their order and every log line are identical.
+ */
+export function parseJsonResponseWithInfo<T>(
+  response: string,
+  options: JsonParsingOptions = {},
+): JsonParseOutcome<T> {
   const logger = options.logger ?? noopGenerationLogger;
   const exactParsed = tryParseExactJson<T>(response);
-  if (exactParsed !== null) return exactParsed;
+  if (exactParsed !== null) {
+    return {
+      value: exactParsed,
+      info: { extraction: 'exact', repair: 'none', reasoningPrefixStripped: false, exact: true },
+    };
+  }
 
   const cleanedResponse = stripReasoningPrefix(response);
   if (cleanedResponse !== response.trim()) {
     const parsedCleaned = parseJsonResponseCandidate<T>(cleanedResponse, logger);
-    if (parsedCleaned !== null) return parsedCleaned;
+    if (parsedCleaned !== null) {
+      return {
+        value: parsedCleaned.value,
+        info: { ...parsedCleaned.method, reasoningPrefixStripped: true, exact: false },
+      };
+    }
   }
 
   const parsed = parseJsonResponseCandidate<T>(response, logger);
-  if (parsed !== null) return parsed;
+  if (parsed !== null) {
+    return {
+      value: parsed.value,
+      info: { ...parsed.method, reasoningPrefixStripped: false, exact: false },
+    };
+  }
 
   logger.error('Failed to parse JSON from response');
   logger.error('Raw response (first 500 chars):', cleanedResponse.substring(0, 500));
@@ -61,7 +123,7 @@ export function parseJsonResponse<T>(response: string, options: JsonParsingOptio
     cleanedResponse.substring(Math.max(0, cleanedResponse.length - 500)),
   );
 
-  return null;
+  return { value: null, info: null };
 }
 
 function tryParseExactJson<T>(response: string): T | null {
@@ -71,6 +133,8 @@ function tryParseExactJson<T>(response: string): T | null {
     return null;
   }
 }
+
+type CandidateMethod = { extraction: JsonParseExtraction; repair: JsonParseRepair };
 
 function stripReasoningPrefix(response: string): string {
   const trimmed = response.trim();
@@ -82,7 +146,10 @@ function stripReasoningPrefix(response: string): string {
   return trimmed.slice(lastMatch.index + lastMatch[0].length).trim();
 }
 
-function parseJsonResponseCandidate<T>(response: string, logger: GenerationLogger): T | null {
+function parseJsonResponseCandidate<T>(
+  response: string,
+  logger: GenerationLogger,
+): { value: T; method: CandidateMethod } | null {
   const cleanedResponse = response.trim();
 
   // Strategy 1: Try to extract JSON from markdown code blocks (may have multiple)
@@ -91,10 +158,10 @@ function parseJsonResponseCandidate<T>(response: string, logger: GenerationLogge
     const extracted = match[1].trim();
     // Only try if it looks like JSON (starts with { or [)
     if (extracted.startsWith('{') || extracted.startsWith('[')) {
-      const result = tryParseJson<T>(extracted, { logger });
+      const result = tryParseJsonWithRepair<T>(extracted, logger);
       if (result !== null) {
         logger.debug('Successfully parsed JSON from code block');
-        return result;
+        return { value: result.value, method: { extraction: 'code-block', repair: result.repair } };
       }
     }
   }
@@ -153,19 +220,25 @@ function parseJsonResponseCandidate<T>(response: string, logger: GenerationLogge
 
     if (endIndex !== -1) {
       const jsonStr = cleanedResponse.substring(startIndex, endIndex + 1);
-      const result = tryParseJson<T>(jsonStr, { logger });
+      const result = tryParseJsonWithRepair<T>(jsonStr, logger);
       if (result !== null) {
         logger.debug('Successfully parsed JSON from response body');
-        return result;
+        return {
+          value: result.value,
+          method: { extraction: 'balanced-block', repair: result.repair },
+        };
       }
     }
   }
 
   // Strategy 3: Last resort - try the whole response
-  const result = tryParseJson<T>(cleanedResponse.trim(), { logger });
+  const result = tryParseJsonWithRepair<T>(cleanedResponse.trim(), logger);
   if (result !== null) {
     logger.debug('Successfully parsed raw response as JSON');
-    return result;
+    return {
+      value: result.value,
+      method: { extraction: 'whole-response', repair: result.repair },
+    };
   }
 
   return null;
@@ -175,10 +248,28 @@ function parseJsonResponseCandidate<T>(response: string, logger: GenerationLogge
  * Try to parse JSON with various fixes for common AI response issues
  */
 export function tryParseJson<T>(jsonStr: string, options: JsonParsingOptions = {}): T | null {
-  const logger = options.logger ?? noopGenerationLogger;
+  const result = tryParseJsonWithRepair<T>(jsonStr, options.logger ?? noopGenerationLogger);
+  return result === null ? null : result.value;
+}
+
+/**
+ * A parsed JSON `null` is "nothing parsed", exactly as `tryParseJson`'s callers
+ * always read its `null` return — the attempt still ends there.
+ */
+function withRepair<T>(
+  value: unknown,
+  repair: JsonParseRepair,
+): { value: T; repair: JsonParseRepair } | null {
+  return value === null ? null : { value: value as T, repair };
+}
+
+function tryParseJsonWithRepair<T>(
+  jsonStr: string,
+  logger: GenerationLogger,
+): { value: T; repair: JsonParseRepair } | null {
   // Attempt 1: Try parsing as-is
   try {
-    return JSON.parse(jsonStr) as T;
+    return withRepair<T>(JSON.parse(jsonStr), 'none');
   } catch (error) {
     logJsonParseError('Attempt 1', jsonStr, error, logger);
     // Continue to fix attempts
@@ -237,7 +328,7 @@ export function tryParseJson<T>(jsonStr: string, options: JsonParsingOptions = {
       }
     }
 
-    return JSON.parse(fixed) as T;
+    return withRepair<T>(JSON.parse(fixed), 'truncation-fix');
   } catch (error) {
     logJsonParseError('Attempt 2', jsonStr, error, logger);
     // Continue to next attempt
@@ -246,7 +337,7 @@ export function tryParseJson<T>(jsonStr: string, options: JsonParsingOptions = {
   // Attempt 3: Use jsonrepair to fix malformed JSON (e.g. unescaped quotes in Chinese text)
   try {
     const repaired = jsonrepair(jsonStr);
-    return JSON.parse(repaired) as T;
+    return withRepair<T>(JSON.parse(repaired), 'jsonrepair');
   } catch (error) {
     logJsonParseError('Attempt 3', jsonStr, error, logger);
     // Continue to next attempt
@@ -270,7 +361,7 @@ export function tryParseJson<T>(jsonStr: string, options: JsonParsingOptions = {
       }
     });
 
-    return JSON.parse(fixed) as T;
+    return withRepair<T>(JSON.parse(fixed), 'control-char');
   } catch (error) {
     logJsonParseError('Attempt 4', jsonStr, error, logger);
     return null;

@@ -5,7 +5,7 @@
 
 import { nanoid } from 'nanoid';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from './constants.js';
-import { parseJsonResponse } from './json-repair.js';
+import { parseJsonResponseWithInfo, type JsonParseInfo } from './json-repair.js';
 import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import {
   formatImageDescription,
@@ -162,6 +162,111 @@ export interface OutlineGenerationOptions extends Omit<
    * and typed planning conflicts still fail either way.
    */
   collectCorrectableIssues?: boolean;
+  /**
+   * Refuse an answer that holds no outline array, or a structurally broken one
+   * ({@link findMalformedOutlineEntries}, {@link findBookUnitShortfall}), as a
+   * typed bad model answer (`OUTLINE_ANSWER_MALFORMED` /
+   * `OUTLINE_ANSWER_UNPARSABLE`, with `badAnswer`), before any analysis; the
+   * result also carries `answer` (how it was read). It is never an
+   * admin-correctable finding. Absent → unchanged behaviour and result shape.
+   */
+  rejectMalformedAnswer?: boolean;
+  /**
+   * With `rejectMalformedAnswer`, the book units a book-structured request
+   * (g5.v7 / g5.v8) requires: an answer whose scenes cite fewer than half of
+   * them is refused as broken ({@link findBookUnitShortfall}).
+   */
+  requiredSourceUnitIds?: readonly string[];
+}
+
+/** A structurally broken outline answer read without any JSON repair. */
+export const OUTLINE_ANSWER_MALFORMED = 'OUTLINE_ANSWER_MALFORMED';
+/**
+ * An outline answer that could not be parsed into a plan at all, or a
+ * structurally broken one that only a JSON repair (truncation fix, jsonrepair,
+ * control characters) made readable.
+ */
+export const OUTLINE_ANSWER_UNPARSABLE = 'OUTLINE_ANSWER_UNPARSABLE';
+
+/** How the outline answer was read, and — when refused — why. */
+export interface OutlineAnswerReport {
+  /** `null` when the text could not be parsed at all. */
+  parse: JsonParseInfo | null;
+  /** Structural findings ({@link findMalformedOutlineEntries}); empty = well-formed. */
+  malformed: string[];
+}
+
+export interface OutlineGenerationResult extends GenerationResult<OutlineGenerationData> {
+  /** Present whenever the model answered (success or failure). */
+  answer?: OutlineAnswerReport;
+  /** Present only on a refusal under `rejectMalformedAnswer`. */
+  badAnswer?: {
+    code: typeof OUTLINE_ANSWER_MALFORMED | typeof OUTLINE_ANSWER_UNPARSABLE;
+    reasons: string[];
+  };
+}
+
+/** Keys of an answer object: an entry carrying one is a nested answer, not a scene. */
+const ANSWER_ONLY_KEYS = ['outlines', 'languageDirective'] as const;
+
+/**
+ * The structural check of an outline answer (lesson 306, 2 Nov 2026): every
+ * entry must be a scene. An entry is not a scene when it is not an object, has
+ * an answer-only key (`outlines`, `languageDirective`) — a whole answer nested
+ * as a slide — or lacks a non-empty string `type` or `title`. Returns one
+ * finding per bad entry; empty for a well-formed answer.
+ */
+export function findMalformedOutlineEntries(entries: readonly unknown[]): string[] {
+  const findings: string[] = [];
+  entries.forEach((entry, index) => {
+    const position = `entry #${index + 1}`;
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      findings.push(`${position} is not a scene object`);
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const nested = ANSWER_ONLY_KEYS.filter((key) => key in record);
+    if (nested.length > 0) {
+      findings.push(
+        `${position} is a nested answer object (has ${nested.join(', ')}), not a scene`,
+      );
+      return;
+    }
+    const missing = (['type', 'title'] as const).filter(
+      (key) => typeof record[key] !== 'string' || (record[key] as string).trim() === '',
+    );
+    if (missing.length > 0) findings.push(`${position} has no ${missing.join(' / ')}`);
+  });
+  return findings;
+}
+
+/** Below this many required units one missed citation would flip the verdict. */
+export const MIN_REQUIRED_UNITS_FOR_SHORTFALL = 4;
+
+/**
+ * The book-structured half of the check: `null` when fewer than
+ * {@link MIN_REQUIRED_UNITS_FOR_SHORTFALL} units are required, or the entries
+ * cite at least half of them (any top-level entry's `sourceContentUnitIds`
+ * counts — more lenient than the coverage gate, which counts teaching slides
+ * only); otherwise the finding. A plan that keeps fewer than half the book
+ * lost most of its answer — it is not a coverage gap for a person to fill one
+ * slide at a time. The caller passes only units the planner could see.
+ */
+export function findBookUnitShortfall(
+  entries: readonly unknown[],
+  requiredSourceUnitIds: readonly string[] | undefined,
+): string | null {
+  const required = new Set((requiredSourceUnitIds ?? []).map(String));
+  if (required.size < MIN_REQUIRED_UNITS_FOR_SHORTFALL) return null;
+  const cited = new Set<string>();
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const ids = (entry as { sourceContentUnitIds?: unknown }).sourceContentUnitIds;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) if (required.has(String(id))) cited.add(String(id));
+  }
+  if (cited.size * 2 >= required.size) return null;
+  return `the plan cites ${cited.size} of the ${required.size} required book units (fewer than half)`;
 }
 
 export interface OutlineFallbackOptions {
@@ -518,7 +623,7 @@ export async function generateSceneOutlinesFromRequirements(
   pdfImages: PdfImage[] | undefined,
   aiCall: AICallFn,
   options?: OutlineGenerationOptions,
-): Promise<GenerationResult<OutlineGenerationData>> {
+): Promise<OutlineGenerationResult> {
   const logger = options?.logger ?? noopGenerationLogger;
   const context: OutlinePromptContext = { ...options, pdfText, pdfImages };
   let prompts: { system: string; user: string };
@@ -534,11 +639,33 @@ export async function generateSceneOutlinesFromRequirements(
 
   const { visionImages } = buildAvailableImages(pdfImages, context);
 
+  let answer: OutlineAnswerReport | undefined;
+  // The answer report rides the result only for a caller that asked for the
+  // check, so every other caller's result is exactly as before.
+  const reported = (): { answer?: OutlineAnswerReport } =>
+    options?.rejectMalformedAnswer && answer ? { answer } : {};
   try {
     const response = await aiCall(prompts.system, prompts.user, visionImages);
-    const parsed = parseJsonResponse<
+    const { value: parsed, info: parseInfo } = parseJsonResponseWithInfo<
       { languageDirective: string; courseTitle?: string; outlines: SceneOutline[] } | SceneOutline[]
     >(response, { logger });
+    answer = { parse: parseInfo, malformed: [] };
+    // F-2/F-4: a typed bad model answer for the caller's one re-roll — never a
+    // finding for a person. A broken answer that needed an actual JSON repair
+    // (or could not be parsed at all) is unparsable; one read without any
+    // repair (exact, fenced, or after a reasoning prefix) is malformed.
+    const refuse = (reasons: string[]): OutlineGenerationResult => {
+      answer = { parse: parseInfo, malformed: reasons };
+      const code =
+        parseInfo && parseInfo.repair === 'none'
+          ? OUTLINE_ANSWER_MALFORMED
+          : OUTLINE_ANSWER_UNPARSABLE;
+      const how = parseInfo ? `${parseInfo.extraction}/${parseInfo.repair}` : 'unparsed';
+      const message = `${code}: the outline answer (read as ${how}) is not a usable plan: ${reasons.join('; ')}`;
+      logger.warn(message);
+      return { success: false, error: message, answer, badAnswer: { code, reasons } };
+    };
+    const NO_PLAN = 'the answer holds no outline array';
 
     let languageDirective: string;
     let courseTitle: string | undefined;
@@ -554,11 +681,23 @@ export async function generateSceneOutlinesFromRequirements(
         typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim().slice(0, 120) : undefined;
       rawOutlines = parsed.outlines;
     } else {
+      if (options?.rejectMalformedAnswer) return refuse([NO_PLAN]);
       return { success: false, error: 'Failed to parse scene outlines response' };
     }
 
     if (!Array.isArray(rawOutlines)) {
+      if (options?.rejectMalformedAnswer) return refuse([NO_PLAN]);
       return { success: false, error: 'Failed to parse scene outlines response' };
+    }
+
+    // The structural check (F-2) on the answer AS READ, before any analysis.
+    if (options?.rejectMalformedAnswer) {
+      const shortfall = findBookUnitShortfall(rawOutlines, options.requiredSourceUnitIds);
+      const reasons = [
+        ...findMalformedOutlineEntries(rawOutlines),
+        ...(shortfall ? [shortfall] : []),
+      ];
+      if (reasons.length > 0) return refuse(reasons);
     }
 
     // The server's register policy is authoritative: the model's directive is
@@ -591,7 +730,7 @@ export async function generateSceneOutlinesFromRequirements(
     if (hasFlow && rawEnriched.length === 0) {
       const message = `${OUTLINE_TEACHING_FLOW_ERROR}: no outlines were returned for a ${context.teachingFlow!.length}-position Teaching Model Flow`;
       logger.warn(message);
-      return { success: false, error: message };
+      return { success: false, error: message, ...reported() };
     }
 
     // The one outline check (shared with an administrator's correction and the
@@ -620,7 +759,7 @@ export async function generateSceneOutlinesFromRequirements(
     if (blocking.length > 0 && !options?.collectCorrectableIssues) {
       const message = legacyRejectionMessage(analysis)!;
       logger.warn(message);
-      return { success: false, error: message };
+      return { success: false, error: message, ...reported() };
     }
 
     // Planning conflicts are not bad answers to re-roll blindly: they throw
@@ -638,12 +777,13 @@ export async function generateSceneOutlinesFromRequirements(
         outlines: result,
         diagnostics: [...analysis.repairs, ...blocking],
       },
+      ...reported(),
     };
   } catch (error) {
     if (error instanceof SceneRuntimeUnavailableError || error instanceof SceneCapConflictError) {
       throw error;
     }
-    return { success: false, error: String(error) };
+    return { success: false, error: String(error), ...reported() };
   }
 }
 

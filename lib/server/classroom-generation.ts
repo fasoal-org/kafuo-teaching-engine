@@ -26,6 +26,7 @@ import {
   isProhibitedWidgetOutline,
   type AICallFn,
   type AgentInfo,
+  type OutlineAnswerReport,
   type OutlineDiagnostic,
   type PdfImage,
   type SceneActionsFallback,
@@ -84,6 +85,7 @@ import {
   markBankQuizScene,
 } from '@/lib/server/teaching-package/bank-quiz-scene';
 import type {
+  OutlineAnswerCapture,
   SourceVisualManifestEntry,
   TeachingFlowEntry as AppTeachingFlowEntry,
   TeachingModelLineage,
@@ -349,6 +351,26 @@ const VISUAL_REPLAN_CODES: ReadonlySet<string> = new Set([
 ]);
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
+
+/** Raw outline text kept whole up to this many UTF-16 code units… */
+const OUTLINE_ANSWER_KEEP_WHOLE = 16_384;
+/** …and beyond it, this many from each end. */
+const OUTLINE_ANSWER_KEEP_EACH_END = 8_192;
+
+/** A size-capped copy of one outline answer, for diagnosis (lesson 306, F-1). */
+export function captureOutlineAnswer(
+  raw: string,
+  report: OutlineAnswerReport,
+): OutlineAnswerCapture {
+  const cut = raw.length > OUTLINE_ANSWER_KEEP_WHOLE;
+  return {
+    parse: report.parse ? { ...report.parse } : null,
+    malformed: [...report.malformed],
+    rawLength: raw.length,
+    rawHead: cut ? raw.slice(0, OUTLINE_ANSWER_KEEP_EACH_END) : raw,
+    rawTail: cut ? raw.slice(raw.length - OUTLINE_ANSWER_KEEP_EACH_END) : '',
+  };
+}
 
 export function containPBLGenerationError(error: unknown, sceneTitle: string): null {
   if (!(error instanceof PBLGenerationError)) throw error;
@@ -779,6 +801,19 @@ export interface GenerationCorrectionOptions {
   ) => OutlineDiagnostic[] | Promise<OutlineDiagnostic[]>;
   /** A finding a person ignored on the resumed checkpoint: it never pauses the run. */
   isIgnoredIssue?: (issue: OutlineDiagnostic) => boolean;
+  /**
+   * g5.v7 / g5.v8: the book units the Lesson Template requires. An outline
+   * answer citing fewer than half of them is a broken answer (re-rolled once),
+   * not a coverage gap. Absent → only the structural answer check applies.
+   */
+  requiredBookUnitIds?: readonly string[];
+  /**
+   * Lesson 306 (F-1): receives a capped copy of every outline answer that
+   * needed an actual JSON repair, could not be parsed, or was refused as
+   * broken — so the evidence survives a re-roll, a pause and a failure alike.
+   * A failure here is logged and never changes the run.
+   */
+  onOutlineAnswer?: (capture: OutlineAnswerCapture) => void | Promise<void>;
   /**
    * g5.v7 (P-6): given the blocking findings, re-plan what the plan left out
    * with the outline model and return the re-diagnosed candidate, or `null` to
@@ -1450,13 +1485,50 @@ export async function generateClassroom(
       | undefined;
     let correctiveContext: string | undefined;
     const maxOutlineGateAttempts = input.governed ? 1 : MAX_OUTLINE_GATE_ATTEMPTS;
-    for (let attempt = 1; attempt <= maxOutlineGateAttempts; attempt += 1) {
-      outlinesResult = await generateSceneOutlinesFromRequirements(
+    // Lesson 306 (F-1/F-3): a run that can pause for a person refuses a
+    // structurally broken outline answer as a bad model answer, re-rolls it ONCE
+    // per run on the same routed call (same stage, attempt and run), and keeps a
+    // capped copy of every answer that needed a repair or was refused.
+    const checkAnswers = Boolean(correction);
+    let badAnswerRerollUsed = false;
+    let lastOutlineAnswer = '';
+    const recordingOutlineCall: AICallFn = async (systemPrompt, userPrompt, images) => {
+      lastOutlineAnswer = await outlineAiCall(systemPrompt, userPrompt, images);
+      return lastOutlineAnswer;
+    };
+    // F-1: an answer that needed an actual JSON repair, could not be parsed,
+    // or was refused is logged (method, size, verdict — never the text) and
+    // its capped raw copy handed to the run's diagnosis store.
+    const noteOutlineAnswer = async (result: NonNullable<typeof outlinesResult>) => {
+      const report = result.answer;
+      if (!report || (report.parse?.repair === 'none' && report.malformed.length === 0)) return;
+      const capture = captureOutlineAnswer(lastOutlineAnswer, report);
+      log.warn(
+        `Outline answer ${report.malformed.length > 0 ? 'refused' : 'repaired'} (read as ${
+          report.parse ? `${report.parse.extraction}/${report.parse.repair}` : 'unparsed'
+        }; ${capture.rawLength} chars)${
+          report.malformed.length > 0 ? `: ${report.malformed.join('; ')}` : ''
+        }`,
+      );
+      try {
+        await correction?.onOutlineAnswer?.(capture);
+      } catch (error) {
+        // Diagnosis must never change the run's outcome.
+        log.warn('Could not store the outline answer diagnosis:', error);
+      }
+    };
+    const callOutlines = (aiCallForOutline: AICallFn, rejectMalformedAnswer: boolean) =>
+      generateSceneOutlinesFromRequirements(
         requirements,
         pdfText,
         hasSourceVisuals ? sourceImages : undefined,
-        outlineAiCall,
+        aiCallForOutline,
         {
+          logger: log,
+          ...(rejectMalformedAnswer ? { rejectMalformedAnswer: true } : {}),
+          ...(rejectMalformedAnswer && correction?.requiredBookUnitIds?.length
+            ? { requiredSourceUnitIds: correction.requiredBookUnitIds }
+            : {}),
           imageGenerationEnabled: input.enableImageGeneration,
           videoGenerationEnabled: input.enableVideoGeneration,
           researchContext,
@@ -1484,9 +1556,38 @@ export async function generateClassroom(
           ...(correction ? { collectCorrectableIssues: true } : {}),
         },
       );
+    for (let attempt = 1; attempt <= maxOutlineGateAttempts; attempt += 1) {
+      outlinesResult = await callOutlines(recordingOutlineCall, checkAnswers);
 
       // A routed call whose both targets failed is not a bad answer to re-roll.
       assertRouteAvailable();
+      await noteOutlineAnswer(outlinesResult);
+      if (outlinesResult.badAnswer && !badAnswerRerollUsed) {
+        // F-3: the same prompt again, once per run — before any visual re-plan,
+        // book-coverage repair or pause could spend calls on a broken plan.
+        badAnswerRerollUsed = true;
+        log.warn(
+          `Outline attempt ${attempt}/${maxOutlineGateAttempts}: bad model answer (${outlinesResult.badAnswer.code}); re-rolling the outline call once`,
+        );
+        await options.onProgress?.({
+          step: 'generating_outlines',
+          progress: 15,
+          message: 'Generating scene outlines again: the first plan was not usable',
+          scenesGenerated: 0,
+        });
+        outlinesResult = await callOutlines(recordingOutlineCall, checkAnswers);
+        assertRouteAvailable();
+        await noteOutlineAnswer(outlinesResult);
+      }
+      if (outlinesResult.badAnswer) {
+        // Still broken after the one re-roll: today's behaviour, from THIS
+        // answer — read through the unchecked path again, with no model call.
+        log.warn(
+          `Outline answer still not usable after the re-roll (${outlinesResult.badAnswer.code}); continuing with today's handling`,
+        );
+        const lastAnswer = lastOutlineAnswer;
+        outlinesResult = await callOutlines(async () => lastAnswer, false);
+      }
       const rejection = outlinesResult.success ? undefined : outlinesResult.error;
       // Collected findings get the SAME bounded re-roll a rejection always got;
       // only the last answer's findings reach a person.

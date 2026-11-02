@@ -102,13 +102,20 @@ export {
   buildOutlinePrompt,
   generateSceneOutlinesFromRequirements,
   sanitizeProceduralSkillOutline,
+  OUTLINE_ANSWER_MALFORMED,
+  OUTLINE_ANSWER_UNPARSABLE,
+  MIN_REQUIRED_UNITS_FOR_SHORTFALL,
+  findBookUnitShortfall,
+  findMalformedOutlineEntries,
 } from './outline-generator.js';
 export type {
   OutlineAnalysis,
   OutlineAnalysisContext,
+  OutlineAnswerReport,
   OutlineFallbackOptions,
   OutlineGenerationData,
   OutlineGenerationOptions,
+  OutlineGenerationResult,
   OutlinePromptContext,
 } from './outline-generator.js';
 export {
@@ -233,10 +240,16 @@ export {
 export type { MediaRegistry, UnauthorizedMediaReason } from './media-registry.js';
 export { uniquifyMediaElementIds } from './outline-media.js';
 export { partitionImagesForVision, sortDocumentImagesForVision } from './outline-formatters.js';
-export { MAX_VISION_IMAGES } from './constants.js';
+export { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from './constants.js';
 export type { VisionImagePartition } from './outline-formatters.js';
-export { parseJsonResponse } from './json-repair.js';
-export type { JsonParsingOptions } from './json-repair.js';
+export { parseJsonResponse, parseJsonResponseWithInfo } from './json-repair.js';
+export type {
+  JsonParseExtraction,
+  JsonParseInfo,
+  JsonParseOutcome,
+  JsonParseRepair,
+  JsonParsingOptions,
+} from './json-repair.js';
 export { noopGenerationLogger } from './logger.js';
 export type { GenerationLogger } from './logger.js';
 export {

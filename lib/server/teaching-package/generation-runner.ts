@@ -89,6 +89,7 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   isTeacherParityModel,
+  plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
   teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -113,6 +114,7 @@ import type { NormalizedSourceImage } from '@/lib/server/teaching-package/source
 import type { ScreenedSourceImages } from '@/lib/server/teaching-package/source-visual-compliance';
 import type { ComplianceVerdict } from '@/lib/server/visual-compliance/types';
 import type { GenerationCorrectionOptions } from '@/lib/server/classroom-generation';
+import { MAX_PDF_CONTENT_CHARS } from '@openmaic/generation';
 import type { AICallFn, OutlineDiagnostic } from '@openmaic/generation';
 import type {
   GenerationCheckpoint,
@@ -129,6 +131,8 @@ const runningAttempts = new Map<string, Promise<void>>();
 // structural model-output error is disproportionately expensive. Repairable
 // outline answers still use the cheap pre-Scene correction loop inside it.
 const MAX_GENERATION_RUNS = 1;
+/** The latest outline answers kept on an attempt for diagnosis (each ≤ 16k chars). */
+const MAX_OUTLINE_ANSWER_DIAGNOSTICS = 4;
 
 async function runnerPool() {
   const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
@@ -741,6 +745,27 @@ async function runKafuoAttempt(
                 })(),
               }
             : {}),
+          // Lesson 306 (F-2): a g5.v7 / g5.v8 plan citing fewer than half of
+          // the required units the planner could see is a broken answer,
+          // re-rolled once before any coverage repair.
+          ...(coverageBook
+            ? {
+                requiredBookUnitIds: plannerVisibleRequiredUnitIds(
+                  coverageBook,
+                  (execution.pdfContent?.text ?? '').substring(0, MAX_PDF_CONTENT_CHARS),
+                ),
+              }
+            : {}),
+          // Lesson 306 (F-1): every repaired / unparsable / refused outline
+          // answer is kept (capped) on the attempt, whatever the run's outcome.
+          onOutlineAnswer: (capture) =>
+            patchSnapshot(pool, attemptId, (snapshot) => ({
+              ...snapshot,
+              outlineAnswerDiagnostics: [
+                ...((snapshot.outlineAnswerDiagnostics as unknown[] | undefined) ?? []),
+                { ...capture, generationRun: run, at: Date.now() },
+              ].slice(-MAX_OUTLINE_ANSWER_DIAGNOSTICS),
+            })),
           collectOutlineIssues: (outlines: SceneOutline[]) => {
             recordCoverageGaps(outlines);
             // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.
