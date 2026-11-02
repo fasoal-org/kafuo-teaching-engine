@@ -729,6 +729,156 @@ describe('generateClassroom source visuals', () => {
     });
   });
 
+  describe('g5.v8: split-unit keepers (review findings)', () => {
+    const flow = [
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: 'i',
+        scenePolicy: {
+          sceneTypes: ['slide'],
+          visual: 'source_grounded',
+          cardinality: 'one_or_more',
+        },
+      },
+    ] as GenerateClassroomInput['teachingFlow'];
+    const slideOf = (id: string, order: number, units: string[], keyPoints: string[]) => ({
+      id,
+      type: 'slide',
+      title: `slide ${id}`,
+      description: '',
+      keyPoints,
+      order,
+      slideType: 'content',
+      contentRole: 'worked_example',
+      teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 },
+      sourceContentUnitIds: units,
+      visualPlan: { mode: 'native' },
+    });
+
+    /** Neither slide planned an image; the re-plan shows EVERY image it is offered. */
+    async function runGreedy(
+      outlines: ReturnType<typeof slideOf>[],
+      images: Array<ReturnType<typeof pdfImage> & Record<string, unknown>>,
+    ) {
+      const { findSplitUnitDuplicateImages } =
+        await import('@/lib/server/teaching-package/split-unit-images');
+      mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+        success: true,
+        data: {
+          languageDirective: 'English.',
+          outlines,
+          diagnostics: outlines.map((outline, at) => ({
+            code: 'SOURCE_VISUAL_NOT_SELECTED',
+            disposition: 'admin_correctable',
+            outlineIndex: at,
+            outlineId: outline.id,
+            field: 'suggestedImageIds',
+            message: `${outline.id} did not select its linked textbook visual`,
+          })),
+        },
+      });
+      mocks.callLLM.mockImplementation(
+        async (params: { messages: Array<{ content: unknown }> }) => {
+          const system = String(params.messages[0]!.content);
+          if (!system.startsWith('You re-plan the VISUAL')) return { text: 'ok' };
+          const user = params.messages[1]!.content;
+          const prompt = Array.isArray(user)
+            ? user.map((part: { text?: string }) => part.text ?? '').join('\n')
+            : String(user);
+          const offered = images
+            .map((image) => image.id)
+            .filter((id) => new RegExp(`\\n- ${id}\\b`).test(prompt));
+          const outline = outlines.find((entry) => prompt.includes(`Slide title: ${entry.title}`))!;
+          return {
+            text: JSON.stringify(
+              offered.length > 0
+                ? {
+                    suggestedImageIds: offered,
+                    imagePlans: offered.map((imageId) => ({
+                      imageId,
+                      shows: 'figure',
+                      teachingPoint: 'p',
+                    })),
+                    visualPlan: { mode: 'image' },
+                    keyPoints: outline.keyPoints,
+                  }
+                : {
+                    suggestedImageIds: [],
+                    visualPlan: { mode: 'native', diagram: { shows: 'd', teachingPoint: 'p' } },
+                    keyPoints: outline.keyPoints,
+                  },
+            ),
+          };
+        },
+      );
+      const materialize = vi.fn(async (_stageId: string, selected: Array<{ id: string }>) => ({
+        servingMapping: Object.fromEntries(selected.map((entry) => [entry.id, `/m/${entry.id}`])),
+        manifest: selected.map((entry) => ({ id: entry.id })),
+        failedIds: [] as string[],
+      }));
+      await generate({
+        input: {
+          pdfContent: { text: 'pdf', images: [], pdfImages: images },
+          teachingFlow: flow,
+          findDuplicateSourceVisuals: findSplitUnitDuplicateImages,
+        },
+        materialize: { images, materialize } as unknown as SourceVisualChannel,
+      });
+      return Object.fromEntries(
+        mocks.generateSceneContent.mock.calls
+          .map((call) => call[0] as { id: string; suggestedImageIds?: string[] })
+          .filter((outline) => outlines.some((entry) => entry.id === outline.id))
+          .map((outline) => [outline.id, outline.suggestedImageIds ?? []]),
+      );
+    }
+
+    it('two images of one unit: each ends on exactly one slide, its own keeper', async () => {
+      const shown = await runGreedy(
+        [
+          slideOf('a', 1, ['u1'], ['3, 6, 9', 'add 3', 'next 12']),
+          slideOf('b', 2, ['u1'], ['5, 25, 125', 'times 5', 'next 625']),
+        ],
+        [
+          { ...pdfImage('src-1'), sourceContentUnitIds: ['u1'], description: '3 6 9 dots' },
+          { ...pdfImage('src-2'), sourceContentUnitIds: ['u1'], description: '5 25 125 squares' },
+        ],
+      );
+      expect(shown).toEqual({ a: ['src-1'], b: ['src-2'] });
+    });
+
+    it('an image linked to two units is not withheld from slides that share no unit', async () => {
+      const shown = await runGreedy(
+        [
+          slideOf('p', 1, ['u1'], ['3, 6, 9', 'add 3', 'next 12']),
+          slideOf('q', 2, ['u2'], ['other', 'content', 'here']),
+        ],
+        [{ ...pdfImage('src-1'), sourceContentUnitIds: ['u1', 'u2'], description: '3 6 9 dots' }],
+      );
+      expect(shown).toEqual({ p: ['src-1'], q: ['src-1'] });
+    });
+
+    it('a tie is broken by the slide whose own planned note matches it', async () => {
+      const { chooseSplitUnitImageKeepers } =
+        await import('@/lib/server/teaching-package/split-unit-images');
+      const withNote = (id: string, keyPoints: string[], shows: string) => ({
+        ...slideOf(id, 1, ['u1'], keyPoints),
+        imagePlans: [{ imageId: 'src-1', shows, teachingPoint: 'p' }],
+      });
+      const keepers = chooseSplitUnitImageKeepers(
+        [
+          withNote('bus', ['8:30', '9:50'], 'timetable'),
+          withNote('seg', ['4, 10, 18', '28, 40'], 'segments 4 10 18 28 40'),
+        ] as never,
+        [{ ...pdfImage('src-1'), sourceContentUnitIds: ['u1'] }] as never,
+      );
+      // Each slide's note is scored against the OTHER slide (both tie at 0 on
+      // the cross notes); the segments slide's own note names its numbers.
+      expect(keepers).toEqual([
+        { imageId: 'src-1', keeperId: 'seg', otherIds: ['bus'], decisive: true },
+      ]);
+    });
+  });
+
   describe('g5.v8: lesson 306 check 4028 (one try-it + three solutions, one image)', () => {
     const image = { ...pdfImage('src-5'), sourceContentUnitIds: ['4028'] };
     const flow = [

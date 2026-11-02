@@ -158,7 +158,8 @@ export function chooseSplitUnitImageKeepers(
   outlines: readonly SceneOutline[],
   sourceImages: readonly PdfImage[],
   options: {
-    decided?: ReadonlyMap<string, string>;
+    /** Per image, the keepers the split-unit duplicate step already chose. */
+    decided?: ReadonlyMap<string, ReadonlySet<string>>;
     keepsImage?: (outline: SceneOutline, imageId: string) => boolean;
   } = {},
 ): SplitUnitImageKeeper[] {
@@ -169,52 +170,89 @@ export function chooseSplitUnitImageKeepers(
   for (const image of sourceImages) {
     const units = new Set((image.sourceContentUnitIds ?? []).map(String));
     if (units.size === 0) continue;
-    const unitSlides = slides.filter((outline) =>
+    const linkedSlides = slides.filter((outline) =>
       [...citedUnits(outline)].some((id) => units.has(id)),
     );
-    if (unitSlides.length < 2) continue;
-    const decidedId = options.decided?.get(image.id);
-    let keeper = unitSlides.find((outline) => outline.id === decidedId);
-    keeper ??= unitSlides.find(
-      (outline) =>
-        (outline.suggestedImageIds ?? []).includes(image.id) &&
-        (options.keepsImage?.(outline, image.id) ?? false),
-    );
-    let decisive = keeper !== undefined;
-    if (!keeper) {
-      const imageTextFor = (scored: SceneOutline) =>
-        [
-          image.caption ?? '',
-          image.figureLabel ?? '',
-          image.description ?? '',
-          ...unitSlides
-            .filter((outline) => outline !== scored)
-            .flatMap((outline) =>
-              (outline.imagePlans ?? [])
-                .filter((plan) => plan.imageId === image.id)
-                .map((plan) => plan.shows ?? ''),
-            ),
-        ].join('\n');
-      let best = -1;
-      let runnerUp = -1;
-      for (const candidate of unitSlides) {
-        const score = imageMatchScore(candidate, imageTextFor(candidate));
-        if (score > best) {
-          keeper = candidate;
-          runnerUp = best;
-          best = score;
-        } else if (score > runnerUp) {
-          runnerUp = score;
-        }
-      }
-      decisive = best > runnerUp;
+    // Slides "of the same unit" share a cited unit (directly or via another
+    // slide), exactly as the split-unit duplicate step groups them.
+    const groups: SceneOutline[][] = [];
+    for (const slide of linkedSlides) {
+      const cited = citedUnits(slide);
+      const joined = groups.filter((group) =>
+        group.some((other) => [...citedUnits(other)].some((id) => cited.has(id))),
+      );
+      const merged = [...joined.flat(), slide];
+      for (const group of joined) groups.splice(groups.indexOf(group), 1);
+      groups.push(merged);
     }
-    keepers.push({
-      imageId: image.id,
-      keeperId: keeper!.id!,
-      otherIds: unitSlides.filter((outline) => outline !== keeper).map((outline) => outline.id!),
-      decisive,
-    });
+    for (const group of groups) {
+      if (group.length < 2) continue;
+      const unitSlides = [...group].sort((a, b) => outlines.indexOf(a) - outlines.indexOf(b));
+      keepers.push(keeperOf(image, unitSlides, options));
+    }
   }
   return keepers;
+}
+
+function keeperOf(
+  image: PdfImage,
+  unitSlides: readonly SceneOutline[],
+  options: {
+    decided?: ReadonlyMap<string, ReadonlySet<string>>;
+    keepsImage?: (outline: SceneOutline, imageId: string) => boolean;
+  },
+): SplitUnitImageKeeper {
+  const decidedIds = options.decided?.get(image.id);
+  let keeper = unitSlides.find((outline) => decidedIds?.has(outline.id!) ?? false);
+  keeper ??= unitSlides.find(
+    (outline) =>
+      (outline.suggestedImageIds ?? []).includes(image.id) &&
+      (options.keepsImage?.(outline, image.id) ?? false),
+  );
+  let decisive = keeper !== undefined;
+  if (!keeper) {
+    const imageTextFor = (scored: SceneOutline) =>
+      [
+        image.caption ?? '',
+        image.figureLabel ?? '',
+        image.description ?? '',
+        ...unitSlides
+          .filter((outline) => outline !== scored)
+          .flatMap((outline) =>
+            (outline.imagePlans ?? [])
+              .filter((plan) => plan.imageId === image.id)
+              .map((plan) => plan.shows ?? ''),
+          ),
+      ].join('\n');
+    const scores = unitSlides.map((candidate) =>
+      imageMatchScore(candidate, imageTextFor(candidate)),
+    );
+    const best = Math.max(...scores);
+    const tied = unitSlides.filter((_, at) => scores[at] === best);
+    keeper = tied[0];
+    decisive = tied.length === 1;
+    if (!decisive) {
+      // A tie: a slide's own planned note of the image may still tell them apart.
+      const ownScores = tied.map((candidate) =>
+        imageMatchScore(
+          candidate,
+          (candidate.imagePlans ?? [])
+            .filter((plan) => plan.imageId === image.id)
+            .map((plan) => plan.shows ?? '')
+            .join('\n'),
+        ),
+      );
+      const bestOwn = Math.max(...ownScores);
+      if (bestOwn > 0 && ownScores.filter((score) => score === bestOwn).length === 1) {
+        keeper = tied[ownScores.indexOf(bestOwn)];
+        decisive = true;
+      }
+    }
+  }
+  return {
+    imageId: image.id,
+    keeperId: keeper!.id!,
+    otherIds: unitSlides.filter((outline) => outline !== keeper).map((outline) => outline.id!),
+    decisive,
+  };
 }

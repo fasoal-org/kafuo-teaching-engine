@@ -1715,11 +1715,11 @@ export async function generateClassroom(
     const keeperIds = new Set<string>();
     const openImages = new Map<string, Set<string>>();
     if (!resumeOutlines && hasSourceVisuals && input.findDuplicateSourceVisuals) {
-      const decided = new Map<string, string>();
+      const decided = new Map<string, Set<string>>();
       for (const duplicate of duplicates) {
-        if (!decided.has(duplicate.imageId)) {
-          decided.set(duplicate.imageId, duplicate.keptOnOutlineId);
-        }
+        const kept = decided.get(duplicate.imageId) ?? new Set<string>();
+        kept.add(duplicate.keptOnOutlineId);
+        decided.set(duplicate.imageId, kept);
       }
       const keepers = chooseSplitUnitImageKeepers(outlines, sourceImages ?? [], {
         decided,
@@ -1728,7 +1728,10 @@ export async function generateClassroom(
       });
       for (const { imageId, keeperId, otherIds, decisive } of keepers) {
         if (!decisive) {
-          openImages.set(imageId, new Set([keeperId, ...otherIds]));
+          openImages.set(
+            imageId,
+            new Set([...(openImages.get(imageId) ?? []), keeperId, ...otherIds]),
+          );
           continue;
         }
         keeperIds.add(keeperId);
@@ -1762,6 +1765,7 @@ export async function generateClassroom(
         ...replanOrder.filter((id) => keeperIds.has(id)),
         ...replanOrder.filter((id) => !keeperIds.has(id)),
       ];
+      const replannedIds = new Set<string>();
       const replanOne = async (outlineId: string, reasons: readonly string[]) => {
         const index = current.findIndex((outline) => outline.id === outlineId);
         const outline = current[index];
@@ -1773,15 +1777,28 @@ export async function generateClassroom(
         const keepSelection = !reselect.has(outlineId) && selected.length > 0;
         const unitIds = new Set(outline.sourceContentUnitIds ?? []);
         let excluded = withoutImages.get(outlineId);
-        // g5.v8 (I-4.3): the image's keeper already shows it, so it is not
-        // offered here. A keeper that did not take it leaves it to the rule below.
-        const keptOnKeeper = [...(keptElsewhere.get(outlineId) ?? [])].filter(([id, keeperId]) =>
+        // g5.v8 (I-4.3): the image's keeper already shows it — or is still to
+        // be re-planned to show it (another keeper of the unit went first) —
+        // so it is not offered here. A keeper that re-planned without taking it
+        // leaves it to the rule below.
+        const kept = [...(keptElsewhere.get(outlineId) ?? [])];
+        const keptOnKeeper = kept.filter(([id, keeperId]) =>
           current.some(
             (entry) => entry.id === keeperId && (entry.suggestedImageIds ?? []).includes(id),
           ),
         );
-        if (keptOnKeeper.length > 0) {
-          excluded = new Set([...(excluded ?? []), ...keptOnKeeper.map(([id]) => id)]);
+        const keptForKeeper = kept.filter(
+          ([id, keeperId]) =>
+            !keptOnKeeper.some(([shown]) => shown === id) &&
+            reasonsById.has(keeperId) &&
+            !replannedIds.has(keeperId),
+        );
+        if (keptOnKeeper.length > 0 || keptForKeeper.length > 0) {
+          excluded = new Set([
+            ...(excluded ?? []),
+            ...keptOnKeeper.map(([id]) => id),
+            ...keptForKeeper.map(([id]) => id),
+          ]);
         }
         // g5.v8 (I-4.3): an image another slide of the same unit already shows
         // (and keeps) is never offered again, so a re-plan cannot re-add it to
@@ -1830,11 +1847,14 @@ export async function generateClassroom(
               ([id, keptOn]) =>
                 `the textbook image ${id} is already shown on ${keptOn}, the slide of this unit it illustrates best; do not show ${id} here: plan a native diagram of this slide's own content (or another listed image)`,
             ),
+            ...keptForKeeper.map(
+              ([id, keptOn]) =>
+                `the textbook image ${id} is kept for ${keptOn}, the slide of this unit it illustrates best; do not show ${id} here: plan a native diagram of this slide's own content (or another listed image)`,
+            ),
             ...[...shownOnUnit]
               .filter(
                 ([id]) =>
-                  !withoutImages.get(outlineId)?.has(id) &&
-                  !keptOnKeeper.some(([kept]) => kept === id),
+                  !withoutImages.get(outlineId)?.has(id) && !kept.some(([keptId]) => keptId === id),
               )
               .map(
                 ([id, keptOn]) =>
@@ -1860,6 +1880,7 @@ export async function generateClassroom(
           aiCall: replanAiCall,
         });
         assertRouteAvailable();
+        replannedIds.add(outlineId);
         if (replanned.ok) {
           current = current.map((entry, at) => (at === index ? replanned.outline : entry));
           log.info(`Slide "${outline.title}" visual re-planned (${replanned.calls} call(s))`);
