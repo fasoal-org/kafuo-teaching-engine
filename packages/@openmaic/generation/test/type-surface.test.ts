@@ -35,6 +35,7 @@ type _SceneContentKeys = Assert<
     | 'pblLoopFallback'
     | 'correctiveNote'
     | 'sourceUnits'
+    | 'visibleWorkingSteps'
     | 'onFailure'
     | 'logger'
   >

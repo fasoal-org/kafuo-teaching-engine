@@ -2,7 +2,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { SLIDE_ROLE_VARIANTS, SPOKEN_SCRIPT_ASSETS, loadSnippet } from '@openmaic/generation';
+import {
+  SLIDE_ROLE_VARIANTS,
+  SPOKEN_SCRIPT_ASSETS,
+  WORKING_STEP_ASSETS,
+  loadSnippet,
+} from '@openmaic/generation';
 import type { SnippetId } from '@openmaic/generation';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -79,6 +84,8 @@ describe('packaged prompt assets', () => {
     ...expectedSnippetFiles,
     ...expectedRoleFiles,
     ...SPOKEN_SCRIPT_ASSETS,
+    // The hidden-step catalogue (g5.v8 visible working), resolved in TypeScript.
+    ...WORKING_STEP_ASSETS,
   ].sort();
 
   test('contains exactly the generation-owned templates and referenced snippets', () => {

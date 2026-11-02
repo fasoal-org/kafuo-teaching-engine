@@ -82,8 +82,39 @@ function loadVariant(file: string): string {
   return loadPromptAsset(`snippets/slide-roles/${file}.md`);
 }
 
+/**
+ * The hidden-step question catalogue (teacher-parity plan I-2): each type, what
+ * reveals it, and the visible working its solution must write. One row per type.
+ */
+export const WORKING_STEP_ASSETS: readonly string[] = [
+  'snippets/working-steps/hidden-step-types.md',
+];
+
+/** The hidden-step catalogue text, as the planner and the solution canvas read it. */
+export function hiddenStepCatalogue(): string {
+  return loadPromptAsset(WORKING_STEP_ASSETS[0]!);
+}
+
+/** Roles that solve an item on the canvas, so every hidden step is written there. */
+const SOLVING_ROLES: readonly string[] = ['worked_example'];
+
+const VISIBLE_WORKING_RULE =
+  '**Visible working (mandatory).** Write every hidden step from the plan as a visible line on the canvas: a step the learner cannot see in the question (a numbered set, a time worked in minutes, a recalled property, a labelled figure, the differences of a pattern, an average change) is its own line, never folded into the answer.';
+
+export interface SlideRoleGuidanceOptions {
+  /**
+   * The caller's flow writes every hidden step visibly (g5.v8). A solving slide
+   * then gets the visible-working rule and the hidden-step catalogue. Absent →
+   * the guidance is byte-identical to before.
+   */
+  visibleWorkingSteps?: boolean;
+}
+
 /** Role guidance for the slide CANVAS generator. */
-export function buildSlideRoleContext(input: SlideRoleGuidanceInput): SlideRoleContext {
+export function buildSlideRoleContext(
+  input: SlideRoleGuidanceInput,
+  options: SlideRoleGuidanceOptions = {},
+): SlideRoleContext {
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   const diagram = input.visualPlan?.mode === 'native' ? input.visualPlan.diagram : undefined;
@@ -101,10 +132,15 @@ export function buildSlideRoleContext(input: SlideRoleGuidanceInput): SlideRoleC
         : VISUAL_PLAN_GUIDANCE[input.visualPlan?.mode ?? '']);
   const sourceGrounding =
     input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
+  const visibleWorking =
+    options.visibleWorkingSteps && SOLVING_ROLES.includes(String(input.contentRole ?? ''))
+      ? [VISIBLE_WORKING_RULE, hiddenStepCatalogue()]
+      : [];
   return {
     hasRoleGuidance: true,
     roleGuidance: [
       loadVariant(file),
+      ...visibleWorking,
       ...(sourceGrounding ? [sourceGrounding] : []),
       ...(visual ? [visual] : []),
       PRECEDENCE,

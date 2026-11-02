@@ -188,10 +188,16 @@ export {
 export type { PlannerGuidance, VisibleSlideInput } from './slide-generation-inputs.js';
 export {
   SLIDE_ROLE_VARIANTS,
+  WORKING_STEP_ASSETS,
   buildSlideNarrationRoleContext,
   buildSlideRoleContext,
+  hiddenStepCatalogue,
 } from './slide-role-guidance.js';
-export type { SlideRoleContext, SlideRoleGuidanceInput } from './slide-role-guidance.js';
+export type {
+  SlideRoleContext,
+  SlideRoleGuidanceInput,
+  SlideRoleGuidanceOptions,
+} from './slide-role-guidance.js';
 export { buildSceneSourceContext, MAX_SCENE_SOURCE_CHARS } from './source-unit-context.js';
 export type { SceneSourceContext, SourceUnitText } from './source-unit-context.js';
 export {

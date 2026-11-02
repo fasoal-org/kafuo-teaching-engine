@@ -224,6 +224,12 @@ export interface SceneContentOptions {
    * guidance (`buildSceneSourceContext`). Absent → the prompt is unchanged.
    */
   sourceUnits?: readonly SourceUnitText[];
+  /**
+   * Slide only: the caller's flow writes every hidden step visibly (g5.v8,
+   * teacher-parity plan I-2). A worked-example slide then gets the
+   * visible-working rule and the hidden-step catalogue. Absent → unchanged.
+   */
+  visibleWorkingSteps?: boolean;
   onFailure?: (failure: SceneContentFailure) => void;
   logger?: GenerationLogger;
 }
@@ -614,6 +620,7 @@ export async function generateSceneContent(
           textDirection,
           options.correctiveNote,
           sceneSourceVars(outline, options.sourceUnits, log),
+          options.visibleWorkingSteps,
         );
       let slide = await generateCanvas();
       if (!slide) return null;
@@ -1123,6 +1130,7 @@ async function generateSlideContent(
   textDirection?: TextDirection,
   correctiveNote?: string,
   sourceVars: Record<string, unknown> = {},
+  visibleWorkingSteps?: boolean,
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -1247,7 +1255,7 @@ async function generateSlideContent(
     ...buildSceneSkillContext(guidance, resolvedSkills),
     // The classification reaches the model only as resolved guidance prose in
     // the non-display planning channel — never as `key: value` data.
-    ...buildSlideRoleContext(guidance),
+    ...buildSlideRoleContext(guidance, visibleWorkingSteps ? { visibleWorkingSteps } : {}),
     ...sourceVars,
   });
 
