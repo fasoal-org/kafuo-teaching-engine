@@ -789,9 +789,18 @@ function insertedBookSlide(
   const base = `${anchor.id}-book-${gap.kind}-${unitId}`;
   let id = base;
   for (let n = 2; outlines.some((outline) => outline.id === id); n += 1) id = `${base}-${n}`;
-  const linked = context.sourceRefs.sourceImages
+  const unitImages = context.sourceRefs.sourceImages
     .filter((image) => (image.sourceContentUnitIds ?? []).some((ref) => String(ref) === unitId))
     .map((image) => image.id);
+  // g5.v8: one more solution slide of a check whose image another slide already
+  // shows gets a native diagram, never the same image again (I-4.3).
+  const shownElsewhere =
+    context.bookStructure?.teacherParity === true &&
+    gap.itemLabel !== undefined &&
+    outlines.some((outline) =>
+      (outline.suggestedImageIds ?? []).some((id) => unitImages.includes(id)),
+    );
+  const linked = shownElsewhere ? [] : unitImages;
   // A position that requires a visual gets a native diagram when no textbook
   // visual belongs to the check (the resume plans its teaching note).
   const visualRequired = anchorPolicy(anchor, context.flow)?.visual !== undefined;

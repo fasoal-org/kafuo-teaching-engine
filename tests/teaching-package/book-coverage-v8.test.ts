@@ -39,6 +39,7 @@ import {
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
 import {
+  applyCorrectionOperations,
   correctionCoverageBook,
   diagnosisContextFromCheckpoint,
   insertableBookGaps,
@@ -567,8 +568,8 @@ describe('g5.v8 coverage repair', () => {
     { stage: 'outcome_visual_explanations', instructions: 'Teach the part.' },
   ] as unknown as TeachingFlowEntry[];
 
-  it('plans the recall slide and each missing item in book order', async () => {
-    const plan = vi.fn(async (input: PlanInsertedSlideInput) => {
+  const planner = () =>
+    vi.fn(async (input: PlanInsertedSlideInput) => {
       const role = /contentRole (\w+)/.exec(input.instruction)?.[1] ?? 'explanation';
       const outline = slide(input.outlineId, [...input.unitIds], {
         contentRole: role as SceneOutline['contentRole'],
@@ -580,29 +581,42 @@ describe('g5.v8 coverage repair', () => {
         ? { ok: true as const, outline: checked.outline, repairs: [], calls: 1 }
         : { ok: false as const, code: 'INSERTION_PLAN_INVALID' as const, message: 'x', calls: 1 };
     });
+
+  const contextFor = (
+    book: CoverageBookStructure,
+    plan: BookCoverageRepairContext['plan'],
+    visuals: BookCoverageRepairContext['visuals'] = [],
+  ): BookCoverageRepairContext => ({
+    book,
+    flow: FLOW,
+    units: ['4015', '4037', '4021', '4025'].map((id, order) => ({
+      id,
+      order,
+      role: 'X',
+      title: null,
+      text: 'text',
+    })),
+    skillOptions: null,
+    language: 'ar-SA',
+    languageDirective: '',
+    visuals,
+    diagnose: (outlines) => ({ outlines, blocking: findBookCoverageDiagnostics(outlines, book) }),
+    plan,
+  });
+
+  it('plans the recall slide and each missing item in book order, with distinct ids', async () => {
+    const plan = planner();
     const book = v8Book();
-    const context: BookCoverageRepairContext = {
-      book,
-      flow: FLOW,
-      units: ['4015', '4037', '4021', '4025'].map((id, order) => ({
-        id,
-        order,
-        role: 'X',
-        title: null,
-        text: 'text',
-      })),
-      skillOptions: null,
-      language: 'ar-SA',
-      languageDirective: '',
-      visuals: [],
-      diagnose: (outlines) => ({ outlines, blocking: findBookCoverageDiagnostics(outlines, book) }),
-      plan,
-    };
     const candidate = completePlan().filter(
       (outline) => !['recall', 'sol1B', 'sol1C'].includes(outline.id!),
     );
     const blocking = findBookCoverageDiagnostics(candidate, book);
-    const repaired = await repairBookCoverageGaps(candidate, blocking, vi.fn(), context);
+    const repaired = await repairBookCoverageGaps(
+      candidate,
+      blocking,
+      vi.fn(),
+      contextFor(book, plan),
+    );
     expect(repaired.blocking).toEqual([]);
     expect(repaired.outlines.slice(0, 7).map((outline) => outline.title)).toEqual([
       't1',
@@ -613,9 +627,85 @@ describe('g5.v8 coverage repair', () => {
       '1B',
       '1C',
     ]);
+    expect(repaired.outlines.slice(5, 7).map((outline) => outline.id)).toEqual([
+      'sol1A-book-missing_solution-4025-1B-r1',
+      'sol1A-book-missing_solution-4025-1C-r1',
+    ]);
     const recall = plan.mock.calls.find(([input]) => input.instruction.includes('recall'))![0];
     expect(recall.instruction).toContain('contentRole explanation');
     expect(recall.unitIds).toEqual(['4015', '4037']);
+  });
+
+  it('still places the item slides when g5.v8 findings stay open', async () => {
+    const book = v8Book();
+    const candidate = completePlan()
+      .filter((outline) => !['sol1B', 'sol1C', 'exercises'].includes(outline.id!))
+      .map((outline) =>
+        outline.id === 'sol1A' ? { ...outline, keyPoints: ['يتقدم خمسة أشهر'] } : outline,
+      );
+    const blocking = findBookCoverageDiagnostics(candidate, book);
+    expect(new Set(codes(blocking))).toEqual(
+      new Set([BOOK_COVERAGE_INCOMPLETE, WORKING_STEP_MISSING]),
+    );
+    const repaired = await repairBookCoverageGaps(
+      candidate,
+      blocking,
+      vi.fn(),
+      contextFor(book, planner()),
+    );
+    expect(repaired.inserted).toBe(2);
+    // Left to a person: the visible working and the (unanchored) exercises block.
+    expect(repaired.blocking.map((d) => [d.code, d.message.slice(0, 30)])).toEqual([
+      [BOOK_COVERAGE_INCOMPLETE, 'the exercises block is missing'],
+      [WORKING_STEP_MISSING, expect.any(String)],
+    ]);
+  });
+
+  it('gives an extra item slide a native diagram when the check image is already shown', async () => {
+    const book = v8Book();
+    const plan = planner();
+    const candidate = completePlan()
+      .filter((outline) => !['sol1C'].includes(outline.id!))
+      .map((outline) =>
+        outline.id === 'sol1A' ? { ...outline, suggestedImageIds: ['img-4025'] } : outline,
+      );
+    const visual = { id: 'img-4025', src: 'data:', sourceContentUnitIds: ['4025'] };
+    const repaired = await repairBookCoverageGaps(
+      candidate,
+      findBookCoverageDiagnostics(candidate, book),
+      vi.fn(),
+      contextFor(book, plan, [visual]),
+    );
+    expect(repaired.inserted).toBe(1);
+    expect(plan.mock.calls[0]![0].eligibleVisuals).toEqual([]);
+  });
+});
+
+describe('g5.v8 admin insert', () => {
+  it('inserts the next item, without the image another slide already shows', () => {
+    const book = v8Book();
+    const plan = completePlan()
+      .filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!))
+      .map((outline) =>
+        outline.id === 'sol1A' ? { ...outline, suggestedImageIds: ['img-4025'] } : outline,
+      );
+    const next = applyCorrectionOperations(
+      plan,
+      [{ op: 'insert_book_slide', unitId: '4025', outlineId: 'sol1A' }],
+      {
+        phase: 'outline',
+        flow: [],
+        sourceRefs: {
+          sourceImages: [{ id: 'img-4025', sha256: 'x', sourceContentUnitIds: ['4025'] }],
+        } as unknown as GenerationCheckpoint['sourceRefs'],
+        pendingOutlineIds: null,
+        bookStructure: book,
+      },
+    );
+    const inserted = next[5]!;
+    expect(inserted.id).toBe('sol1A-book-missing_solution-4025');
+    expect(inserted.description).toContain('item 1B only');
+    expect(inserted.suggestedImageIds).toBeUndefined();
   });
 });
 

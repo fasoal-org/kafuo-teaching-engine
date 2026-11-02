@@ -18,7 +18,11 @@ import type { AICallFn, OutlineDiagnostic } from '@openmaic/generation';
 import { createLogger } from '@/lib/logger';
 import {
   BOOK_COVERAGE_INCOMPLETE,
+  EXERCISE_CAP_EXCEEDED,
+  EXERCISE_UNUSABLE_CITED,
+  EXERCISES_MISPLACED,
   findBookCoverageGaps,
+  WORKING_STEP_MISSING,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -127,7 +131,18 @@ function repairableGaps(
   book: CoverageBookStructure,
 ): BookCoverageGap[] | null {
   if (blocking.length === 0) return null;
-  if (blocking.some((issue) => issue.code !== BOOK_COVERAGE_INCOMPLETE)) return null;
+  // g5.v8: its own findings (caps, placement, visible working) are a person's to
+  // fix and stay open, but they never stop the slides the plan can place.
+  const parity = book.teacherParity === true;
+  if (
+    blocking.some(
+      (issue) =>
+        issue.code !== BOOK_COVERAGE_INCOMPLETE &&
+        !(parity && TEACHER_PARITY_FINDINGS.has(issue.code)),
+    )
+  ) {
+    return null;
+  }
   // A check with no try-it is also reported as untaught; its one try-it slide
   // answers both, so it is planned once.
   const tryItMissing = new Set<string>();
@@ -136,11 +151,24 @@ function repairableGaps(
     if (gap.kind === 'missing_try_it') tryItMissing.add(gap.unit.contentUnitId);
   }
   const gaps = found.filter(
-    (gap) => !(gap.kind === 'missing_teaching' && tryItMissing.has(gap.unit.contentUnitId)),
+    (gap) =>
+      !(gap.kind === 'missing_teaching' && tryItMissing.has(gap.unit.contentUnitId)) &&
+      // g5.v8: a new kind the plan cannot place (no anchor) is left to a person
+      // instead of blocking every other repair.
+      !(parity && gap.anchorIndex === undefined && TEACHER_PARITY_KINDS.has(gap.kind)),
   );
   if (gaps.length === 0 || gaps.some((gap) => gap.anchorIndex === undefined)) return null;
   return gaps;
 }
+
+const TEACHER_PARITY_FINDINGS: ReadonlySet<string> = new Set([
+  EXERCISE_CAP_EXCEEDED,
+  EXERCISE_UNUSABLE_CITED,
+  EXERCISES_MISPLACED,
+  WORKING_STEP_MISSING,
+]);
+
+const TEACHER_PARITY_KINDS: ReadonlySet<string> = new Set(['missing_recall', 'missing_exercises']);
 
 export async function repairBookCoverageGaps(
   candidate: readonly SceneOutline[],
@@ -182,9 +210,20 @@ export async function repairBookCoverageGaps(
       });
       if (!units.some((unit) => unit.id === unitId)) continue;
       const role = roleFor(gap);
-      const linked = context.visuals.filter((visual) =>
+      const unitVisuals = context.visuals.filter((visual) =>
         (visual.sourceContentUnitIds ?? []).some((id) => unitIds.includes(String(id))),
       );
+      // g5.v8: one more solution slide of a check whose image another slide
+      // already shows gets a native diagram, never the same image again (I-4.3).
+      const shownElsewhere =
+        context.book.teacherParity === true &&
+        gap.itemLabel !== undefined &&
+        outlines.some((outline) =>
+          (outline.suggestedImageIds ?? []).some((id) =>
+            unitVisuals.some((visual) => visual.id === id),
+          ),
+        );
+      const linked = shownElsewhere ? [] : unitVisuals;
       const check = (outline: SceneOutline): PlanCheck => {
         const messages: string[] = [];
         if (outline.contentRole !== role || outline.slideType !== 'content') {
@@ -223,7 +262,8 @@ export async function repairBookCoverageGaps(
           ...(visual.height !== undefined ? { height: visual.height } : {}),
         })),
         instruction: instructionFor(gap),
-        outlineId: `${anchor.id}-book-${gap.kind}-${unitId}-r${round}`,
+        // A check's items share kind, unit and anchor: the item keeps ids distinct.
+        outlineId: `${anchor.id}-book-${gap.kind}-${unitId}${gap.itemLabel ? `-${gap.itemLabel}` : ''}-r${round}`,
         order: gap.anchorIndex! + 2,
         check,
         aiCall,
