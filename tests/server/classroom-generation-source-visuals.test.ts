@@ -700,6 +700,18 @@ describe('generateClassroom source visuals', () => {
       expect(slides).toHaveLength(4);
       const holders = slides.filter((slide) => slide.suggestedImageIds?.includes('src-5'));
       expect(holders.map((slide) => slide.id)).toEqual(['try-it']);
+      // The slide content (canvas) receives the image on the try-it only.
+      const assigned = Object.fromEntries(
+        mocks.generateSceneContent.mock.calls
+          .filter((call) => ids.includes((call[0] as { id: string }).id))
+          .map((call) => [
+            (call[0] as { id: string }).id,
+            ((call[2] as { assignedImages?: Array<{ id: string }> }).assignedImages ?? []).map(
+              (entry) => entry.id,
+            ),
+          ]),
+      );
+      expect(assigned).toEqual({ 'try-it': ['src-5'], 'sol-a': [], 'sol-b': [], 'sol-c': [] });
       // Each solution is told why the image is not offered.
       expect(prompts).toHaveLength(4);
       for (const prompt of prompts.slice(1)) {
