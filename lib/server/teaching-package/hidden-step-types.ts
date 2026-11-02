@@ -107,8 +107,9 @@ const LIST_GAP = '[\\s\\d=:،,()\\-–→←.]{1,12}(?:و\\s*)?';
 
 /**
  * A name from a cycle, as a whole word. Months allow an article and a
- * one-letter prefix; an Arabic weekday needs its article or a preceding «يوم»
- * and takes no prefix (so «واحد» is never «الأحد»); «صفر» needs «شهر» before it
+ * one-letter prefix; an Arabic weekday needs its article (a one-letter prefix
+ * only before the article, as in «والأحد») or a preceding «يوم», so «واحد» is
+ * never «الأحد»; «صفر» needs «شهر» before it
  * or another Hijri month beside it.
  */
 function namePattern(set: string, alternatives: string): string {
@@ -119,7 +120,7 @@ function namePattern(set: string, alternatives: string): string {
       .map((form) => form.replace(/^ال/, ''))
       .join('|');
     const latin = forms.filter((form) => !form.startsWith('ال')).join('|');
-    return `${WORD_START}(?:(?:ال|يوم\\s+(?:ال)?)(?:${arabic})|${latin})${WORD_END}`;
+    return `${WORD_START}(?:(?:[وبفك]?ال|يوم\\s+(?:ال)?)(?:${arabic})|${latin})${WORD_END}`;
   }
   if (alternatives === 'صفر') {
     return (

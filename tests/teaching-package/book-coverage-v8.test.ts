@@ -438,6 +438,8 @@ describe('hidden-step detector', () => {
     expect(detectHiddenStepTypes('العدد الذي صفر في رمضان، وعدد ذو صفر')).toEqual([]);
     // A weekday after «يوم», and «صفر» as a month in a list, still count.
     expect(detectHiddenStepTypes('يوم السبت ثم يوم الأحد')).toEqual(['ordered_named_set']);
+    // A one-letter prefix before the article still counts: a two-day list.
+    expect(detectHiddenStepTypes('يتدرب السبت والأحد')).toEqual(['ordered_named_set']);
     expect(detectHiddenStepTypes('محرم، صفر')).toEqual(['ordered_named_set']);
     expect(detectHiddenStepTypes('شهر صفر بعد شهر رجب')).toEqual(['ordered_named_set']);
   });
