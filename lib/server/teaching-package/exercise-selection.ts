@@ -27,7 +27,7 @@ export interface ExerciseSelection {
   slides: string[][];
 }
 
-/** A usable exercise: an `exercise` unit not marked unusable (incl. instructions_only). */
+/** A usable exercise: an `exercise` unit not marked unusable; instructions_only units are excluded. */
 function usable(unit: KafuoBookStructureUnit): boolean {
   return unit.element === 'exercise' && unit.exerciseUsable !== false;
 }

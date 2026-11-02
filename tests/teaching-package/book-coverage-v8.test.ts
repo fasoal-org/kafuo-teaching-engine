@@ -503,6 +503,13 @@ describe('g5.v8 switch and planner text', () => {
       units: V8_BOOK.units.filter((unit) => !['4040', '4060'].includes(unit.contentUnitId)),
     };
     expect(exerciseBlockRequirement(teacherParityBook(unusable, V8))).toBe('');
+    // …and then the v8 text says there is no block instead of pointing to one.
+    const none = bookStructureRequirement(unusable, { teacherParity: true });
+    expect(none).toContain('so the lesson has no\nexercises block');
+    expect(none).not.toContain('EXERCISES BLOCK below');
+    expect(bookStructureRequirement(V8_BOOK, { teacherParity: true })).toContain(
+      'EXERCISES BLOCK below',
+    );
     expect(exerciseBlockRequirement(undefined)).toBe('');
   });
 
@@ -654,9 +661,9 @@ describe('g5.v8 coverage gates', () => {
     );
     const book = v8Book();
     book.units = [...book.units, { ...book.units[7]!, contentUnitId: '4062' }];
-    // The engine selected 4040 and 4060 (cap 2): 4062 is cited unselected.
+    // The engine selected 4040 and 4060 (cap 2): 4062 is cited unselected,
+    // reported once by the set check, not again as a unit-count cap.
     expect(findBookCoverageDiagnostics(more, book).map((d) => [d.code, d.message])).toEqual([
-      [EXERCISE_CAP_EXCEEDED, 'the exercises block cites more than 2 exercise units'],
       [
         EXERCISE_UNSELECTED_CITED,
         'exercise unit 4062 is cited but is not selected for the exercises block',
@@ -685,28 +692,49 @@ describe('g5.v8 coverage gates', () => {
     expect(codes(findBookCoverageDiagnostics(missing, teacherParityBook(V8_BOOK, V7)))).toEqual([]);
   });
 
-  it('raises EXERCISE_TOO_FEW below the minimum units or slides, never without one', () => {
+  it('raises EXERCISE_TOO_FEW below the minimum slides, never without one', () => {
     // completePlan: 2 usable units (4040, 4060) on 1 exercise slide.
     expect(codes(findBookCoverageDiagnostics(completePlan(), v8Book()))).toEqual([]);
     expect(codes(findBookCoverageDiagnostics(completePlan(), minBook(2, 1)))).toEqual([]);
+    // The engine plans 2 units on 2 slides: the units are checked by set only
+    // (both cited, and fewer than 3 exist), the 1 slide is below the minimum.
     const found = findBookCoverageDiagnostics(completePlan(), minBook(3, 2));
-    expect(found.map((d) => [d.code, d.field, d.disposition])).toEqual([
-      [EXERCISE_TOO_FEW, 'sourceContentUnitIds', 'admin_correctable'],
-      [EXERCISE_TOO_FEW, 'sourceContentUnitIds', 'admin_correctable'],
-    ]);
-    expect(found.map((d) => d.message)).toEqual([
-      'the exercises block cites fewer than 3 usable exercise units',
-      'the exercises block has fewer than 2 exercise slides',
+    expect(found.map((d) => [d.code, d.field, d.disposition, d.message])).toEqual([
+      [
+        EXERCISE_TOO_FEW,
+        'sourceContentUnitIds',
+        'admin_correctable',
+        'the exercises block has fewer than 2 exercise slides',
+      ],
     ]);
     expect(found.every(isIgnorableIssue)).toBe(true);
-    // Only the cited usable units count: the instruction line (4038) does not.
+    // A missing unit is the set finding alone, never also a unit-count minimum.
     const units = completePlan().map((outline) =>
       outline.id === 'exercises' ? { ...outline, sourceContentUnitIds: ['4038', '4040'] } : outline,
     );
     expect(codes(findBookCoverageDiagnostics(units, minBook(2, 1)))).toEqual([
-      EXERCISE_TOO_FEW,
       EXERCISE_SELECTED_MISSING,
     ]);
+    // Fewer usable units than the slide minimum: the engine's own plan (1 unit
+    // on 1 slide) is never refused.
+    const single = teacherParityBook(
+      {
+        ...V8_BOOK,
+        units: V8_BOOK.units.filter((unit) => unit.contentUnitId !== '4060'),
+        exercisePolicy: {
+          maxExercises: 10,
+          maxExerciseSlides: 3,
+          minExercises: 2,
+          minExerciseSlides: 2,
+        },
+      },
+      V8,
+      bookUnitFactsOf(V8_BOOK, TEXTS),
+    )!;
+    const followsEngine = completePlan().map((outline) =>
+      outline.id === 'exercises' ? { ...outline, sourceContentUnitIds: ['4038', '4040'] } : outline,
+    );
+    expect(codes(findBookCoverageDiagnostics(followsEngine, single))).toEqual([]);
     // No exercise slide at all is the missing_exercises gap alone.
     const none = completePlan().filter((outline) => outline.id !== 'exercises');
     expect(codes(findBookCoverageDiagnostics(none, minBook(3, 2)))).toEqual([
@@ -895,7 +923,7 @@ describe('g5.v8 coverage repair', () => {
       contextFor(book, planner()),
     );
     expect(repaired.inserted).toBe(2);
-    expect(codes(repaired.blocking)).toEqual([EXERCISE_TOO_FEW, EXERCISE_TOO_FEW]);
+    expect(codes(repaired.blocking)).toEqual([EXERCISE_TOO_FEW]);
   });
 
   it('places the item slides and leaves the selection findings open for a person', async () => {

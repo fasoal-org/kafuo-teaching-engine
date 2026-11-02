@@ -407,13 +407,17 @@ function teacherParityDiagnostics(
   });
 
   const policy = book.exercisePolicy;
+  // The engine's selection (owner, 2 Nov 2026). When it exists, the units are
+  // checked by set alone (below), so a unit-count cap or minimum never reports
+  // the same deviation twice; only the slide counts are checked here.
+  const selection = selectExercises(book, book.unitFacts);
   if (policy) {
     // An instruction line (`instructions_only`) is cited beside its items and
     // is not an exercise; only usable units count against the cap.
     const counted = exercises.filter(
       (unit) => cited.has(unit.contentUnitId) && unit.exerciseUsable !== false,
     ).length;
-    if (counted > policy.maxExercises) {
+    if (!selection && counted > policy.maxExercises) {
       diagnostics.push({
         code: EXERCISE_CAP_EXCEEDED,
         disposition: 'admin_correctable',
@@ -432,7 +436,7 @@ function teacherParityDiagnostics(
     // The minimum (owner, 2 Nov 2026). A plan with no exercise slide at all is
     // already the `missing_exercises` coverage gap, so it is not reported twice.
     if (exerciseSlides.length > 0 && policy.minExercises !== undefined) {
-      if (counted < policy.minExercises) {
+      if (!selection && counted < policy.minExercises) {
         diagnostics.push({
           code: EXERCISE_TOO_FEW,
           disposition: 'admin_correctable',
@@ -441,9 +445,12 @@ function teacherParityDiagnostics(
           message: `the exercises block cites fewer than ${policy.minExercises} usable exercise units`,
         });
       }
+      // The engine may plan fewer slides than the minimum (fewer exercises than
+      // it needs): a plan that follows the engine is never refused for it.
       if (
         policy.minExerciseSlides !== undefined &&
-        exerciseSlides.length < policy.minExerciseSlides
+        exerciseSlides.length < policy.minExerciseSlides &&
+        !(selection && selection.slides.length < policy.minExerciseSlides)
       ) {
         diagnostics.push({
           code: EXERCISE_TOO_FEW,
@@ -454,11 +461,10 @@ function teacherParityDiagnostics(
       }
     }
   }
-  // The engine's selection (owner, 2 Nov 2026): the block cites exactly the
-  // selected units. Checked by set only, and only once an exercise slide exists
-  // (none at all is the `missing_exercises` gap). The messages carry the unit
-  // id and no live count, so an ignore keyed on them survives edits.
-  const selection = selectExercises(book, book.unitFacts);
+  // The block cites exactly the selected units. Checked by set only, and only
+  // once an exercise slide exists (none at all is the `missing_exercises` gap).
+  // The messages carry the unit id and no live count, so an ignore keyed on
+  // them survives edits.
   if (selection && exerciseSlides.length > 0) {
     const selected = new Set(selection.unitIds);
     for (const id of selection.unitIds) {
@@ -691,17 +697,22 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
     'the example, not the check that follows it.',
     'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
     hiddenStepCatalogue(),
-    ...(policy
+    ...(policy && !book.units.some(isUsableExercise)
       ? [
-          'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
-          'just before the closing summary slide, comes the exercises block: one transition slide',
-          '«تمارين», then the exercise slides (contentRole worked_example). The engine fixes which',
-          'exercise units the block solves and on which slide (EXERCISES BLOCK below). Each',
-          'exercise slide states each of its items and solves it with compact visible working.',
-          'Never cite a unit marked exerciseUsable=false, except a reason=instructions_only unit,',
-          'which is only the instruction line of the exercises paired with the same example.',
+          'EXERCISES: no exercise unit of this lesson holds a usable item, so the lesson has no',
+          'exercises block: plan no «تمارين» slide and cite no element=exercise unit.',
         ]
-      : []),
+      : policy
+        ? [
+            'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
+            'just before the closing summary slide, comes the exercises block: one transition slide',
+            '«تمارين», then the exercise slides (contentRole worked_example). The engine fixes which',
+            'exercise units the block solves and on which slide (EXERCISES BLOCK below). Each',
+            'exercise slide states each of its items and solves it with compact visible working.',
+            'Never cite a unit marked exerciseUsable=false, except a reason=instructions_only unit,',
+            'which is only the instruction line of the exercises paired with the same example.',
+          ]
+        : []),
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }
