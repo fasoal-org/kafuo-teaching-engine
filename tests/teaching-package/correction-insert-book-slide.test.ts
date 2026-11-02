@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { findBookCoverageDiagnostics } from '@/lib/server/teaching-package/book-coverage';
+import {
+  findBookCoverageDiagnostics,
+  type CoverageBookStructure,
+} from '@/lib/server/teaching-package/book-coverage';
 import {
   applyCorrectionOperations,
   buildCorrectionView,
@@ -167,6 +170,91 @@ describe('insert_book_slide correction', () => {
       context(),
     );
     expect(edited[2]!.title).toBe('الحل: تخمينات');
+  });
+
+  it('g5.v8: an item solution takes its own item from the try-it, never the previous solution', () => {
+    const v8Book = {
+      ...BOOK,
+      teacherParity: true,
+      unitFacts: { '4028': { itemLabels: ['1A', '1B'], hiddenSteps: [] } },
+    } as CoverageBookStructure;
+    const outlines = [
+      slide('ex2', ['4026'], { contentRole: 'worked_example' }),
+      slide('try2', ['4028'], {
+        contentRole: 'check_understanding',
+        title: 'جرّب: تخمينات جبرية وهندسية',
+        keyPoints: ['1A) ناتج جمع عددين زوجيين', '1B) ناتج ضرب عددين فرديين'],
+        teachingSkills: SKILLS,
+      } as Partial<SceneOutline>),
+      slide('sol1A', ['4028'], {
+        contentRole: 'worked_example',
+        title: 'الحل: ناتج جمع عددين زوجيين (1A)',
+        keyPoints: ['2 + 4 = 6 زوجي', '6 + 8 = 14 زوجي'],
+        teachingSkills: SKILLS,
+      } as Partial<SceneOutline>),
+      slide('next', ['9999'], { slideType: 'transition' }),
+    ];
+    const gaps = insertableBookGaps(outlines, v8Book, FLOW);
+    expect(gaps.map((gap) => [gap.itemLabel, gap.anchorIndex])).toEqual([['1B', 2]]);
+
+    const edited = applyCorrectionOperations(
+      outlines,
+      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
+      context({ bookStructure: v8Book }),
+    );
+    const inserted = edited[3]!;
+    expect(edited.map((o) => o.id)).toEqual([
+      'ex2',
+      'try2',
+      'sol1A',
+      'sol1A-book-missing_solution-4028',
+      'next',
+    ]);
+    expect(inserted.title).toBe('الحل: تخمينات جبرية وهندسية (1B)');
+    expect(inserted.keyPoints).toEqual(['1B) ناتج ضرب عددين فرديين']);
+    expect(inserted.keyPoints).not.toContain('2 + 4 = 6 زوجي');
+
+    // No point names the item alone: no key points, and an English try-it titles in English.
+    const unlabelled = outlines.map((outline) =>
+      outline.id === 'try2'
+        ? { ...outline, title: 'Try it: conjectures', keyPoints: ['items 1A and 1B'] }
+        : outline,
+    );
+    const bare = applyCorrectionOperations(
+      unlabelled,
+      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
+      context({ bookStructure: v8Book }),
+    )[3]!;
+    expect(bare.title).toBe('Solution: conjectures (1B)');
+    expect(bare.keyPoints).toEqual([]);
+
+    // The item gap closes, and the inserted slide (with or without key points)
+    // leaves only the picture note the resume writes.
+    expect(insertableBookGaps(edited, v8Book, FLOW)).toEqual([]);
+    const diagnosisContext = {
+      flow: FLOW,
+      contentUnitIds: ['4026', '4028', '9999'],
+      sourceImages: [
+        { id: 'src-5', src: '', pageNumber: 2, sourceContentUnitIds: ['4028'] },
+        { id: 'src-9', src: '', pageNumber: 3, sourceContentUnitIds: ['4026'] },
+      ],
+      governed: false,
+      bookStructure: v8Book,
+    };
+    const bareEdited = applyCorrectionOperations(
+      unlabelled,
+      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
+      context({ bookStructure: v8Book }),
+    );
+    for (const plan of [edited, bareEdited]) {
+      const blocking = diagnoseCandidateOutlines(plan, diagnosisContext).blocking;
+      expect(blocking.some((d) => d.code === 'BOOK_COVERAGE_INCOMPLETE')).toBe(false);
+      expect(
+        blocking
+          .filter((d) => d.outlineId === 'sol1A-book-missing_solution-4028')
+          .filter((d) => d.code !== 'VISUAL_TEACHING_NOTE_MISSING'),
+      ).toEqual([]);
+    }
   });
 
   it('selects no visual when none is linked and the position requires none', () => {

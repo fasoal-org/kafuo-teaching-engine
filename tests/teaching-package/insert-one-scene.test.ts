@@ -107,6 +107,23 @@ describe('insertOneScene', () => {
     expect((options.assignedImages as PdfImage[]).map((image) => image.id)).toEqual(['src-1']);
   });
 
+  it('a g5.v8 package generates the inserted slide under the visible-working rule', async () => {
+    const optionsFor = async (teachingModel?: { key: string; version: string }) => {
+      const { input, generateContent } = run(teachingModel ? { teachingModel } : {});
+      await insertOneScene(input);
+      return (
+        generateContent.mock.calls[0] as unknown as [unknown, unknown, Record<string, unknown>]
+      )[2];
+    };
+    expect(await optionsFor({ key: 'g5', version: 'g5.v8' })).toMatchObject({
+      visibleWorkingSteps: true,
+    });
+    expect(await optionsFor({ key: 'g5', version: 'g5.v7' })).not.toHaveProperty(
+      'visibleWorkingSteps',
+    );
+    expect(await optionsFor()).not.toHaveProperty('visibleWorkingSteps');
+  });
+
   it('places a sentinel for the new slide in the Actions page context', async () => {
     const { input, generateActions } = run();
     await insertOneScene(input);

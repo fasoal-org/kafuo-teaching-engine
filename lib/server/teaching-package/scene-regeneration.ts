@@ -398,6 +398,7 @@ export async function regenerateSlideScene(
         : {}),
       instruction: request.instruction,
       ...(request.mode === 'narration' ? { narrationOnly: true } : {}),
+      teachingModel: version.teachingModel,
       aiCallFor: route.aiCallFor,
       assertRouteAvailable: route.assertAvailable,
       registerPolicy,

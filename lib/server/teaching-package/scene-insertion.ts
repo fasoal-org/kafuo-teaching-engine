@@ -999,6 +999,7 @@ export async function insertGeneratedSlide(
       assertRouteAvailable: route.assertAvailable,
       registerPolicy,
       ...(governedContext ? { governed: governedContext } : {}),
+      teachingModel: context.version.teachingModel,
       now: clock,
     });
     if (!generated.ok) {

@@ -50,7 +50,9 @@ import {
   narrationAudioGap,
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
+import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
 import type { AppScene, Scene } from '@/lib/types/stage';
+import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 
 export interface InsertOneSceneInput {
   /** The normalized planned outline (id = the minted `ins_…`, order = its position). */
@@ -65,6 +67,11 @@ export interface InsertOneSceneInput {
   assertRouteAvailable?: () => void;
   registerPolicy: SpeechRegisterPolicy | null;
   governed?: GovernedRegenerationContext;
+  /**
+   * The package version's Teaching Model: a g5.v8 (teacher-parity) package
+   * generates an inserted solving slide under the visible-working rule.
+   */
+  teachingModel?: TeachingModelLineage | null;
   now?: () => number;
   /** Test seams. */
   generateContent?: typeof generateSceneContent;
@@ -122,6 +129,7 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       allowProceduralSkill: true,
       ...(assignedImages.length > 0 ? { assignedImages, imageMapping } : {}),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+      ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
       onFailure: (event) => {
         contentFailure = event;
       },

@@ -48,8 +48,12 @@ export function normalizeBookText(text: string, lowerCase = true): string {
 
 /**
  * The fixed cycles of names, each name as normalized text (`ة` → `ه`,
- * `ى` → `ي`). A two-word name keeps its space; the article and a one-letter
- * conjunction or preposition before a name are allowed by the matcher.
+ * `ى` → `ي`). A two-word name keeps its space. For a month, the article and a
+ * one-letter conjunction or preposition before it are allowed by the matcher.
+ * Names that are also ordinary words are held tighter (see {@link namePattern}):
+ * an Arabic weekday needs its article or a preceding «يوم» and takes no
+ * one-letter prefix («واحد», «أحد», «اثنين» are numbers), and «صفر» (zero)
+ * counts only as «شهر صفر» or beside another Hijri month in a list.
  */
 const ORDERED_SETS: Readonly<Record<string, readonly string[]>> = {
   hijri_months: [
@@ -92,20 +96,46 @@ const ORDERED_SETS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-/** A name from a cycle, as a whole word (an article or one-letter prefix allowed). */
-function namePattern(alternatives: string): string {
-  const forms = alternatives
-    .split('|')
-    .map((form) => form.replace(/^ال/, '').replace(/ /g, '\\s+(?:ال)?'))
-    .join('|');
-  return `(?<![\\p{L}\\p{N}])[وبلفك]?(?:ال)?(?:${forms})(?![\\p{L}\\p{N}])`;
+const WORD_START = '(?<![\\p{L}\\p{N}])';
+const WORD_END = '(?![\\p{L}\\p{N}])';
+
+/** A word that names a Hijri month, for «صفر»'s list context. */
+const HIJRI_WORD =
+  '(?<![\\p{L}])(?:محرم|المحرم|ربيع|جمادي|رجب|شعبان|رمضان|شوال|ذو\\s+ال(?:قعده|حجه)|ذي\\s+ال(?:قعده|حجه)|الحجه|القعده)';
+/** What separates two names of a written list: spaces, punctuation, numbers, «و». */
+const LIST_GAP = '[\\s\\d=:،,()\\-–→←.]{1,12}(?:و\\s*)?';
+
+/**
+ * A name from a cycle, as a whole word. Months allow an article and a
+ * one-letter prefix; an Arabic weekday needs its article or a preceding «يوم»
+ * and takes no prefix (so «واحد» is never «الأحد»); «صفر» needs «شهر» before it
+ * or another Hijri month beside it.
+ */
+function namePattern(set: string, alternatives: string): string {
+  const forms = alternatives.split('|');
+  if (set === 'weekdays') {
+    const arabic = forms
+      .filter((form) => form.startsWith('ال'))
+      .map((form) => form.replace(/^ال/, ''))
+      .join('|');
+    const latin = forms.filter((form) => !form.startsWith('ال')).join('|');
+    return `${WORD_START}(?:(?:ال|يوم\\s+(?:ال)?)(?:${arabic})|${latin})${WORD_END}`;
+  }
+  if (alternatives === 'صفر') {
+    return (
+      `${WORD_START}(?:شهر\\s+صفر|(?<=${HIJRI_WORD}${LIST_GAP})و?صفر` +
+      `|و?صفر(?=${LIST_GAP}${HIJRI_WORD}))${WORD_END}`
+    );
+  }
+  const body = forms.map((form) => form.replace(/^ال/, '').replace(/ /g, '\\s+(?:ال)?')).join('|');
+  return `${WORD_START}[وبلفك]?(?:ال)?(?:${body})${WORD_END}`;
 }
 
 const SET_MATCHERS: ReadonlyArray<{ set: string; names: RegExp[] }> = Object.entries(
   ORDERED_SETS,
 ).map(([set, names]) => ({
   set,
-  names: names.map((name) => new RegExp(namePattern(name), 'u')),
+  names: names.map((name) => new RegExp(namePattern(set, name), 'u')),
 }));
 
 /** The cycles whose names the text uses: two distinct names of one cycle at least. */
@@ -122,12 +152,23 @@ function clockTimes(text: string): string[] {
   return text.match(CLOCK_TIME) ?? [];
 }
 
+/**
+ * A time of day as book text writes one: `hh:mm` right after «الساعة» or right
+ * before a morning/evening marker («صباحًا», «مساءً», «ص», «م», am/pm). A bare
+ * `1:20` is a ratio or a scale, never a time.
+ */
+const MARKED_CLOCK_TIME = new RegExp(
+  `(?:(?<=الساعه\\s*)${CLOCK_TIME.source}` +
+    `|${CLOCK_TIME.source}(?=\\s*(?:صباحا|مساءا|مساء|ص|م|am|pm|a\\.m\\.|p\\.m\\.)(?![\\p{L}])))`,
+  'gu',
+);
+
 /** The detectable hidden-step types of one item's (or unit's) text. */
 export function detectHiddenStepTypes(text: string): DetectedHiddenStepType[] {
   const normalized = normalizeBookText(text);
   const types: DetectedHiddenStepType[] = [];
   if (orderedSetsIn(normalized).length > 0) types.push('ordered_named_set');
-  if (clockTimes(normalized).length >= 2) types.push('clock_time');
+  if ((normalized.match(MARKED_CLOCK_TIME) ?? []).length >= 2) types.push('clock_time');
   return types;
 }
 

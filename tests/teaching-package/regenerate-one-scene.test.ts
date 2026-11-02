@@ -165,7 +165,12 @@ const policy = resolveSpeechRegisterPolicy({ language: 'ar', subjectCode: 'MATH'
 
 async function run(
   contentReply: string,
-  options: { pre?: AppScene; outline?: AppDocumentOutline; speech?: string } = {},
+  options: {
+    pre?: AppScene;
+    outline?: AppDocumentOutline;
+    speech?: string;
+    teachingModel?: { key: string; version: string };
+  } = {},
 ) {
   const pre = options.pre ?? preImage();
   const stub = model(contentReply, options.speech);
@@ -175,6 +180,7 @@ async function run(
     stage,
     outlineSnapshot: options.outline ?? snapshot(),
     instruction: INSTRUCTION,
+    ...(options.teachingModel ? { teachingModel: options.teachingModel } : {}),
     aiCallFor: stub.aiCallFor,
     registerPolicy: policy,
     refuseFallbackActions: true,
@@ -222,6 +228,22 @@ describe('regenerateOneScene — AT-G', () => {
     const contentPrompt = prompts.find((prompt) => prompt.stage === 'scene-content:slide')!;
     expect(contentPrompt.system + contentPrompt.user).toContain(policy!.directive.slice(0, 40));
     expect(contentPrompt.system + contentPrompt.user).toMatch(/right-to-left|RTL/i);
+  });
+
+  it('a g5.v8 package regenerates a solving slide under the visible-working rule', async () => {
+    const RULE = 'Visible working (mandatory)';
+    const solving = snapshot({ contentRole: 'worked_example' });
+    const contentPromptOf = async (teachingModel?: { key: string; version: string }) => {
+      const { prompts } = await run(content([image('src-3', 'x')]), {
+        outline: solving,
+        ...(teachingModel ? { teachingModel } : {}),
+      });
+      const found = prompts.find((prompt) => prompt.stage === 'scene-content:slide')!;
+      return found.system + found.user;
+    };
+    expect(await contentPromptOf({ key: 'g5', version: 'g5.v8' })).toContain(RULE);
+    expect(await contentPromptOf({ key: 'g5', version: 'g5.v7' })).not.toContain(RULE);
+    expect(await contentPromptOf()).not.toContain(RULE);
   });
 
   it('an unparsable content answer fails with SCENE_CONTENT_GENERATION_FAILED and no Action call', async () => {

@@ -420,6 +420,34 @@ describe('hidden-step detector', () => {
     expect(detectHiddenStepTypes('14) 0, 2, 4, 6, 8')).toEqual([]);
   });
 
+  it('never reads the numbers واحد / أحد / اثنين / صفر as weekdays or months', () => {
+    // Math 1 source 603, item (30): «اثنين» (two) and «واحد» (one).
+    expect(detectHiddenStepTypes('(30) ناتج ضرب عدد في اثنين، مضافًا إليه واحد.')).toEqual([]);
+    // Math 1 source 617: «أحد الفريقين» (one of the teams), «الصفر» (zero), one weekday.
+    expect(
+      detectHiddenStepTypes(
+        '(2) إذا اعتذر أحد الفريقين فسوف تؤجل المباراة. ' +
+          'لم تنخفض درجة الحرارة عن الصفر السيليزية في يوم الإثنين. ' +
+          'الاستنتاج: لم يسقط الثلج يوم الإثنين.',
+      ),
+    ).toEqual([]);
+    expect(
+      detectHiddenStepTypes('أحد العددين واحد والآخر اثنين، ومجموعهما مع صفر لا يتغير في شهر محرم'),
+    ).toEqual([]);
+    // «الذي» and the particle «ذو» are no Hijri month beside «صفر».
+    expect(detectHiddenStepTypes('العدد الذي صفر في رمضان، وعدد ذو صفر')).toEqual([]);
+    // A weekday after «يوم», and «صفر» as a month in a list, still count.
+    expect(detectHiddenStepTypes('يوم السبت ثم يوم الأحد')).toEqual(['ordered_named_set']);
+    expect(detectHiddenStepTypes('محرم، صفر')).toEqual(['ordered_named_set']);
+    expect(detectHiddenStepTypes('شهر صفر بعد شهر رجب')).toEqual(['ordered_named_set']);
+  });
+
+  it('counts a clock time only with a time marker, never a ratio or scale', () => {
+    expect(detectHiddenStepTypes('مقياس الرسم 1:20، ثم 1:50 للمخطط الثاني')).toEqual([]);
+    expect(detectHiddenStepTypes('النسبة 3:15 والنسبة 2:30')).toEqual([]);
+    expect(detectHiddenStepTypes('تبدأ الساعة 7:30 وتنتهي 9:15 صباحًا')).toEqual(['clock_time']);
+  });
+
   it('reads check item labels, never algebra', () => {
     expect(checkItemLabels('تحقق من فهمك 1A) شوال 1B) 10, 4 1C) مثلث')).toEqual(['1A', '1B', '1C']);
     expect(checkItemLabels('تحقق من فهمك (2A ناتج جمع عددين زوجيين. (2B …')).toEqual(['2A', '2B']);

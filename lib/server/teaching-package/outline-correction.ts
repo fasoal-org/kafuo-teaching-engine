@@ -40,6 +40,7 @@ import {
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
 import { instructionFor } from '@/lib/server/teaching-package/book-coverage-repair';
+import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
@@ -778,6 +779,43 @@ export function solutionTitle(tryItTitle: string): string {
   return /[؀-ۿ]/.test(tryItTitle) ? `الحل: ${topic}` : `Solution: ${topic}`;
 }
 
+/**
+ * The inserted solution's title and key points. A whole check's solution
+ * follows its try-it slide and carries all of its items. A g5.v8 item's
+ * solution is anchored on the check's LAST solution slide, which solves
+ * another item: it reads the check's try-it slide instead and keeps only the
+ * key points that name its own item alone (none when no point does), and its title
+ * names the item, so it never re-solves the item before it.
+ */
+function solutionContent(
+  outlines: readonly SceneOutline[],
+  gap: BookCoverageGap,
+  anchor: SceneOutline,
+  title: string | undefined,
+): { title: string; keyPoints: string[] } {
+  const label = gap.itemLabel;
+  if (label === undefined) {
+    return {
+      title: title ?? solutionTitle(anchor.title),
+      keyPoints: [...(anchor.keyPoints ?? [])],
+    };
+  }
+  const unitId = gap.unit.contentUnitId;
+  const tryIt = outlines.find(
+    (outline) =>
+      outline.contentRole === 'check_understanding' &&
+      (outline.sourceContentUnitIds ?? []).some((id) => String(id) === unitId),
+  );
+  const keyPoints = (tryIt?.keyPoints ?? []).filter((point) => {
+    const labels = checkItemLabels(point);
+    return labels.length === 1 && labels[0] === label;
+  });
+  return {
+    title: title ?? `${solutionTitle(tryIt?.title ?? anchor.title)} (${label})`,
+    keyPoints,
+  };
+}
+
 function insertedBookSlide(
   outlines: readonly SceneOutline[],
   gap: BookCoverageGap,
@@ -809,9 +847,8 @@ function insertedBookSlide(
     type: 'slide',
     slideType: 'content',
     contentRole: 'worked_example',
-    title: title ?? solutionTitle(anchor.title),
+    ...solutionContent(outlines, gap, anchor, title),
     description: instructionFor(gap),
-    keyPoints: [...(anchor.keyPoints ?? [])],
     order: gap.anchorIndex! + 2,
     ...(anchor.teachingStage ? { teachingStage: { ...anchor.teachingStage } } : {}),
     sourceContentUnitIds: [unitId],

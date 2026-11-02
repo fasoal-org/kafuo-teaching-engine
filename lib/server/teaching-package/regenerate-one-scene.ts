@@ -58,7 +58,9 @@ import {
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
+import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 import type { AppScene, Scene } from '@/lib/types/stage';
 
 export interface RegenerateOneSceneInput {
@@ -76,6 +78,11 @@ export interface RegenerateOneSceneInput {
    * re-offer — so an image the reviewer deleted never comes back.
    */
   narrationOnly?: boolean;
+  /**
+   * The package version's Teaching Model: a g5.v8 (teacher-parity) package
+   * regenerates a solving slide under the visible-working rule, as its run did.
+   */
+  teachingModel?: TeachingModelLineage | null;
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -242,6 +249,7 @@ export async function regenerateOneScene(
       editDirective: input.instruction,
       baselineContent: baseline,
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+      ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
       onFailure: (event) => {
         contentFailure = event;
       },
