@@ -353,6 +353,25 @@ const VISUAL_REPLAN_CODES: ReadonlySet<string> = new Set([
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
 
+/** The routed lesson-plan (outline) stage and its own time limit per model attempt. */
+const OUTLINE_STAGE = 'scene-outlines-stream';
+export const OUTLINE_TIMEOUT_MS = 180_000;
+
+/**
+ * The executor options of one routed teaching call. The whole lesson plan is
+ * one non-streamed call: a g5.v8 plan of ~35 slides took 97.5 s against the
+ * 110 s default (lesson 306), so only the outline stage gets a longer limit.
+ */
+export function routedCallOptions(
+  stage: string,
+  images: ReadonlyArray<unknown> | undefined,
+): { images?: ReadonlyArray<unknown>; timeoutMs?: number } {
+  return {
+    ...(images !== undefined ? { images } : {}),
+    ...(stage === OUTLINE_STAGE ? { timeoutMs: OUTLINE_TIMEOUT_MS } : {}),
+  };
+}
+
 /** Raw outline text kept whole up to this many UTF-16 code units… */
 const OUTLINE_ANSWER_KEEP_WHOLE = 16_384;
 /** …and beyond it, this many from each end. */
@@ -1023,7 +1042,7 @@ export async function generateClassroom(
             },
           ],
         },
-        withImages ? { images } : {},
+        routedCallOptions(stage, withImages ? images : undefined),
       );
       return result.text;
     } catch (error) {
