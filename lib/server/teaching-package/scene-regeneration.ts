@@ -79,6 +79,11 @@ export interface SceneRegenerationRequest {
   instruction: string;
   reason: string;
   idempotencyKey: string;
+  /**
+   * `'narration'` (D-5 A, 2 Nov 2026): regenerate a slide's narration only and
+   * keep its canvas exactly as the reviewer left it. Absent → the whole slide.
+   */
+  mode?: 'narration';
 }
 
 function invalid(field: string, rule: string, limit?: number): TeachingPackageError {
@@ -111,16 +116,26 @@ export function parseSceneRegenerationRequest(
   if (key.length < min) throw invalid('idempotencyKey', 'min', min);
   if (key.length > max) throw invalid('idempotencyKey', 'max', max);
   if (!/^[A-Za-z0-9_-]+$/.test(key)) throw invalid('idempotencyKey', 'format');
-  return { instruction, reason, idempotencyKey: key };
+  const mode = body.mode;
+  if (mode !== undefined && mode !== 'narration') throw invalid('mode', 'format');
+  return { instruction, reason, idempotencyKey: key, ...(mode ? { mode } : {}) };
 }
 
 /** The digest an idempotency key is bound to: same key + different body → 409. */
 export function sceneRegenerationRequestDigest(
   sceneId: string,
-  request: Pick<SceneRegenerationRequest, 'instruction' | 'reason'>,
+  request: Pick<SceneRegenerationRequest, 'instruction' | 'reason' | 'mode'>,
 ): string {
+  // `mode` joins the digest only when set, so whole-slide digests are unchanged.
   return createHash('sha256')
-    .update(JSON.stringify({ sceneId, instruction: request.instruction, reason: request.reason }))
+    .update(
+      JSON.stringify({
+        sceneId,
+        instruction: request.instruction,
+        reason: request.reason,
+        ...(request.mode ? { mode: request.mode } : {}),
+      }),
+    )
     .digest('hex');
 }
 
@@ -382,6 +397,7 @@ export async function regenerateSlideScene(
         ? { outlineSnapshot: stageDocument.outline as AppDocumentOutline }
         : {}),
       instruction: request.instruction,
+      ...(request.mode === 'narration' ? { narrationOnly: true } : {}),
       aiCallFor: route.aiCallFor,
       assertRouteAvailable: route.assertAvailable,
       registerPolicy,

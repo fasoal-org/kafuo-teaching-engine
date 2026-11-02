@@ -19,6 +19,7 @@ import { useCanvasStore } from '@/lib/store/canvas';
 import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { NARRATION_AUDIO_ISSUE_CODE } from '@/lib/edit/narration-audio-client';
+import { NARRATION_DELETED_IMAGE_ISSUE_CODE } from '@/lib/edit/dangling-element-actions';
 
 interface ThumbItemProps {
   readonly scene: Scene;
@@ -30,6 +31,13 @@ interface ThumbItemProps {
   readonly onDelete: () => void;
   /** Present only when this slide may be regenerated (write grant, editable package, slide). */
   readonly onRegenerate?: () => void;
+  /**
+   * Present only when this slide's narration may be regenerated alone (same
+   * gate): the remedy of the deleted-image warning (D-5 A).
+   */
+  readonly onRegenerateNarration?: () => void;
+  /** Dismisses the deleted-image warning; the narration stays as it is. */
+  readonly onDismissNarrationWarning?: () => void;
   /** Present only when this scene's missing narration audio may be regenerated (same gate). */
   readonly onRegenerateAudio?: () => void;
   /** The audio of this scene is being regenerated now. */
@@ -45,10 +53,29 @@ function ThumbItemComponent({
   onDuplicate,
   onDelete,
   onRegenerate,
+  onRegenerateNarration,
+  onDismissNarrationWarning,
   onRegenerateAudio,
   regeneratingAudio = false,
 }: ThumbItemProps) {
   const { t } = useI18n();
+  const issues = scene.generationIssues ?? [];
+  const narrationDescribesDeletedImage = issues.some(
+    (issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE,
+  );
+  // A reviewer's own delete is not a generation problem: the card says
+  // "needs review" when that warning is its only issue.
+  const issueTitle = t(
+    issues.every((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE)
+      ? 'edit.narrationRegeneration.reviewTitle'
+      : 'edit.nav.sceneGenerationIssue',
+  );
+  // The slide/quiz regeneration is the remedy of the other issues only.
+  const hasRegenerableIssue = issues.some(
+    (issue) =>
+      issue.code !== NARRATION_AUDIO_ISSUE_CODE &&
+      issue.code !== NARRATION_DELETED_IMAGE_ISSUE_CODE,
+  );
   const viewportSize = useCanvasStore.use.viewportSize();
   const viewportRatio = useCanvasStore.use.viewportRatio();
   const updateScene = useStageStore.use.updateScene();
@@ -142,10 +169,10 @@ function ThumbItemComponent({
         {/* Page-level "incomplete content" dot — surfaces a scene with any
             content issue (blank narration / no actions / unbound cue …) so the
             user can spot it in the rail without opening every page. */}
-        {(scene.generationIssues?.length ?? 0) > 0 ? (
+        {issues.length > 0 ? (
           <span
-            title={t('edit.nav.sceneGenerationIssue')}
-            aria-label={t('edit.nav.sceneGenerationIssue')}
+            title={issueTitle}
+            aria-label={issueTitle}
             data-testid="scene-generation-issue-dot"
             className="absolute right-1 top-1 z-10 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-white dark:ring-slate-900"
           />
@@ -294,7 +321,7 @@ function ThumbItemComponent({
             data-testid="scene-generation-issues"
             className="rounded border border-red-200 bg-red-50 px-1.5 py-1 text-[10px] leading-snug text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
           >
-            <p className="font-semibold">{t('edit.nav.sceneGenerationIssue')}</p>
+            <p className="font-semibold">{issueTitle}</p>
             {scene.generationIssues!.map((issue) => (
               <p key={issue.code} className="line-clamp-3" title={issue.message}>
                 {t(`edit.nav.generationIssue.${issue.code}`, { defaultValue: issue.message })}
@@ -326,27 +353,54 @@ function ThumbItemComponent({
                   )}
                 </button>
               )}
-            {onRegenerate &&
-              scene.generationIssues!.some(
-                (issue) => issue.code !== NARRATION_AUDIO_ISSUE_CODE,
-              ) && (
-                <button
-                  type="button"
-                  data-testid="scene-generation-issue-regenerate"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRegenerate();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="mt-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
-                >
-                  {t(
-                    scene.type === 'quiz'
-                      ? 'edit.quizRegeneration.menuItem'
-                      : 'edit.slideRegeneration.menuItem',
-                  )}
-                </button>
-              )}
+            {/* A manual image delete left the narration describing it (D-5 A):
+                regenerate the narration alone (paid, only on submit) or keep it. */}
+            {narrationDescribesDeletedImage && onRegenerateNarration && (
+              <button
+                type="button"
+                data-testid="scene-issue-regenerate-narration"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRegenerateNarration();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="mt-1 me-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
+              >
+                {t('edit.narrationRegeneration.action')}
+              </button>
+            )}
+            {narrationDescribesDeletedImage && onDismissNarrationWarning && (
+              <button
+                type="button"
+                data-testid="scene-issue-dismiss-narration-warning"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDismissNarrationWarning();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="mt-1 me-1 rounded border border-red-300 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
+              >
+                {t('edit.narrationRegeneration.dismiss')}
+              </button>
+            )}
+            {onRegenerate && hasRegenerableIssue && (
+              <button
+                type="button"
+                data-testid="scene-generation-issue-regenerate"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRegenerate();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="mt-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-red-700"
+              >
+                {t(
+                  scene.type === 'quiz'
+                    ? 'edit.quizRegeneration.menuItem'
+                    : 'edit.slideRegeneration.menuItem',
+                )}
+              </button>
+            )}
           </div>
         )}
       </div>

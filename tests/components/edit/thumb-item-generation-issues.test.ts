@@ -68,6 +68,8 @@ function quiz(issues: Array<{ code: string; message: string }>): Scene {
 function mount(props: {
   scene: Scene;
   onRegenerate?: () => void;
+  onRegenerateNarration?: () => void;
+  onDismissNarrationWarning?: () => void;
   onRegenerateAudio?: () => void;
   regeneratingAudio?: boolean;
 }) {
@@ -137,5 +139,56 @@ describe('ThumbItem generation-issue card', () => {
     const host = mount({ scene: quiz([AUDIO, OTHER]) });
     expect(audioButton(host)).toBeNull();
     expect(regenerateButton(host)).toBeNull();
+  });
+});
+
+// D-5 A (2 Nov 2026): a manual image delete left the narration describing it.
+describe('ThumbItem deleted-image narration warning', () => {
+  const DELETED = { code: 'NARRATION_DESCRIBES_DELETED_IMAGE', message: 'stale narration' };
+  const slide = (issues: Array<{ code: string; message: string }>) =>
+    ({ ...quiz(issues), type: 'slide' }) as unknown as Scene;
+  const narrationButton = (host: HTMLElement) =>
+    host.querySelector<HTMLButtonElement>('[data-testid="scene-issue-regenerate-narration"]');
+  const dismissButton = (host: HTMLElement) =>
+    host.querySelector<HTMLButtonElement>('[data-testid="scene-issue-dismiss-narration-warning"]');
+
+  it('says so in Arabic and offers "regenerate narration" and dismiss, not the slide regeneration', () => {
+    const onRegenerateNarration = vi.fn();
+    const onDismissNarrationWarning = vi.fn();
+    const onRegenerate = vi.fn();
+    const host = mount({
+      scene: slide([DELETED]),
+      onRegenerate,
+      onRegenerateNarration,
+      onDismissNarrationWarning,
+    });
+    expect(host.textContent).toContain('هذه الشريحة تحتاج مراجعة');
+    expect(host.textContent).not.toContain('حدثت مشكلة أثناء التوليد');
+    expect(host.textContent).toContain('الشرح الصوتي ما زال يصف صورة حُذفت من هذه الشريحة.');
+    expect(regenerateButton(host)).toBeNull();
+    expect(narrationButton(host)?.textContent).toBe('إعادة توليد الشرح');
+    expect(dismissButton(host)?.textContent).toBe('إبقاء الشرح');
+    act(() => narrationButton(host)!.click());
+    act(() => dismissButton(host)!.click());
+    expect(onRegenerateNarration).toHaveBeenCalledOnce();
+    expect(onDismissNarrationWarning).toHaveBeenCalledOnce();
+    expect(onRegenerate).not.toHaveBeenCalled();
+  });
+
+  it('beside another issue: the slide regeneration stays for that issue', () => {
+    const host = mount({
+      scene: slide([OTHER, DELETED]),
+      onRegenerate: vi.fn(),
+      onRegenerateNarration: vi.fn(),
+    });
+    expect(host.textContent).toContain('حدثت مشكلة أثناء التوليد');
+    expect(regenerateButton(host)).not.toBeNull();
+    expect(narrationButton(host)).not.toBeNull();
+  });
+
+  it('without the gate: dismiss only, no paid action', () => {
+    const host = mount({ scene: slide([DELETED]), onDismissNarrationWarning: vi.fn() });
+    expect(narrationButton(host)).toBeNull();
+    expect(dismissButton(host)).not.toBeNull();
   });
 });

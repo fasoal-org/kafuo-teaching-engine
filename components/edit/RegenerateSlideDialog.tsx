@@ -44,6 +44,12 @@ interface RegenerateSlideDialogProps {
   readonly sceneTitle: string;
   /** The scene's type (3 Oct 2026: quizzes are regenerable too) — picks the wording. */
   readonly sceneType?: 'slide' | 'quiz';
+  /**
+   * `'narration'` (D-5 A, 2 Nov 2026): regenerate this slide's narration only,
+   * keeping its canvas — opened from the deleted-image warning, with both
+   * fields pre-filled for the reviewer to review. Paid only on submit.
+   */
+  readonly mode?: 'narration';
   /** Test seam. */
   readonly run?: typeof runSlideRegeneration;
 }
@@ -81,25 +87,37 @@ export function RegenerateSlideDialog({
   sceneId,
   sceneTitle,
   sceneType = 'slide',
+  mode,
   run = runSlideRegeneration,
 }: RegenerateSlideDialogProps) {
   const { t, locale } = useI18n();
-  // Quiz wording where it differs; every other key falls back to the slide text.
+  const narration = mode === 'narration' && sceneType === 'slide';
+  // Quiz (or narration-only) wording where it differs; every other key falls
+  // back to the slide text.
+  const variant = narration
+    ? 'narrationRegeneration'
+    : sceneType === 'quiz'
+      ? 'quizRegeneration'
+      : null;
   const tr = useCallback(
     (key: string, options?: Record<string, unknown>) =>
-      sceneType === 'quiz'
-        ? t(`edit.quizRegeneration.${key}`, {
+      variant
+        ? t(`edit.${variant}.${key}`, {
             ...options,
             defaultValue: t(`edit.slideRegeneration.${key}`, options),
           })
         : t(`edit.slideRegeneration.${key}`, options),
-    [t, sceneType],
+    [t, variant],
   );
   const dir = locale.startsWith('ar') ? 'rtl' : 'ltr';
   const instructionId = useId();
   const reasonId = useId();
-  const [instruction, setInstruction] = useState('');
-  const [reason, setReason] = useState('');
+  const [instruction, setInstruction] = useState(() =>
+    narration ? t('edit.narrationRegeneration.defaultInstruction') : '',
+  );
+  const [reason, setReason] = useState(() =>
+    narration ? t('edit.narrationRegeneration.defaultReason') : '',
+  );
   const [touched, setTouched] = useState<Record<Field, boolean>>({
     instruction: false,
     reason: false,
@@ -146,6 +164,7 @@ export function RegenerateSlideDialog({
         instruction: instruction.trim(),
         reason: reason.trim(),
         idempotencyKey: newRegenerationKey(),
+        ...(narration ? { mode: 'narration' as const } : {}),
       });
       switch (outcome.kind) {
         case 'success': {

@@ -114,7 +114,7 @@ async function errorFrom(response: Response): Promise<SceneRegenerationRequestEr
 export async function postSlideRegeneration(
   stageId: string,
   sceneId: string,
-  body: { instruction: string; reason: string; idempotencyKey: string },
+  body: { instruction: string; reason: string; idempotencyKey: string; mode?: 'narration' },
   options: { fetchImpl?: typeof fetch; transportRetries?: number } = {},
 ): Promise<{ status: 200; result: RegenerationResult } | { status: 202; regenerationId: string }> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -175,6 +175,8 @@ export interface RunSlideRegenerationInput {
   instruction: string;
   reason: string;
   idempotencyKey: string;
+  /** `'narration'`: regenerate the slide's narration only; its canvas is kept (D-5 A). */
+  mode?: 'narration';
 }
 
 export interface RunSlideRegenerationDeps {
@@ -222,6 +224,7 @@ export async function runSlideRegeneration(
           instruction: input.instruction,
           reason: input.reason,
           idempotencyKey: input.idempotencyKey,
+          ...(input.mode ? { mode: input.mode } : {}),
         },
         { fetchImpl },
       );

@@ -268,6 +268,72 @@ describe('regenerateOneScene — AT-G', () => {
   });
 });
 
+// D-5 A (2 Nov 2026): after a reviewer deletes an image, the narration alone.
+describe('regenerateOneScene — narration only', () => {
+  const DELETED_ISSUE = { code: 'NARRATION_DESCRIBES_DELETED_IMAGE', message: 'stale narration' };
+  const OTHER_ISSUE = { code: 'SPEECH_REGISTER_NONCOMPLIANT', message: 'register' };
+  const plannedLogo = () =>
+    snapshot({ imagePlans: [{ imageId: 'src-3', shows: 'GREEN-DOTS-MARK' }] });
+
+  async function narrate(pre: AppScene, outline = plannedLogo()) {
+    const stub = model('NOT-USED: no content call');
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: outline,
+      instruction: INSTRUCTION,
+      narrationOnly: true,
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    return { result, prompts: stub.prompts };
+  }
+
+  it('keeps the canvas, sends no content call, and never describes the deleted image', async () => {
+    const pre = {
+      ...preImage([]),
+      generationIssues: [OTHER_ISSUE, DELETED_ISSUE],
+    } as unknown as AppScene;
+    const { result, prompts } = await narrate(pre);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(prompts.map((prompt) => prompt.stage)).toEqual(['scene-actions']);
+    const actionsPrompt = prompts[0]!;
+    expect(actionsPrompt.user).toContain('INSTRUCTION-MARK');
+    expect(actionsPrompt.system + actionsPrompt.user).not.toContain('GREEN-DOTS-MARK');
+    expect(actionsPrompt.system + actionsPrompt.user).not.toContain(SRC_3);
+    expect(result.scene.content).toEqual(pre.content);
+    expect(imageSrcs(result.scene)).toEqual([]);
+    expect(result.scene.actions?.find((action) => action.type === 'speech')?.text).toBe(SAUDI);
+    expect(result.scene.generationIssues).toEqual([OTHER_ISSUE]);
+    expect(result.scene.updatedAt).toBe(42);
+  });
+
+  it('an image still on the canvas keeps its planned note (control)', async () => {
+    const pre = { ...preImage(), generationIssues: [DELETED_ISSUE] } as unknown as AppScene;
+    const { result, prompts } = await narrate(pre);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(prompts[0]!.user).toContain('GREEN-DOTS-MARK');
+    expect(result.scene.content).toEqual(pre.content);
+    expect(result.scene).not.toHaveProperty('generationIssues');
+  });
+
+  it('a quiz narration alone is refused before any model call', async () => {
+    const quiz = {
+      ...preImage(),
+      type: 'quiz',
+      content: { type: 'quiz', questions: [] },
+    } as unknown as AppScene;
+    const { result, prompts } = await narrate(quiz);
+    expect(result).toMatchObject({ ok: false, code: 'SCENE_TYPE_NOT_REGENERABLE' });
+    expect(prompts).toEqual([]);
+  });
+});
+
 // 3 Oct 2026: a quiz is regenerated like a slide, minus the canvas.
 describe('regenerateOneScene — quiz', () => {
   const currentQuestion = {

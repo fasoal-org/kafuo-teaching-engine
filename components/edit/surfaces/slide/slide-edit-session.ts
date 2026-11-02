@@ -29,6 +29,8 @@ import {
 } from '@openmaic/editor/core';
 import {
   deletedElementIds,
+  deletedNarratedImage,
+  NARRATION_DELETED_IMAGE_ISSUE_CODE,
   withoutActionsOnDeletedElements,
 } from '@/lib/edit/dangling-element-actions';
 import { commitSlideEdit } from '@/lib/edit/scene-edit-bridge';
@@ -94,16 +96,37 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     const { sceneId, history } = get();
     if (!sceneId) return;
     const store = useStageStore.getState();
+    if (!manual || !history) {
+      store.updateScene(sceneId, { content: next });
+      return;
+    }
+    const scene = store.scenes?.find((candidate) => candidate.id === sceneId);
+    const deletedIds = deletedElementIds(history.present.canvas.elements, next.canvas.elements);
     // An element a person deletes takes its spotlight/laser Actions with it;
     // otherwise Submit refuses the package for an Action pointing at nothing.
-    const actions =
-      manual && history
-        ? withoutActionsOnDeletedElements(
-            store.scenes?.find((scene) => scene.id === sceneId)?.actions,
-            deletedElementIds(history.present.canvas.elements, next.canvas.elements),
-          )
-        : null;
-    store.updateScene(sceneId, actions ? { content: next, actions } : { content: next });
+    const actions = withoutActionsOnDeletedElements(scene?.actions, deletedIds);
+    // The speech still describes a deleted image the narration pointed at
+    // (D-5 A): flag the slide until its narration is regenerated or dismissed.
+    // Read BEFORE the pointers are removed — they are the signal.
+    const issues = scene?.generationIssues ?? [];
+    const flag =
+      deletedNarratedImage(history.present.canvas.elements, deletedIds, scene?.actions) &&
+      !issues.some((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE);
+    store.updateScene(sceneId, {
+      content: next,
+      ...(actions ? { actions } : {}),
+      ...(flag
+        ? {
+            generationIssues: [
+              ...issues,
+              {
+                code: NARRATION_DELETED_IMAGE_ISSUE_CODE,
+                message: 'The narration still describes an image that was deleted from this slide.',
+              },
+            ],
+          }
+        : {}),
+    });
   };
 
   const replace = (history: EditorHistory, manual = false) => {

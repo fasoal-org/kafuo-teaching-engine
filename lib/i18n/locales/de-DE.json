@@ -414,6 +414,7 @@
         "ACTION_REFERENCE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
+        "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
         "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
       }
     },
@@ -739,6 +740,18 @@
       "errors": {
         "generic": "The quiz could not be regenerated ({{code}}). Nothing was saved."
       }
+    },
+    "narrationRegeneration": {
+      "reviewTitle": "This slide needs review",
+      "action": "Regenerate narration",
+      "dismiss": "Keep narration",
+      "title": "Regenerate narration",
+      "scope": "Only this slide's narration is regenerated. The slide content stays exactly as it is now; the narration is replaced. Each regeneration is a paid AI call.",
+      "submit": "Regenerate narration",
+      "running": "Regenerating the narration…",
+      "success": "The narration was regenerated.",
+      "defaultInstruction": "An image was deleted from this slide. Rewrite the narration so it explains only what the slide shows now, and never mentions or describes the deleted image.",
+      "defaultReason": "The narration described an image that was deleted from the slide."
     },
     "narrationAudio": {
       "action": "Regenerate audio",

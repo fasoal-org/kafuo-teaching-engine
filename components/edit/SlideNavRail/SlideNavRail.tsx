@@ -33,6 +33,7 @@ import {
 } from '@/lib/edit/scene-regeneration-client';
 import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
 import { runNarrationAudioRegeneration } from '@/lib/edit/narration-audio-client';
+import { NARRATION_DELETED_IMAGE_ISSUE_CODE } from '@/lib/edit/dangling-element-actions';
 import {
   isStageEditingLocked,
   onStageSaveConflict,
@@ -98,6 +99,8 @@ export function SlideNavRail() {
     id: string;
     title: string;
     type: 'slide' | 'quiz';
+    /** Narration only, from the deleted-image warning (D-5 A). */
+    mode?: 'narration';
   } | null>(null);
   // A scene's missing narration audio, regenerated on the server (4 Oct 2026).
   const [regeneratingAudio, setRegeneratingAudio] = useState<ReadonlySet<string>>(() => new Set());
@@ -704,6 +707,29 @@ export function SlideNavRail() {
                             }
                           : undefined
                       }
+                      onRegenerateNarration={
+                        canRegenerateScene(regenerationGate, scene) && scene.type === 'slide'
+                          ? () => {
+                              if (refuseWhileInserting()) return;
+                              setRegenerating({
+                                id: scene.id,
+                                title: scene.title,
+                                type: 'slide',
+                                mode: 'narration',
+                              });
+                            }
+                          : undefined
+                      }
+                      onDismissNarrationWarning={() => {
+                        // The reviewer keeps the narration as it is (D-5 A).
+                        if (refuseWhileInserting()) return;
+                        const remaining = (scene.generationIssues ?? []).filter(
+                          (issue) => issue.code !== NARRATION_DELETED_IMAGE_ISSUE_CODE,
+                        );
+                        useStageStore.getState().updateScene(scene.id, {
+                          generationIssues: remaining.length > 0 ? remaining : undefined,
+                        });
+                      }}
                       onRegenerateAudio={
                         canRegenerateScene(regenerationGate, scene)
                           ? () => void regenerateAudio(scene.id)
@@ -751,6 +777,7 @@ export function SlideNavRail() {
           sceneId={regenerating.id}
           sceneTitle={regenerating.title}
           sceneType={regenerating.type}
+          {...(regenerating.mode ? { mode: regenerating.mode } : {})}
         />
       ) : null}
       {stageId && inserting ? (

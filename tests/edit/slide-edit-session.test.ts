@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultSlide, createDefaultTextElement } from '@/lib/edit/slide-edit-elements';
+import {
+  createDefaultImageElement,
+  createDefaultSlide,
+  createDefaultTextElement,
+} from '@/lib/edit/slide-edit-elements';
 import type { PPTTextElement } from '@openmaic/dsl';
 import type { SlideContent } from '@/lib/types/stage';
 
@@ -12,7 +16,11 @@ const updateScene = vi.fn();
 // The Stage ids whose editing lock an AI slide insertion holds (plan §5.1).
 const lockedStages = new Set<string>();
 // The live scenes the write-through reads Actions from.
-const scenes: Array<{ id: string; actions?: unknown[] }> = [];
+const scenes: Array<{
+  id: string;
+  actions?: unknown[];
+  generationIssues?: { code: string; message: string }[];
+}> = [];
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: { getState: () => ({ updateScene, stage: { id: 'stage-1' }, scenes }) },
   isStageEditingLocked: (stageId: string | null | undefined) =>
@@ -99,6 +107,92 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     });
     const [, patch] = updateScene.mock.calls.at(-1)!;
     expect(patch).not.toHaveProperty('actions');
+  });
+
+  describe('a deleted image the narration pointed at (D-5 A)', () => {
+    const CODE = 'NARRATION_DESCRIBES_DELETED_IMAGE';
+    const imageContent = (): SlideContent => {
+      const content = makeContent();
+      content.canvas.elements.push(createDefaultImageElement('img-1', '/book/logo.png'));
+      return content;
+    };
+    const imageActions = () => [
+      { id: 'a-speech', type: 'speech', text: 'green dots' },
+      { id: 'a-spot', type: 'spotlight', elementId: 'img-1' },
+    ];
+    const deleteImage = (origin: 'toolbar' | 'canvas' | 'agent' = 'toolbar') =>
+      useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+        origin,
+        history: 'record',
+        operations: [{ type: 'element.delete', elementId: 'img-1' }],
+      });
+    const lastIssues = () =>
+      (updateScene.mock.calls.at(-1)![1] as { generationIssues?: { code: string }[] })
+        .generationIssues;
+
+    it('a manual delete flags the slide in the same write that removes the spotlight', () => {
+      scenes.push({ id: 'scene-1', actions: imageActions() });
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      deleteImage('canvas');
+      const [, patch] = updateScene.mock.calls.at(-1)!;
+      expect(patch.actions.map((action: { id: string }) => action.id)).toEqual(['a-speech']);
+      expect(patch.generationIssues).toEqual([{ code: CODE, message: expect.any(String) }]);
+    });
+
+    it('keeps the other issues and never adds the flag twice', () => {
+      const other = { code: 'SPEECH_REGISTER_NONCOMPLIANT', message: 'x' };
+      scenes.push({ id: 'scene-1', actions: imageActions(), generationIssues: [other] });
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      deleteImage();
+      expect(lastIssues()).toEqual([other, { code: CODE, message: expect.any(String) }]);
+
+      scenes[0] = {
+        id: 'scene-1',
+        actions: imageActions(),
+        generationIssues: [{ code: CODE, message: 'm' }],
+      };
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      deleteImage();
+      expect(lastIssues()).toBeUndefined();
+    });
+
+    it('an agent delete, an undo/redo and a reflow never flag', () => {
+      scenes.push({ id: 'scene-1', actions: imageActions() });
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      deleteImage('agent');
+      expect(lastIssues()).toBeUndefined();
+
+      useSlideEditSession.getState().seed('scene-1', makeContent());
+      useSlideEditSession
+        .getState()
+        .applyOp({ type: 'element.update', elementId: 'text-1', patch: { rotate: 3 } });
+      useSlideEditSession.getState().undo();
+      useSlideEditSession.getState().redo();
+      expect(lastIssues()).toBeUndefined();
+      // A reflow whose snapshot lacks the image is not a person's deletion.
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      useSlideEditSession.getState().commitContent(makeContent(), false);
+      expect(lastIssues()).toBeUndefined();
+    });
+
+    it('a deleted text element, or an image no Action pointed at, is not flagged', () => {
+      scenes.push({
+        id: 'scene-1',
+        actions: [
+          { id: 'a-speech', type: 'speech', text: 'hello' },
+          { id: 'a-spot', type: 'spotlight', elementId: 'text-1' },
+        ],
+      });
+      useSlideEditSession.getState().seed('scene-1', imageContent());
+      deleteImage();
+      expect(lastIssues()).toBeUndefined();
+      useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+        origin: 'toolbar',
+        history: 'record',
+        operations: [{ type: 'element.delete', elementId: 'text-1' }],
+      });
+      expect(lastIssues()).toBeUndefined();
+    });
   });
 
   it('refuses every history move while an AI insertion holds the Stage (no history change, no write)', () => {

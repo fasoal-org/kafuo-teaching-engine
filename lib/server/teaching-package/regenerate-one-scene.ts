@@ -22,10 +22,13 @@ import {
   generateSceneActions,
   generateSceneContent,
   type AICallFn,
+  type GeneratedSlideContent,
+  type NarrationImageNote,
   type SceneActionsFallback,
   type VisualPlan,
 } from '@openmaic/generation';
 
+import { NARRATION_DELETED_IMAGE_ISSUE_CODE } from '@/lib/edit/dangling-element-actions';
 import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
 import { validateAppScene } from '@/lib/document-store/validators';
 import { omitUndefinedObjectMembers } from '@/lib/persistence/plain-json';
@@ -67,6 +70,12 @@ export interface RegenerateOneSceneInput {
   outlineSnapshot?: AppDocumentOutline;
   /** The reviewer's requirements for the AI — the edit directive. */
   instruction: string;
+  /**
+   * D-5 A (2 Nov 2026): regenerate the slide's narration (its Actions) only.
+   * The canvas is kept exactly as stored — no content model call, no image
+   * re-offer — so an image the reviewer deleted never comes back.
+   */
+  narrationOnly?: boolean;
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -174,6 +183,12 @@ export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
   const pre = input.scene;
+  if (input.narrationOnly && (pre.type !== 'slide' || pre.content.type !== 'slide')) {
+    return failure(
+      'SCENE_TYPE_NOT_REGENERABLE',
+      'only a slide’s narration can be regenerated alone',
+    );
+  }
   if (isBankQuizScene(pre)) {
     // W6: the questions live in the Kafuo question bank; nothing is generated.
     return failure(
@@ -185,9 +200,9 @@ export async function regenerateOneScene(
   if (pre.type !== 'slide' || pre.content.type !== 'slide') {
     return failure('SCENE_TYPE_NOT_REGENERABLE', 'only slides and quizzes can be regenerated');
   }
+  if (input.narrationOnly) return regenerateSlideNarration(input);
   const assertRoute = input.assertRouteAvailable ?? (() => {});
   const generateContent = input.generateContent ?? generateSceneContent;
-  const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
 
   // 1. The outline, seeded from the persisted Scene and its stored plan. No AI
@@ -250,62 +265,13 @@ export async function regenerateOneScene(
   }
 
   // 4. Actions under the register policy; fallback defaults refused.
-  const fallbackCode: TeachingPackageErrorCode = input.governed
-    ? 'GOVERNED_ACTION_GENERATION_FAILED'
-    : 'SCENE_ACTION_GENERATION_FAILED';
   // Each lifted book image reaches narration with its own planned note.
   const imageNotes = hasImageMapping
     ? buildNarrationImageNotes(outline, assignedImages, imageMapping)
     : undefined;
-  let actions;
-  try {
-    const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
-    const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
-      async (correctiveContext) => {
-        let fellBack: SceneActionsFallback | undefined;
-        const generated = await generateActions(
-          outline,
-          content,
-          input.aiCallFor('scene-actions'),
-          {
-            ctx: sceneCtx,
-            agents,
-            languageDirective,
-            ...(input.registerPolicy
-              ? { spokenLanguagePolicy: input.registerPolicy.directive }
-              : {}),
-            ...(spokenScript ? { spokenScript } : {}),
-            ...(correctiveContext ? { correctiveContext } : {}),
-            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
-            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
-            ...(imageNotes ? { imageNotes } : {}),
-            onFallback: (info) => {
-              fellBack = info;
-            },
-          },
-        );
-        if (fellBack && input.refuseFallbackActions) {
-          assertRoute();
-          throw new TeachingPackageError(
-            fallbackCode,
-            'the narration could not be generated (the model answer was unusable); nothing was written',
-            { fallback: fellBack.code },
-          );
-        }
-        return filterKnownActions(generated);
-      },
-      input.registerPolicy,
-      { title: pre.title, outlineId: outline.id },
-      { outline, ctx: sceneCtx },
-    );
-  } catch (error) {
-    assertRoute();
-    if (error instanceof TeachingPackageError)
-      return failure(error.code, error.message, error.details);
-    throw error;
-  }
-  assertRoute();
+  const generatedActions = await slideActions(input, outline, content, { imageNotes });
+  if (!generatedActions.ok) return generatedActions;
+  const actions = generatedActions.actions;
 
   // 5. Assembly: same id, carried assistance, the pre-image's canvas frame.
   const built = buildCompleteScene(
@@ -354,6 +320,15 @@ export async function regenerateOneScene(
   }
 
   // 6. Validation (repeated inside the store write).
+  return validatedSlideCandidate(input, candidate);
+}
+
+/** Step 6 of a slide regeneration: invariants, Actions, the write boundary. */
+function validatedSlideCandidate(
+  input: RegenerateOneSceneInput,
+  candidate: AppScene,
+): RegenerateOneSceneResult {
+  const pre = input.scene;
   const violations = regenerationInvariantViolations(pre, candidate);
   if (violations.length > 0) {
     return failure(
@@ -362,9 +337,9 @@ export async function regenerateOneScene(
     );
   }
   const others = input.scenes.filter((scene) => scene.id !== pre.id);
-  const findings = validateSceneActionStructure([...others, candidate], { stage }).filter(
-    (finding) => finding.sceneId === pre.id,
-  );
+  const findings = validateSceneActionStructure([...others, candidate], {
+    stage: input.stage,
+  }).filter((finding) => finding.sceneId === pre.id);
   if (findings.length > 0) {
     const first = findings[0]!;
     return failure(first.code, first.message, { findings: findings.length });
@@ -380,6 +355,155 @@ export async function regenerateOneScene(
     );
   }
   return { ok: true, scene: storable };
+}
+
+type RegenerationFailure = Extract<RegenerateOneSceneResult, { ok: false }>;
+type SlideActionsResult =
+  | { ok: true; actions: ReturnType<typeof filterKnownActions> }
+  | RegenerationFailure;
+
+/**
+ * Step 4 of a slide regeneration: the Actions under the register policy, with
+ * model-free fallback Actions refused. `directive` (narration-only) carries the
+ * reviewer's requirements to the narration model.
+ */
+async function slideActions(
+  input: RegenerateOneSceneInput,
+  outline: SceneOutline,
+  content: GeneratedSlideContent,
+  options: { imageNotes?: Record<string, NarrationImageNote>; directive?: string },
+): Promise<SlideActionsResult> {
+  const pre = input.scene;
+  const assertRoute = input.assertRouteAvailable ?? (() => {});
+  const generateActions = input.generateActions ?? generateSceneActions;
+  const agents = input.stage.generatedAgentConfigs;
+  const languageDirective = input.registerPolicy?.directive ?? input.stage.languageDirective ?? '';
+  const fallbackCode: TeachingPackageErrorCode = input.governed
+    ? 'GOVERNED_ACTION_GENERATION_FAILED'
+    : 'SCENE_ACTION_GENERATION_FAILED';
+  const { imageNotes, directive } = options;
+  let actions;
+  try {
+    const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
+    const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
+    actions = await generateRegisterCompliantActions(
+      async (registerCorrection) => {
+        const correctiveContext =
+          [directive, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+        let fellBack: SceneActionsFallback | undefined;
+        const generated = await generateActions(
+          outline,
+          content,
+          input.aiCallFor('scene-actions'),
+          {
+            ctx: sceneCtx,
+            agents,
+            languageDirective,
+            ...(input.registerPolicy
+              ? { spokenLanguagePolicy: input.registerPolicy.directive }
+              : {}),
+            ...(spokenScript ? { spokenScript } : {}),
+            ...(correctiveContext ? { correctiveContext } : {}),
+            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
+            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+            ...(imageNotes ? { imageNotes } : {}),
+            onFallback: (info) => {
+              fellBack = info;
+            },
+          },
+        );
+        if (fellBack && input.refuseFallbackActions) {
+          assertRoute();
+          throw new TeachingPackageError(
+            fallbackCode,
+            'the narration could not be generated (the model answer was unusable); nothing was written',
+            { fallback: fellBack.code },
+          );
+        }
+        return filterKnownActions(generated);
+      },
+      input.registerPolicy,
+      { title: pre.title, outlineId: outline.id },
+      { outline, ctx: sceneCtx },
+    );
+  } catch (error) {
+    assertRoute();
+    if (error instanceof TeachingPackageError)
+      return failure(error.code, error.message, error.details) as RegenerationFailure;
+    throw error;
+  }
+  assertRoute();
+  return { ok: true, actions };
+}
+
+/**
+ * D-5 A (2 Nov 2026): a slide's narration regenerated alone, after the
+ * reviewer deleted an image the old narration described. The canvas is the
+ * stored one, untouched: no content call, no image re-offer (a full
+ * regeneration offers the outline's selected images again, so a deleted
+ * Ministry logo could come back). Only images still on the canvas reach the
+ * narration with their planned notes. Everything else — Action gate,
+ * invariants, audio mark, write boundary — is the slide path's.
+ */
+async function regenerateSlideNarration(
+  input: RegenerateOneSceneInput,
+): Promise<RegenerateOneSceneResult> {
+  const pre = input.scene;
+  if (pre.content.type !== 'slide') {
+    return failure(
+      'SCENE_TYPE_NOT_REGENERABLE',
+      'only a slide’s narration can be regenerated alone',
+    );
+  }
+  const now = input.now ?? Date.now;
+  const canvas = pre.content.canvas;
+  const shownSources = new Set(
+    canvas.elements
+      .map((element) => (element.type === 'image' ? (element as { src?: unknown }).src : undefined))
+      .filter((src): src is string => typeof src === 'string'),
+  );
+  const shown = (input.outlineSnapshot?.sourceVisuals ?? []).filter((entry) =>
+    shownSources.has(entry.servingPath),
+  );
+  const shownIds = new Set(shown.map((entry) => entry.id));
+  const seeded = seededOutline(pre, input.outlineSnapshot);
+  // The outline keeps only the images still shown: a deleted one has no note.
+  const outline: SceneOutline = {
+    ...seeded,
+    ...(seeded.suggestedImageIds
+      ? { suggestedImageIds: seeded.suggestedImageIds.filter((id) => shownIds.has(id)) }
+      : {}),
+  };
+  const notes =
+    shown.length > 0
+      ? buildNarrationImageNotes(
+          outline,
+          shown.map((entry) => ({ id: entry.id })),
+          Object.fromEntries(shown.map((entry) => [entry.id, entry.servingPath])),
+        )
+      : {};
+  const generated = await slideActions(
+    input,
+    outline,
+    { elements: canvas.elements, background: canvas.background } as GeneratedSlideContent,
+    {
+      ...(Object.keys(notes).length > 0 ? { imageNotes: notes } : {}),
+      directive: `Rewrite only this slide's narration. The slide's canvas is final: describe and point at only the elements listed above, never an image or element that is not listed. The reviewer's requirements:\n${input.instruction}`,
+    },
+  );
+  if (!generated.ok) return generated;
+
+  const { generationIssues: preIssues, ...rest } = pre;
+  const remaining = (preIssues ?? []).filter(
+    (issue) => issue.code !== NARRATION_DELETED_IMAGE_ISSUE_CODE,
+  );
+  const candidate = {
+    ...rest,
+    actions: generated.actions,
+    updatedAt: now(),
+    ...(remaining.length > 0 ? { generationIssues: remaining } : {}),
+  } as AppScene;
+  return validatedSlideCandidate(input, candidate);
 }
 
 /**
