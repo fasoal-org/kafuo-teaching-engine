@@ -1155,6 +1155,21 @@ const ATTEMPT_COLUMNS = `id,
   started_at,
   completed_at`;
 
+/**
+ * The attempt record's snapshot WITHOUT the diagnosis-only
+ * `outlineAnswerDiagnostics` (lesson 306, F-1): the raw model text stays on the
+ * row for an operator and never travels in an attempt record (the aggregate
+ * read and the generate replay return it to the backend).
+ */
+function attemptSnapshotOf(raw: unknown): GenerationInputSnapshot {
+  const snapshot = raw as GenerationInputSnapshot;
+  if (!snapshot || typeof snapshot !== 'object' || !('outlineAnswerDiagnostics' in snapshot)) {
+    return snapshot;
+  }
+  const { outlineAnswerDiagnostics: _diagnosisOnly, ...record } = snapshot;
+  return record as GenerationInputSnapshot;
+}
+
 function rowToAttempt(row: RawAttemptRow): GenerationAttempt {
   return {
     id: row.id,
@@ -1173,7 +1188,7 @@ function rowToAttempt(row: RawAttemptRow): GenerationAttempt {
     generationRuns: Number(row.generation_runs ?? 0),
     requestedByActorRef: row.requested_by_actor_ref,
     teachingModel: { key: row.teaching_model_key, version: row.teaching_model_version },
-    inputSnapshot: row.input_snapshot as GenerationInputSnapshot,
+    inputSnapshot: attemptSnapshotOf(row.input_snapshot),
     producedStageId: row.produced_stage_id,
     stageId: row.stage_id,
     displacedAt: row.displaced_at === null ? null : Number(row.displaced_at),
