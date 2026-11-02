@@ -14,9 +14,12 @@ import {
   bookStructureRequirement,
   bookUnitFactsOf,
   EXERCISE_CAP_EXCEEDED,
+  EXERCISE_SELECTED_MISSING,
   EXERCISE_TOO_FEW,
+  EXERCISE_UNSELECTED_CITED,
   EXERCISE_UNUSABLE_CITED,
   EXERCISES_MISPLACED,
+  exerciseBlockRequirement,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
   isTeacherParityModel,
@@ -461,20 +464,46 @@ describe('g5.v8 switch and planner text', () => {
     expect(kafuo.requirement).toContain('PER ITEM');
     expect(kafuo.requirement).toContain('RECALL');
     expect(kafuo.requirement).toContain('`ordered_named_set`');
-    expect(kafuo.requirement).toContain('at most\n1 exercise slides');
-    // An older wire without the minimum states none.
+    expect(kafuo.requirement).toContain('«تمارين», then the exercise slides');
+    // The engine picks the items: no count or choice is left to the planner.
+    expect(kafuo.requirement).toContain('The engine fixes which');
     expect(kafuo.requirement).not.toContain('AT LEAST');
-    expect(bookStructureRequirement(minBook(6, 2), { teacherParity: true }).split('\n')).toEqual(
-      expect.arrayContaining([
-        'The block is not optional: it holds AT LEAST 6 usable exercise units',
-        'on AT LEAST 2 exercise slides. Prefer one item per pattern or',
-      ]),
+    expect(kafuo.requirement).not.toContain('Prefer one item per pattern');
+    expect(bookStructureRequirement(minBook(6, 2), { teacherParity: true })).not.toContain(
+      'AT LEAST',
     );
     // The same map under g5.v7 keeps the g5.v7 text.
     const v7 = parseKafuoGenerationRequest(body({ bookStructure: V8_BOOK }));
     expect(buildKafuoStartRequest(v7.request, v7.aggregate).kafuo.requirement).toContain(
       'BOOK-STRUCTURED LESSON (g5.v7)',
     );
+  });
+
+  it('tells the planner exactly which exercise units each exercise slide solves', () => {
+    expect(exerciseBlockRequirement(minBook(2, 1)).split('\n')).toEqual([
+      '',
+      '',
+      'EXERCISES BLOCK (fixed by the engine): one «تمارين» transition slide, then exactly 1',
+      'exercise slide (contentRole worked_example), in this order:',
+      '- exercise slide 1 solves the units 4040, 4060;',
+      'Each exercise slide cites exactly its units above (and may also cite the',
+      'reason=instructions_only unit paired with the same example). Do not cite any other',
+      'exercise unit anywhere in the lesson.',
+    ]);
+    expect(exerciseBlockRequirement(minBook(2, 2))).toContain(
+      'exactly 2\nexercise slides (contentRole worked_example), in this order:\n' +
+        '- exercise slide 1 solves the units 4040;\n- exercise slide 2 solves the units 4060;',
+    );
+    // Never for g5.v7, a map without a policy, or no usable exercise.
+    expect(exerciseBlockRequirement(teacherParityBook(V8_BOOK, V7))).toBe('');
+    const { exercisePolicy: _policy, ...noPolicy } = V8_BOOK;
+    expect(exerciseBlockRequirement(teacherParityBook(noPolicy, V8))).toBe('');
+    const unusable = {
+      ...V8_BOOK,
+      units: V8_BOOK.units.filter((unit) => !['4040', '4060'].includes(unit.contentUnitId)),
+    };
+    expect(exerciseBlockRequirement(teacherParityBook(unusable, V8))).toBe('');
+    expect(exerciseBlockRequirement(undefined)).toBe('');
   });
 
   it('marks exercise units with their example and usability; other markers are unchanged', () => {
@@ -625,7 +654,35 @@ describe('g5.v8 coverage gates', () => {
     );
     const book = v8Book();
     book.units = [...book.units, { ...book.units[7]!, contentUnitId: '4062' }];
-    expect(codes(findBookCoverageDiagnostics(more, book))).toEqual([EXERCISE_CAP_EXCEEDED]);
+    // The engine selected 4040 and 4060 (cap 2): 4062 is cited unselected.
+    expect(findBookCoverageDiagnostics(more, book).map((d) => [d.code, d.message])).toEqual([
+      [EXERCISE_CAP_EXCEEDED, 'the exercises block cites more than 2 exercise units'],
+      [
+        EXERCISE_UNSELECTED_CITED,
+        'exercise unit 4062 is cited but is not selected for the exercises block',
+      ],
+    ]);
+  });
+
+  it('accepts exactly the selected set and names a selected unit left uncited', () => {
+    expect(findBookCoverageDiagnostics(completePlan(), minBook(2, 1))).toEqual([]);
+    const missing = completePlan().map((outline) =>
+      outline.id === 'exercises' ? { ...outline, sourceContentUnitIds: ['4038', '4040'] } : outline,
+    );
+    const found = findBookCoverageDiagnostics(missing, v8Book());
+    expect(found.map((d) => [d.code, d.message, d.disposition])).toEqual([
+      [
+        EXERCISE_SELECTED_MISSING,
+        'exercise unit 4060 is selected for the exercises block but no exercise slide cites it',
+        'admin_correctable',
+      ],
+    ]);
+    expect(found.every(isIgnorableIssue)).toBe(true);
+    // No exercise slide at all is the missing_exercises gap alone.
+    const none = completePlan().filter((outline) => outline.id !== 'exercises');
+    expect(codes(findBookCoverageDiagnostics(none, v8Book()))).toEqual([BOOK_COVERAGE_INCOMPLETE]);
+    // g5.v7 never checks the selection.
+    expect(codes(findBookCoverageDiagnostics(missing, teacherParityBook(V8_BOOK, V7)))).toEqual([]);
   });
 
   it('raises EXERCISE_TOO_FEW below the minimum units or slides, never without one', () => {
@@ -646,7 +703,10 @@ describe('g5.v8 coverage gates', () => {
     const units = completePlan().map((outline) =>
       outline.id === 'exercises' ? { ...outline, sourceContentUnitIds: ['4038', '4040'] } : outline,
     );
-    expect(codes(findBookCoverageDiagnostics(units, minBook(2, 1)))).toEqual([EXERCISE_TOO_FEW]);
+    expect(codes(findBookCoverageDiagnostics(units, minBook(2, 1)))).toEqual([
+      EXERCISE_TOO_FEW,
+      EXERCISE_SELECTED_MISSING,
+    ]);
     // No exercise slide at all is the missing_exercises gap alone.
     const none = completePlan().filter((outline) => outline.id !== 'exercises');
     expect(codes(findBookCoverageDiagnostics(none, minBook(3, 2)))).toEqual([
@@ -836,6 +896,29 @@ describe('g5.v8 coverage repair', () => {
     );
     expect(repaired.inserted).toBe(2);
     expect(codes(repaired.blocking)).toEqual([EXERCISE_TOO_FEW, EXERCISE_TOO_FEW]);
+  });
+
+  it('places the item slides and leaves the selection findings open for a person', async () => {
+    const book = v8Book();
+    book.units = [...book.units, { ...book.units[7]!, contentUnitId: '4062' }];
+    const candidate = completePlan()
+      .filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!))
+      .map((outline) =>
+        outline.id === 'exercises'
+          ? { ...outline, sourceContentUnitIds: ['4038', '4040', '4062'] }
+          : outline,
+      );
+    const repaired = await repairBookCoverageGaps(
+      candidate,
+      findBookCoverageDiagnostics(candidate, book),
+      vi.fn(),
+      contextFor(book, planner()),
+    );
+    expect(repaired.inserted).toBe(2);
+    expect(codes(repaired.blocking)).toEqual([
+      EXERCISE_SELECTED_MISSING,
+      EXERCISE_UNSELECTED_CITED,
+    ]);
   });
 
   it('gives an extra item slide a native diagram when the check image is already shown', async () => {

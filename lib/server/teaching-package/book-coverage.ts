@@ -22,6 +22,7 @@
  */
 import { hiddenStepCatalogue, type OutlineDiagnostic } from '@openmaic/generation';
 
+import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import {
   bookUnitFacts,
   showsWorkingStep,
@@ -42,6 +43,10 @@ export const EXERCISE_UNUSABLE_CITED = 'EXERCISE_UNUSABLE_CITED';
 export const EXERCISES_MISPLACED = 'EXERCISES_MISPLACED';
 /** g5.v8: a solution lacks the visible working its hidden-step type needs. */
 export const WORKING_STEP_MISSING = 'WORKING_STEP_MISSING';
+/** g5.v8: an exercise unit the engine selected for the block is not cited. */
+export const EXERCISE_SELECTED_MISSING = 'EXERCISE_SELECTED_MISSING';
+/** g5.v8: a usable exercise unit the engine did not select is cited. */
+export const EXERCISE_UNSELECTED_CITED = 'EXERCISE_UNSELECTED_CITED';
 
 /** The Teaching Model whose requests get the teacher-parity gates. */
 export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as const;
@@ -449,6 +454,33 @@ function teacherParityDiagnostics(
       }
     }
   }
+  // The engine's selection (owner, 2 Nov 2026): the block cites exactly the
+  // selected units. Checked by set only, and only once an exercise slide exists
+  // (none at all is the `missing_exercises` gap). The messages carry the unit
+  // id and no live count, so an ignore keyed on them survives edits.
+  const selection = selectExercises(book, book.unitFacts);
+  if (selection && exerciseSlides.length > 0) {
+    const selected = new Set(selection.unitIds);
+    for (const id of selection.unitIds) {
+      if (cited.has(id)) continue;
+      diagnostics.push({
+        code: EXERCISE_SELECTED_MISSING,
+        disposition: 'admin_correctable',
+        field: 'sourceContentUnitIds',
+        message: `exercise unit ${id} is selected for the exercises block but no exercise slide cites it`,
+      });
+    }
+    for (const unit of exercises) {
+      if (!cited.has(unit.contentUnitId) || !isUsableExercise(unit)) continue;
+      if (selected.has(unit.contentUnitId)) continue;
+      diagnostics.push({
+        code: EXERCISE_UNSELECTED_CITED,
+        disposition: 'admin_correctable',
+        field: 'sourceContentUnitIds',
+        message: `exercise unit ${unit.contentUnitId} is cited but is not selected for the exercises block`,
+      });
+    }
+  }
   for (const unit of exercises) {
     if (
       cited.has(unit.contentUnitId) &&
@@ -662,23 +694,41 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
     ...(policy
       ? [
           'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
-          'just before the closing summary slide: one transition slide «تمارين», then at most',
-          `${policy.maxExerciseSlides} exercise slides (contentRole worked_example) holding at most`,
-          `${policy.maxExercises} exercise units in total. Each exercise slide cites the units of the`,
-          'items it solves, states each item and solves it with compact visible working. Never',
-          'cite a unit marked exerciseUsable=false, except a reason=instructions_only unit, which',
-          'is only the instruction line of the exercises paired with the same example.',
-          ...(policy.minExercises !== undefined && policy.minExerciseSlides !== undefined
-            ? [
-                `The block is not optional: it holds AT LEAST ${policy.minExercises} usable exercise units`,
-                `on AT LEAST ${policy.minExerciseSlides} exercise slides. Prefer one item per pattern or`,
-                'hidden-step type not yet solved and each paired example once, then add further',
-                'usable items until the minimum is reached.',
-              ]
-            : []),
+          'just before the closing summary slide, comes the exercises block: one transition slide',
+          '«تمارين», then the exercise slides (contentRole worked_example). The engine fixes which',
+          'exercise units the block solves and on which slide (EXERCISES BLOCK below). Each',
+          'exercise slide states each of its items and solves it with compact visible working.',
+          'Never cite a unit marked exerciseUsable=false, except a reason=instructions_only unit,',
+          'which is only the instruction line of the exercises paired with the same example.',
         ]
       : []),
     'Transition slides never count as teaching a unit.',
+  ].join('\n');
+}
+
+/**
+ * g5.v8: the exercises block the engine selected ({@link selectExercises}),
+ * as the planner must plan it. Built from the coverage book (map + pinned unit
+ * facts), so the planner is told exactly the set the gate checks. Empty for
+ * any other Teaching Model, without an `exercisePolicy`, or with no usable
+ * exercise.
+ */
+export function exerciseBlockRequirement(book: CoverageBookStructure | undefined): string {
+  if (!book?.teacherParity) return '';
+  const selection = selectExercises(book, book.unitFacts);
+  if (!selection) return '';
+  const count = selection.slides.length;
+  return [
+    '',
+    '',
+    `EXERCISES BLOCK (fixed by the engine): one «تمارين» transition slide, then exactly ${count}`,
+    `exercise slide${count === 1 ? '' : 's'} (contentRole worked_example), in this order:`,
+    ...selection.slides.map(
+      (ids, index) => `- exercise slide ${index + 1} solves the units ${ids.join(', ')};`,
+    ),
+    'Each exercise slide cites exactly its units above (and may also cite the',
+    'reason=instructions_only unit paired with the same example). Do not cite any other',
+    'exercise unit anywhere in the lesson.',
   ].join('\n');
 }
 

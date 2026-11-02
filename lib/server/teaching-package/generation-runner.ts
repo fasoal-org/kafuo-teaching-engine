@@ -88,6 +88,7 @@ import {
 import {
   annotateBookMarkers,
   bookUnitFactsOf,
+  exerciseBlockRequirement,
   isTeacherParityModel,
   plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
@@ -480,15 +481,19 @@ async function runKafuoAttempt(
   // each check's items and each check / exercise's hidden-step types, measured
   // here from the approved text and pinned on the checkpoint for re-checks.
   const teacherParity = isTeacherParityModel(kafuo.teachingModel);
+  // A resume reads the facts its checkpoint pinned, so the engine's exercise
+  // selection (`selectExercises`) stays the set the run was planned with.
   const bookFacts =
-    teacherParity && kafuo.bookStructure && normalizedSource
-      ? bookUnitFactsOf(
-          kafuo.bookStructure,
-          retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
-            (unit) => ({ id: unit.unitId, text: unit.normalizedText }),
-          ),
-        )
-      : null;
+    teacherParity && kafuo.bookStructure && resume?.sourceRefs.bookUnitFacts
+      ? resume.sourceRefs.bookUnitFacts
+      : teacherParity && kafuo.bookStructure && normalizedSource
+        ? bookUnitFactsOf(
+            kafuo.bookStructure,
+            retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+              (unit) => ({ id: unit.unitId, text: unit.normalizedText }),
+            ),
+          )
+        : null;
   const coverageBook = teacherParityBook(
     requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds),
     kafuo.teachingModel,
@@ -588,10 +593,13 @@ async function runKafuoAttempt(
     };
   }
 
+  // g5.v8: the exercises block the engine selected, from the same coverage book
+  // (map + unit facts) the gate checks it against. Empty for every other model.
+  const exerciseBlock = exerciseBlockRequirement(coverageBook);
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
-      ? `${kafuo.requirement}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
-      : `${kafuo.requirement}${withheldVisualsNote}`,
+      ? `${kafuo.requirement}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
+      : `${kafuo.requirement}${exerciseBlock}${withheldVisualsNote}`,
     pdfContent: {
       // g5.v7: markers carry each unit's book kind and part; unchanged otherwise.
       text: annotateBookMarkers(source.text, kafuo.bookStructure),
