@@ -87,9 +87,13 @@ import {
 } from '@/lib/server/teaching-package/outline-grounding';
 import {
   annotateBookMarkers,
+  bookUnitFactsOf,
+  isTeacherParityModel,
   requireEssentialUntypedUnits,
+  teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
 import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import { findSplitUnitDuplicateImages } from '@/lib/server/teaching-package/split-unit-images';
 import { plannerSkillOptions } from '@/lib/server/teaching-package/scene-insertion';
 import {
   appOutlineDiagnostics,
@@ -468,7 +472,24 @@ async function runKafuoAttempt(
     : null;
   // The coverage gate's book map: untyped units with an essential role are
   // required too, so the planner re-plans them before any scene is paid for.
-  const coverageBook = requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds);
+  // g5.v8 (an explicit Teaching Model check): the teacher-parity gates read
+  // each check's items and each check / exercise's hidden-step types, measured
+  // here from the approved text and pinned on the checkpoint for re-checks.
+  const teacherParity = isTeacherParityModel(kafuo.teachingModel);
+  const bookFacts =
+    teacherParity && kafuo.bookStructure && normalizedSource
+      ? bookUnitFactsOf(
+          kafuo.bookStructure,
+          retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+            (unit) => ({ id: unit.unitId, text: unit.normalizedText }),
+          ),
+        )
+      : null;
+  const coverageBook = teacherParityBook(
+    requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds),
+    kafuo.teachingModel,
+    bookFacts,
+  );
   // Essential sections the plan left untaught. They do NOT pause the run: the
   // package finishes as a draft and Submit refuses it until each one has a
   // slide generated for it (`assertEssentialSectionsCovered`). Sticky across a
@@ -501,6 +522,7 @@ async function runKafuoAttempt(
     contentUnitIds,
     essentialContentUnitIds: essentialUnitIds,
     coverageGapUnitIds: [...coverageGaps],
+    ...(bookFacts ? { bookUnitFacts: bookFacts } : {}),
     contentUnits: normalizedSource
       ? normalizedSource.manifest.contentUnits.map((unit) => ({
           id: String(unit.id),
@@ -607,6 +629,12 @@ async function runKafuoAttempt(
             contentUnits: normalizedSource.manifest.contentUnits,
           }).map((unit) => ({ id: unit.unitId, title: unit.title, text: unit.normalizedText })),
         }
+      : {}),
+    // g5.v8 (teacher-parity plan): solutions write every hidden step on the
+    // canvas, and a split unit's textbook image stays on the slide it
+    // illustrates. Absent for every earlier version.
+    ...(teacherParity
+      ? { visibleWorkingSteps: true, findDuplicateSourceVisuals: findSplitUnitDuplicateImages }
       : {}),
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's

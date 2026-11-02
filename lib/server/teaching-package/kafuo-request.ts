@@ -24,16 +24,22 @@ import {
 } from '@/lib/server/speech/teaching-route';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
-import { bookStructureRequirement } from '@/lib/server/teaching-package/book-coverage';
+import {
+  bookStructureRequirement,
+  isTeacherParityModel,
+} from '@/lib/server/teaching-package/book-coverage';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import type { StageTtsRoute } from '@/lib/types/stage';
+import { KAFUO_EXERCISE_UNUSABLE_REASONS } from '@/lib/types/teaching-package';
 import type {
   GenerationExecutionInput,
   KafuoContentResource,
   KafuoGenerationRequest,
   KafuoNarrationTtsRoute,
   KafuoBookStructure,
+  KafuoExercisePolicy,
+  KafuoExerciseUnusableReason,
   KafuoNormalizedContentResource,
   KafuoSubjectOffering,
   LearningObjectiveRef,
@@ -968,6 +974,22 @@ function parseBookStructure(raw: unknown): KafuoBookStructure | undefined {
     }
     const paired = optionalId(u.pairedExampleUnitId, `${path}.pairedExampleUnitId`);
     const attaches = optionalId(u.attachesToUnitId, `${path}.attachesToUnitId`);
+    // g5.v8: an unusable exercise unit says so, and why. Both keys travel
+    // together, only on an `exercise` unit; absent ⇒ usable (and absent here).
+    if (u.exerciseUsable !== undefined || u.exerciseUnusableReason !== undefined) {
+      if (u.element !== 'exercise') {
+        throw invalid(`${path}.exerciseUsable is allowed only on an exercise unit`);
+      }
+      if (u.exerciseUsable !== false) throw invalid(`${path}.exerciseUsable must be false`);
+      if (
+        typeof u.exerciseUnusableReason !== 'string' ||
+        !(KAFUO_EXERCISE_UNUSABLE_REASONS as readonly string[]).includes(u.exerciseUnusableReason)
+      ) {
+        throw invalid(
+          `${path}.exerciseUnusableReason must be one of ${KAFUO_EXERCISE_UNUSABLE_REASONS.join(', ')}`,
+        );
+      }
+    }
     return {
       contentUnitId: u.contentUnitId,
       kind: u.kind as string | null,
@@ -976,9 +998,36 @@ function parseBookStructure(raw: unknown): KafuoBookStructure | undefined {
       ...(u.partIndex !== undefined ? { partIndex: u.partIndex as number } : {}),
       ...(paired !== undefined ? { pairedExampleUnitId: paired } : {}),
       ...(attaches !== undefined ? { attachesToUnitId: attaches } : {}),
+      ...(u.exerciseUsable === false
+        ? {
+            exerciseUsable: false as const,
+            exerciseUnusableReason: u.exerciseUnusableReason as KafuoExerciseUnusableReason,
+          }
+        : {}),
     };
   });
-  return { templateVersionId, rules, units };
+  const exercisePolicy = parseExercisePolicy(record.exercisePolicy, invalid);
+  return { templateVersionId, rules, units, ...(exercisePolicy ? { exercisePolicy } : {}) };
+}
+
+/** g5.v8 `bookStructure.exercisePolicy`: exactly the two positive integer caps. */
+function parseExercisePolicy(
+  raw: unknown,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoExercisePolicy | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid('exercisePolicy must be an object');
+  }
+  const policy = raw as Record<string, unknown>;
+  const cap = (key: 'maxExercises' | 'maxExerciseSlides'): number => {
+    const value = policy[key];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+      throw invalid(`exercisePolicy.${key} must be a positive integer`);
+    }
+    return value;
+  };
+  return { maxExercises: cap('maxExercises'), maxExerciseSlides: cap('maxExerciseSlides') };
 }
 
 /**
@@ -1093,7 +1142,11 @@ export function buildKafuoStartRequest(
   aggregate: TeachingPackageAggregateKey,
 ): { start: StartGenerationAttemptRequestAlias; kafuo: KafuoGenerationContext } {
   // g5.v7 adds the book-structured planning rules; empty for every earlier version.
-  const requirement = `${buildKafuoRequirement(request)}${bookStructureRequirement(request.bookStructure)}`;
+  // g5.v8 (an explicit Teaching Model check) adds the teacher-parity rules instead.
+  const book = bookStructureRequirement(request.bookStructure, {
+    teacherParity: isTeacherParityModel(request.teachingModel),
+  });
+  const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
   const execution: GenerationExecutionInput = {

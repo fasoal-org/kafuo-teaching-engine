@@ -35,7 +35,9 @@ import {
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
   requireEssentialUntypedUnits,
+  teacherParityBook,
   type BookCoverageGap,
+  type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
 import { instructionFor } from '@/lib/server/teaching-package/book-coverage-repair';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -113,8 +115,11 @@ export interface OutlineDiagnosisContext {
   governed: boolean;
   /** Test seam for the canonical Skill registry directory. */
   skillsDir?: string;
-  /** g5.v7: the book map whose required elements must each have a slide. */
-  bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v7: the book map whose required elements must each have a slide. A
+   * g5.v8 attempt's map is marked `teacherParity` (`teacherParityBook`).
+   */
+  bookStructure?: CoverageBookStructure;
 }
 
 const positionLabel = (flow: readonly TeachingFlowEntry[], outline: SceneOutline | undefined) => {
@@ -231,17 +236,32 @@ export function diagnoseCandidateOutlines(
   };
 }
 
+/**
+ * The coverage book a correction re-checks against: the pinned map, its
+ * essential untyped units required, and — only for a g5.v8 attempt — the
+ * teacher-parity mark with the unit facts the run pinned.
+ */
+export function correctionCoverageBook(
+  sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'>,
+  bookStructure: KafuoBookStructure | undefined,
+  teachingModel: { key: string; version: string } | undefined,
+): CoverageBookStructure | undefined {
+  return teacherParityBook(
+    requireEssentialUntypedUnits(bookStructure, sourceRefs.essentialContentUnitIds),
+    teachingModel,
+    sourceRefs.bookUnitFacts,
+  );
+}
+
 /** The diagnosis context a checkpoint pins (metadata only — no bytes). */
 export function diagnosisContextFromCheckpoint(
   checkpoint: Pick<GenerationCheckpoint, 'sourceRefs'>,
   flow: readonly TeachingFlowEntry[],
   governed: boolean,
   bookStructure?: KafuoBookStructure,
+  teachingModel?: { key: string; version: string },
 ): OutlineDiagnosisContext {
-  const coverageBook = requireEssentialUntypedUnits(
-    bookStructure,
-    checkpoint.sourceRefs.essentialContentUnitIds,
-  );
+  const coverageBook = correctionCoverageBook(checkpoint.sourceRefs, bookStructure, teachingModel);
   return {
     ...(coverageBook ? { bookStructure: coverageBook } : {}),
     flow,
@@ -485,7 +505,7 @@ export interface CorrectionEditContext {
   sourceRefs: GenerationCheckpointSourceRefs;
   pendingOutlineIds: readonly string[] | null;
   /** The book map the diagnosis checks coverage against (`insert_book_slide`). */
-  bookStructure?: KafuoBookStructure;
+  bookStructure?: CoverageBookStructure;
 }
 
 function setField(
@@ -716,10 +736,12 @@ export function applyCorrectionOperations(
  * The book gaps a person can fill with `insert_book_slide`: a check's missing
  * solution slide, which always has its try-it slide as the anchor — when the
  * anchor's flow position allows a worked example (else the slide could never pass).
+ * g5.v8: a check item without its own solution slide is the same kind, with the
+ * check's last solution slide as the anchor.
  */
 export function insertableBookGaps(
   outlines: readonly SceneOutline[],
-  book: KafuoBookStructure | undefined,
+  book: CoverageBookStructure | undefined,
   flow: readonly TeachingFlowEntry[],
 ): BookCoverageGap[] {
   return findBookCoverageGaps(outlines, book).filter((gap) => {
@@ -842,6 +864,8 @@ export interface CorrectionView {
     anchorOutlineId: string;
     anchorTitle: string;
     message: string;
+    /** g5.v8: the check item the inserted solution slide works. */
+    itemLabel?: string;
   }>;
   repairs: GenerationCheckpoint['repairs'];
   flow: CorrectionFlowPosition[];
@@ -962,9 +986,10 @@ export function buildCorrectionView(
       checkpoint.phase === 'outline'
         ? insertableBookGaps(
             checkpoint.outlines,
-            requireEssentialUntypedUnits(
+            correctionCoverageBook(
+              checkpoint.sourceRefs,
               attempt.inputSnapshot.bookStructure,
-              checkpoint.sourceRefs.essentialContentUnitIds,
+              attempt.teachingModel,
             ),
             flow,
           ).map((gap) => {
@@ -976,6 +1001,7 @@ export function buildCorrectionView(
               anchorOutlineId: anchor.id,
               anchorTitle: anchor.title,
               message: gap.message,
+              ...(gap.itemLabel ? { itemLabel: gap.itemLabel } : {}),
             };
           })
         : [],

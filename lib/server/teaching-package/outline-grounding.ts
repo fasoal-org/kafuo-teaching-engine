@@ -89,9 +89,19 @@ export function essentialContentUnitIds(
 ): string[] {
   // g5.v7: the book map decides. The opener («لماذا؟») and the goal list are
   // cover material (P-7), never a section that needs its own teaching slide.
+  // g5.v8: recall and exercise units are placed by rule (one recall slide, a
+  // capped exercises block), never one teaching slide each — whatever role the
+  // parse gave them («المثال 1» opens some exercise units). No earlier map has
+  // these elements, so this changes nothing before g5.v8.
   const notTaught = new Set(
     (bookStructure?.units ?? [])
-      .filter((unit) => unit.element === 'ignore' || unit.element === 'objective_source')
+      .filter(
+        (unit) =>
+          unit.element === 'ignore' ||
+          unit.element === 'objective_source' ||
+          unit.element === 'prior_knowledge' ||
+          unit.element === 'exercise',
+      )
       .map((unit) => String(unit.contentUnitId)),
   );
   return [...manifest.contentUnits]

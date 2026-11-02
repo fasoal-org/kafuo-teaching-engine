@@ -513,6 +513,67 @@ describe('generateClassroom source visuals', () => {
     expect(outlinesToMedia[0].mediaGenerations).toHaveLength(0);
   });
 
+  it('g5.v8: a split unit image is re-planned away from the slide it does not illustrate', async () => {
+    const linked = { ...pdfImage('src-1'), sourceContentUnitIds: ['4021'] };
+    const slideOf = (id: string, order: number) => ({
+      id,
+      type: 'slide',
+      title: id,
+      description: '',
+      keyPoints: ['a', 'b', 'c'],
+      order,
+      sourceContentUnitIds: ['4021'],
+      suggestedImageIds: ['src-1'],
+      visualPlan: { mode: 'image' },
+      imagePlans: [{ imageId: 'src-1', shows: 's', teachingPoint: 't' }],
+    });
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'English.', outlines: [slideOf('bus', 1), slideOf('seg', 2)] },
+    });
+    const replanPrompts: string[] = [];
+    mocks.callLLM.mockImplementation(async (params: { messages: Array<{ content: unknown }> }) => {
+      const system = String(params.messages[0]!.content);
+      if (!system.startsWith('You re-plan the VISUAL')) return { text: 'ok' };
+      replanPrompts.push(String(params.messages[1]!.content));
+      return {
+        text: JSON.stringify({
+          suggestedImageIds: [],
+          visualPlan: { mode: 'native', diagram: { shows: 'timeline', teachingPoint: 'gaps' } },
+          keyPoints: ['10:15', '11:00', '11:45'],
+        }),
+      };
+    });
+    const find = vi.fn(() => [{ outlineId: 'bus', imageId: 'src-1', keptOnOutlineId: 'seg' }]);
+    const materialize = vi.fn(async (_stageId: string, selected: Array<{ id: string }>) => ({
+      servingMapping: Object.fromEntries(selected.map((image) => [image.id, `/m/${image.id}`])),
+      manifest: selected.map((image) => ({ id: image.id })),
+      failedIds: [] as string[],
+    }));
+    await generate({
+      input: {
+        pdfContent: { text: 'pdf', images: [], pdfImages: [linked] },
+        teachingFlow: [{ stage: 'lesson_introduction', instructions: 'i' }],
+        findDuplicateSourceVisuals: find,
+      },
+      materialize: { images: [linked], materialize } as unknown as SourceVisualChannel,
+    });
+
+    expect(find).toHaveBeenCalledTimes(1);
+    // One re-plan, for the bus slide only, offered no image and told why.
+    expect(replanPrompts).toHaveLength(1);
+    expect(replanPrompts[0]).toContain('Slide title: bus');
+    expect(replanPrompts[0]).toContain('Textbook images linked to this slide: none');
+    expect(replanPrompts[0]).toContain('do not show src-1 here');
+    const contentCalls = mocks.generateSceneContent.mock.calls.map(
+      (call) => call[0] as { id: string; suggestedImageIds?: string[]; visualPlan?: unknown },
+    );
+    expect(contentCalls.find((outline) => outline.id === 'bus')?.suggestedImageIds).toBeUndefined();
+    expect(contentCalls.find((outline) => outline.id === 'seg')?.suggestedImageIds).toEqual([
+      'src-1',
+    ]);
+  });
+
   it('persists the teaching flow and source-visual manifest through the sink', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,

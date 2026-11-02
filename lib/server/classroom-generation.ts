@@ -451,6 +451,23 @@ export interface GenerateClassroomInput {
    */
   sourceUnits?: readonly SourceUnitText[];
   /**
+   * g5.v8 (teacher-parity plan I-2): worked-example canvases write every
+   * hidden step from the plan as a visible line. Set by the caller from the
+   * Teaching Model; absent → every prompt is byte-identical.
+   */
+  visibleWorkingSteps?: boolean;
+  /**
+   * g5.v8 (teacher-parity plan I-4.3): the slides that show a textbook image
+   * another slide of the same unit illustrates better. Each is sent to the
+   * per-slide visual re-plan without that image, so it gets a native diagram
+   * (or another linked image). Fresh plans only, never an administrator's
+   * resumed candidate. Absent → no such step.
+   */
+  findDuplicateSourceVisuals?: (
+    outlines: readonly SceneOutline[],
+    sourceImages: readonly PdfImage[],
+  ) => ReadonlyArray<{ outlineId: string; imageId: string; keptOnOutlineId: string }>;
+  /**
    * The authority a governed run carries (Module 3/4 W1, TAE-RQ-009/015).
    * Built ONCE by the caller from the Teaching Skills contract marker alone —
    * presence IS governance, and nothing downstream may re-derive the mode from
@@ -1541,6 +1558,21 @@ export async function generateClassroom(
         if (diagnostic.code !== 'VISUAL_TEACHING_NOTE_MISSING') reselect.add(diagnostic.outlineId);
       }
     }
+    // g5.v8 (I-4.3): a split unit's image stays on the slide it illustrates;
+    // every other slide of that unit showing it is re-planned without it.
+    const withoutImages = new Map<string, Set<string>>();
+    if (!resumeOutlines && hasSourceVisuals && input.findDuplicateSourceVisuals) {
+      for (const duplicate of input.findDuplicateSourceVisuals(outlines, sourceImages ?? [])) {
+        addReason(
+          duplicate.outlineId,
+          `the textbook image ${duplicate.imageId} is shown on the slide it illustrates (${duplicate.keptOnOutlineId}); this slide teaches another part of the same unit, so do not show ${duplicate.imageId} here: plan a native diagram of this slide's own content (or another listed image)`,
+        );
+        reselect.add(duplicate.outlineId);
+        const excluded = withoutImages.get(duplicate.outlineId) ?? new Set<string>();
+        excluded.add(duplicate.imageId);
+        withoutImages.set(duplicate.outlineId, excluded);
+      }
+    }
     if (!resumeOutlines && hasSourceVisuals) {
       const seen = new Set(
         sortDocumentImagesForVision([...sourceImages!])
@@ -1571,13 +1603,16 @@ export async function generateClassroom(
         const selected = outline.suggestedImageIds ?? [];
         const keepSelection = !reselect.has(outlineId) && selected.length > 0;
         const unitIds = new Set(outline.sourceContentUnitIds ?? []);
+        const excluded = withoutImages.get(outlineId);
         const linkedImages = keepSelection
           ? selected
               .map((id) => (sourceImages ?? []).find((image) => image.id === id))
               .filter((image): image is PdfImage => image !== undefined)
           : sortDocumentImagesForVision(
-              (sourceImages ?? []).filter((image) =>
-                (image.sourceContentUnitIds ?? []).some((id) => unitIds.has(id)),
+              (sourceImages ?? []).filter(
+                (image) =>
+                  !excluded?.has(image.id) &&
+                  (image.sourceContentUnitIds ?? []).some((id) => unitIds.has(id)),
               ),
             );
         const replanned = await replanSlideVisuals({
@@ -1588,8 +1623,8 @@ export async function generateClassroom(
           sourceText: buildSceneSourceContext(outline, input.sourceUnits).sourceContextText,
           languageDirective,
           reasons,
-          check: (candidate) =>
-            blockingOutlineDiagnostics(
+          check: (candidate) => [
+            ...blockingOutlineDiagnostics(
               analyze(current.map((entry, at) => (at === index ? candidate : entry))),
             )
               .filter(
@@ -1597,6 +1632,13 @@ export async function generateClassroom(
                   diagnostic.outlineId === outlineId && VISUAL_REPLAN_CODES.has(diagnostic.code),
               )
               .map((diagnostic) => diagnostic.message),
+            ...(candidate.suggestedImageIds ?? [])
+              .filter((id) => excluded?.has(id))
+              .map(
+                (id) =>
+                  `the textbook image ${id} belongs to another slide of this unit; do not show it here`,
+              ),
+          ],
           aiCall: replanAiCall,
         });
         assertRouteAvailable();
@@ -1891,6 +1933,7 @@ export async function generateClassroom(
                     : {}),
                   ...(resolvedSkills ? { resolvedSkills } : {}),
                   ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                  ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
                   ...(outlineAssignedImages && outlineAssignedImages.length > 0
                     ? {
                         assignedImages: outlineAssignedImages,
@@ -2364,6 +2407,7 @@ export async function generateClassroom(
           ...(textDirection !== undefined ? { textDirection } : {}),
           editDirective: NATIVE_VISUAL_DIRECTIVE,
           baselineContent: { elements: canvas.elements as never, background: canvas.background },
+          ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
           ...(input.governed ? { onVisualIssue: (issue) => void nativeIssues.push(issue) } : {}),
         });
       } catch (error) {

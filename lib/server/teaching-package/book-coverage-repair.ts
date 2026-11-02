@@ -20,6 +20,7 @@ import {
   BOOK_COVERAGE_INCOMPLETE,
   findBookCoverageGaps,
   type BookCoverageGap,
+  type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
   planInsertedSlide,
@@ -28,7 +29,7 @@ import {
   type PlannerUnit,
 } from '@/lib/server/teaching-package/plan-inserted-slide';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { KafuoBookStructure, TeachingFlowEntry } from '@/lib/types/teaching-package';
+import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 
 const log = createLogger('BookCoverageRepair');
 
@@ -36,7 +37,7 @@ const log = createLogger('BookCoverageRepair');
 export const BOOK_COVERAGE_REPAIR_ROUNDS = 2;
 
 export interface BookCoverageRepairContext {
-  book: KafuoBookStructure;
+  book: CoverageBookStructure;
   flow: readonly TeachingFlowEntry[];
   /** The retained source units the outline prompt read, with their text. */
   units: readonly PlannerUnit[];
@@ -76,6 +77,8 @@ export interface BookCoverageRepairResult {
 function roleFor(gap: BookCoverageGap): string {
   if (gap.kind === 'missing_solution') return 'worked_example';
   if (gap.kind === 'missing_try_it') return 'check_understanding';
+  // g5.v8: the recall slide is an explanation (kind definition), not a new kind.
+  if (gap.kind === 'missing_recall') return 'explanation';
   if (gap.unit.element === 'worked_example') return 'worked_example';
   if (gap.unit.element === 'try_it') return 'check_understanding';
   return 'explanation';
@@ -85,6 +88,21 @@ function roleFor(gap: BookCoverageGap): string {
 export function instructionFor(gap: BookCoverageGap): string {
   const id = gap.unit.contentUnitId;
   const example = gap.unit.pairedExampleUnitId;
+  if (gap.kind === 'missing_solution' && gap.itemLabel) {
+    // g5.v8 (D-2 B): one solution slide per check item.
+    return (
+      `Plan ONE solution slide (contentRole worked_example) for item ${gap.itemLabel} only of the book check in content unit ${id}: ` +
+      `work that item alone step by step to a final answer with this part's decision rule, writing every hidden step as its own key point` +
+      (example ? `, the way the book's example in unit ${example} is solved.` : '.') +
+      ' The book prints no answer, so work it from the given data; a guess or prediction item gets a reasoned number stated as an estimate.'
+    );
+  }
+  if (gap.kind === 'missing_recall') {
+    return (
+      `Plan the recall slide (contentRole explanation, contentKind definition) that opens part 1 and cites content units ${(gap.citeUnitIds ?? [id]).join(', ')}: ` +
+      'the prior facts this lesson uses but does not teach, each in one line with a one-line example. Teach nothing new from this lesson.'
+    );
+  }
   if (gap.kind === 'missing_solution') {
     return (
       `Plan the solution slide (contentRole worked_example) for the book check in content unit ${id}: ` +
@@ -106,7 +124,7 @@ export function instructionFor(gap: BookCoverageGap): string {
 function repairableGaps(
   outlines: readonly SceneOutline[],
   blocking: readonly OutlineDiagnostic[],
-  book: KafuoBookStructure,
+  book: CoverageBookStructure,
 ): BookCoverageGap[] | null {
   if (blocking.length === 0) return null;
   if (blocking.some((issue) => issue.code !== BOOK_COVERAGE_INCOMPLETE)) return null;
@@ -139,7 +157,14 @@ export async function repairBookCoverageGaps(
     const gaps = repairableGaps(outlines, open, context.book);
     if (!gaps) break;
     // Insert from the last anchor backwards, so earlier anchors keep their index.
-    const ordered = [...gaps].sort((a, b) => (b.anchorIndex ?? 0) - (a.anchorIndex ?? 0));
+    // g5.v8 only: gaps sharing one anchor (a check's items) go in last-first, so
+    // they land in book order; g5.v7 keeps its order exactly.
+    const position = new Map(gaps.map((gap, index) => [gap, index] as const));
+    const ordered = [...gaps].sort(
+      (a, b) =>
+        (b.anchorIndex ?? 0) - (a.anchorIndex ?? 0) ||
+        (context.book.teacherParity ? position.get(b)! - position.get(a)! : 0),
+    );
     let planned = 0;
     for (const gap of ordered) {
       const anchor = outlines[gap.anchorIndex!]!;
@@ -147,8 +172,8 @@ export async function repairBookCoverageGaps(
       const flowEntry = stage ? context.flow[stage.flowIndex] : undefined;
       if (!stage || !flowEntry) continue;
       const unitId = gap.unit.contentUnitId;
-      const unitIds = [unitId];
-      const contextIds = [unitId, gap.unit.pairedExampleUnitId].filter(
+      const unitIds = gap.citeUnitIds?.length ? [...gap.citeUnitIds] : [unitId];
+      const contextIds = [...unitIds, gap.unit.pairedExampleUnitId].filter(
         (id): id is string => typeof id === 'string',
       );
       const units = contextIds.flatMap((id) => {
@@ -208,7 +233,7 @@ export async function repairBookCoverageGaps(
         // run (lesson text) are blanked, and a provider's own error text is cut.
         const reason = result.message
           .replace(
-            /the slide could not be planned \(.*$/s,
+            /the slide could not be planned \([\s\S]*$/,
             'the slide could not be planned (model call failed)',
           )
           .replace(/"[^"]*"/g, '"…"')

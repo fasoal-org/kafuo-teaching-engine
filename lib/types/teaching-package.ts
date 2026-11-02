@@ -225,10 +225,38 @@ export interface KafuoBookStructureUnit {
   required: boolean;
   /** Absent for opening, objective-source and ignored units. */
   partIndex?: number;
-  /** For a try-it unit: the worked example printed before it. */
+  /**
+   * For a try-it unit: the worked example printed before it. g5.v8: for an
+   * `exercise` unit, the «المثال N» it is printed under.
+   */
   pairedExampleUnitId?: string;
   /** For a supporting note: the element it explains. */
   attachesToUnitId?: string;
+  /**
+   * g5.v8, `exercise` units only: sent (always `false`) when the unit holds no
+   * solvable item. Absent ⇒ usable.
+   */
+  exerciseUsable?: false;
+  /** g5.v8: why an exercise unit is unusable (sent with `exerciseUsable: false`). */
+  exerciseUnusableReason?: KafuoExerciseUnusableReason;
+}
+
+/**
+ * Why a g5.v8 exercise unit holds no item to pick. `instructions_only` is the
+ * instruction line of the units after it that share its `pairedExampleUnitId`.
+ */
+export const KAFUO_EXERCISE_UNUSABLE_REASONS = [
+  'empty',
+  'number_only',
+  'figure_description_only',
+  'instructions_only',
+] as const;
+export type KafuoExerciseUnusableReason = (typeof KAFUO_EXERCISE_UNUSABLE_REASONS)[number];
+
+/** g5.v8: the exercises block caps (owner decision D-4), sent when the map holds exercises. */
+export interface KafuoExercisePolicy {
+  maxExercises: number;
+  maxExerciseSlides: number;
 }
 
 /** The g5.v7 book map and Lesson Template Kafuo sends (`bookStructure`). */
@@ -236,6 +264,8 @@ export interface KafuoBookStructure {
   templateVersionId: string;
   rules: Array<{ kind: string; element: string; required: boolean }>;
   units: KafuoBookStructureUnit[];
+  /** g5.v8 only, and only when the map holds exercise units. */
+  exercisePolicy?: KafuoExercisePolicy;
 }
 
 /** Kafuo Learning Objective reference retained on a scene (app-layer field). */
@@ -498,6 +528,15 @@ export interface GenerationCheckpointSourceRefs {
    * generated for it after generation ("Generate slide") restores it.
    */
   coverageGapUnitIds?: string[];
+  /**
+   * g5.v8 only: per check / exercise unit, its labelled items and detectable
+   * hidden-step types (no text), so a correction re-check reads the same facts
+   * as the run. Absent on every earlier version.
+   */
+  bookUnitFacts?: Record<
+    string,
+    { itemLabels: string[]; hiddenSteps: Array<'ordered_named_set' | 'clock_time'> }
+  >;
   /** Content Unit choices for a person (id, order, title, role) — no text. */
   contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
   /** Screening verdicts reused on resume instead of screening again. */
