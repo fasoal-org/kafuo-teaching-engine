@@ -44,6 +44,8 @@ const SNIPPET_IDS = [
   'slide-video-instructions',
   'slide-classification-contract',
   'spoken-language-policy',
+  'sacred-text-policy',
+  'sacred-text-short-line',
 ] as const satisfies readonly SnippetId[];
 
 const GRANDFATHERED_NON_CAMEL_CASE_PLACEHOLDERS = [
