@@ -228,6 +228,17 @@ export type TeachingPackageErrorCode =
   | 'SUBJECT_NO_LONGER_AVAILABLE'
   /** Ownership mismatch or unknown id: a non-enumerating 404. */
   | 'CONVERSATION_NOT_FOUND'
+  // --- D-05 Free Chat answer rating: Kafuo → TE signed ownership check ---
+  /**
+   * The message is not a Free Chat tutor answer in a conversation of this
+   * tenant + student (unknown id, a student message, another owner, a Help
+   * message id): one non-enumerating 404 for every case.
+   */
+  | 'ANSWER_NOT_FOUND'
+  /** A Kafuo-signed request with a missing or wrong signature, or a missing or wrong `purpose`. */
+  | 'SIGNATURE_INVALID'
+  /** A Kafuo-signed request whose timestamp is not digits or is more than 300 s off. */
+  | 'SIGNATURE_STALE'
   /** The same logical turn is still generating (younger than the route deadline). */
   | 'TURN_IN_PROGRESS'
   /** A legacy help-turn replay carried a different `requestDigest` for the same `turnId`. */
@@ -479,6 +490,9 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SUBJECT_NOT_ALLOWED: 403,
   SUBJECT_NO_LONGER_AVAILABLE: 403,
   CONVERSATION_NOT_FOUND: 404,
+  ANSWER_NOT_FOUND: 404,
+  SIGNATURE_INVALID: 401,
+  SIGNATURE_STALE: 400,
   TURN_IN_PROGRESS: 409,
   TURN_DIGEST_CONFLICT: 409,
   ALLOWANCE_EXHAUSTED: 429,

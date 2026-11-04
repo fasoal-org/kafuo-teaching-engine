@@ -1697,6 +1697,32 @@ export function readMessage(queryable: Queryable, id: string): Promise<TutorMess
   return readById(queryable, CHAT_MESSAGES, id);
 }
 
+/**
+ * Ownership read of one Free Chat TUTOR message (D-05 answer rating): the row
+ * only when its conversation has this `tenant_id` and `student_ref`. A student
+ * message, another owner's message and an unknown id all read as absent; Help
+ * messages live in `tutor_help_messages` and are never matched. Read only.
+ * No filter on conversation status (archived answers stay rateable) or on
+ * grounding mode (clarification replies are answers too).
+ */
+export async function readOwnedTutorMessage(
+  queryable: Queryable,
+  messageId: string,
+  owner: ConversationOwner,
+): Promise<TutorMessage | null> {
+  // A semi-join: `messageColumns` is unqualified, and `tutor_conversations`
+  // shares `id`, `status` and `created_at`.
+  const result = await queryable.query<MessageRow>(
+    `SELECT ${messageColumns(CHAT_MESSAGES)} FROM tutor_messages
+      WHERE id = $1 AND role = 'tutor'
+        AND conversation_id IN (
+          SELECT id FROM tutor_conversations WHERE tenant_id = $2 AND student_ref = $3
+        )`,
+    [messageId, owner.tenantId, owner.studentRef],
+  );
+  return result.rows[0] ? mapMessage(result.rows[0]) : null;
+}
+
 export function markMessageGenerating(
   queryable: Queryable,
   id: string,

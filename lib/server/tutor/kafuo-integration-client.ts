@@ -44,7 +44,12 @@ export function kafuoIntegrationTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_KAFUO_INTEGRATION_TIMEOUT_MS;
 }
 
-function integrationSecret(): string {
+/**
+ * The shared HMAC secret (`TEACHING_ENGINE_WEBHOOK_SECRET`), trimmed; '' when
+ * unset. One secret signs both directions: this client's calls to Kafuo and
+ * Kafuo's signed calls to the TE (`kafuo-request-signature.ts`).
+ */
+export function integrationSecret(): string {
   return (process.env.TEACHING_ENGINE_WEBHOOK_SECRET ?? '').trim();
 }
 

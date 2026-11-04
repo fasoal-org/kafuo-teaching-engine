@@ -197,6 +197,10 @@ describe('teaching package service auth', () => {
       SUBJECT_NOT_ALLOWED: 403,
       SUBJECT_NO_LONGER_AVAILABLE: 403,
       CONVERSATION_NOT_FOUND: 404,
+      // D-05 Free Chat answer rating: the Kafuo-signed ownership check.
+      ANSWER_NOT_FOUND: 404,
+      SIGNATURE_INVALID: 401,
+      SIGNATURE_STALE: 400,
       TURN_IN_PROGRESS: 409,
       TURN_DIGEST_CONFLICT: 409,
       ALLOWANCE_EXHAUSTED: 429,

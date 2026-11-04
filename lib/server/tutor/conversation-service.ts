@@ -42,6 +42,7 @@ import {
   readConversationByClientRequestId,
   readMessagesBySeq,
   readOwnedConversation,
+  readOwnedTutorMessage,
   unarchiveConversation,
   updateConversationLessonAssociation,
   updateConversationPendingClarification,
@@ -370,6 +371,44 @@ export async function setArchived(
     : await unarchiveConversation(deps.pool, id, owner(grant), nowS);
   if (!updated) throw new TeachingPackageError('CONVERSATION_NOT_FOUND', 'conversation not found');
   return toWireConversation(updated);
+}
+
+// ---------------------------------------------------------------------------
+// Answer ownership (D-05: Kafuo asks before it stores a 👍/👎)
+// ---------------------------------------------------------------------------
+
+export interface AnswerOwnershipInput {
+  tenantId: string;
+  studentRef: string;
+  messageId: string;
+}
+
+export type AnswerOwnership =
+  | { rateable: true }
+  | { rateable: false; reason: 'not_completed' | 'safety_boundary' };
+
+/**
+ * Is `messageId` a rateable Kafuo answer of this tenant + student? A
+ * completed tutor message that is not a safety boundary is; an owned tutor
+ * message that is not completed, or is a boundary reply, is not (with the
+ * reason). Everything else (unknown, a student message, another student or
+ * tenant, a Help message id) is one `ANSWER_NOT_FOUND`.
+ *
+ * Only the pool is taken: no Kafuo meter, model, grounding or refusal-cache
+ * call can happen here.
+ */
+export async function checkAnswerOwnership(
+  deps: Pick<TutorRuntimeDeps, 'pool'>,
+  input: AnswerOwnershipInput,
+): Promise<AnswerOwnership> {
+  const message = await readOwnedTutorMessage(deps.pool, input.messageId, {
+    tenantId: input.tenantId,
+    studentRef: input.studentRef,
+  });
+  if (!message) throw new TeachingPackageError('ANSWER_NOT_FOUND', 'answer not found');
+  if (message.status !== 'completed') return { rateable: false, reason: 'not_completed' };
+  if (message.safety?.boundary === true) return { rateable: false, reason: 'safety_boundary' };
+  return { rateable: true };
 }
 
 // ---------------------------------------------------------------------------
