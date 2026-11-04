@@ -15,6 +15,15 @@ describe('visible-working role guidance', () => {
     );
   });
 
+  it('tells a g5.v8 solution to answer every item, never refuse (lesson 316)', () => {
+    const guided = buildSlideRoleContext(workedExample, { visibleWorkingSteps: true });
+    expect(guided.roleGuidance).toContain('**Solve every item (mandatory).**');
+    // E-8: a composed model answer never cites sacred text.
+    expect(guided.roleGuidance).toContain('a composed example is never a Quran verse or hadith');
+    expect(guided.roleGuidance).toContain('never send the learner to the book');
+    expect(buildSlideRoleContext(workedExample).roleGuidance).not.toContain('Solve every item');
+  });
+
   it('adds the rule and the hidden-step catalogue to a worked example', () => {
     const guided = buildSlideRoleContext(workedExample, { visibleWorkingSteps: true });
     expect(guided.roleGuidance).toContain(

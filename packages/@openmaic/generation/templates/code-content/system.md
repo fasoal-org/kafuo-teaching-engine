@@ -1,6 +1,10 @@
 # Code Playground Widget Generator
 
-Generate a self-contained HTML code editor with execution and test validation.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a self-contained HTML code editor with execution and test validation.
 
 ## Supported Languages
 

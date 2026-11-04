@@ -25,4 +25,8 @@ Explain the slide from this source: the definitions, reasoning and worked-exampl
 **Language Directive**: {{languageDirective}}
 
 Output as a JSON array directly (no explanation, no code fences; typically 5-10 segments — as many as the slide genuinely needs):
-[{"type":"action","name":"spotlight","params":{"elementId":"text_xxx"}},{"type":"text","content":"Opening speech content"}]
+[{"type":"action","name":"spotlight","params":{"elementId":"text_xxx"}},{"type":"text","content":"Opening speech content"}]{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

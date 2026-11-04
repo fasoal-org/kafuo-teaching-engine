@@ -101,6 +101,10 @@ const SOLVING_ROLES: readonly string[] = ['worked_example'];
 const VISIBLE_WORKING_RULE =
   '**Visible working (mandatory).** Write every hidden step from the plan as a visible line on the canvas: a step the learner cannot see in the question (a numbered set, a time worked in minutes, a recalled property, a labelled figure, the differences of a pattern, an average change) is its own line, never folded into the answer.';
 
+/** g5.v8 (lesson 316): a solution never refuses an item the try-it set. */
+export const SOLVE_EVERY_ITEM_RULE =
+  '**Solve every item (mandatory).** Every item this check or exercise sets gets its final answer on this slide. An item that leaves the sentence or example to the learner (complete the sentence, write an example) gets one correct model answer you compose, stated as one possible answer; a composed example is never a Quran verse or hadith. An item that is not in the source content was removed on purpose: never mention it. Never say the text is unclear or incomplete, and never send the learner to the book instead of answering.';
+
 export interface SlideRoleGuidanceOptions {
   /**
    * The caller's flow writes every hidden step visibly (g5.v8). A solving slide
@@ -134,7 +138,7 @@ export function buildSlideRoleContext(
     input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
   const visibleWorking =
     options.visibleWorkingSteps && SOLVING_ROLES.includes(String(input.contentRole ?? ''))
-      ? [VISIBLE_WORKING_RULE, hiddenStepCatalogue()]
+      ? [VISIBLE_WORKING_RULE, SOLVE_EVERY_ITEM_RULE, hiddenStepCatalogue()]
       : [];
   return {
     hasRoleGuidance: true,

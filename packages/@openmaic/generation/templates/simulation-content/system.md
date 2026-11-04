@@ -1,6 +1,10 @@
 # Simulation Widget Content Generator
 
-Generate a self-contained HTML simulation with embedded widget configuration.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a self-contained HTML simulation with embedded widget configuration.
 
 ## Output Structure
 

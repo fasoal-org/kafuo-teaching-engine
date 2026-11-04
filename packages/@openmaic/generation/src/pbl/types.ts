@@ -14,6 +14,7 @@ import type {
   PBLThreadSeat as ContractPBLThreadSeat,
 } from '@openmaic/dsl';
 import type { SceneOutline } from '../outline-types.js';
+import type { SacredTextPromptContext } from '../sacred-text-policy.js';
 
 export type {
   PBLProject,
@@ -604,6 +605,9 @@ export interface PBLPlannerV2Input {
    *  When absent, `detectProjectLanguage` falls back to scanning
    *  outline content. */
   targetLanguage?: string;
+  /** Kafuo Quran and hadith policy (S-6): rendered into the planner system
+   *  prompt when present; absent → the prompt is byte-identical. */
+  sacredText?: SacredTextPromptContext;
 }
 
 // ---------------------------------------------------------------------------

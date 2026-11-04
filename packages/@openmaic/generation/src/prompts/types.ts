@@ -29,7 +29,9 @@ export type SnippetId =
   | 'slide-image-instructions'
   | 'slide-generated-image-instructions'
   | 'slide-video-instructions'
-  | 'spoken-language-policy';
+  | 'spoken-language-policy'
+  | 'sacred-text-policy'
+  | 'sacred-text-short-line';
 
 /** Loaded prompt template. */
 export interface LoadedPrompt {

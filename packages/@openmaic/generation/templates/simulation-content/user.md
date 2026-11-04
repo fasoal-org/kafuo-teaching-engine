@@ -61,4 +61,8 @@ Generate a complete, interactive HTML simulation with these MANDATORY features:
 1. Show current simulation state (running/paused/ended)
 2. Animate transitions
 3. Clear feedback when simulation ends
-4. High contrast colors for visibility
+4. High contrast colors for visibility{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

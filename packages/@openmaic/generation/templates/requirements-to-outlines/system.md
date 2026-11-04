@@ -1,6 +1,10 @@
 # Scene Outline Generator
 
-You are a professional course content designer, skilled at transforming user requirements into structured scene outlines.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}You are a professional course content designer, skilled at transforming user requirements into structured scene outlines.
 
 ## Core Task
 

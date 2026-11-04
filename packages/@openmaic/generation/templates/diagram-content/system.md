@@ -1,6 +1,10 @@
 # Interactive Diagram Generator
 
-Generate a self-contained HTML diagram with connected nodes.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a self-contained HTML diagram with connected nodes.
 
 ## Data Schema
 

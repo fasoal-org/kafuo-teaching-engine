@@ -1,6 +1,10 @@
 # Interactive Scene Action Generator
 
-{{#if hasSpokenLanguagePolicy}}{{snippet:spoken-language-policy}}
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}{{#if hasSpokenLanguagePolicy}}{{snippet:spoken-language-policy}}
 
 {{/if}}{{#if hasSpokenScriptPolicy}}{{spokenScriptPolicy}}
 

@@ -18,6 +18,7 @@ import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import type { AssistancePlan } from './outline-types.js';
 import type { AICallFn } from './pipeline-types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
+import { sacredTextVars, type SacredTextPromptContext } from './sacred-text-policy.js';
 import type { PlannerGuidance } from './slide-generation-inputs.js';
 
 /** Tags an assistance tier may carry — the prose subset the renderers manage. */
@@ -78,6 +79,10 @@ export function visibleCanvasText(elements: PPTElement[]): string {
 
 export interface SlideAssistanceOptions {
   languageDirective?: string;
+  /** Kafuo Q-4: the Quran and hadith policy and the slide's protected quotes. */
+  sacredText?: SacredTextPromptContext;
+  /** The units the slide cites (which protected quotes it may show). */
+  citedUnitIds?: readonly string[];
   logger?: GenerationLogger;
 }
 
@@ -107,6 +112,7 @@ export async function generateSlideAssistance(
     reasoningSupport:
       guidance.contentRole === 'practice' && guidance.contentKind === 'higher_order',
     lightweightSupport: guidance.contentRole === 'check_understanding',
+    ...sacredTextVars(options.sacredText, options.citedUnitIds ?? []),
   });
   if (!prompts) return undefined;
 

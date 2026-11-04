@@ -134,4 +134,8 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 
 **Final reminder**: your entire response must be a JSON **object** with exactly three top-level keys — `languageDirective` (string), `courseTitle` (string, ≤30 chars, in the teaching language), and `outlines` (array). Do not return a bare array. Do not wrap in prose or code fences.{{#if normalizedGrounding}}
 
-**Grounding reminder**: every scene in `outlines` must include a non-empty `sourceContentUnitIds` array holding Content Unit ids copied exactly from the `[[CONTENT_UNIT id=...]]` markers. Do not invent ids and do not return block ids.{{/if}}
+**Grounding reminder**: every scene in `outlines` must include a non-empty `sourceContentUnitIds` array holding Content Unit ids copied exactly from the `[[CONTENT_UNIT id=...]]` markers. Do not invent ids and do not return block ids.{{/if}}{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

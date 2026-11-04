@@ -63,4 +63,8 @@ Generate a complete, self-contained HTML procedural skill widget with these mand
 21. Choose a visual layout that fits this scene instead of defaulting every procedural-skill widget to the same dark dashboard or checklist panel. Possible layouts include a light step-card board, work-order desk, safety inspection station, measurement station, process kanban, simulator-like control board, GO/STOP decision station, handoff checklist board, or troubleshooting station.
 22. Regardless of visual style, preserve task operation, decision, feedback, progress, reset, completion checking, stable selectors, and the existing postMessage listener contract.
 
-Return only the full HTML document. Do not include Markdown fences or explanatory text.
+Return only the full HTML document. Do not include Markdown fences or explanatory text.{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

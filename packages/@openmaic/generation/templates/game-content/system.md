@@ -1,6 +1,10 @@
 # Educational Game Widget Generator
 
-Generate a self-contained HTML game that is FUN, ENGAGING, and EDUCATIONAL.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a self-contained HTML game that is FUN, ENGAGING, and EDUCATIONAL.
 
 ## Core Principle: GAMES, NOT QUIZZES
 

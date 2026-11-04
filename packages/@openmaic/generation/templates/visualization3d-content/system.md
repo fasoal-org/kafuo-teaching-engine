@@ -1,6 +1,10 @@
 # 3D Visualization Content Generator
 
-Generate a self-contained HTML 3D visualization with embedded widget configuration using Three.js.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a self-contained HTML 3D visualization with embedded widget configuration using Three.js.
 
 ## Output Structure
 

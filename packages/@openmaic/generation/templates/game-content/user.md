@@ -70,4 +70,8 @@ Generate a FUN, INTERACTIVE HTML game with these MANDATORY features:
 9. Pause functionality
 
 ### Output
-Return ONLY the HTML document. Make the game FUN enough that students want to play again!
+Return ONLY the HTML document. Make the game FUN enough that students want to play again!{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

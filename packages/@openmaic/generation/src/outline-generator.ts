@@ -56,6 +56,7 @@ import {
 } from './widget-type-policy.js';
 import type { AICallFn, GenerationResult } from './pipeline-types.js';
 import { buildPrompt, PROMPT_IDS } from './prompts/index.js';
+import { sacredTextVars, type SacredTextPromptContext } from './sacred-text-policy.js';
 
 export const DEFAULT_LANGUAGE_DIRECTIVE =
   'Teach in the language that matches the user requirement.';
@@ -105,6 +106,12 @@ export interface OutlinePromptContext {
    * directive is used as before.
    */
   authoritativeLanguageDirective?: string;
+  /**
+   * The protected Quran and hadith quotes of the approved source (Kafuo Q-4).
+   * Present → the fixed policy block and the verbatim quotes render. Absent →
+   * the templates render byte-identically.
+   */
+  sacredText?: SacredTextPromptContext;
   pdfText?: string;
   pdfImages?: PdfImage[];
   visionEnabled?: boolean;
@@ -582,6 +589,8 @@ export function buildOutlinePrompt(
     imageTextPolicy: resolveImageTextPolicyText(context.language, context.textDirection),
     hasAuthoritativeLanguageDirective: Boolean(context.authoritativeLanguageDirective),
     authoritativeLanguageDirective: context.authoritativeLanguageDirective ?? '',
+    // Quran and hadith (Kafuo Q-4): the fixed rule and every protected quote.
+    ...sacredTextVars(context.sacredText, null),
   });
 
   if (!prompts) {

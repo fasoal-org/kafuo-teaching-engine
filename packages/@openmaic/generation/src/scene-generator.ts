@@ -102,6 +102,7 @@ import {
 } from './slide-layout.js';
 import { PlannerV2Error } from './pbl/planner-core.js';
 import type { PBLPlannerV2Input } from './pbl/types.js';
+import { sacredTextVars, type SacredTextPromptContext } from './sacred-text-policy.js';
 
 function isGeneratedMediaPlaceholder(value: string | undefined): value is string {
   return !!value && /^gen_(img|vid)_[\w-]+$/i.test(value);
@@ -230,6 +231,11 @@ export interface SceneContentOptions {
    * visible-working rule and the hidden-step catalogue. Absent → unchanged.
    */
   visibleWorkingSteps?: boolean;
+  /**
+   * Kafuo Q-4: the Quran and hadith policy, with the protected quotes of the
+   * units this scene cites. Absent → every prompt is byte-identical.
+   */
+  sacredText?: SacredTextPromptContext;
   onFailure?: (failure: SceneContentFailure) => void;
   logger?: GenerationLogger;
 }
@@ -296,7 +302,20 @@ export interface SceneActionsOptions {
    * named here. Absent → image elements are listed as before.
    */
   imageNotes?: Readonly<Record<string, NarrationImageNote>>;
+  /**
+   * Kafuo Q-4 / Q-7: the Quran and hadith policy (narration never reads a
+   * quote), with the protected quotes of the cited units. Absent → unchanged.
+   */
+  sacredText?: SacredTextPromptContext;
   logger?: GenerationLogger;
+}
+
+/** The sacred-text variables of one scene: the quotes of the units it cites. */
+function sceneSacredVars(
+  outline: SceneOutline,
+  sacredText: SacredTextPromptContext | undefined,
+): Record<string, unknown> {
+  return sacredTextVars(sacredText, outline.sourceContentUnitIds ?? []);
 }
 
 /** Template variables for a slide's approved source text; empty when there is none. */
@@ -591,6 +610,7 @@ export async function generateSceneContent(
       allowProceduralSkill,
       logger: log,
       onFailure: options.onFailure,
+      sacredVars: sceneSacredVars(outline, options.sacredText),
     });
   }
 
@@ -619,7 +639,10 @@ export async function generateSceneContent(
           options.resolvedSkills,
           textDirection,
           options.correctiveNote,
-          sceneSourceVars(outline, options.sourceUnits, log),
+          {
+            ...sceneSourceVars(outline, options.sourceUnits, log),
+            ...sceneSacredVars(outline, options.sacredText),
+          },
           options.visibleWorkingSteps,
         );
       let slide = await generateCanvas();
@@ -668,6 +691,8 @@ export async function generateSceneContent(
           options.onFailure,
           options.resolvedSkills,
           textDirection,
+          undefined,
+          sceneSacredVars(outline, options.sacredText),
         );
         const stillMissing = native
           ? plannedVisualIssue({ mode: 'native' }, native.elements)
@@ -697,7 +722,13 @@ export async function generateSceneContent(
           { title: outline.title, elements: canvas.elements },
           guidance,
           aiCall,
-          { languageDirective, logger: log },
+          {
+            languageDirective,
+            logger: log,
+            ...(options.sacredText
+              ? { sacredText: options.sacredText, citedUnitIds: outline.sourceContentUnitIds ?? [] }
+              : {}),
+          },
         );
       let assistance = await authorAssistance(slide);
       if (
@@ -751,6 +782,7 @@ export async function generateSceneContent(
         options.onFailure,
         options.resolvedSkills,
         editDirective,
+        sceneSacredVars(outline, options.sacredText),
       );
     case 'pbl':
       return generatePBLSceneContent(
@@ -761,6 +793,7 @@ export async function generateSceneContent(
         userRequirements,
         options.pblLoopFallback,
         log,
+        options.sacredText,
       );
     default:
       return null;
@@ -1454,6 +1487,8 @@ async function generateQuizContent(
    * appended to the user prompt. Absent → the prompt is byte-identical to before.
    */
   editDirective?: string,
+  /** Kafuo Q-4 / Q-12: the Quran and hadith policy variables; empty → unchanged. */
+  sacredVars: Record<string, unknown> = {},
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig = outline.quizConfig || {
     questionCount: 3,
@@ -1470,6 +1505,7 @@ async function generateQuizContent(
     questionTypes: quizConfig.questionTypes.join(', '),
     languageDirective: languageDirective || '',
     ...buildSceneSkillContext(outline, resolvedSkills),
+    ...sacredVars,
   });
 
   if (!prompts) {
@@ -1624,6 +1660,7 @@ async function generatePBLSceneContent(
   userRequirements?: UserRequirements,
   pblLoopFallback?: (input: PBLPlannerV2Input) => Promise<PBLProject>,
   log: GenerationLogger = noopGenerationLogger,
+  sacredText?: SacredTextPromptContext,
 ): Promise<GeneratedPBLContent | null> {
   const pblConfig = outline.pblConfig;
   if (!pblConfig) {
@@ -1647,6 +1684,9 @@ async function generatePBLSceneContent(
         }
       : undefined,
     targetLanguage,
+    // Kafuo S-6: both planner paths (single call and the loop fallback)
+    // render the Quran and hadith policy from this.
+    ...(sacredText ? { sacredText } : {}),
   };
 
   try {
@@ -1760,6 +1800,8 @@ export async function generateWidgetContent(
     allowProceduralSkill?: boolean;
     logger?: GenerationLogger;
     onFailure?: (failure: SceneContentFailure) => void;
+    /** Kafuo S-6: the Quran and hadith policy variables of this scene. */
+    sacredVars?: Record<string, unknown>;
   } = {},
 ): Promise<GeneratedInteractiveContent | null> {
   const log = options.logger ?? noopGenerationLogger;
@@ -1871,7 +1913,7 @@ export async function generateWidgetContent(
       return null;
   }
 
-  const prompts = buildPrompt(promptId, variables);
+  const prompts = buildPrompt(promptId, { ...variables, ...(options.sacredVars ?? {}) });
   if (!prompts) {
     log.error(`Failed to build ${widgetType} prompt for: ${outline.title}`);
     options.onFailure?.({ code: 'prompt-unavailable' });
@@ -2320,6 +2362,7 @@ export async function generateSceneActions(
       ...buildSceneSkillContext(guidance, options.resolvedSkills),
       ...buildSlideNarrationRoleContext(guidance),
       ...sceneSourceVars(outline, options.sourceUnits, log),
+      ...sceneSacredVars(outline, options.sacredText),
     });
 
     if (!prompts) {
@@ -2367,6 +2410,7 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
+      ...sceneSacredVars(outline, options.sacredText),
     });
 
     if (!prompts) {
@@ -2415,6 +2459,7 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(outline, options.resolvedSkills),
+      ...sceneSacredVars(outline, options.sacredText),
     });
 
     if (!prompts) {

@@ -42,4 +42,8 @@ Generate a complete HTML diagram with:
 5. **Mobile-friendly**: Collapsible sidebar, doesn't block diagram
 6. **First node visible** on load
 
-Embed config in `<script type="application/json" id="widget-config">`.
+Embed config in `<script type="application/json" id="widget-config">`.{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

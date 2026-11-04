@@ -37,4 +37,8 @@ Generate a complete, interactive HTML code editor with:
 2. Run button with output display
 3. Test case validation
 4. Progressive hint system
-5. Embedded widget configuration JSON
+5. Embedded widget configuration JSON{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

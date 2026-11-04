@@ -16,4 +16,8 @@ Slide title: {{title}}
 
 {{languageDirective}}
 
-Output the JSON object directly.
+Output the JSON object directly.{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

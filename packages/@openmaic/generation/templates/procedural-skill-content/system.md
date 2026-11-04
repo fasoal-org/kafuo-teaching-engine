@@ -1,6 +1,10 @@
 # Procedural Skill Widget Content Generator
 
-Generate a complete, self-contained HTML procedural skill practice widget for an interactive lesson scene.
+{{#if hasSacredTextPolicy}}{{snippet:sacred-text-policy}}
+
+{{/if}}{{#if hasSacredTextShortLine}}{{snippet:sacred-text-short-line}}
+
+{{/if}}Generate a complete, self-contained HTML procedural skill practice widget for an interactive lesson scene.
 
 This widget is for task-oriented procedural practice. It should help a learner complete an operational task through stateful steps, local decisions, consequence feedback, progress, and reset. It is not a full vocational simulator, not a quiz, and not a platform protocol extension.
 

@@ -76,4 +76,8 @@ Embed a complete widget configuration in the HTML:
 3. Control panel at bottom for thumb access
 4. Readable text sizes
 
-Return ONLY the HTML document.
+Return ONLY the HTML document.{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

@@ -8,4 +8,8 @@ Description: {{description}}
 **Language Directive**: {{languageDirective}}
 
 Output as a JSON array directly (no explanation, no code fences, 1-2 short text segments). No discussion or other action types — text only:
-[{"type":"text","content":"Let's test your understanding"}]
+[{"type":"text","content":"Let's test your understanding"}]{{#if hasSacredTextPolicy}}
+
+## Protected quotes (copy exactly, never explain) / النصوص المحمية (تُنقل حرفيًا ولا تُشرح)
+
+{{sacredQuotesText}}{{/if}}

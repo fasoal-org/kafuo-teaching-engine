@@ -36,6 +36,7 @@ type _SceneContentKeys = Assert<
     | 'correctiveNote'
     | 'sourceUnits'
     | 'visibleWorkingSteps'
+    | 'sacredText'
     | 'onFailure'
     | 'logger'
   >
@@ -55,6 +56,7 @@ type _SceneActionKeys = Assert<
     | 'spokenScript'
     | 'sourceUnits'
     | 'imageNotes'
+    | 'sacredText'
     | 'logger'
   >
 >;
@@ -62,7 +64,7 @@ type _BuildKeys = Assert<Equal<keyof BuildCompleteSceneOptions, 'sceneId'>>;
 type _PBLInputKeys = Assert<
   Equal<
     keyof PBLPlannerV2Input,
-    'outline' | 'courseContext' | 'user' | 'priorQuizResults' | 'targetLanguage'
+    'outline' | 'courseContext' | 'user' | 'priorQuizResults' | 'targetLanguage' | 'sacredText'
   >
 >;
 

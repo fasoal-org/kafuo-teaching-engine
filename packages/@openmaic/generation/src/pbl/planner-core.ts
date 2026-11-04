@@ -8,6 +8,7 @@
 
 import { noopGenerationLogger, type GenerationLogger } from '../logger.js';
 import { loadPBLV2Prompt } from './prompts/loader.js';
+import { sacredTextPromptBlocks } from '../sacred-text-policy.js';
 import { computeInitialAssessment, reseatAssessmentTier } from './operations/kernel/proficiency.js';
 import { trimmedPBLText } from './readers.js';
 
@@ -159,7 +160,11 @@ export async function buildPlannerSystemPrompt(
   // `contentLanguage` is resolved by the caller from
   // `project.languageDirective || project.language` (single source). It may be
   // a BCP-47 locale or a nuanced directive like "中文为主，英文技术术语保留原文".
-  return loadPBLV2Prompt(promptName, {
+  // Kafuo S-6: the Quran and hadith policy (full block + the cited units'
+  // quotes, or the one short line) frames the planner prompt; absent → the
+  // prompt is byte-identical.
+  const sacred = sacredTextPromptBlocks(input.sacredText, input.outline.sourceContentUnitIds ?? []);
+  const prompt = loadPBLV2Prompt(promptName, {
     projectTopic: pblConfig.projectTopic,
     projectDescription: pblConfig.projectDescription,
     targetSkills: (pblConfig.targetSkills ?? []).join(', '),
@@ -177,6 +182,7 @@ export async function buildPlannerSystemPrompt(
     // interpolator leaves unknown placeholders literal).
     scenarioDesign: buildScenarioDesignBlock(pblConfig, scenarioRoleplay),
   });
+  return `${sacred.system}${prompt}${sacred.user}`;
 }
 
 /** SCENARIO ONLY. Build the role-play scenario-design instruction block

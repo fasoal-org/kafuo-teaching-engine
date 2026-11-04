@@ -207,6 +207,8 @@ export type {
 } from './slide-role-guidance.js';
 export { buildSceneSourceContext, MAX_SCENE_SOURCE_CHARS } from './source-unit-context.js';
 export type { SceneSourceContext, SourceUnitText } from './source-unit-context.js';
+export { sacredTextVars } from './sacred-text-policy.js';
+export type { SacredQuotePromptEntry, SacredTextPromptContext } from './sacred-text-policy.js';
 export {
   SPOKEN_SCRIPT_ASSETS,
   buildSpokenScriptContext,
