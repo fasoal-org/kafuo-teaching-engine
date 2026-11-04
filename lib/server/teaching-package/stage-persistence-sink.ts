@@ -146,6 +146,8 @@ export function createTeachingPackagePersistenceSink(
             ...(data.sourceVisuals
               ? { sourceVisuals: data.sourceVisuals as SourceVisualManifestEntry[] }
               : {}),
+            // Q-14: the Quran / hadith pins the Editor write refusal reads.
+            ...(data.sacredQuotes ? { sacredQuotes: data.sacredQuotes } : {}),
           },
         };
         try {

@@ -192,19 +192,125 @@ export function checkItemLabels(text: string): string[] {
     const key = `${Number(number)}${arabic[letter] ?? letter}`;
     if (!labels.includes(key)) labels.push(key);
   }
-  return labels;
+  if (labels.length > 0) return labels;
+  // A check numbered «1.», «1-», «1)», «(1)» at line start (3 Nov 2026). The
+  // space after «.» / «-» keeps «1.5» and a section number «1-1» out.
+  // «.5 » is the RTL form of «5.» (4 Nov 2026, the backend's rule); a decimal
+  // «.5» inside a line never opens it.
+  const numbered =
+    /^[^\S\n]*(?:\.(\d{1,2})(?=\s)|\(\s*(\d{1,2})\s*\)|(\d{1,2})[^\S\n]*(?:[.\-–](?=\s)|\)))/gmu;
+  for (const match of normalized.matchAll(numbered)) {
+    const key = String(Number(match[1] ?? match[2] ?? match[3]!));
+    if (!labels.includes(key)) labels.push(key);
+  }
+  if (labels.length > 0) return labels;
+  return trailingItemNumbers(asciiDigits(text)).map(String);
+}
+
+/**
+ * The math-book OCR form «value (N» (4 Nov 2026, lessons 312 units 5464/5466):
+ * in RTL order the item number follows its answer or expression, as in
+ * «62 (1 \frac{5}{4} (2». On one line, a `(N` (N of 1–3 digits) is an item
+ * number when ALL hold:
+ * 1. a value precedes it on the line: the last non-space character before
+ *    the «(» exists and is not «(»;
+ * 2. N is followed by whitespace or the line's end, or by «)» ending the line
+ *    («-2a + 9d \quad (38)», unit 5466);
+ * 3. no «)» follows on the line before the next «(» or the line's end (so an
+ *    expression bracket «(8 \cdot 5)» never counts).
+ * Then a candidate counts only when N-1 or N+1 is a candidate too: they form
+ * runs of consecutive numbers (1..12, 37..42), so one stray bracket never does.
+ * Returned ascending, once per number.
+ */
+export function trailingItemNumbers(text: string): number[] {
+  const candidates = new Set<number>();
+  for (const line of text.split('\n')) {
+    for (const match of line.matchAll(/\((\d{1,3})(?:(?=\s|$)|\)(?=\s*$))/gu)) {
+      const at = match.index ?? 0;
+      const before = line.slice(0, at).trimEnd();
+      if (before === '' || before.endsWith('(')) continue;
+      const after = line.slice(at + match[0].length);
+      const close = after.indexOf(')');
+      const open = after.indexOf('(');
+      if (close >= 0 && (open < 0 || close < open)) continue;
+      candidates.add(Number(match[1]));
+    }
+  }
+  return [...candidates]
+    .filter((n) => candidates.has(n - 1) || candidates.has(n + 1))
+    .sort((a, b) => a - b);
+}
+
+/** Arabic-Indic digits as ASCII digits; nothing else changes. */
+function asciiDigits(text: string): string {
+  return text
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+}
+
+/**
+ * The «المثال N» header «تأكد» / «تدرب» print, at a line's start — the backend's
+ * `_EXERCISE_HEADER_RE` (`curriculums_management/domain/book_parts.py`).
+ */
+const EXERCISE_HEADER =
+  /^[^\p{L}\p{N}_\n]*(?:(?:تأكد|تدرب(?:[^\S\n]+وحل[^\S\n]+المسائل)?)[^\S\n]*)?(?:المثالان|المثال|الأمثلة)[^\S\n]*(\d{1,3})(?:[^\S\n]*(?:[,،\-–]|و|إلى)[^\S\n]*\d{1,3})*/gmu;
+/** A numbered question opening a line — the backend's `_LINE_ITEM_NUMBER_RE`. */
+const LINE_ITEM_NUMBER =
+  /^[^\S\n]*(?:\.(\d{1,3})(?=\s)|\(?[^\S\n]*(\d{1,3})(?:[^\S\n]*[A-Za-z]?[^\S\n]*\)|[^\S\n]*[.\-–](?=\s)|(?=[^\S\n]|$)))/gmu;
+
+/**
+ * The numbered questions an exercise unit holds, once per number, in book
+ * order: the backend's `exercise_question_count` rule, so the engine weighs a
+ * unit as `minExercises` counted it. Only a number opening a line counts
+ * («1.», «1-», «1)», «(1)», a bare «1 »); «●» bullets and an «المثال N» header
+ * never do.
+ */
+export function exerciseQuestionNumbers(text: string): number[] {
+  if (!text) return [];
+  const body = asciiDigits(text).replace(EXERCISE_HEADER, ' ');
+  const all = trailingItemNumbers(body);
+  const numbers: number[] = [];
+  for (const match of body.matchAll(LINE_ITEM_NUMBER)) {
+    // A unit using the OCR form «value (N» prints a value, not a question, as a
+    // bare line-start number («62» in «62 (1», «84» in «84 + 16 = …»), so every
+    // bare line-start number is then skipped (the backend's
+    // `exercise_question_numbers`, 4 Nov 2026).
+    const bare = match[1] === undefined && /^[^\S\n]*\d+$/.test(match[0]);
+    if (all.length > 0 && bare) continue;
+    const number = Number(match[1] ?? match[2]);
+    if (!numbers.includes(number)) numbers.push(number);
+  }
+  // The OCR form «value (N» ({@link trailingItemNumbers}), added once per number.
+  const trailing = all.filter((number) => !numbers.includes(number));
+  if (trailing.length === 0) return numbers;
+  return [...numbers, ...trailing].sort((a, b) => a - b);
 }
 
 /** What the gate needs to know about one book unit, pinned on the checkpoint. */
 export interface BookUnitFacts {
-  /** A check's labelled items (1A, 1B…); empty when the text labels none. */
+  /** A check's labelled items (1A, 1B… or 1, 2…); empty when the text labels none. */
   itemLabels: string[];
   /** The detectable hidden-step types its items use. */
   hiddenSteps: DetectedHiddenStepType[];
+  /**
+   * The numbered questions the unit holds ({@link exerciseQuestionNumbers}).
+   * Absent on facts pinned before 3 Nov 2026: the unit then weighs one.
+   */
+  questionNumbers?: number[];
+  /**
+   * M-4 (4 Nov 2026 rule): an exercise or check whose every item held a verse
+   * or hadith, so nothing is left to set or solve; the engine never selects it.
+   */
+  noItemsLeft?: true;
 }
 
 export function bookUnitFacts(text: string): BookUnitFacts {
-  return { itemLabels: checkItemLabels(text), hiddenSteps: detectHiddenStepTypes(text) };
+  const questionNumbers = exerciseQuestionNumbers(text);
+  return {
+    itemLabels: checkItemLabels(text),
+    hiddenSteps: detectHiddenStepTypes(text),
+    ...(questionNumbers.length > 0 ? { questionNumbers } : {}),
+  };
 }
 
 /** A name of the cycle beside a number: `محرم = 1`, `1. محرم`, `شوال (10)`. */

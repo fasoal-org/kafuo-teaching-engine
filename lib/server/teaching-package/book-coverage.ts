@@ -16,15 +16,20 @@
  * g5.v8 (teacher-parity plan, 2 Nov 2026) adds, ONLY when the attempt's
  * Teaching Model is `g5@g5.v8` ({@link isTeacherParityModel}, marked on the
  * coverage book as `teacherParity`): the recall slide, one solution slide per
- * check item, the exercises block with its caps and its minimum, and the visible working of the
+ * check (all its items together; owner, 4 Nov 2026), the exercises block with its caps and its minimum, and the visible working of the
  * detectable hidden-step types. A g5.v7 attempt — new, resumed or corrected —
  * never carries the mark, so it is checked exactly as before.
  */
 import { hiddenStepCatalogue, type OutlineDiagnostic } from '@openmaic/generation';
+import {
+  isSacredExerciseScene,
+  withoutSacredItems,
+} from '@/lib/server/teaching-package/sacred-text';
 
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import {
   bookUnitFacts,
+  exerciseQuestionNumbers,
   showsWorkingStep,
   type BookUnitFacts,
   type DetectedHiddenStepType,
@@ -47,6 +52,10 @@ export const WORKING_STEP_MISSING = 'WORKING_STEP_MISSING';
 export const EXERCISE_SELECTED_MISSING = 'EXERCISE_SELECTED_MISSING';
 /** g5.v8: a usable exercise unit the engine did not select is cited. */
 export const EXERCISE_UNSELECTED_CITED = 'EXERCISE_UNSELECTED_CITED';
+/** g5.v8: a «تأكد» check has more than one solution slide (owner, 4 Nov 2026: one per check). */
+export const SOLUTION_SLIDES_DUPLICATED = 'SOLUTION_SLIDES_DUPLICATED';
+/** g5.v8: the recall slide comes after the first teaching slide of part 1. */
+export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
 
 /** The Teaching Model whose requests get the teacher-parity gates. */
 export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as const;
@@ -84,6 +93,73 @@ function factUnit(unit: KafuoBookStructureUnit): boolean {
  * texts. Pinned on the checkpoint (`sourceRefs.bookUnitFacts`) so a correction
  * re-check reads the same facts without the text.
  */
+/** A book exercise or «تأكد» check unit: its verse and hadith items are dropped (4 Nov 2026). */
+export function isSacredExerciseElement(unit: KafuoBookStructureUnit): boolean {
+  return unit.element === 'exercise' || unit.element === 'try_it';
+}
+
+/**
+ * H-2: the exercise and «تأكد» check unit ids of a g5.v8 run's book map, for
+ * single-slide regeneration and insertion; `undefined` without a map or on any
+ * earlier Teaching Model (the rule stays off there, as in the run).
+ */
+export function sacredExerciseUnitIdsOf(
+  book: KafuoBookStructure | undefined,
+  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
+): string[] | undefined {
+  if (!book || !isTeacherParityModel(teachingModel)) return undefined;
+  return book.units.filter(isSacredExerciseElement).map((unit) => String(unit.contentUnitId));
+}
+
+/** Where a single-slide route's exercise scope came from (F-7). */
+export type SacredExerciseScopeSource = 'book' | 'outline' | 'role' | 'off';
+
+/**
+ * F-7: the exercise unit ids of a single-slide regeneration or insertion. A
+ * g5.v8 version whose attempt or book map cannot be read never turns the rule
+ * off: it falls back to the units the Stage's own outline cites on its
+ * exercise and check outlines (contentRole or teaching stage), and otherwise
+ * to `[]`, the role/stage scope, which needs no unit ids.
+ */
+export function resolveSacredExerciseUnitIds(
+  book: KafuoBookStructure | undefined,
+  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
+  outlines: readonly SceneOutline[] | undefined,
+): { unitIds: string[] | undefined; source: SacredExerciseScopeSource } {
+  if (!isTeacherParityModel(teachingModel)) return { unitIds: undefined, source: 'off' };
+  const fromBook = sacredExerciseUnitIdsOf(book, teachingModel);
+  if (fromBook) return { unitIds: fromBook, source: 'book' };
+  const fromOutline = [
+    ...new Set(
+      (outlines ?? [])
+        .filter((outline) =>
+          isSacredExerciseScene(
+            {
+              id: outline.id,
+              content: { contentRole: outline.contentRole },
+              teachingStage: outline.teachingStage,
+            } as Parameters<typeof isSacredExerciseScene>[0],
+            {},
+          ),
+        )
+        .flatMap((outline) => (outline.sourceContentUnitIds ?? []).map(String)),
+    ),
+  ];
+  if (fromOutline.length > 0) return { unitIds: fromOutline, source: 'outline' };
+  return { unitIds: [], source: 'role' };
+}
+
+/**
+ * M-4: the strip removed items and no numbered item is left: the book's numbered
+ * items were all verses or hadith, or an unnumbered unit kept one line at most
+ * (its instruction).
+ */
+function noItemsLeft(body: string, stripped: string): boolean {
+  if (stripped === body || exerciseQuestionNumbers(stripped).length > 0) return false;
+  const lines = stripped.split('\n').filter((line) => line.trim() !== '').length;
+  return exerciseQuestionNumbers(body).length > 0 || lines <= 1;
+}
+
 export function bookUnitFactsOf(
   book: KafuoBookStructure,
   units: ReadonlyArray<{ id: string; text: string }>,
@@ -93,7 +169,13 @@ export function bookUnitFactsOf(
   for (const unit of book.units) {
     const body = text.get(unit.contentUnitId);
     if (!factUnit(unit) || body === undefined) continue;
-    facts[unit.contentUnitId] = bookUnitFacts(body);
+    // 4 Nov 2026: a verse or hadith item is never an exercise or check item,
+    // so it is not counted (and the engine never selects it).
+    const items = isSacredExerciseElement(unit) ? withoutSacredItems(body) : body;
+    facts[unit.contentUnitId] = {
+      ...bookUnitFacts(items),
+      ...(noItemsLeft(body, items) ? { noItemsLeft: true as const } : {}),
+    };
   }
   return facts;
 }
@@ -152,6 +234,11 @@ export interface BookCoverageGap {
   itemLabel?: string;
   /** g5.v8, `missing_recall`: every unit the recall slide cites. */
   citeUnitIds?: string[];
+  /**
+   * g5.v8, `missing_recall`: the outline whose teaching stage the new slide
+   * takes (part 1's first teaching slide), when it differs from the anchor.
+   */
+  stageFromIndex?: number;
   /**
    * The outline the missing slide goes right after, or `undefined` when no
    * slide of the plan places it (then only a person can):
@@ -258,9 +345,10 @@ export function findBookCoverageGaps(
         message: `${describe(unit)} has a try-it slide but no solution slide after it`,
         anchorIndex: tryIt,
       });
-    } else if (book.teacherParity) {
-      gaps.push(...missingItemSolutions(outlines, book, unit, tryIt));
     }
+    // g5.v8 (owner, 4 Nov 2026): one solution slide per check, solving all its
+    // items together: more than one is SOLUTION_SLIDES_DUPLICATED, merged by
+    // the repair (`mergeDuplicateSolutions`).
   }
   if (book.teacherParity) gaps.push(...teacherParityGaps(outlines, book));
   return gaps;
@@ -268,34 +356,6 @@ export function findBookCoverageGaps(
 
 function isSolutionOf(outline: SceneOutline, unitId: string): boolean {
   return teaches(outline) && outline.contentRole === 'worked_example' && cites(outline, unitId);
-}
-
-/**
- * g5.v8 (D-2 B): one solution slide per check item. The items are the labels
- * the check's text prints (1A, 1B…); slides are not matched to items (a slide
- * names its item only in free text), so the gate counts: fewer solution slides
- * after the try-it than labelled items leaves the last items without theirs.
- * A check whose text labels fewer than two items needs one solution, as before.
- */
-function missingItemSolutions(
-  outlines: readonly SceneOutline[],
-  book: CoverageBookStructure,
-  unit: KafuoBookStructureUnit,
-  tryIt: number,
-): BookCoverageGap[] {
-  const labels = book.unitFacts?.[unit.contentUnitId]?.itemLabels ?? [];
-  if (labels.length < 2) return [];
-  const solutions: number[] = [];
-  outlines.forEach((outline, index) => {
-    if (index > tryIt && isSolutionOf(outline, unit.contentUnitId)) solutions.push(index);
-  });
-  return labels.slice(solutions.length).map((label) => ({
-    kind: 'missing_solution' as const,
-    unit,
-    itemLabel: label,
-    message: `${describe(unit)} item ${label} has no solution slide of its own (one solution slide per check item)`,
-    anchorIndex: solutions[solutions.length - 1],
-  }));
 }
 
 function sameStage(a: SceneOutline | undefined, b: SceneOutline | undefined): boolean {
@@ -312,6 +372,82 @@ function isUsableExercise(unit: KafuoBookStructureUnit): boolean {
   return unit.element === 'exercise' && unit.exerciseUsable !== false;
 }
 
+/** Elements that are never part 1's own teaching (recall, exercises, cover material). */
+const NOT_BODY: ReadonlySet<string> = new Set([
+  'prior_knowledge',
+  'exercise',
+  'objective_source',
+  'ignore',
+]);
+
+/** The g5.v8 flow's opening stages: they come before part 1 and never hold its recall. */
+const OPENING_STAGE = /^lesson_(opener|learning_map)$/;
+
+/**
+ * g5.v8 recall (I-1): where the recall slide and part 1's first teaching slide
+ * sit, among the slides after the opening stages (lesson_opener,
+ * lesson_learning_map: an opener citing a prior_knowledge unit is not the
+ * recall, lessons 315 and 317). `recall` is the first slide citing a
+ * prior_knowledge unit and nothing else but MATH_READING notes (E-1: a later
+ * part's slide reusing the prior unit is never the recall, so it never moves);
+ * `first` the first other slide teaching a part-1 body unit.
+ */
+export function recallPlacement(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): { recall?: number; first?: number } {
+  const ids = (element: (unit: KafuoBookStructureUnit) => boolean) =>
+    new Set(book.units.filter(element).map((unit) => unit.contentUnitId));
+  const priors = ids((unit) => unit.element === 'prior_knowledge');
+  const recallIds = new Set([...priors, ...ids((unit) => unit.kind === 'MATH_READING')]);
+  const body = ids((unit) => unit.partIndex === 1 && !NOT_BODY.has(String(unit.element)));
+  const citesAny = (outline: SceneOutline, set: ReadonlySet<string>) =>
+    (outline.sourceContentUnitIds ?? []).some((id) => set.has(String(id)));
+  const citesOnly = (outline: SceneOutline, set: ReadonlySet<string>) =>
+    (outline.sourceContentUnitIds ?? []).every((id) => set.has(String(id)));
+  let recall: number | undefined;
+  let first: number | undefined;
+  outlines.forEach((outline, index) => {
+    if (!teaches(outline) || OPENING_STAGE.test(outline.teachingStage?.key ?? '')) return;
+    if (citesAny(outline, priors) && citesOnly(outline, recallIds)) recall ??= index;
+    else if (citesAny(outline, body)) first ??= index;
+  });
+  return { ...(recall !== undefined ? { recall } : {}), ...(first !== undefined ? { first } : {}) };
+}
+
+/**
+ * g5.v8 (owner, 4 Nov 2026): the solution slides of each «تأكد» check —
+ * `worked_example` slides after its try-it (any, when it has none) citing it
+ * and no exercise unit, so the exercises block is never counted. Only checks
+ * with two or more are returned, each with its slides in plan order.
+ */
+export function duplicateSolutionSlides(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): Array<{ unitId: string; indexes: number[] }> {
+  const exerciseIds = new Set(
+    book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+  );
+  const groups: Array<{ unitId: string; indexes: number[] }> = [];
+  for (const unit of book.units) {
+    if (unit.element !== 'try_it') continue;
+    const tryIt = outlines.findIndex(
+      (outline) =>
+        teaches(outline) &&
+        outline.contentRole === 'check_understanding' &&
+        cites(outline, unit.contentUnitId),
+    );
+    const indexes: number[] = [];
+    outlines.forEach((outline, index) => {
+      if (index <= tryIt || !isSolutionOf(outline, unit.contentUnitId)) return;
+      if ((outline.sourceContentUnitIds ?? []).some((id) => exerciseIds.has(String(id)))) return;
+      indexes.push(index);
+    });
+    if (indexes.length > 1) groups.push({ unitId: unit.contentUnitId, indexes });
+  }
+  return groups;
+}
+
 /** g5.v8: the recall slide (I-1, D-1 A) and the exercises block (I-3, D-3 C). */
 function teacherParityGaps(
   outlines: readonly SceneOutline[],
@@ -319,24 +455,12 @@ function teacherParityGaps(
 ): BookCoverageGap[] {
   const gaps: BookCoverageGap[] = [];
   const priors = book.units.filter((unit) => unit.element === 'prior_knowledge');
-  if (
-    priors.length > 0 &&
-    !outlines.some(
-      (outline) => teaches(outline) && priors.some((unit) => cites(outline, unit.contentUnitId)),
-    )
-  ) {
-    // The recall opens part 1: it goes after the slide right before part 1's
-    // first teaching slide (its transition), when both sit at one flow position.
-    const partOne = new Set(
-      book.units
-        .filter((unit) => unit.partIndex === 1 && !PLACED_BY_RULE.has(String(unit.element)))
-        .map((unit) => unit.contentUnitId),
-    );
-    const first = outlines.findIndex(
-      (outline) =>
-        teaches(outline) &&
-        (outline.sourceContentUnitIds ?? []).some((id) => partOne.has(String(id))),
-    );
+  const placement = recallPlacement(outlines, book);
+  if (priors.length > 0 && placement.recall === undefined) {
+    // The recall opens part 1: it goes right before part 1's first teaching
+    // slide, in that slide's teaching stage. An opener or learning-map slide
+    // citing a prior unit is not the recall slide (lessons 315, 317).
+    const first = placement.first;
     const notes = book.units.filter((unit) => unit.kind === 'MATH_READING');
     gaps.push({
       kind: 'missing_recall',
@@ -345,11 +469,18 @@ function teacherParityGaps(
       message: `the recall slide citing the prior_knowledge units ${priors
         .map((unit) => unit.contentUnitId)
         .join(', ')} is missing at the start of part 1`,
-      anchorIndex:
-        first > 0 && sameStage(outlines[first - 1], outlines[first]) ? first - 1 : undefined,
+      ...(first !== undefined && first > 0
+        ? {
+            anchorIndex: first - 1,
+            ...(sameStage(outlines[first - 1], outlines[first]) ? {} : { stageFromIndex: first }),
+          }
+        : {}),
     });
   }
-  const usable = book.units.filter(isUsableExercise);
+  // M-4: a unit with no item left after the verse/hadith strip is not usable.
+  const usable = book.units.filter(
+    (unit) => isUsableExercise(unit) && book.unitFacts?.[unit.contentUnitId]?.noItemsLeft !== true,
+  );
   if (
     book.exercisePolicy &&
     usable.length > 0 &&
@@ -369,6 +500,49 @@ function teacherParityGaps(
     });
   }
   return gaps;
+}
+
+/** The numbered items a selection plans: a multi-question unit its questions, any other one. */
+function selectionItemCount(selection: NonNullable<ReturnType<typeof selectExercises>>): number {
+  return selection.slides.reduce(
+    (sum, ids, index) =>
+      sum +
+      ids.reduce((inner, id) => inner + (selection.slideQuestions?.[index]?.[id]?.length || 1), 0),
+    0,
+  );
+}
+
+/**
+ * The numbered exercise items the plan's exercise slides set: a selected unit
+ * cited there counts one, or, when it holds several numbered questions, the
+ * ones its slides' title or key points number. A unit whose slides number none
+ * of them counts what the selection gives it (the plan cannot be read finer).
+ */
+function plannedExerciseItems(
+  outlines: readonly SceneOutline[],
+  exerciseSlides: readonly number[],
+  selection: NonNullable<ReturnType<typeof selectExercises>>,
+  facts: Record<string, BookUnitFacts> | undefined,
+): number {
+  let total = 0;
+  for (const id of selection.unitIds) {
+    const slides = exerciseSlides.map((index) => outlines[index]!).filter((o) => cites(o, id));
+    if (slides.length === 0) continue;
+    const numbers = facts?.[id]?.questionNumbers ?? [];
+    if (numbers.length < 2) {
+      total += 1;
+      continue;
+    }
+    const shown = new Set(
+      slides.flatMap((outline) => exerciseQuestionNumbers(visibleText(outline))),
+    );
+    const planned = numbers.filter((n) => shown.has(n)).length;
+    total +=
+      planned > 0
+        ? planned
+        : (selection.slideQuestions ?? []).reduce((sum, q) => sum + (q[id]?.length ?? 0), 0);
+  }
+  return total;
 }
 
 const WORKING_STEP_LABELS: Readonly<Record<DetectedHiddenStepType, string>> = {
@@ -392,6 +566,32 @@ function teacherParityDiagnostics(
   book: CoverageBookStructure,
 ): OutlineDiagnostic[] {
   const diagnostics: OutlineDiagnostic[] = [];
+  // One solution slide per check (owner, 4 Nov 2026; lessons 312, 317). No
+  // live count in the message: an ignore keys on it and must survive edits.
+  for (const group of duplicateSolutionSlides(outlines, book)) {
+    diagnostics.push({
+      code: SOLUTION_SLIDES_DUPLICATED,
+      disposition: 'admin_correctable',
+      field: 'sourceContentUnitIds',
+      message: `check ${group.unitId} has more than one solution slide; one solution slide solves all of its items`,
+    });
+  }
+  // Recall first (lessons 307, 315, 317): the recall slide opens part 1.
+  if (book.units.some((unit) => unit.element === 'prior_knowledge')) {
+    const { recall, first } = recallPlacement(outlines, book);
+    if (recall !== undefined && first !== undefined && recall > first) {
+      const outline = outlines[recall]!;
+      diagnostics.push({
+        code: RECALL_NOT_FIRST,
+        disposition: 'admin_correctable',
+        outlineIndex: recall,
+        ...(outline.id ? { outlineId: outline.id } : {}),
+        field: 'order',
+        message:
+          'the recall slide comes after the first teaching slide of part 1, which it must open',
+      });
+    }
+  }
   const exercises = book.units.filter((unit) => unit.element === 'exercise');
   const exerciseIds = new Set(exercises.map((unit) => unit.contentUnitId));
   const exerciseSlides: number[] = [];
@@ -436,6 +636,20 @@ function teacherParityDiagnostics(
     // The minimum (owner, 2 Nov 2026). A plan with no exercise slide at all is
     // already the `missing_exercises` coverage gap, so it is not reported twice.
     if (exerciseSlides.length > 0 && policy.minExercises !== undefined) {
+      // With a selection, the floor counts the numbered items the exercise
+      // slides plan (lesson 312: 5 of 6): min(minExercises, the selection's items).
+      // A selected unit left uncited is EXERCISE_SELECTED_MISSING alone.
+      if (selection && selection.unitIds.every((id) => cited.has(id))) {
+        const floor = Math.min(policy.minExercises, selectionItemCount(selection));
+        if (plannedExerciseItems(outlines, exerciseSlides, selection, book.unitFacts) < floor) {
+          diagnostics.push({
+            code: EXERCISE_TOO_FEW,
+            disposition: 'admin_correctable',
+            field: 'keyPoints',
+            message: `the exercises block plans fewer than ${floor} numbered exercise items`,
+          });
+        }
+      }
       if (!selection && counted < policy.minExercises) {
         diagnostics.push({
           code: EXERCISE_TOO_FEW,
@@ -672,7 +886,23 @@ export function bookStructureRequirement(
   ].join('\n');
 }
 
-/** The g5.v8 planner guidance: recall, one solution per item, visible working, exercises. */
+/**
+ * g5.v8: every check that follows a worked example, by id — the planner
+ * skipped «مسائل تدريبية» checks after examples (lessons 308, 314, 315, 318).
+ */
+function checkListLine(book: KafuoBookStructure): string[] {
+  const checks = book.units.filter(
+    (unit) => unit.element === 'try_it' && unit.pairedExampleUnitId !== undefined,
+  );
+  if (checks.length === 0) return [];
+  return [
+    `Each of these checks needs its try-it slide AND its solution slide(s) right after its example's slide: ${checks
+      .map((unit) => `${unit.contentUnitId} (after example ${unit.pairedExampleUnitId})`)
+      .join(', ')}.`,
+  ];
+}
+
+/** The g5.v8 planner guidance: recall, one solution per check, visible working, exercises. */
 function teacherParityRequirement(book: KafuoBookStructure, rules: string): string {
   const policy = book.exercisePolicy;
   return [
@@ -690,11 +920,13 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
       : []),
     'CHECKS: every try_it unit gets ONE try-it slide (contentRole check_understanding) that sets',
     "all of the check's items (1A, 1B, …) without their answers, then ONE solution slide",
-    '(contentRole worked_example) PER ITEM, in the book order. Each solution slide cites the',
-    "check's unit and works exactly one item to a final answer from the given data; an item",
-    'that asks to guess or predict gets a reasoned number, stated as an estimate.',
+    "(contentRole worked_example) PER CHECK that cites the check's unit and solves ALL of its",
+    'items together, in the book order, each to a final answer from the given data; an item',
+    'that asks to guess or predict gets a reasoned number, stated as an estimate. Never split',
+    "a check's solution across slides: each check has exactly one solution slide.",
     "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
     'the example, not the check that follows it.',
+    ...checkListLine(book),
     'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
     hiddenStepCatalogue(),
     ...(policy && !book.units.some(isUsableExercise)
@@ -734,13 +966,33 @@ export function exerciseBlockRequirement(book: CoverageBookStructure | undefined
     '',
     `EXERCISES BLOCK (fixed by the engine): one «تمارين» transition slide, then exactly ${count}`,
     `exercise slide${count === 1 ? '' : 's'} (contentRole worked_example), in this order:`,
-    ...selection.slides.map(
-      (ids, index) => `- exercise slide ${index + 1} solves the units ${ids.join(', ')};`,
-    ),
+    ...selection.slides.map((ids, index) => {
+      const questions = selection.slideQuestions?.[index] ?? {};
+      const units = ids.map((id) => {
+        const numbers = questions[id];
+        return numbers?.length ? `${id} (questions ${questionRange(numbers)} only)` : id;
+      });
+      return `- exercise slide ${index + 1} solves the units ${units.join(', ')};`;
+    }),
     'Each exercise slide cites exactly its units above (and may also cite the',
     'reason=instructions_only unit paired with the same example). Do not cite any other',
     'exercise unit anywhere in the lesson.',
+    ...(selection.slideQuestions
+      ? [
+          'A unit listed with questions holds several numbered questions: that slide states and',
+          'solves only those questions, and the same unit is cited again on the slide that solves',
+          'its next questions.',
+        ]
+      : []),
   ].join('\n');
+}
+
+/** «1–4», or «1, 3, 5» when the numbers are not consecutive. */
+function questionRange(numbers: readonly number[]): string {
+  const consecutive = numbers.every((n, i) => i === 0 || n === numbers[i - 1]! + 1);
+  return consecutive && numbers.length > 1
+    ? `${numbers[0]}–${numbers[numbers.length - 1]}`
+    : numbers.join(', ');
 }
 
 /** Elements never taught one slide each: cover/ignored material and rule-placed blocks. */

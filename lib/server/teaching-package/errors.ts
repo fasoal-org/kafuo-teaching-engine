@@ -364,6 +364,17 @@ export type TeachingPackageErrorCode =
    * before any attempt exists, so no silent lesson is built (D-7).
    */
   | 'TTS_ROUTE_UNAVAILABLE'
+  // --- Quran and hadith (quran-text-handling-rules-plan Q-5, Q-14) ---
+  /**
+   * A regenerated or inserted Scene changed, invented, cut, explained or spoke
+   * a Quran verse or hadith; nothing was written.
+   */
+  | 'SACRED_TEXT_ALTERED'
+  /**
+   * The source carries a Quran quote the backend's canonical check flagged
+   * (`canonical_status: "mismatch"`); generation is refused until review.
+   */
+  | 'SACRED_TEXT_CANONICAL_MISMATCH'
   // --- Admin-correction pause / resume (slide-classification-admin-correction-plan §3) ---
   /** The attempt is not paused for correction (or its checkpoint is not awaiting). */
   | 'CORRECTION_NOT_AWAITING'
@@ -524,6 +535,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NARRATION_AUDIO_GENERATION_FAILED: 502,
   TTS_ROUTE_INVALID: 400,
   TTS_ROUTE_UNAVAILABLE: 409,
+  SACRED_TEXT_ALTERED: 502,
+  SACRED_TEXT_CANONICAL_MISMATCH: 422,
 };
 
 export class TeachingPackageError extends Error {

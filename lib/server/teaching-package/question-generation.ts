@@ -38,13 +38,22 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import {
   QUESTION_ENVELOPE_VERSION,
   QUESTION_GENERATION_PROMPT_VERSION,
-  QUESTION_SYSTEM_PROMPT,
   TEACHING_ROLES,
   buildQuestionUserPrompt,
+  questionSystemPrompt,
   type PromptSection,
   type QuestionType,
   type TeachingRole,
 } from '@/lib/server/teaching-package/question-generation-prompt';
+import {
+  detectSacredQuotesByParagraph,
+  pinnedQuotesIn,
+  readSacredQuotePins,
+  sacredPolicyModeFor,
+  sacredQuestionFindings,
+  shownSceneTexts,
+  type SacredQuestionText,
+} from '@/lib/server/teaching-package/sacred-text';
 import type { AppScene } from '@/lib/types/stage';
 import type { LearningItemRef } from '@/lib/types/teaching-package';
 
@@ -438,6 +447,57 @@ function normalizeEnvelope(
   return { learning_outcome_id: learningOutcomeId, slots: parsed.slots };
 }
 
+function textOf(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * H-2: the learner-visible texts of each envelope slot's question (stem,
+ * choices, explanation, model answer, rubric, per-choice rationales). Reads an
+ * unvalidated model answer, so every field is optional.
+ */
+function slotQuestionTexts(slots: unknown[]): SacredQuestionText[] {
+  const out: SacredQuestionText[] = [];
+  for (const slot of slots) {
+    const slotRecord = (slot ?? {}) as { question?: unknown; unsupported_reason?: unknown };
+    const question = slotRecord.question;
+    if (!question || typeof question !== 'object') {
+      // L-3: an unsupported slot's reason travels to Kafuo too.
+      const reason = textOf(slotRecord.unsupported_reason);
+      if (reason) out.push({ stem: '', options: [], other: [reason] });
+      continue;
+    }
+    const record = question as Record<string, unknown>;
+    const measurement = record.measurement_structure;
+    const records = (value: unknown) =>
+      Array.isArray(value)
+        ? value.filter(
+            (entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object',
+          )
+        : [];
+    out.push({
+      stem: textOf(record.question_text),
+      options: records(record.choices).map((choice) => textOf(choice.text)),
+      other: [
+        textOf(record.explanation),
+        textOf(record.model_answer),
+        textOf(record.grading_rubric),
+        // L-3: every other text the envelope carries to Kafuo.
+        textOf(record.concept_name),
+        textOf(slotRecord.unsupported_reason),
+        measurement && typeof measurement === 'object'
+          ? textOf((measurement as Record<string, unknown>).description)
+          : '',
+        ...records(record.diagnostic_hypotheses).flatMap((hypothesis) => [
+          textOf(hypothesis.label),
+          textOf(hypothesis.explanation),
+        ]),
+      ],
+    });
+  }
+  return out;
+}
+
 // --------------------------------------------------------------------------
 // Service
 // --------------------------------------------------------------------------
@@ -594,20 +654,54 @@ export async function generateTeachingQuestionSet(
   // The envelope's shape is only *described* to the model, and Kafuo refuses a
   // drifted one whole. Checking it here turns that drift into a retry of this
   // call instead of a failed generation run on the other side.
+  const sacredPins = readSacredQuotePins(
+    (document.outline as { sacredQuotes?: unknown } | undefined)?.sacredQuotes,
+  );
+  // H-2 (Q-5, Q-12): the book quotes a generated question may show — the
+  // lesson source's and the book questions' detected quotes, plus the pinned
+  // quotes the approved Scenes show.
+  const sacredQuotes = [
+    // N-M2: per paragraph, so one stray bracket voids only its own paragraph.
+    ...detectSacredQuotesByParagraph(context.sourceText),
+    ...bookQuestions.flatMap((question) => detectSacredQuotesByParagraph(question.content)),
+    ...(sacredPins
+      ? pinnedQuotesIn(shownSceneTexts(document.scenes as AppScene[]), sacredPins)
+      : []),
+  ];
   const conforms = (candidate: string): boolean => {
     const json = parseJsonResponse<Record<string, unknown>>(candidate);
     if (!json || typeof json !== 'object' || !Array.isArray(json.slots)) return false;
     if (envelopeViolations(normalizeEnvelope(json, request.objectiveRef)).length > 0) return false;
     // A targeted typed slot must come back as that type; Kafuo refuses any other.
     const wanted = request.targetRole ? request.targetQuestionType : null;
-    return (
-      !wanted ||
-      (json.slots as Array<{ question?: { question_type?: unknown } | null }>).every(
+    if (
+      wanted &&
+      !(json.slots as Array<{ question?: { question_type?: unknown } | null }>).every(
         (slot) => !slot?.question || slot.question.question_type === wanted,
       )
-    );
+    ) {
+      return false;
+    }
+    // H-2: a changed, invented, explained or distractor verse / hadith is a retry.
+    return sacredQuestionFindings(slotQuestionTexts(json.slots), sacredQuotes).length === 0;
   };
-  const { text, model } = await port.generate(QUESTION_SYSTEM_PROMPT, userPrompt, conforms);
+  // S-9: the full Quran and hadith block when the package pins a book quote,
+  // the lesson source or the prompt material holds one, or the subject is
+  // ARABIC; the one short line otherwise.
+  const sacredMode = sacredPolicyModeFor({
+    subjectCode: context.inputSnapshot.subjectCode,
+    pins: sacredPins,
+    texts: [
+      context.sourceText,
+      ...teachingScenes.map((scene) => scene.content),
+      ...bookQuestions.map((question) => question.content),
+    ],
+  });
+  const { text, model } = await port.generate(
+    questionSystemPrompt(sacredMode),
+    userPrompt,
+    conforms,
+  );
   const parsed = parseJsonResponse<Record<string, unknown>>(text);
   if (!parsed || typeof parsed !== 'object') {
     throw new TeachingPackageError(
@@ -616,6 +710,27 @@ export async function generateTeachingQuestionSet(
     );
   }
   const envelope = normalizeEnvelope(parsed, request.objectiveRef);
+
+  // N-H2 (owner-approved): unlike a shape drift, a Quran / hadith finding that
+  // survives the retries stops the whole set; nothing reaches Kafuo. Codes
+  // only, never the text.
+  const sacredCodes = sacredQuestionFindings(
+    slotQuestionTexts(envelope.slots as unknown[]),
+    sacredQuotes,
+  );
+  if (sacredCodes.length > 0) {
+    log.warn('teaching question set stopped by the Quran / hadith check', {
+      requestId: request.requestId,
+      versionId: version.id,
+      objectiveRef: request.objectiveRef,
+      codes: sacredCodes,
+    });
+    throw new TeachingPackageError(
+      'SACRED_TEXT_ALTERED',
+      `the question set changes, invents or explains a Quran verse or hadith (${sacredCodes.join(', ')}); nothing was returned`,
+      { codes: sacredCodes },
+    );
+  }
 
   // Retries exhausted and still off-shape: hand it to Kafuo anyway. Kafuo is the
   // validator of record and records the refusal against its own run; failing

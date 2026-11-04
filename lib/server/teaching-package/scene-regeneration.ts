@@ -24,7 +24,15 @@ import {
   createOwnerBoundDocumentStore,
   type TransactionSource,
 } from '@/lib/persistence/owner-bound-document-store';
-import { readRetainedVersionContext, readVersionById } from '@/lib/persistence/teaching-package';
+import {
+  readAttemptById,
+  readRetainedVersionContext,
+  readVersionById,
+} from '@/lib/persistence/teaching-package';
+import {
+  isTeacherParityModel,
+  resolveSacredExerciseUnitIds,
+} from '@/lib/server/teaching-package/book-coverage';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import {
   isTeachingPackageStageLockedError,
@@ -389,8 +397,25 @@ export async function regenerateSlideScene(
     const scenes = stageDocument.scenes.map((scene) =>
       scene.id === row.sceneId ? row.previousScene : scene,
     );
+    // H-2: the book's exercise and check units (g5.v8 runs only), from the
+    // attempt's input snapshot, so the 4 Nov exercise rule holds here too.
+    // F-7: no attempt or no book map never turns the rule off silently.
+    const exerciseScope = resolveSacredExerciseUnitIds(
+      version.currentAttemptId && isTeacherParityModel(version.teachingModel)
+        ? (await readAttemptById(pool, version.currentAttemptId))?.inputSnapshot.bookStructure
+        : undefined,
+      version.teachingModel,
+      (stageDocument.outline as AppDocumentOutline | undefined)?.outlines,
+    );
+    if (exerciseScope.source === 'outline' || exerciseScope.source === 'role') {
+      log.warn(
+        `SACRED_EXERCISE_SCOPE_FALLBACK regeneration=${row.id} version=${grant.versionId} attempt=${version.currentAttemptId ?? 'none'} scope=${exerciseScope.source}`,
+      );
+    }
+    const sacredExerciseUnitIds = exerciseScope.unitIds;
     const generated = await (deps.regenerate ?? regenerateOneScene)({
       scene: row.previousScene,
+      ...(sacredExerciseUnitIds ? { sacredExerciseUnitIds } : {}),
       scenes,
       stage,
       ...(stageDocument.outline

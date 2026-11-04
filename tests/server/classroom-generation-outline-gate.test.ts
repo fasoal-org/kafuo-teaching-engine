@@ -246,9 +246,9 @@ describe('generateClassroom Stage-1 outline gate', () => {
         await expect(
           generateWith({ input: { prohibitedWidgetTypes: ['game'] } }),
         ).rejects.toMatchObject({ code: 'GAME_GENERATION_DEFERRED' });
-        // The slide before it was generated; the game never reached a model call.
-        expect(mocks.generateSceneContent).toHaveBeenCalledTimes(1);
-        expect(mocks.generateSceneContent.mock.calls[0]![0]).toMatchObject({ id: 'outline-1' });
+        // The refusal runs in a pre-pass before any content spend (6d968161):
+        // no Scene, not even the slide before the game, reached a model call.
+        expect(mocks.generateSceneContent).toHaveBeenCalledTimes(0);
       },
     );
 

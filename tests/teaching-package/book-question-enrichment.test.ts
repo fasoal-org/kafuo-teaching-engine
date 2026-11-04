@@ -215,6 +215,99 @@ describe('book question enrichment from an approved package', () => {
     );
   });
 
+  it('retries added texts that show an invented or explained verse, never the book’s own (H-2)', async () => {
+    const seeded = await seed();
+    const VERSE = '﴿وَأَخِى هَٰرُونُ هُوَ أَفْصَحُ مِنِّى لِسَانًا﴾';
+    let accept: ((text: string) => boolean) | undefined;
+    generate.mockImplementation(async (_system, _prompt, check) => {
+      accept = check;
+      return { text: JSON.stringify(GOOD), model: 'openai:test' };
+    });
+    await enrichBookQuestion(
+      pool as never,
+      request(seeded, {
+        bookQuestion: {
+          questionId: '701',
+          questionText: `أعرب كلمة «هارون» في قوله تعالى: ${VERSE}`,
+          choices: [
+            { choiceId: 'A', text: 'بدل' },
+            { choiceId: 'B', text: 'فاعل' },
+            { choiceId: 'C', text: 'مفعول به' },
+          ],
+          correctChoiceId: 'A',
+          bookExplanation: null,
+        },
+      }),
+      port,
+    );
+    // The book's own verse in the stem is never a finding.
+    expect(accept?.(JSON.stringify(GOOD))).toBe(true);
+    const explained = { ...GOOD, explanation: 'معنى الآية أن هارون أفصح لسانا.' };
+    expect(accept?.(JSON.stringify(explained))).toBe(false);
+    const invented = {
+      ...GOOD,
+      diagnostic_hypotheses: [
+        GOOD.diagnostic_hypotheses[0],
+        { ...GOOD.diagnostic_hypotheses[1], explanation: 'يخلط بقوله ﴿قول مخترع﴾' },
+      ],
+    };
+    expect(accept?.(JSON.stringify(invented))).toBe(false);
+  });
+
+  it('returns nothing when an added verse finding survives the retries (N-H2)', async () => {
+    const seeded = await seed();
+    const invented = { ...GOOD, explanation: 'كما في ﴿قول مخترع ليس في الكتاب﴾' };
+    generate.mockImplementation(async (_system, _prompt, check) => {
+      expect(check(JSON.stringify(invented))).toBe(false);
+      return { text: JSON.stringify(invented), model: 'openai:test' };
+    });
+    const error = await enrichBookQuestion(pool as never, request(seeded), port).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(TeachingPackageError);
+    expect(error).toMatchObject({
+      code: 'SACRED_TEXT_ALTERED',
+      details: { codes: ['SACRED_TEXT_ALTERED'] },
+    });
+    expect(JSON.stringify((error as TeachingPackageError).details)).not.toContain('مخترع');
+    expect((error as Error).message).not.toContain('مخترع');
+  });
+
+  it('catches an added altered verse even when the book stem already has a finding (N-M1)', async () => {
+    const seeded = await seed();
+    const VERSE = '﴿وَأَخِى هَٰرُونُ هُوَ أَفْصَحُ مِنِّى لِسَانًا﴾';
+    let accept: ((text: string) => boolean) | undefined;
+    generate.mockImplementation(async (_system, _prompt, check) => {
+      accept = check;
+      return { text: JSON.stringify(GOOD), model: 'openai:test' };
+    });
+    await enrichBookQuestion(
+      pool as never,
+      request(seeded, {
+        bookQuestion: {
+          questionId: '702',
+          // The book prints the verse and then copies it without brackets:
+          // SACRED_TEXT_ALTERED on the stem alone.
+          questionText: `${VERSE} أعرب ما تحته خط: وأخي هارون هو أفصح مني لسانا`,
+          choices: [
+            { choiceId: 'A', text: 'بدل' },
+            { choiceId: 'B', text: 'فاعل' },
+            { choiceId: 'C', text: 'مفعول به' },
+          ],
+          correctChoiceId: 'A',
+          bookExplanation: null,
+        },
+      }),
+      port,
+    );
+    expect(accept?.(JSON.stringify(GOOD))).toBe(true);
+    const altered = {
+      ...GOOD,
+      explanation: 'كما في قوله ﴿وَأَخِى هَٰرُونُ هُوَ أَفْصَحُ لِسَانًا﴾',
+    };
+    expect(accept?.(JSON.stringify(altered))).toBe(false);
+  });
+
   it('checks the envelope shape so a drifted response is retried before crossing to Kafuo', () => {
     const expected = { wrongChoiceIds: ['B', 'C'], needsExplanation: false };
     expect(enrichmentEnvelopeViolations(normalizeEnrichmentEnvelope(GOOD), expected)).toContain(

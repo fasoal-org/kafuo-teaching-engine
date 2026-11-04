@@ -15,8 +15,8 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import type { RegenerateOneSceneInput } from '@/lib/server/teaching-package/regenerate-one-scene';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
-import type { AppStage } from '@/lib/document-store/persistence-types';
-import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
+import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
+import { makeDocument, makeOutline, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 /**
  * Reviewer-driven single-slide regeneration over PGlite, through the real
@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   regenerate: vi.fn(),
   createRoute: vi.fn(),
   duringGeneration: null as null | (() => Promise<void>),
+  warn: vi.fn(),
 }));
 
 vi.mock('@/lib/server/teaching-package/regenerate-one-scene', () => ({
@@ -38,7 +39,7 @@ vi.mock('@/lib/server/teaching-package/routed-regeneration-call', () => ({
   createRegenerationRoute: mocks.createRoute,
 }));
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn(), debug: vi.fn() }),
 }));
 
 class PGlitePool {
@@ -327,6 +328,55 @@ describe('slide regeneration routes', () => {
     // The reason never reaches the generator.
     expect(JSON.stringify(mocks.regenerate.mock.calls[0]![0])).not.toContain('REASON-MARK');
     expect(mocks.regenerate.mock.calls[0]![0].instruction).toBe(INSTRUCTION);
+  });
+
+  it('F-7: a g5.v8 version with no attempt keeps the exercise rule on (outline ids, else role scope) and warns with ids only', async () => {
+    const V8 = 'stage-regen-v8';
+    const outline = {
+      ...makeOutline('v8 package'),
+      outlines: [
+        { id: 'o-ex', contentRole: 'practice', sourceContentUnitIds: ['u-ex'] },
+        { id: 'o-exp', contentRole: 'explanation', sourceContentUnitIds: ['u-explain'] },
+      ],
+    } as unknown as AppDocumentOutline;
+    for (const [stageId, docOutline] of [
+      [V8, outline],
+      [`${V8}-bare`, makeOutline('v8 bare')],
+    ] as const) {
+      await editorStore().saveDocument(
+        makeDocument(stageId, 'v8 package', [makeSlideScene('scene-1', stageId, 1)], docOutline),
+      );
+      await insertVersion(pool as never, {
+        id: `tpv-${stageId}`,
+        aggregate: {
+          tenantId: 'tenant-test',
+          learningItem: { type: 'lesson', id: `li-${stageId}` },
+        },
+        version: 1,
+        status: 'draft',
+        currentStageId: stageId,
+        teachingModel: { key: 'g5', version: 'g5.v8' },
+        now: 1,
+      });
+    }
+    mocks.warn.mockClear();
+    const withOutline = await post('scene-1', body(), cookieFor(V8, 'write').cookie, V8);
+    expect(withOutline.status).toBe(200);
+    expect(mocks.regenerate.mock.calls[0]![0].sacredExerciseUnitIds).toEqual(['u-ex']);
+    const bare = `${V8}-bare`;
+    expect((await post('scene-1', body(), cookieFor(bare, 'write').cookie, bare)).status).toBe(200);
+    // No unit ids anywhere: the role/stage scope (an empty id list), never off.
+    expect(mocks.regenerate.mock.calls[1]![0].sacredExerciseUnitIds).toEqual([]);
+    const warnings = mocks.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings.filter((line) => line.startsWith('SACRED_EXERCISE_SCOPE_FALLBACK'))).toEqual([
+      expect.stringContaining(`version=tpv-${V8} attempt=none scope=outline`),
+      expect.stringContaining(`version=tpv-${bare} attempt=none scope=role`),
+    ]);
+    // A g5.v1 version stays off and silent.
+    mocks.warn.mockClear();
+    expect((await post('scene-1', body())).status).toBe(200);
+    expect(mocks.regenerate.mock.calls[2]![0].sacredExerciseUnitIds).toBeUndefined();
+    expect(mocks.warn).not.toHaveBeenCalled();
   });
 
   it('AT-AU: no grant, cookie, raw learner key or tp: value is stored', async () => {

@@ -39,7 +39,11 @@ import {
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
-import { instructionFor } from '@/lib/server/teaching-package/book-coverage-repair';
+import {
+  instructionFor,
+  solutionTitle,
+  teachingNoteFrom,
+} from '@/lib/server/teaching-package/book-coverage-repair';
 import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
@@ -611,10 +615,28 @@ function setField(
       }
       // A native diagram keeps its planned note only while it stays native; a
       // new native plan gets its note when the resumed run re-plans it (D-3).
-      const diagram =
-        record.mode === 'native' && next.visualPlan?.mode === 'native'
+      // Lesson 318: a person's own complete note is kept, and a native plan
+      // with no note at all gets one read from the slide, so it never blocks.
+      const sent = record.diagram as { shows?: unknown; teachingPoint?: unknown } | undefined;
+      const sentNote =
+        typeof sent?.shows === 'string' &&
+        sent.shows.trim() !== '' &&
+        sent.shows.length <= 500 &&
+        typeof sent.teachingPoint === 'string' &&
+        sent.teachingPoint.trim() !== '' &&
+        sent.teachingPoint.length <= 500
+          ? { shows: sent.shows.trim(), teachingPoint: sent.teachingPoint.trim() }
+          : undefined;
+      const kept =
+        next.visualPlan?.mode === 'native' &&
+        typeof next.visualPlan.diagram?.shows === 'string' &&
+        next.visualPlan.diagram.shows.trim() !== '' &&
+        typeof next.visualPlan.diagram?.teachingPoint === 'string' &&
+        next.visualPlan.diagram.teachingPoint.trim() !== ''
           ? next.visualPlan.diagram
           : undefined;
+      const diagram =
+        record.mode === 'native' ? (sentNote ?? kept ?? teachingNoteFrom(next)) : undefined;
       next.visualPlan = {
         mode: record.mode as 'image' | 'native' | 'omitted',
         ...(typeof reason === 'string' ? { omissionReason: reason } : {}),
@@ -774,10 +796,7 @@ function anchorPolicy(
  * admin page's language (a reviewer's English UI once titled an Arabic slide
  * "Solution: …").
  */
-export function solutionTitle(tryItTitle: string): string {
-  const topic = tryItTitle.replace(/^[^:：]{1,20}[:：]\s*/, '').trim() || tryItTitle;
-  return /[؀-ۿ]/.test(tryItTitle) ? `الحل: ${topic}` : `Solution: ${topic}`;
-}
+export { solutionTitle };
 
 /**
  * The inserted solution's title and key points. A whole check's solution
@@ -842,20 +861,24 @@ function insertedBookSlide(
   // A position that requires a visual gets a native diagram when no textbook
   // visual belongs to the check (the resume plans its teaching note).
   const visualRequired = anchorPolicy(anchor, context.flow)?.visual !== undefined;
+  const content = solutionContent(outlines, gap, anchor, title);
+  const description = instructionFor(gap, context.bookStructure?.teacherParity === true);
+  // Lesson 318: a native plan carries a complete note, or it blocks the resume.
+  const diagram = teachingNoteFrom({ ...content, description });
   return {
     id,
     type: 'slide',
     slideType: 'content',
     contentRole: 'worked_example',
-    ...solutionContent(outlines, gap, anchor, title),
-    description: instructionFor(gap),
+    ...content,
+    description,
     order: gap.anchorIndex! + 2,
     ...(anchor.teachingStage ? { teachingStage: { ...anchor.teachingStage } } : {}),
     sourceContentUnitIds: [unitId],
     ...(linked.length > 0
       ? { suggestedImageIds: linked, visualPlan: { mode: 'image' } }
       : visualRequired
-        ? { visualPlan: { mode: 'native' } }
+        ? { visualPlan: { mode: 'native', diagram } }
         : {}),
     ...(anchor.teachingSkills ? { teachingSkills: structuredClone(anchor.teachingSkills) } : {}),
   } as SceneOutline;

@@ -14,7 +14,13 @@
  * validator and the Question Bank authority.
  */
 
-export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v4.20261101';
+import {
+  sacredTextPolicyFor,
+  type SacredPolicyMode,
+} from '@/lib/server/teaching-package/sacred-text-policy';
+
+/** v6 (S-9): the Quran and hadith block is full or one short line by lesson/subject. */
+export const QUESTION_GENERATION_PROMPT_VERSION = 'te-tqg.v6.20261104';
 /**
  * v2 (one question source plan, 1 Nov 2026): a targeted slot may be single choice,
  * true/false, multiple answer or short answer. Kafuo sends v2 from W2 on; v1 is still
@@ -80,7 +86,7 @@ const MATH_NOTATION_RULE = String.raw`MATH NOTATION
   Correct: "\\( P = \\frac{F}{A} \\)"
   Wrong:   "(P = \frac{F}{A})"`;
 
-export const QUESTION_SYSTEM_PROMPT = `You write diagnostic multiple-choice questions for an approved school lesson.
+const QUESTION_SYSTEM_PROMPT_BODY = `You write diagnostic multiple-choice questions for an approved school lesson.
 
 AUTHORITY
 - The learning outcome defines WHAT must be assessed.
@@ -186,7 +192,20 @@ Return ONLY a JSON object with exactly this shape (no commentary, no markdown):
       }
     }
   ]
-}`;
+}
+
+`;
+
+/**
+ * The bank-question system prompt (S-9): the full Quran and hadith block for a
+ * lesson with quotes or an ARABIC subject, the one short line otherwise.
+ */
+export function questionSystemPrompt(mode: SacredPolicyMode): string {
+  return `${QUESTION_SYSTEM_PROMPT_BODY}${sacredTextPolicyFor(mode)}`;
+}
+
+/** The full-policy prompt (the fail-safe default). */
+export const QUESTION_SYSTEM_PROMPT = questionSystemPrompt('full');
 
 export interface PromptSection {
   anchor: string;

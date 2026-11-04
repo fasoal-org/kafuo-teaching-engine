@@ -15,8 +15,8 @@ import {
 const [ENGLISH_RULES, ARABIC_RULES] = TUTOR_RULES_TEXT.split('\n---\n') as [string, string];
 
 describe('tutor rules — answer format (FMT-01)', () => {
-  it('is versioned r6', () => {
-    expect(TUTOR_RULES_VERSION).toBe('tutor-rules@r6');
+  it('is versioned r7', () => {
+    expect(TUTOR_RULES_VERSION).toBe('tutor-rules@r7');
     expect(TUTOR_RULES_TEXT.split('\n---\n')).toHaveLength(2);
   });
 

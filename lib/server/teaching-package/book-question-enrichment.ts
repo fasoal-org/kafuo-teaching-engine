@@ -23,11 +23,16 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   BOOK_ENRICHMENT_ENVELOPE_VERSION,
   BOOK_ENRICHMENT_PROMPT_VERSION,
-  BOOK_ENRICHMENT_SYSTEM_PROMPT,
+  bookEnrichmentSystemPrompt,
   buildBookEnrichmentUserPrompt,
   enrichmentEnvelopeViolations,
   normalizeEnrichmentEnvelope,
 } from '@/lib/server/teaching-package/book-question-enrichment-prompt';
+import {
+  detectSacredQuotesByParagraph,
+  sacredAddedTextFindings,
+  sacredPolicyModeFor,
+} from '@/lib/server/teaching-package/sacred-text';
 import {
   defaultModelPort,
   selectSourceExcerpts,
@@ -138,6 +143,33 @@ export async function enrichBookQuestion(
     siblingMeasurements: request.siblingMeasurements,
     findings: request.findings,
   });
+  // H-2 (Q-5, Q-12): the book quotes the added texts may show — the lesson
+  // source's (per paragraph, N-M2) and the book question's own. The question,
+  // choices and book explanation are the book's and read-only, so only the
+  // model's own fields are checked (N-M1); whether the item shows a quote, for
+  // the explanation rule, comes from the book texts. This path reads no Stage
+  // document, so it has no pins to add.
+  const bookTexts = [
+    request.bookQuestion.questionText,
+    ...request.bookQuestion.choices.map((choice) => choice.text),
+    ...(request.bookQuestion.bookExplanation ? [request.bookQuestion.bookExplanation] : []),
+  ];
+  const sacredQuotes = [context.sourceText, ...bookTexts].flatMap(detectSacredQuotesByParagraph);
+  const addedSacredFindings = (json: Record<string, unknown>): string[] => {
+    const text = (value: unknown) => (typeof value === 'string' ? value : '');
+    const hypotheses = Array.isArray(json.diagnostic_hypotheses)
+      ? json.diagnostic_hypotheses.filter(
+          (entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object',
+        )
+      : [];
+    const measurement = json.measurement_structure as Record<string, unknown> | null | undefined;
+    const added = [
+      text(json.explanation),
+      ...hypotheses.flatMap((entry) => [text(entry.label), text(entry.explanation)]),
+      measurement && typeof measurement === 'object' ? text(measurement.description) : '',
+    ];
+    return sacredAddedTextFindings(bookTexts, added, sacredQuotes);
+  };
   const conforms = (candidate: string): boolean => {
     const json = parseJsonResponse<Record<string, unknown>>(candidate);
     if (!json || typeof json !== 'object') return false;
@@ -145,15 +177,45 @@ export async function enrichBookQuestion(
       enrichmentEnvelopeViolations(normalizeEnrichmentEnvelope(json), {
         wrongChoiceIds,
         needsExplanation,
-      }).length === 0
+      }).length === 0 && addedSacredFindings(json).length === 0
     );
   };
-  const { text, model } = await port.generate(BOOK_ENRICHMENT_SYSTEM_PROMPT, prompt, conforms);
+  // S-9: the full Quran and hadith block when the lesson source or the book
+  // question holds a quote, or the subject is ARABIC; the short line otherwise.
+  const sacredMode = sacredPolicyModeFor({
+    subjectCode: context.inputSnapshot.subjectCode,
+    texts: [
+      context.sourceText,
+      request.bookQuestion.questionText,
+      request.bookQuestion.bookExplanation,
+      ...request.bookQuestion.choices.map((choice) => choice.text),
+    ],
+  });
+  const { text, model } = await port.generate(
+    bookEnrichmentSystemPrompt(sacredMode),
+    prompt,
+    conforms,
+  );
   const parsed = parseJsonResponse<Record<string, unknown>>(text);
   if (!parsed || typeof parsed !== 'object') {
     throw new TeachingPackageError(
       'QUESTION_GENERATION_OUTPUT_INVALID',
       'the model output could not be parsed as JSON',
+    );
+  }
+  // N-H2 (owner-approved): unlike a shape drift, a Quran / hadith finding that
+  // survives the retries is never handed to Kafuo. Codes only, never the text.
+  const sacredCodes = addedSacredFindings(parsed);
+  if (sacredCodes.length > 0) {
+    log.warn('book question enrichment stopped by the Quran / hadith check', {
+      requestId: request.requestId,
+      versionId: version.id,
+      codes: sacredCodes,
+    });
+    throw new TeachingPackageError(
+      'SACRED_TEXT_ALTERED',
+      `the enrichment changes, invents or explains a Quran verse or hadith (${sacredCodes.join(', ')}); nothing was returned`,
+      { codes: sacredCodes },
     );
   }
   const envelope = normalizeEnrichmentEnvelope(parsed);

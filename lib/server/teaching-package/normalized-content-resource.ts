@@ -7,6 +7,13 @@ import { fetchBytesSecurely, type SecureBytesOptions } from '@/lib/server/agent-
 import { ContentResourceAcquisitionError } from '@/lib/server/teaching-package/content-resource';
 import { retainableUnitText, unitMaySkipText } from '@/lib/server/teaching-package/content-units';
 import {
+  canonicalMismatchQuotes,
+  SACRED_TEXT_CANONICAL_MISMATCH,
+  SacredQuotesContractError,
+  sacredQuotesFromManifest,
+  type SacredQuoteWire,
+} from '@/lib/server/teaching-package/sacred-text';
+import {
   toVisionPdfImages,
   type NormalizedSource,
   type NormalizedSourceImage,
@@ -37,6 +44,13 @@ interface ManifestUnit {
   title?: string;
   normalizedText?: string;
   blocks: ManifestBlock[];
+  /**
+   * Optional (Quran/hadith plan Q-3): the unit's protected quotes, exact text.
+   * Absent on older backends — the TE then detects ﴿…﴾ spans itself.
+   */
+  sacred_quotes?: SacredQuoteWire[];
+  /** The same field in the manifest's camelCase style, accepted too. */
+  sacredQuotes?: SacredQuoteWire[];
 }
 
 interface ManifestVisual {
@@ -393,6 +407,26 @@ export async function acquireNormalizedContentResource(
   }
 
   const units = ordered(manifest.contentUnits, 'NORMALIZED_CONTENT_ARCHIVE_INVALID');
+  // Q-3: the optional `sacred_quotes` of each unit must be well-formed when
+  // present (fail closed); its absence is the older contract, detected later.
+  let sacredQuotes: ReturnType<typeof sacredQuotesFromManifest>;
+  try {
+    sacredQuotes = sacredQuotesFromManifest(units);
+  } catch (error) {
+    if (error instanceof SacredQuotesContractError) {
+      fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', error.message);
+    }
+    throw error;
+  }
+  // S-6: a verse the backend's canonical check flagged (`canonical_status:
+  // "mismatch"`) is never generated from; the unit goes back to review.
+  const mismatched = canonicalMismatchQuotes(sacredQuotes);
+  if (mismatched.length > 0) {
+    fail(
+      SACRED_TEXT_CANONICAL_MISMATCH,
+      `${mismatched.length} Quran quote(s) of the source differ from the canonical text; the content needs review before generation`,
+    );
+  }
   const blockIds = new Set<string>();
   const associationByVisual = new Map<
     string,

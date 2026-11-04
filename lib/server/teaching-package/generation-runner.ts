@@ -89,12 +89,22 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   exerciseBlockRequirement,
+  isSacredExerciseElement,
   isTeacherParityModel,
   plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
   teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
 import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import {
+  detectSacredQuotes,
+  exerciseSceneIdsOf,
+  SACRED_TEXT_ALTERED,
+  sacredPolicyMode,
+  sacredQuotesFromManifest,
+  validateSacredText,
+  withoutSacredItems,
+} from '@/lib/server/teaching-package/sacred-text';
 import { findSplitUnitDuplicateImages } from '@/lib/server/teaching-package/split-unit-images';
 import { plannerSkillOptions } from '@/lib/server/teaching-package/scene-insertion';
 import {
@@ -596,6 +606,27 @@ async function runKafuoAttempt(
   // g5.v8: the exercises block the engine selected, from the same coverage book
   // (map + unit facts) the gate checks it against. Empty for every other model.
   const exerciseBlock = exerciseBlockRequirement(coverageBook);
+  // Quran and hadith (plan Q-3 to Q-15): the protected quotes of the approved
+  // source — the export's `sacred_quotes`, or, from an older backend or a PDF
+  // fallback, the ﴿…﴾ spans and attributed hadith found in the text. Every
+  // Kafuo run carries the policy (validation, narration and media stripping,
+  // pins). Owner decision S-9: the prompts get the FULL block only when the
+  // lesson has quotes or its subject route key is ARABIC (Literary Studies
+  // routes as ARABIC); every other run gets the one short "never invent a
+  // verse or hadith" line. Acquisition already refused a malformed field.
+  const sacredQuotes = normalizedSource
+    ? sacredQuotesFromManifest(normalizedSource.manifest.contentUnits)
+    : detectSacredQuotes({ id: '', normalizedText: source.text });
+  // g5.v8 (owner, 4 Nov 2026): verse and hadith items are removed from the
+  // book's exercise and «تأكد» check units, shown and spoken. Off otherwise.
+  const sacredExerciseScopeOn = teacherParity && kafuo.bookStructure !== undefined;
+  const sacredExerciseUnitIds = new Set<string>(
+    sacredExerciseScopeOn
+      ? kafuo
+          .bookStructure!.units.filter(isSacredExerciseElement)
+          .map((unit) => String(unit.contentUnitId))
+      : [],
+  );
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
@@ -613,6 +644,11 @@ async function runKafuoAttempt(
     // reported on its outline, and a Scene that would still build one is
     // refused before any widget call — initial, corrected and resumed runs alike.
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
+    sacredText: {
+      quotes: sacredQuotes,
+      mode: sacredPolicyMode(sacredQuotes, kafuo.subjectCode),
+      ...(sacredExerciseScopeOn ? { exerciseUnitIds: [...sacredExerciseUnitIds] } : {}),
+    },
     // Owner decision (1 Nov 2026, slide-questions plan rev 2): the check quiz
     // generates its questions like any slide; the reviewer edits them, and the
     // backend saves them in the question bank at approval. So no bank
@@ -639,7 +675,15 @@ async function runKafuoAttempt(
       ? {
           sourceUnits: retainableContentUnits({
             contentUnits: normalizedSource.manifest.contentUnits,
-          }).map((unit) => ({ id: unit.unitId, title: unit.title, text: unit.normalizedText })),
+          }).map((unit) => ({
+            id: unit.unitId,
+            title: unit.title,
+            // g5.v8 (4 Nov 2026): an exercise or check slide never sets or
+            // solves a verse or hadith item, so its unit text drops them.
+            text: sacredExerciseUnitIds.has(String(unit.unitId))
+              ? withoutSacredItems(unit.normalizedText)
+              : unit.normalizedText,
+          })),
         }
       : {}),
     // g5.v8 (teacher-parity plan): solutions write every hidden step on the
@@ -800,7 +844,11 @@ async function runKafuoAttempt(
                       role: unit.role,
                       subtype: unit.subtype ?? null,
                       title: unit.title ?? null,
-                      text: unit.normalizedText,
+                      // M-3 (4 Nov 2026 rule): the repair planner and the
+                      // fallback try-it never carry a verse or hadith item.
+                      text: sacredExerciseUnitIds.has(String(unit.unitId))
+                        ? withoutSacredItems(unit.normalizedText)
+                        : unit.normalizedText,
                     })),
                     skillOptions: governedByTeachingSkills
                       ? (entry) => plannerSkillOptions(entry, kafuo.teachingFlow)
@@ -814,7 +862,8 @@ async function runKafuoAttempt(
                       return { outlines: diagnosed.outlines, blocking: diagnosed.blocking };
                     },
                   });
-                  return repaired.inserted > 0
+                  // g5.v8: a merge or a recall move changes the plan without an insert.
+                  return repaired.inserted + repaired.restructured > 0
                     ? { outlines: repaired.outlines, blocking: repaired.blocking }
                     : null;
                 },
@@ -976,6 +1025,85 @@ async function runKafuoAttempt(
           await compensateRun(pool, result.id);
           continue;
         }
+      }
+
+      // Quran and hadith gate (plan Q-5, Q-7, Q-10, Q-12, Q-13, Q-15): every
+      // verse and hadith the package shows equals the book text, and is never
+      // split, completed, explained, a distractor, spoken, or beside audio.
+      // Narration and image prompts were already repaired before TTS and media
+      // (`stripSacredNarration`), so what is left is a bad model answer in a
+      // Scene: the Stage is retained and those Scenes are regenerated on resume,
+      // exactly like the Action gate above; an unscoped finding compensates.
+      // g5.v8 (4 Nov 2026): exercise and check Scenes show no verse or hadith item.
+      const sacredExerciseScope = sacredExerciseScopeOn
+        ? {
+            exerciseSceneIds: exerciseSceneIdsOf(
+              result.scenes,
+              result.outlines,
+              sacredExerciseUnitIds,
+            ),
+          }
+        : undefined;
+      const sacredFindings = validateSacredText(result.scenes, sacredQuotes, sacredExerciseScope);
+      if (sacredFindings.length > 0) {
+        const offendingOutlines = new Set(
+          sacredFindings.flatMap((finding) => {
+            const outlineId = result.scenes.find(
+              (scene) => scene.id === finding.sceneId,
+            )?.outlineId;
+            return outlineId ? [outlineId] : [];
+          }),
+        );
+        const pending = result.outlines
+          .filter((outline) => offendingOutlines.has(outline.id))
+          .map((outline) => outline.id);
+        const codes = [...new Set(sacredFindings.map((finding) => finding.code))];
+        if (pending.length > 0) {
+          const { paused } = await pauseAttemptForCorrection(
+            pool,
+            attemptId,
+            {
+              phase: 'scenes',
+              outlines: result.outlines,
+              courseTitle: result.stage.name ?? null,
+              languageDirective: result.stage.languageDirective ?? '',
+              diagnostics: sceneRegenerationDiagnostics(
+                result.outlines,
+                pending,
+                SACRED_TEXT_ALTERED,
+                (outlineId) => {
+                  const sceneIds = result.scenes
+                    .filter((scene) => scene.outlineId === outlineId)
+                    .map((scene) => scene.id);
+                  const findings = sacredFindings.filter((finding) =>
+                    sceneIds.includes(finding.sceneId),
+                  );
+                  return `${findings.map((finding) => `${finding.code}: ${finding.message}`).join('; ')}; this outline's Scene is regenerated on resume`;
+                },
+              ),
+              repairs: [],
+              reservedStageId: result.id,
+              pendingOutlineIds: pending,
+            },
+            sourceRefsFor(run),
+          );
+          if (paused) {
+            log.warn(
+              `Teaching package attempt ${attemptId} run ${run} paused after sacred-text validation (${codes.join(', ')}); ${pending.length} Scene(s) to regenerate`,
+            );
+            return;
+          }
+        }
+        lastFailure = {
+          code: SACRED_TEXT_ALTERED,
+          message: `${sacredFindings[0]!.message} (${sacredFindings.length} sacred-text finding(s): ${codes.join(', ')})`,
+          retryable: true,
+        };
+        log.warn(
+          `Teaching package attempt ${attemptId} run ${run} failed sacred-text validation (${codes.join(', ')})`,
+        );
+        await compensateRun(pool, result.id);
+        continue;
       }
 
       // Machine repairs (an incompatible contentKind dropped, the role kept, …)

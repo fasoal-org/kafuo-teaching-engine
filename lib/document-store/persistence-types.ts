@@ -3,7 +3,11 @@ import type { Stage } from '@openmaic/dsl';
 
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
-import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
+import type {
+  SacredQuotePin,
+  SourceVisualManifestEntry,
+  TeachingFlowEntry,
+} from '@/lib/types/teaching-package';
 
 /** App-owned stage shape. Device playback position is not document metadata. */
 export type AppStage = Stage;
@@ -61,6 +65,12 @@ export interface AppDocumentOutline {
    * image binary. Survives successor clones and Editor saves.
    */
   sourceVisuals?: SourceVisualManifestEntry[];
+  /**
+   * Quran and hadith pins (Kafuo plan Q-14): sha256 + source block id of each
+   * protected quote of the generation's source, never the text. An Editor write
+   * whose quote spans are not pinned is refused. Survives Editor saves.
+   */
+  sacredQuotes?: SacredQuotePin[];
   createdAt: number;
   updatedAt: number;
 }

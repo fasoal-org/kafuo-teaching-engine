@@ -590,6 +590,141 @@ describe('teaching question generation from an approved package', () => {
     expect(accept?.(JSON.stringify(drifted))).toBe(false);
   });
 
+  it('retries a question that shows an invented or explained verse (H-2)', async () => {
+    const seeded = await seed();
+    let accept: ((text: string) => boolean) | undefined;
+    const checking: QuestionModelPort = {
+      generate: async (_system, _prompt, check) => {
+        accept = check;
+        return { text: JSON.stringify(ENVELOPE), model: 'm' };
+      },
+    };
+    await generateTeachingQuestionSet(qp(), request(seeded), checking);
+    const question = {
+      question_text: 'Which fraction is larger?',
+      question_type: 'multiple_choice',
+      choices: ['A', 'B', 'C', 'D'].map((choice_id) => ({ choice_id, text: choice_id })),
+      correct_choice_id: 'A',
+      explanation: 'A common denominator shows it.',
+      difficulty: 'easy',
+      concept_name: 'c',
+      skill_tag: 's',
+      cognitive_level: 'apply',
+      measurement_structure: { signature: 'sig', description: 'd' },
+      diagnostic_hypotheses: ['B', 'C', 'D'].map((choice_id) => ({
+        choice_id,
+        label: 'l',
+        explanation: 'x',
+      })),
+      evidence_anchors: ['C1'],
+      validation_notes: {
+        has_exactly_one_correct_answer: true,
+        answerable_from_approved_evidence: true,
+        is_original_question: true,
+      },
+    };
+    const envelope = (overrides: Record<string, unknown>) =>
+      JSON.stringify({
+        learning_outcome_id: 48,
+        slots: [
+          {
+            teaching_role: 'mastery_check',
+            supported: true,
+            unsupported_reason: null,
+            question: { ...question, ...overrides },
+          },
+        ],
+      });
+    expect(accept?.(envelope({}))).toBe(true);
+    // The lesson source holds no verse: any ﴿…﴾ span is an invented one.
+    expect(accept?.(envelope({ question_text: 'أعرب: ﴿قول مخترع ليس في الكتاب﴾' }))).toBe(false);
+    expect(accept?.(envelope({ explanation: 'كما في ﴿قول مخترع ليس في الكتاب﴾' }))).toBe(false);
+    // L-3: the other texts the envelope carries to Kafuo are checked too.
+    expect(accept?.(envelope({ concept_name: '﴿قول مخترع﴾' }))).toBe(false);
+    expect(
+      accept?.(
+        envelope({ measurement_structure: { signature: 'sig', description: '﴿قول مخترع﴾' } }),
+      ),
+    ).toBe(false);
+    expect(
+      accept?.(
+        JSON.stringify({
+          learning_outcome_id: 48,
+          slots: [
+            {
+              teaching_role: 'check_understanding',
+              supported: false,
+              unsupported_reason: 'كما في ﴿قول مخترع﴾',
+              question: null,
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      accept?.(
+        envelope({
+          choices: ['A', 'B', 'C', 'D'].map((choice_id) => ({
+            choice_id,
+            text: choice_id === 'B' ? '﴿قول مخترع﴾' : choice_id,
+          })),
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('stops the whole set when a verse finding survives the retries (N-H2)', async () => {
+    const seeded = await seed();
+    const question = {
+      question_text: 'أعرب: ﴿قول مخترع ليس في الكتاب﴾',
+      question_type: 'multiple_choice',
+      choices: ['A', 'B', 'C', 'D'].map((choice_id) => ({ choice_id, text: choice_id })),
+      correct_choice_id: 'A',
+      explanation: 'e',
+      difficulty: 'easy',
+      concept_name: 'c',
+      skill_tag: 's',
+      cognitive_level: 'apply',
+      measurement_structure: { signature: 'sig', description: 'd' },
+      diagnostic_hypotheses: ['B', 'C', 'D'].map((choice_id) => ({
+        choice_id,
+        label: 'l',
+        explanation: 'x',
+      })),
+      evidence_anchors: ['C1'],
+      validation_notes: {
+        has_exactly_one_correct_answer: true,
+        answerable_from_approved_evidence: true,
+        is_original_question: true,
+      },
+    };
+    const text = JSON.stringify({
+      learning_outcome_id: 48,
+      slots: [
+        { teaching_role: 'mastery_check', supported: true, unsupported_reason: null, question },
+      ],
+    });
+    // The port exhausted its retries (the check refused every answer) and
+    // returned the last one, as the stage-routed port does.
+    const exhausted: QuestionModelPort = {
+      generate: async (_system, _prompt, check) => {
+        expect(check?.(text)).toBe(false);
+        return { text, model: 'm' };
+      },
+    };
+    const error = await generateTeachingQuestionSet(qp(), request(seeded), exhausted).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(TeachingPackageError);
+    expect(error).toMatchObject({
+      code: 'SACRED_TEXT_ALTERED',
+      details: { codes: ['SACRED_TEXT_ALTERED'] },
+    });
+    // Codes only: the verse text never travels in the error.
+    expect(JSON.stringify((error as TeachingPackageError).details)).not.toContain('مخترع');
+    expect((error as Error).message).not.toContain('مخترع');
+  });
+
   it('refuses unparseable model output', async () => {
     const seeded = await seed();
     mocks.generate.mockResolvedValue({ text: 'not json at all', model: 'm' });

@@ -28,15 +28,82 @@ import {
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
+  mergeDuplicateSolutions,
   repairBookCoverageGaps,
   type BookCoverageRepairContext,
 } from '@/lib/server/teaching-package/book-coverage-repair';
 import {
   checkItemLabels,
   detectHiddenStepTypes,
+  exerciseQuestionNumbers,
   HIDDEN_STEP_TYPES,
   showsWorkingStep,
 } from '@/lib/server/teaching-package/hidden-step-types';
+
+describe('RTL question numbers (4 Nov 2026)', () => {
+  it('counts «.5 » at line start, never a decimal inside a line', () => {
+    expect(exerciseQuestionNumbers('.5 احسب\n.6 بسّط\nالناتج 0.5 تقريبًا')).toEqual([5, 6]);
+    expect(checkItemLabels('تأكد\n.1 أوجد\n.2 احسب 3.5')).toEqual(['1', '2']);
+  });
+
+  it('reads the math OCR form «value (N» as items in consecutive runs only', () => {
+    // Lesson 312 unit 5464, as stored (content_units.text).
+    const unit5464 = [
+      'تأكد',
+      '',
+      'مثال 1 حدّد مجموعات الأعداد التي ينتمي إليها كل عدد مما يأتي:',
+      '',
+      '62 (1 \\frac{5}{4} (2 \\sqrt{11} (3 -12 (4',
+      '',
+      'مثال 2 ما الخاصية الموضّحة في كلّ ممّا يأتي؟',
+      '',
+      '(6 \\cdot 8) \\cdot 5 = 6 \\cdot (8 \\cdot 5) (5 7(9 - 5) = 7 \\cdot 9 - 7 \\cdot 5 (6',
+      '',
+      '84 + 16 = 16 + 84 (7 (12 + 5)6 = 12 \\cdot 6 + 5 \\cdot 6 (8',
+      '',
+      'مثال 3 أوجد النظير الجمعي والنظير الضربي لكل عدد مما يأتي:',
+      '',
+      '-7 (9 \\frac{4}{9} (10 3.8 (11 \\sqrt{5} (12',
+      '',
+      'مثال 4 13) تخفيضات: يبين الجدول المجاور أسعار أربعة أصناف من الملابس في أحد العروض. فإذا زاد السعر الأصلي لكلّ منها بنسبة 8% فأوجد قيمة هذه الزيادة.',
+      '',
+      'الصنف السعر (﷼) قميص 40 بنطال 60 ثوب 100 معطف 200',
+      '',
+      'مثال 5 بسّط كل عبارة مما يأتي:',
+      '',
+      '5(3x + 6y) + 4(2x - 9y) (14 6(6a + 5b) - 3(4a + 7b) (15',
+      '',
+      '-4(6c - 3d) - 5(-2c - 4d) (16 -5(8x - 2y) - 4(-6x - 3y) (17',
+    ].join('\n');
+    const items5464 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17];
+    expect(exerciseQuestionNumbers(unit5464)).toEqual(items5464);
+    expect(checkItemLabels(unit5464)).toEqual(items5464.map(String));
+    // Lesson 312 unit 5466, as stored.
+    const unit5466 = [
+      'مثال 5',
+      '',
+      'بسط كل عبارة مما يأتي:',
+      '',
+      '-2a + 9d - 5a - 6d \\quad (38)',
+      '',
+      '8b - 3c + 4b + 9c \\quad (37)',
+      '',
+      '6(9a - 3b) - 8(2a + 4b) \\quad (40)',
+      '',
+      '4(4x - 9y) + 8(3x + 2y) \\quad (39)',
+      '',
+      '-5(10x + 8z) - 6(4x - 7z) \\quad (42)',
+      '',
+      '-2(-5g + 6k) - 9(-2g + 4k) \\quad (41)',
+    ].join('\n');
+    expect(exerciseQuestionNumbers(unit5466)).toEqual([37, 38, 39, 40, 41, 42]);
+    expect(checkItemLabels(unit5466)).toEqual(['37', '38', '39', '40', '41', '42']);
+    // One stray bracket after a value is no item; neither is an expression bracket.
+    expect(
+      exerciseQuestionNumbers('القيمة 62 (7 تقريبًا\nس = 6 \\cdot (8 + 5) و 2 \\cdot (9 + 1)'),
+    ).toEqual([]);
+  });
+});
 import {
   buildKafuoStartRequest,
   canonicalRequestDigest,
@@ -276,9 +343,8 @@ function completePlan(): SceneOutline[] {
     slide('recall', ['4015', '4037'], { contentKind: 'definition' }),
     slide('ex1', ['4021'], { contentRole: 'worked_example' }),
     slide('try1', ['4025'], { contentRole: 'check_understanding' }),
+    // One solution slide per check (owner, 4 Nov 2026).
     slide('sol1A', ['4025'], { contentRole: 'worked_example', keyPoints: MONTHS_WORKED }),
-    slide('sol1B', ['4025'], { contentRole: 'worked_example' }),
-    slide('sol1C', ['4025'], { contentRole: 'worked_example' }),
     slide('t2', [], { slideType: 'transition' }),
     slide('ex2', ['4026'], { contentRole: 'worked_example' }),
     slide('t-ex', ['4038'], { slideType: 'transition', title: 'تمارين' }),
@@ -461,7 +527,8 @@ describe('g5.v8 switch and planner text', () => {
     expect(kafuo.requirement).toContain('BOOK-STRUCTURED LESSON (g5.v8)');
     expect(kafuo.requirement).not.toContain('(g5.v7)');
     expect(kafuo.requirement).toContain('ONE solution slide');
-    expect(kafuo.requirement).toContain('PER ITEM');
+    expect(kafuo.requirement).toContain('PER CHECK');
+    expect(kafuo.requirement).not.toContain('PER ITEM');
     expect(kafuo.requirement).toContain('RECALL');
     expect(kafuo.requirement).toContain('`ordered_named_set`');
     expect(kafuo.requirement).toContain('«تمارين», then the exercise slides');
@@ -510,6 +577,11 @@ describe('g5.v8 switch and planner text', () => {
     expect(bookStructureRequirement(V8_BOOK, { teacherParity: true })).toContain(
       'EXERCISES BLOCK below',
     );
+    // Lessons 314/315/318: every check after an example is named by id.
+    expect(bookStructureRequirement(V8_BOOK, { teacherParity: true })).toContain(
+      '4025 (after example 4021)',
+    );
+    expect(bookStructureRequirement(V8_BOOK)).not.toContain('after example 4021');
     expect(exerciseBlockRequirement(undefined)).toBe('');
   });
 
@@ -592,6 +664,14 @@ describe('hidden-step detector', () => {
     expect(checkItemLabels('تحقق من فهمك (2A ناتج جمع عددين زوجيين. (2B …')).toEqual(['2A', '2B']);
     expect(checkItemLabels('(1أ) … (1ب) …')).toEqual(['1A', '1B']);
     expect(checkItemLabels('إذا كان (2a + b) = 0')).toEqual([]);
+    // «1.»-style labels at line start (3 Nov 2026); «1.5» and «1-1» are not items.
+    expect(checkItemLabels('تحقق من فهمك\n١. أوجد\n2- احسب\n(3) بسّط\n4) قارن 1.5')).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+    ]);
+    expect(checkItemLabels('الدرس 1-1 يساوي 1.5')).toEqual([]);
   });
 
   it('accepts the visible working, refuses the one-line answer', () => {
@@ -627,15 +707,18 @@ describe('g5.v8 coverage gates', () => {
     ]);
   });
 
-  it('asks for one solution slide per check item', () => {
+  it('asks for one solution slide per check, not per lettered item (4 Nov 2026)', () => {
+    // One solution slide solving 1A, 1B and 1C together passes.
     const plan = completePlan().filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!));
-    const gaps = findBookCoverageGaps(plan, v8Book());
-    expect(gaps.map((gap) => [gap.kind, gap.itemLabel, gap.anchorIndex])).toEqual([
-      ['missing_solution', '1B', 4],
-      ['missing_solution', '1C', 4],
-    ]);
-    // The admin may insert them, after the check's last solution slide.
-    expect(insertableBookGaps(plan, v8Book(), [])).toHaveLength(2);
+    expect(findBookCoverageGaps(plan, v8Book())).toEqual([]);
+    // A planner split across slides is still accepted.
+    expect(findBookCoverageGaps(completePlan(), v8Book())).toEqual([]);
+    // No solution at all: one gap for the check, with no item label.
+    const none = completePlan().filter(
+      (outline) => !['sol1A', 'sol1B', 'sol1C'].includes(outline.id!),
+    );
+    const gaps = findBookCoverageGaps(none, v8Book());
+    expect(gaps.map((gap) => [gap.kind, gap.itemLabel])).toEqual([['missing_solution', undefined]]);
   });
 
   it('refuses the exercise caps, an unusable item and a misplaced block', () => {
@@ -669,6 +752,36 @@ describe('g5.v8 coverage gates', () => {
         'exercise unit 4062 is cited but is not selected for the exercises block',
       ],
     ]);
+  });
+
+  it('accepts one 8-question unit cited on 2 exercise slides by question range', () => {
+    const texts = [
+      ...TEXTS.filter((entry) => entry.id !== '4040'),
+      { id: '4040', text: '1. أ\n2. ب\n3. ج\n4. د\n5. هـ\n6. و\n7. ز\n8. ح' },
+    ];
+    const policy = {
+      maxExercises: 10,
+      maxExerciseSlides: 3,
+      minExercises: 6,
+      minExerciseSlides: 2,
+    };
+    const book = teacherParityBook(
+      { ...V8_BOOK, exercisePolicy: policy },
+      V8,
+      bookUnitFactsOf(V8_BOOK, texts),
+    )!;
+    const plan = completePlan();
+    const at = plan.findIndex((outline) => outline.id === 'exercises');
+    plan.splice(
+      at,
+      1,
+      slide('exercises', ['4038', '4040'], { contentRole: 'worked_example' }),
+      slide('exercises-2', ['4040'], { contentRole: 'worked_example' }),
+    );
+    expect(findBookCoverageDiagnostics(plan, book)).toEqual([]);
+    const requirement = exerciseBlockRequirement(book);
+    expect(requirement).toContain('- exercise slide 1 solves the units 4040 (questions 1–4 only);');
+    expect(requirement).toContain('- exercise slide 2 solves the units 4040 (questions 5–8 only);');
   });
 
   it('accepts exactly the selected set and names a selected unit left uncited', () => {
@@ -771,6 +884,37 @@ describe('g5.v8 coverage gates', () => {
     ]);
   });
 
+  it('E-2: a merge keeps a working step written in a removed per-item title', () => {
+    const plan = completePlan().flatMap((outline) =>
+      outline.id === 'sol1A'
+        ? [
+            { ...outline, title: 'حل 1A', keyPoints: ['يتقدم شهرين'] },
+            slide('sol1B', ['4025'], {
+              contentRole: 'worked_example',
+              title: MONTHS_WORKED[0]!,
+              description: 'نرتب الأشهر بأرقامها',
+              keyPoints: ['فالتالي ربيع الآخر'],
+            }),
+          ]
+        : [outline],
+    );
+    const working = (outlines: SceneOutline[]) =>
+      codes(findBookCoverageDiagnostics(outlines, v8Book())).filter(
+        (code) => code === WORKING_STEP_MISSING,
+      );
+    expect(working(plan)).toEqual([]);
+    const { outlines, merged } = mergeDuplicateSolutions(plan, v8Book());
+    expect(merged).toBe(1);
+    const kept = outlines.find((outline) => outline.id === 'sol1A')!;
+    expect(kept.keyPoints).toEqual([
+      'يتقدم شهرين',
+      MONTHS_WORKED[0],
+      'نرتب الأشهر بأرقامها',
+      'فالتالي ربيع الآخر',
+    ]);
+    expect(working(outlines)).toEqual([]);
+  });
+
   it('lets a person ignore every new code', () => {
     const plan = completePlan().filter((outline) => !['recall', 'sol1B'].includes(outline.id!));
     plan.splice(3, 0, slide('early', ['4061'], { contentRole: 'worked_example' }));
@@ -823,8 +967,10 @@ describe('g5.v8 coverage repair', () => {
       const role = /contentRole (\w+)/.exec(input.instruction)?.[1] ?? 'explanation';
       const outline = slide(input.outlineId, [...input.unitIds], {
         contentRole: role as SceneOutline['contentRole'],
-        title: /item (\w+)/.exec(input.instruction)?.[1] ?? 'recall',
+        title: role === 'worked_example' ? 'solution' : 'recall',
         teachingStage: input.teachingStage,
+        // One solution slide per check works every item with visible steps.
+        ...(role === 'worked_example' ? { keyPoints: MONTHS_WORKED } : {}),
       });
       const checked = input.check(outline);
       return checked.ok
@@ -854,11 +1000,11 @@ describe('g5.v8 coverage repair', () => {
     plan,
   });
 
-  it('plans the recall slide and each missing item in book order, with distinct ids', async () => {
+  it('plans the recall slide and ONE solution slide for the whole check', async () => {
     const plan = planner();
     const book = v8Book();
     const candidate = completePlan().filter(
-      (outline) => !['recall', 'sol1B', 'sol1C'].includes(outline.id!),
+      (outline) => !['recall', 'sol1A', 'sol1B', 'sol1C'].includes(outline.id!),
     );
     const blocking = findBookCoverageDiagnostics(candidate, book);
     const repaired = await repairBookCoverageGaps(
@@ -868,52 +1014,51 @@ describe('g5.v8 coverage repair', () => {
       contextFor(book, plan),
     );
     expect(repaired.blocking).toEqual([]);
-    expect(repaired.outlines.slice(0, 7).map((outline) => outline.title)).toEqual([
+    expect(repaired.inserted).toBe(2);
+    expect(repaired.outlines.slice(0, 6).map((outline) => outline.title)).toEqual([
       't1',
       'recall',
       'ex1',
       'try1',
-      'sol1A',
-      '1B',
-      '1C',
+      'solution',
+      't2',
     ]);
-    expect(repaired.outlines.slice(5, 7).map((outline) => outline.id)).toEqual([
-      'sol1A-book-missing_solution-4025-1B-r1',
-      'sol1A-book-missing_solution-4025-1C-r1',
-    ]);
+    expect(repaired.outlines[4]!.id).toBe('try1-book-missing_solution-4025-r1');
+    const solution = plan.mock.calls.find(([input]) =>
+      input.instruction.includes('worked_example'),
+    )![0];
+    expect(solution.instruction).toContain('ALL of its items together on this one slide');
+    expect(solution.instruction).not.toMatch(/item \w+ only/);
     const recall = plan.mock.calls.find(([input]) => input.instruction.includes('recall'))![0];
     expect(recall.instruction).toContain('contentRole explanation');
     expect(recall.unitIds).toEqual(['4015', '4037']);
   });
 
-  it('still places the item slides when g5.v8 findings stay open', async () => {
+  it('still places the solution slide when g5.v8 findings stay open', async () => {
     const book = v8Book();
-    const candidate = completePlan()
-      .filter((outline) => !['sol1B', 'sol1C', 'exercises'].includes(outline.id!))
-      .map((outline) =>
-        outline.id === 'sol1A' ? { ...outline, keyPoints: ['يتقدم خمسة أشهر'] } : outline,
-      );
-    const blocking = findBookCoverageDiagnostics(candidate, book);
-    expect(new Set(codes(blocking))).toEqual(
-      new Set([BOOK_COVERAGE_INCOMPLETE, WORKING_STEP_MISSING]),
+    const candidate = completePlan().filter(
+      (outline) => !['sol1A', 'sol1B', 'sol1C', 'exercises'].includes(outline.id!),
     );
+    const blocking = findBookCoverageDiagnostics(candidate, book);
+    expect(new Set(codes(blocking))).toEqual(new Set([BOOK_COVERAGE_INCOMPLETE]));
     const repaired = await repairBookCoverageGaps(
       candidate,
       blocking,
       vi.fn(),
       contextFor(book, planner()),
     );
-    expect(repaired.inserted).toBe(2);
-    // Left to a person: the visible working and the (unanchored) exercises block.
+    expect(repaired.inserted).toBe(1);
+    // Left to a person: the (unanchored) exercises block.
     expect(repaired.blocking.map((d) => [d.code, d.message.slice(0, 30)])).toEqual([
       [BOOK_COVERAGE_INCOMPLETE, 'the exercises block is missing'],
-      [WORKING_STEP_MISSING, expect.any(String)],
     ]);
   });
 
-  it('places the item slides and leaves EXERCISE_TOO_FEW open for a person', async () => {
+  it('places the solution slide and leaves EXERCISE_TOO_FEW open for a person', async () => {
     const book = minBook(3, 2);
-    const candidate = completePlan().filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!));
+    const candidate = completePlan().filter(
+      (outline) => !['sol1A', 'sol1B', 'sol1C'].includes(outline.id!),
+    );
     const blocking = findBookCoverageDiagnostics(candidate, book);
     expect(new Set(codes(blocking))).toEqual(new Set([BOOK_COVERAGE_INCOMPLETE, EXERCISE_TOO_FEW]));
     const repaired = await repairBookCoverageGaps(
@@ -922,15 +1067,15 @@ describe('g5.v8 coverage repair', () => {
       vi.fn(),
       contextFor(book, planner()),
     );
-    expect(repaired.inserted).toBe(2);
+    expect(repaired.inserted).toBe(1);
     expect(codes(repaired.blocking)).toEqual([EXERCISE_TOO_FEW]);
   });
 
-  it('places the item slides and leaves the selection findings open for a person', async () => {
+  it('places the solution slide and leaves the selection findings open for a person', async () => {
     const book = v8Book();
     book.units = [...book.units, { ...book.units[7]!, contentUnitId: '4062' }];
     const candidate = completePlan()
-      .filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!))
+      .filter((outline) => !['sol1A', 'sol1B', 'sol1C'].includes(outline.id!))
       .map((outline) =>
         outline.id === 'exercises'
           ? { ...outline, sourceContentUnitIds: ['4038', '4040', '4062'] }
@@ -942,44 +1087,39 @@ describe('g5.v8 coverage repair', () => {
       vi.fn(),
       contextFor(book, planner()),
     );
-    expect(repaired.inserted).toBe(2);
+    expect(repaired.inserted).toBe(1);
     expect(codes(repaired.blocking)).toEqual([
       EXERCISE_SELECTED_MISSING,
       EXERCISE_UNSELECTED_CITED,
     ]);
   });
 
-  it('gives an extra item slide a native diagram when the check image is already shown', async () => {
+  it('inserts nothing for a check already solved on one slide', async () => {
     const book = v8Book();
     const plan = planner();
-    const candidate = completePlan()
-      .filter((outline) => !['sol1C'].includes(outline.id!))
-      .map((outline) =>
-        outline.id === 'sol1A' ? { ...outline, suggestedImageIds: ['img-4025'] } : outline,
-      );
-    const visual = { id: 'img-4025', src: 'data:', sourceContentUnitIds: ['4025'] };
+    const candidate = completePlan().filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!));
     const repaired = await repairBookCoverageGaps(
       candidate,
       findBookCoverageDiagnostics(candidate, book),
       vi.fn(),
-      contextFor(book, plan, [visual]),
+      contextFor(book, plan),
     );
-    expect(repaired.inserted).toBe(1);
-    expect(plan.mock.calls[0]![0].eligibleVisuals).toEqual([]);
+    expect(repaired.inserted).toBe(0);
+    expect(plan).not.toHaveBeenCalled();
   });
 });
 
 describe('g5.v8 admin insert', () => {
-  it('inserts the next item, without the image another slide already shows', () => {
+  it('inserts the one solution slide of the check after its try-it slide', () => {
     const book = v8Book();
     const plan = completePlan()
-      .filter((outline) => !['sol1B', 'sol1C'].includes(outline.id!))
+      .filter((outline) => !['sol1A', 'sol1B', 'sol1C'].includes(outline.id!))
       .map((outline) =>
-        outline.id === 'sol1A' ? { ...outline, suggestedImageIds: ['img-4025'] } : outline,
+        outline.id === 'try1' ? { ...outline, suggestedImageIds: ['img-4025'] } : outline,
       );
     const next = applyCorrectionOperations(
       plan,
-      [{ op: 'insert_book_slide', unitId: '4025', outlineId: 'sol1A' }],
+      [{ op: 'insert_book_slide', unitId: '4025', outlineId: 'try1' }],
       {
         phase: 'outline',
         flow: [],
@@ -990,10 +1130,16 @@ describe('g5.v8 admin insert', () => {
         bookStructure: book,
       },
     );
-    const inserted = next[5]!;
-    expect(inserted.id).toBe('sol1A-book-missing_solution-4025');
-    expect(inserted.description).toContain('item 1B only');
-    expect(inserted.suggestedImageIds).toBeUndefined();
+    const inserted = next[4]!;
+    expect(inserted.id).toBe('try1-book-missing_solution-4025');
+    expect(inserted.description).toContain('ALL of its items together on this one slide');
+    expect(
+      next.filter(
+        (outline) =>
+          outline.contentRole === 'worked_example' &&
+          (outline.sourceContentUnitIds ?? []).includes('4025'),
+      ),
+    ).toHaveLength(1);
   });
 });
 

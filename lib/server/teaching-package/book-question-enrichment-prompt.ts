@@ -5,9 +5,14 @@
  * response crosses the service boundary.
  */
 import { hasBareTex } from '@/lib/server/teaching-package/question-envelope';
+import {
+  sacredTextPolicyFor,
+  type SacredPolicyMode,
+} from '@/lib/server/teaching-package/sacred-text-policy';
 
 export const BOOK_ENRICHMENT_ENVELOPE_VERSION = 'bqe.v1';
-export const BOOK_ENRICHMENT_PROMPT_VERSION = 'te-bqe.v2.20261026';
+/** v4 (S-9): the Quran and hadith block is full or one short line by lesson/subject. */
+export const BOOK_ENRICHMENT_PROMPT_VERSION = 'te-bqe.v4.20261104';
 
 const ALLOWED_KEYS = [
   'difficulty',
@@ -17,7 +22,7 @@ const ALLOWED_KEYS = [
 ] as const;
 const DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 
-export const BOOK_ENRICHMENT_SYSTEM_PROMPT = [
+const BOOK_ENRICHMENT_SYSTEM_LINES = [
   'You add teaching metadata to a question taken verbatim from an approved school textbook.',
   'The question, its choices and its correct answer are the book’s and are read-only: never restate, correct, translate or improve them.',
   'Ground every rationale and explanation in the lesson source excerpts provided.',
@@ -29,7 +34,19 @@ export const BOOK_ENRICHMENT_SYSTEM_PROMPT = [
   'Never cite pages, figures or chapters. Write in the requested language.',
   // String.raw keeps the backslashes the model must see (see question-generation-prompt.ts).
   String.raw`Math notation: put every mathematical expression, formula, equation, variable with an operator and TeX command in an explanation inside \( ... \) for inline math or \[ ... \] for a display line; never write bare TeX (\frac, \times, \div, ...) outside them, and never use plain parentheses ( ... ) or $ ... $ as math delimiters. The output is JSON, so escape every backslash. Correct: "\\( P = \\frac{F}{A} \\)". Wrong: "(P = \frac{F}{A})".`,
-].join('\n');
+];
+
+/**
+ * The enrichment system prompt. Quran and hadith (plan Q-4, Q-12, S-9): the
+ * full shared block for a lesson with quotes or an ARABIC subject, the one
+ * short line otherwise.
+ */
+export function bookEnrichmentSystemPrompt(mode: SacredPolicyMode): string {
+  return [...BOOK_ENRICHMENT_SYSTEM_LINES, sacredTextPolicyFor(mode)].join('\n');
+}
+
+/** The full-policy prompt (the fail-safe default). */
+export const BOOK_ENRICHMENT_SYSTEM_PROMPT = bookEnrichmentSystemPrompt('full');
 
 export interface BookEnrichmentPromptInput {
   language: string;

@@ -51,6 +51,17 @@ import {
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  pinnedQuotesIn,
+  sacredPolicyModeFor,
+  sacredQuotesForPrompt,
+  singleSceneExerciseScope,
+  singleSceneSacredFindings,
+  stripSacredExerciseItems,
+  stripSacredNarration,
+  withCandidateQuotes,
+  type SacredQuotePin,
+} from '@/lib/server/teaching-package/sacred-text';
 import type { AppScene, Scene } from '@/lib/types/stage';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 
@@ -72,6 +83,21 @@ export interface InsertOneSceneInput {
    * generates an inserted solving slide under the visible-working rule.
    */
   teachingModel?: TeachingModelLineage | null;
+  /**
+   * Quran and hadith (plan Q-4, Q-5, Q-7, Q-14): the package's pins and the
+   * chosen units' text. Present → the prompts carry the policy and the pinned
+   * quotes found in the text, narration is stripped, and a slide that alters a
+   * quote is refused. Absent (a package from before the rule) → unchanged.
+   */
+  sacred?: {
+    pins: SacredQuotePin[];
+    sourceTexts: readonly string[];
+    /**
+     * g5.v8 (4 Nov 2026): the book's exercise and «تأكد» check unit ids. Present
+     * (with a teacher-parity model) → a slide citing one shows no verse or hadith item.
+     */
+    exerciseUnitIds?: readonly string[];
+  };
   now?: () => number;
   /** Test seams. */
   generateContent?: typeof generateSceneContent;
@@ -112,6 +138,20 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
   const generateContent = input.generateContent ?? generateSceneContent;
   const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
+  const sacredQuotes = input.sacred
+    ? pinnedQuotesIn(input.sacred.sourceTexts, input.sacred.pins)
+    : null;
+  // S-9 (L-2): decided per LESSON like the insertion planner — the full block
+  // when the package pins any book quote or the Stage is ARABIC.
+  const sacredPrompt =
+    sacredQuotes && input.sacred
+      ? {
+          sacredText: {
+            quotes: sacredQuotesForPrompt(sacredQuotes),
+            mode: sacredPolicyModeFor({ subjectCode: stage.subjectCode, pins: input.sacred.pins }),
+          },
+        }
+      : {};
 
   // 1. Content — the normalized outline, never an edit mode.
   const selected = new Set(outline.suggestedImageIds ?? []);
@@ -130,6 +170,7 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       ...(assignedImages.length > 0 ? { assignedImages, imageMapping } : {}),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
+      ...sacredPrompt,
       onFailure: (event) => {
         contentFailure = event;
       },
@@ -196,6 +237,7 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
             ...(assignedImages.length > 0
               ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
               : {}),
+            ...sacredPrompt,
             onFallback: (info) => {
               fellBack = info;
             },
@@ -249,6 +291,34 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
   }
 
   // 4. Validation (repeated in T2 on the exact snapshot).
+  if (input.sacred && sacredQuotes) {
+    // S-5: the candidate's own pinned quotes too (repair and checks).
+    const checkQuotes = withCandidateQuotes(assembled, input.sacred.pins, sacredQuotes);
+    // H-2 (4 Nov 2026 rule): an inserted exercise or check slide of a g5.v8
+    // package drops its verse and hadith items before the repair and checks.
+    const scope = isTeacherParityModel(input.teachingModel)
+      ? singleSceneExerciseScope(
+          assembled,
+          outline.sourceContentUnitIds ?? [],
+          input.sacred.exerciseUnitIds,
+        )
+      : undefined;
+    if (scope) stripSacredExerciseItems([assembled], checkQuotes, scope);
+    stripSacredNarration([assembled], checkQuotes);
+    const sacredFindings = singleSceneSacredFindings(
+      assembled,
+      input.sacred.pins,
+      checkQuotes,
+      scope,
+    );
+    if (sacredFindings.length > 0) {
+      return failure(
+        'SACRED_TEXT_ALTERED',
+        `${sacredFindings.map((finding) => `${finding.code}: ${finding.message}`).join('; ')}; nothing was written`,
+        { findings: sacredFindings.map((finding) => finding.code) },
+      );
+    }
+  }
   const findings = validateSceneActionStructure([...input.scenes, assembled], { stage }).filter(
     (finding) => finding.sceneId === assembled.id,
   );

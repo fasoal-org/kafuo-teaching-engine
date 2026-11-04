@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
@@ -170,6 +172,7 @@ async function run(
     outline?: AppDocumentOutline;
     speech?: string;
     teachingModel?: { key: string; version: string };
+    sacredExerciseUnitIds?: string[];
   } = {},
 ) {
   const pre = options.pre ?? preImage();
@@ -181,6 +184,9 @@ async function run(
     outlineSnapshot: options.outline ?? snapshot(),
     instruction: INSTRUCTION,
     ...(options.teachingModel ? { teachingModel: options.teachingModel } : {}),
+    ...(options.sacredExerciseUnitIds
+      ? { sacredExerciseUnitIds: options.sacredExerciseUnitIds }
+      : {}),
     aiCallFor: stub.aiCallFor,
     registerPolicy: policy,
     refuseFallbackActions: true,
@@ -658,5 +664,117 @@ describe('regenerateOneScene — AT-I book images', () => {
       .map((key) => vi.spyOn(media as Record<string, (...args: unknown[]) => unknown>, key));
     await run(content([image('src-3', 'x'), image('gen_img_1', 'y')]));
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// Quran and hadith (quran-text-handling-rules-plan Q-4, Q-5, Q-7, Q-14).
+describe('regenerateOneScene — pinned Quran verses', () => {
+  const VERSE = '﴿هُوَ الَّذِي أَنزَلَ عَلَيْكَ الْكِتَابَ مِنْهُ آيَاتٌ مُّحْكَمَاتٌ﴾';
+  const verseText = (text: string, id = 'v1') => ({
+    id,
+    type: 'text',
+    content: `<p>${text}</p>`,
+    left: 60,
+    top: 200,
+    width: 400,
+    height: 60,
+    rotate: 0,
+    defaultFontName: 'Tajawal',
+    defaultColor: '#111',
+  });
+  const pinned = () =>
+    ({
+      ...snapshot(),
+      sacredQuotes: [
+        {
+          kind: 'quran',
+          sha256: createHash('sha256').update(VERSE, 'utf8').digest('hex'),
+          sourceBlockId: '41',
+          contentUnitId: 'cu-1',
+          reference: 'سورة آل عمران الآية: 7',
+          used: true,
+        },
+      ],
+    }) as unknown as AppDocumentOutline;
+  const withVerse = () => preImage([image(SRC_3), verseText(VERSE)]);
+
+  it('gives the prompts the policy and the exact pinned verse, and keeps it', async () => {
+    const reply = content([image('src-3', 'x'), { type: 'text', content: `<p>${VERSE}</p>` }]);
+    const { result, prompts } = await run(reply, { pre: withVerse(), outline: pinned() });
+    expect(result.ok).toBe(true);
+    const contentPrompt = prompts.find((prompt) => prompt.stage === 'scene-content:slide')!;
+    expect(contentPrompt.system).toContain('Quran and hadith (fixed rule)');
+    expect(contentPrompt.user).toContain(VERSE);
+    const actionsPrompt = prompts.find((prompt) => ACTIONS_PROMPT.test(prompt.system))!;
+    expect(actionsPrompt.system).toContain('تأمّل الآية المعروضة');
+  });
+
+  it('refuses a regenerated slide that changes one letter of the verse', async () => {
+    const changed = VERSE.replace('أَنزَلَ', 'أَنزَلْ');
+    const reply = content([image('src-3', 'x'), { type: 'text', content: `<p>${changed}</p>` }]);
+    const { result } = await run(reply, { pre: withVerse(), outline: pinned() });
+    expect(result).toMatchObject({ ok: false, code: 'SACRED_TEXT_ALTERED' });
+  });
+
+  it('replaces narration that reads the verse with the owner line', async () => {
+    const reply = content([image('src-3', 'x'), { type: 'text', content: `<p>${VERSE}</p>` }]);
+    const { result } = await run(reply, {
+      pre: withVerse(),
+      outline: pinned(),
+      speech: `${SAUDI} قال تعالى: ${VERSE}`,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const spoken = result.scene.actions?.find((action) => action.type === 'speech')?.text ?? '';
+    expect(spoken).toContain('تأمّل الآية المعروضة');
+    expect(spoken).not.toMatch(/[﴾﴿]/);
+  });
+
+  it('H-2: a regenerated g5.v8 exercise slide drops its verse item, shown and spoken', async () => {
+    const outline = {
+      ...pinned(),
+      outlines: [{ ...pinned().outlines[0]!, sourceContentUnitIds: ['ex-1'] }],
+    } as AppDocumentOutline;
+    const reply = content([
+      image('src-3', 'x'),
+      { type: 'text', content: `<p>1) بيت الشعر الأول</p><p>2) ${VERSE}</p>` },
+    ]);
+    const speech = `${SAUDI} قال تعالى: ${VERSE}`;
+    const shownOf = (scene: AppScene) =>
+      JSON.stringify(scene.content.type === 'slide' ? scene.content.canvas.elements : []);
+
+    const { result } = await run(reply, {
+      pre: withVerse(),
+      outline,
+      speech,
+      teachingModel: { key: 'g5', version: 'g5.v8' },
+      sacredExerciseUnitIds: ['ex-1'],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(shownOf(result.scene)).toContain('بيت الشعر الأول');
+    expect(shownOf(result.scene)).not.toMatch(/[﴾﴿]/);
+    const spoken = (result.scene.actions ?? [])
+      .filter((action) => action.type === 'speech')
+      .map((action) => (action as { text: string }).text)
+      .join(' ');
+    expect(spoken).not.toMatch(/[﴾﴿]/);
+    expect(spoken).not.toContain('تأمّل الآية المعروضة');
+
+    // Without the book's exercise units (or before g5.v8) the verse stays.
+    const kept = await run(reply, {
+      pre: withVerse(),
+      outline,
+      speech,
+      teachingModel: { key: 'g5', version: 'g5.v7' },
+      sacredExerciseUnitIds: ['ex-1'],
+    });
+    expect(kept.result.ok).toBe(true);
+    if (kept.result.ok) expect(shownOf(kept.result.scene)).toMatch(/﴿/);
+  });
+
+  it('leaves a package without pins unchanged', async () => {
+    const { prompts } = await run(content([image('src-3', 'x')]));
+    for (const prompt of prompts) expect(prompt.system).not.toContain('Quran and hadith');
   });
 });

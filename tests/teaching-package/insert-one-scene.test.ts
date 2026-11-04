@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PdfImage, SceneOutline } from '@openmaic/generation';
@@ -173,5 +175,72 @@ describe('insertOneScene', () => {
       ok: false,
       code: 'SCENE_CONTENT_GENERATION_FAILED',
     });
+  });
+});
+
+// H-2 (owner rule, 4 Nov 2026): no verse or hadith item on an inserted exercise slide.
+describe('insertOneScene — exercise slide without verse items', () => {
+  const VERSE = '﴿هُوَ الَّذِي أَنزَلَ عَلَيْكَ الْكِتَابَ مِنْهُ آيَاتٌ مُّحْكَمَاتٌ﴾';
+  const pins = [
+    {
+      kind: 'quran' as const,
+      sha256: createHash('sha256').update(VERSE, 'utf8').digest('hex'),
+      sourceBlockId: '41',
+      contentUnitId: 'cu_3',
+      reference: 'سورة آل عمران الآية: 7',
+      used: true,
+    },
+  ];
+  const textElement = (content: string) => ({
+    id: 'text-1',
+    type: 'text',
+    content,
+    left: 10,
+    top: 10,
+    width: 300,
+    height: 50,
+    rotate: 0,
+    defaultFontName: 'Tajawal',
+    defaultColor: '#111111',
+  });
+  const insert = (teachingModel: { key: string; version: string }) =>
+    insertOneScene(
+      run({
+        teachingModel,
+        sacred: {
+          pins,
+          sourceTexts: [`1) بيت الشعر الأول\n2) ${VERSE}`],
+          exerciseUnitIds: ['cu_3'],
+        },
+        generateContent: vi.fn(async () => ({
+          elements: [textElement(`<p>1) بيت الشعر الأول</p><p>2) ${VERSE}</p>`)],
+        })) as never,
+        generateActions: vi.fn(async () => [
+          { id: 'a1', type: 'speech', text: `قال تعالى: ${VERSE}` },
+          { id: 'a2', type: 'speech', text: 'نحل البيت الأول معًا.' },
+        ]) as never,
+      }).input,
+    );
+
+  it('drops the verse item, shown and spoken, and never leaves an empty speech', async () => {
+    const result = await insert({ key: 'g5', version: 'g5.v8' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const shown = JSON.stringify(
+      result.scene.content.type === 'slide' ? result.scene.content.canvas.elements : [],
+    );
+    expect(shown).toContain('بيت الشعر الأول');
+    expect(shown).not.toMatch(/[﴾﴿]/);
+    const speeches = (result.scene.actions ?? []).filter((action) => action.type === 'speech');
+    expect(speeches.map((action) => (action as { text: string }).text)).toEqual([
+      'نحل البيت الأول معًا.',
+    ]);
+  });
+
+  it('keeps the verse before g5.v8', async () => {
+    const result = await insert({ key: 'g5', version: 'g5.v7' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(JSON.stringify(result.scene.content)).toMatch(/﴿/);
   });
 });

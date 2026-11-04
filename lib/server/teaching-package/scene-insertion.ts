@@ -42,10 +42,15 @@ import {
 } from '@/lib/persistence/owner-bound-document-store';
 import {
   readAllContentUnitsForVersion,
+  readAttemptById,
   readRetainedVersionContext,
   readVersionById,
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
+import {
+  isTeacherParityModel,
+  resolveSacredExerciseUnitIds,
+} from '@/lib/server/teaching-package/book-coverage';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
@@ -81,6 +86,10 @@ import {
   type GovernedRegenerationContext,
 } from '@/lib/server/teaching-package/governed-regeneration';
 import { insertOneScene } from '@/lib/server/teaching-package/insert-one-scene';
+import {
+  readSacredQuotePins,
+  sacredPolicyModeFor,
+} from '@/lib/server/teaching-package/sacred-text';
 import {
   insertionSkillsInvalidError,
   insertionSkillValidationSet,
@@ -968,6 +977,13 @@ export async function insertGeneratedSlide(
       instruction: request.instruction,
       outlineId: newOutlineId,
       order: position.at,
+      // S-9: full Quran and hadith block for a lesson with pinned or detected
+      // quotes, or an ARABIC Stage; the one short line otherwise.
+      sacredMode: sacredPolicyModeFor({
+        subjectCode: stage.subjectCode,
+        pins: readSacredQuotePins(outlineRecord?.sacredQuotes),
+        texts: chosenUnits.map((unit) => unit.normalizedText),
+      }),
       check: (outline) =>
         checkPlan(outline, {
           scenes: ordered,
@@ -989,6 +1005,23 @@ export async function insertGeneratedSlide(
       plannedOutline: planned.outline as unknown as Record<string, unknown>,
       outlineRepairs: planned.repairs,
     }).catch(() => {});
+    // H-2: the book's exercise and check units (g5.v8 runs only), from the
+    // attempt's input snapshot, so the 4 Nov exercise rule holds here too.
+    const version = context.version;
+    // F-7: no attempt or no book map never turns the rule off silently.
+    const exerciseScope = resolveSacredExerciseUnitIds(
+      version.currentAttemptId && isTeacherParityModel(version.teachingModel)
+        ? (await readAttemptById(pool, version.currentAttemptId))?.inputSnapshot.bookStructure
+        : undefined,
+      version.teachingModel,
+      outlineRecord?.outlines,
+    );
+    if (exerciseScope.source === 'outline' || exerciseScope.source === 'role') {
+      log.warn(
+        `SACRED_EXERCISE_SCOPE_FALLBACK insertion=${row.id} version=${version.id} attempt=${version.currentAttemptId ?? 'none'} scope=${exerciseScope.source}`,
+      );
+    }
+    const exerciseUnitIds = exerciseScope.unitIds;
     const generated = await (deps.insert ?? insertOneScene)({
       outline: planned.outline,
       newSceneId,
@@ -1000,6 +1033,17 @@ export async function insertGeneratedSlide(
       registerPolicy,
       ...(governedContext ? { governed: governedContext } : {}),
       teachingModel: context.version.teachingModel,
+      // Quran and hadith (plan Q-14): a package generated under the rule pins
+      // its book quotes; the chosen units' text supplies their exact wording.
+      ...(readSacredQuotePins(outlineRecord?.sacredQuotes)
+        ? {
+            sacred: {
+              pins: readSacredQuotePins(outlineRecord?.sacredQuotes)!,
+              sourceTexts: chosenUnits.map((unit) => unit.normalizedText),
+              ...(exerciseUnitIds ? { exerciseUnitIds } : {}),
+            },
+          }
+        : {}),
       now: clock,
     });
     if (!generated.ok) {

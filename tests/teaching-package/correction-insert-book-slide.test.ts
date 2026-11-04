@@ -172,7 +172,7 @@ describe('insert_book_slide correction', () => {
     expect(edited[2]!.title).toBe('الحل: تخمينات');
   });
 
-  it('g5.v8: an item solution takes its own item from the try-it, never the previous solution', () => {
+  it('g5.v8: one solution per check — a labelled check with one solution has no per-item gap', () => {
     const v8Book = {
       ...BOOK,
       teacherParity: true,
@@ -194,43 +194,15 @@ describe('insert_book_slide correction', () => {
       } as Partial<SceneOutline>),
       slide('next', ['9999'], { slideType: 'transition' }),
     ];
-    const gaps = insertableBookGaps(outlines, v8Book, FLOW);
-    expect(gaps.map((gap) => [gap.itemLabel, gap.anchorIndex])).toEqual([['1B', 2]]);
-
-    const edited = applyCorrectionOperations(
-      outlines,
-      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
-      context({ bookStructure: v8Book }),
-    );
-    const inserted = edited[3]!;
-    expect(edited.map((o) => o.id)).toEqual([
-      'ex2',
-      'try2',
-      'sol1A',
-      'sol1A-book-missing_solution-4028',
-      'next',
-    ]);
-    expect(inserted.title).toBe('الحل: تخمينات جبرية وهندسية (1B)');
-    expect(inserted.keyPoints).toEqual(['1B) ناتج ضرب عددين فرديين']);
-    expect(inserted.keyPoints).not.toContain('2 + 4 = 6 زوجي');
-
-    // No point names the item alone: no key points, and an English try-it titles in English.
+    // One solution slide solves the whole check (all its items): no gap is left
+    // for 1B, so nothing is offered for insertion.
+    expect(insertableBookGaps(outlines, v8Book, FLOW)).toEqual([]);
     const unlabelled = outlines.map((outline) =>
       outline.id === 'try2'
         ? { ...outline, title: 'Try it: conjectures', keyPoints: ['items 1A and 1B'] }
         : outline,
     );
-    const bare = applyCorrectionOperations(
-      unlabelled,
-      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
-      context({ bookStructure: v8Book }),
-    )[3]!;
-    expect(bare.title).toBe('Solution: conjectures (1B)');
-    expect(bare.keyPoints).toEqual([]);
-
-    // The item gap closes, and the inserted slide (with or without key points)
-    // leaves only the picture note the resume writes.
-    expect(insertableBookGaps(edited, v8Book, FLOW)).toEqual([]);
+    expect(insertableBookGaps(unlabelled, v8Book, FLOW)).toEqual([]);
     const diagnosisContext = {
       flow: FLOW,
       contentUnitIds: ['4026', '4028', '9999'],
@@ -241,19 +213,9 @@ describe('insert_book_slide correction', () => {
       governed: false,
       bookStructure: v8Book,
     };
-    const bareEdited = applyCorrectionOperations(
-      unlabelled,
-      [{ op: 'insert_book_slide', outlineId: 'sol1A', unitId: '4028' }],
-      context({ bookStructure: v8Book }),
-    );
-    for (const plan of [edited, bareEdited]) {
+    for (const plan of [outlines, unlabelled]) {
       const blocking = diagnoseCandidateOutlines(plan, diagnosisContext).blocking;
       expect(blocking.some((d) => d.code === 'BOOK_COVERAGE_INCOMPLETE')).toBe(false);
-      expect(
-        blocking
-          .filter((d) => d.outlineId === 'sol1A-book-missing_solution-4028')
-          .filter((d) => d.code !== 'VISUAL_TEACHING_NOTE_MISSING'),
-      ).toEqual([]);
     }
   });
 
@@ -328,7 +290,46 @@ describe('insert_book_slide correction', () => {
       [INSERT],
       context({ flow, sourceRefs: { ...SOURCE_REFS, sourceImages: [] } }),
     );
-    expect(edited[2]!.visualPlan).toEqual({ mode: 'native' });
+    // Lesson 318: the native plan carries a complete note, so it never blocks.
+    expect(edited[2]!.visualPlan).toEqual({
+      mode: 'native',
+      diagram: {
+        shows: 'الحل: تخمينات جبرية وهندسية',
+        teachingPoint: 'item one',
+      },
+    });
+    const blocking = diagnoseCandidateOutlines(edited, {
+      flow,
+      contentUnitIds: ['4026', '4028', '9999'],
+      sourceImages: [],
+      governed: false,
+      bookStructure: BOOK,
+    }).blocking;
+    expect(blocking.filter((d) => d.outlineId === edited[2]!.id)).toEqual([]);
+  });
+
+  it('keeps a set visualPlan on an inserted slide, with its diagram', () => {
+    const inserted = applyCorrectionOperations(CANDIDATE, [INSERT], context());
+    const id = inserted[2]!.id;
+    const diagram = { shows: 'سلسلة خطوات الحل', teachingPoint: 'نعوّض في العلاقة' };
+    const edited = applyCorrectionOperations(
+      inserted,
+      parseCorrectionOperations([
+        { op: 'set', outlineId: id, field: 'visualPlan', value: { mode: 'native', diagram } },
+      ]),
+      context(),
+    );
+    expect(edited[2]!.visualPlan).toEqual({ mode: 'native', diagram });
+    // Native with no note sent: one is read from the slide, never left missing.
+    const bare = applyCorrectionOperations(
+      inserted,
+      [{ op: 'set', outlineId: id, field: 'visualPlan', value: { mode: 'native' } }],
+      context(),
+    );
+    expect(bare[2]!.visualPlan).toMatchObject({
+      mode: 'native',
+      diagram: { shows: 'الحل: تخمينات جبرية وهندسية', teachingPoint: 'item one' },
+    });
   });
 
   it('offers no insert where the position does not allow a worked example', () => {

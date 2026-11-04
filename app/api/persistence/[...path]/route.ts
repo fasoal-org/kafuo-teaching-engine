@@ -47,6 +47,7 @@ import { sanitizeLearnerDelivery } from '@/lib/server/teaching-package/learner-q
 import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import { sacredTextEditRefusal } from '@/lib/server/teaching-package/sacred-text-edit-guard';
 import {
   encodeSceneRevs,
   EXPECTED_SCENE_REVS_HEADER,
@@ -639,6 +640,25 @@ export async function handlePersistenceRequest(
               return response;
             }
             throw error;
+          }
+          // Q-14 (Quran/hadith plan): a write that changes a pinned verse or
+          // hadith of a package is refused before the store runs.
+          const sacred = await sacredTextEditRefusal(request, path, queryable);
+          if (sacred) {
+            const response = Response.json(
+              {
+                error: {
+                  code: sacred.code,
+                  message: sacred.message,
+                  details: { scenes: sacred.scenes },
+                },
+              },
+              { status: sacred.status },
+            );
+            for (const [name, value] of responseHeaders.entries()) {
+              response.headers.append(name, value);
+            }
+            return response;
           }
         }
       } else if (grantEvaluation.covered && grantEvaluation.refusal) {

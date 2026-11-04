@@ -59,6 +59,20 @@ import {
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  pinnedQuotesIn,
+  readSacredQuotePins,
+  sacredPolicyModeFor,
+  sacredQuotesForPrompt,
+  shownSceneTexts,
+  singleSceneExerciseScope,
+  singleSceneSacredFindings,
+  stripSacredExerciseItems,
+  stripSacredNarration,
+  withCandidateQuotes,
+  type SacredQuote,
+  type SacredQuotePin,
+} from '@/lib/server/teaching-package/sacred-text';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 import type { AppScene, Scene } from '@/lib/types/stage';
@@ -83,6 +97,11 @@ export interface RegenerateOneSceneInput {
    * regenerates a solving slide under the visible-working rule, as its run did.
    */
   teachingModel?: TeachingModelLineage | null;
+  /**
+   * g5.v8 (4 Nov 2026): the book's exercise and «تأكد» check unit ids. Present
+   * (with a teacher-parity model) → a slide citing one shows no verse or hadith item.
+   */
+  sacredExerciseUnitIds?: readonly string[];
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -106,6 +125,62 @@ function failure(
   details?: unknown,
 ): RegenerateOneSceneResult {
   return { ok: false, code, message, ...(details === undefined ? {} : { details }) };
+}
+
+/**
+ * Quran and hadith (plan Q-4, Q-5, Q-7, Q-14) on a package generated under the
+ * rule (its outline record carries pins): the pre-image's pinned quotes are the
+ * exact book text the prompts may show. A package without pins is unchanged.
+ */
+function sacredContextOf(
+  input: RegenerateOneSceneInput,
+): { pins: SacredQuotePin[]; quotes: SacredQuote[] } | null {
+  const pins = readSacredQuotePins(input.outlineSnapshot?.sacredQuotes);
+  if (!pins) return null;
+  return { pins, quotes: pinnedQuotesIn(shownSceneTexts([input.scene]), pins) };
+}
+
+function sacredPromptOf(input: RegenerateOneSceneInput) {
+  const sacred = sacredContextOf(input);
+  if (!sacred) return {};
+  // S-9 (L-2): decided per LESSON like the planner — the full block when the
+  // package pins any book quote or the Stage is ARABIC, else the short line.
+  const mode = sacredPolicyModeFor({ subjectCode: input.stage.subjectCode, pins: sacred.pins });
+  return { sacredText: { quotes: sacredQuotesForPrompt(sacred.quotes), mode } };
+}
+
+/** Narration stripped of quotes, then the one-scene checks; a finding writes nothing. */
+function sacredTextRefusal(
+  input: RegenerateOneSceneInput,
+  candidate: AppScene,
+): RegenerateOneSceneResult | null {
+  const sacred = sacredContextOf(input);
+  if (!sacred) return null;
+  // S-5: the candidate's own pinned quotes too, so its narration repair and
+  // checks know every quote it shows.
+  const quotes = withCandidateQuotes(candidate, sacred.pins, sacred.quotes);
+  // H-2 (4 Nov 2026 rule): an exercise or check slide of a g5.v8 package drops
+  // its verse and hadith items before the narration repair and the checks.
+  const scope = isTeacherParityModel(input.teachingModel)
+    ? singleSceneExerciseScope(
+        candidate,
+        [
+          ...(candidate.sourceContentUnitIds ?? []),
+          ...(input.outlineSnapshot?.outlines.find((outline) => outline.id === candidate.outlineId)
+            ?.sourceContentUnitIds ?? []),
+        ],
+        input.sacredExerciseUnitIds,
+      )
+    : undefined;
+  if (scope) stripSacredExerciseItems([candidate], quotes, scope);
+  stripSacredNarration([candidate], quotes);
+  const findings = singleSceneSacredFindings(candidate, sacred.pins, quotes, scope);
+  if (findings.length === 0) return null;
+  return failure(
+    'SACRED_TEXT_ALTERED',
+    `${findings.map((finding) => `${finding.code}: ${finding.message}`).join('; ')}; nothing was written`,
+    { findings: findings.map((finding) => finding.code) },
+  );
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -250,6 +325,7 @@ export async function regenerateOneScene(
       baselineContent: baseline,
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
+      ...sacredPromptOf(input),
       onFailure: (event) => {
         contentFailure = event;
       },
@@ -337,6 +413,8 @@ function validatedSlideCandidate(
   candidate: AppScene,
 ): RegenerateOneSceneResult {
   const pre = input.scene;
+  const sacredRefusal = sacredTextRefusal(input, candidate);
+  if (sacredRefusal) return sacredRefusal;
   const violations = regenerationInvariantViolations(pre, candidate);
   if (violations.length > 0) {
     return failure(
@@ -415,6 +493,7 @@ async function slideActions(
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
             ...(imageNotes ? { imageNotes } : {}),
+            ...sacredPromptOf(input),
             onFallback: (info) => {
               fellBack = info;
             },
@@ -547,6 +626,7 @@ async function regenerateQuizScene(
       languageDirective,
       editDirective,
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+      ...sacredPromptOf(input),
       onFailure: (event) => {
         contentFailure = event;
       },
@@ -591,6 +671,7 @@ async function regenerateQuizScene(
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+            ...sacredPromptOf(input),
             onFallback: (info) => {
               fellBack = info;
             },
@@ -640,6 +721,8 @@ async function regenerateQuizScene(
     if (stamped) candidate = { ...candidate, alignmentBaseline: stamped };
   }
 
+  const sacredRefusal = sacredTextRefusal(input, candidate);
+  if (sacredRefusal) return sacredRefusal;
   const violations = regenerationInvariantViolations(pre, candidate);
   if (violations.length > 0) {
     return failure(

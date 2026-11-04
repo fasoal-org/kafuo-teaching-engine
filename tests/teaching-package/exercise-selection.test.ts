@@ -4,8 +4,16 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import {
+  bookUnitFactsOf,
+  findBookCoverageGaps,
+  teacherParityBook,
+} from '@/lib/server/teaching-package/book-coverage';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
-import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
+import {
+  exerciseQuestionNumbers,
+  type BookUnitFacts,
+} from '@/lib/server/teaching-package/hidden-step-types';
 import type { KafuoBookStructure, KafuoBookStructureUnit } from '@/lib/types/teaching-package';
 
 const POLICY = { maxExercises: 10, maxExerciseSlides: 3, minExercises: 6, minExerciseSlides: 2 };
@@ -63,6 +71,51 @@ function lesson306(): KafuoBookStructure {
 
 const byId = (book: KafuoBookStructure) =>
   new Map(book.units.map((unit) => [unit.contentUnitId, unit] as const));
+
+describe('M-4: an exercise left without items after the verse strip', () => {
+  const VERSE = '﴿هُوَ الَّذِي أَنزَلَ عَلَيْكَ الْكِتَابَ مِنْهُ آيَاتٌ مُّحْكَمَاتٌ﴾';
+  const units: KafuoBookStructureUnit[] = ['8001', '8002', '8003'].map((id) => ({
+    contentUnitId: id,
+    kind: 'PRACTICE',
+    element: 'exercise',
+    required: false,
+    partIndex: 1,
+  }));
+  const book: KafuoBookStructure = {
+    templateVersionId: '3',
+    rules: [],
+    units,
+    exercisePolicy: POLICY,
+  };
+  const texts = [
+    // Every numbered item is a verse.
+    { id: '8001', text: `استخرج النعت:\n1) ${VERSE}\n2) ${VERSE}` },
+    // One verse item, nothing else but the instruction.
+    { id: '8002', text: `أعرب ما تحته خط:\n${VERSE}` },
+    // A poem item survives beside the verse.
+    { id: '8003', text: `عيّن التابع:\n1) بيت الشعر الأول\n2) ${VERSE}` },
+  ];
+
+  it('is marked, never selected, and not a coverage requirement', () => {
+    const facts = bookUnitFactsOf(book, texts);
+    expect(facts['8001']!.noItemsLeft).toBe(true);
+    expect(facts['8002']!.noItemsLeft).toBe(true);
+    expect(facts['8003']!.noItemsLeft).toBeUndefined();
+    expect(selectExercises(book, facts)!.unitIds).toEqual(['8003']);
+
+    // With only verse-only exercises, nothing is selectable and no slide is required.
+    const verseOnly = { ...book, units: units.slice(0, 2) };
+    expect(selectExercises(verseOnly, facts)).toBeNull();
+    const coverage = teacherParityBook(verseOnly, { key: 'g5', version: 'g5.v8' }, facts);
+    expect(findBookCoverageGaps([], coverage).map((gap) => gap.kind)).not.toContain(
+      'missing_exercises',
+    );
+    const withPoem = teacherParityBook(book, { key: 'g5', version: 'g5.v8' }, facts);
+    expect(findBookCoverageGaps([], withPoem).map((gap) => gap.kind)).toContain(
+      'missing_exercises',
+    );
+  });
+});
 
 describe('selectExercises', () => {
   it('picks 8 of 28 usable, covering every example on 2 slides of 4', () => {
@@ -180,6 +233,81 @@ describe('selectExercises', () => {
       },
     })!;
     expect(one.slides).toHaveLength(1);
+  });
+
+  it('spreads one 8-question review unit over 2 slides by question range', () => {
+    const review: KafuoBookStructureUnit = {
+      contentUnitId: '7001',
+      kind: 'PRACTICE',
+      element: 'exercise',
+      required: false,
+      partIndex: 1,
+    };
+    const facts: Record<string, BookUnitFacts> = {
+      '7001': {
+        itemLabels: [],
+        hiddenSteps: [],
+        questionNumbers: exerciseQuestionNumbers(
+          'التقويم\n● الفكرة الرئيسة\n١. سؤال\n2- سؤال\n3) سؤال\n(4) سؤال\n5. سؤال\n6. سؤال\n7. سؤال\n8. سؤال',
+        ),
+      },
+    };
+    expect(facts['7001']!.questionNumbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const book = { units: [review], exercisePolicy: POLICY };
+    const selection = selectExercises(book, facts)!;
+    expect(selection.unitIds).toEqual(['7001']);
+    expect(selection.slides).toEqual([['7001'], ['7001']]);
+    expect(selection.slideQuestions).toEqual([{ '7001': [1, 2, 3, 4] }, { '7001': [5, 6, 7, 8] }]);
+    // Without the facts (an older checkpoint) the unit weighs one, as before.
+    expect(selectExercises(book)).toEqual({ unitIds: ['7001'], slides: [['7001']] });
+    // A 10-question unit under an 8 cap solves its first 8 questions.
+    const ten = { '7001': { ...facts['7001']!, questionNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } };
+    const capped = selectExercises(
+      { units: [review], exercisePolicy: { ...POLICY, maxExercises: 8 } },
+      ten,
+    )!;
+    expect(capped.slideQuestions!.flatMap((slide) => slide['7001'] ?? [])).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+  });
+
+  it('counts 6–8 exercises across a multi-question unit and single units', () => {
+    const units: KafuoBookStructureUnit[] = ['7001', '7002', '7003'].map((id) => ({
+      contentUnitId: id,
+      kind: 'PRACTICE',
+      element: 'exercise',
+      required: false,
+      partIndex: 1,
+    }));
+    const facts: Record<string, BookUnitFacts> = {
+      '7001': { itemLabels: [], hiddenSteps: [], questionNumbers: [1, 2, 3, 4, 5] },
+      '7002': { itemLabels: [], hiddenSteps: [], questionNumbers: [6] },
+    };
+    const selection = selectExercises({ units, exercisePolicy: POLICY }, facts)!;
+    const solved = selection.slides.reduce(
+      (sum, ids, index) =>
+        sum +
+        ids.reduce(
+          (inner, id) => inner + (selection.slideQuestions?.[index]?.[id]?.length ?? 1),
+          0,
+        ),
+      0,
+    );
+    expect(solved).toBeGreaterThanOrEqual(6);
+    expect(solved).toBeLessThanOrEqual(8);
+    expect(solved).toBe(7);
+    expect(selection.unitIds).toEqual(['7001', '7002', '7003']);
+    expect(selection.slides).toHaveLength(2);
+    expect(selection.slides.map((ids) => ids.length)).toEqual([1, 3]);
+    expect(selection.slideQuestions).toEqual([{ '7001': [1, 2, 3, 4] }, { '7001': [5] }]);
+  });
+
+  it('reads numbered questions by the backend rule', () => {
+    expect(exerciseQuestionNumbers('تدرب\nالمثال 2\n● ملخص 3\n١١) سؤال\n12 سؤال')).toEqual([
+      11, 12,
+    ]);
+    expect(exerciseQuestionNumbers('يساوي 1.5 والدرس 1-1')).toEqual([]);
+    expect(exerciseQuestionNumbers('')).toEqual([]);
   });
 
   it('selects nothing without a policy or a usable exercise', () => {

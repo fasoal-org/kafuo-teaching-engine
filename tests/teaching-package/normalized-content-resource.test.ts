@@ -361,6 +361,77 @@ describe('normalized content acquisition', () => {
     ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_LINEAGE_MISMATCH' });
   });
 
+  // Quran/hadith plan Q-3: the backend's additive, optional `sacred_quotes`.
+  it('accepts the optional sacred_quotes field on a content unit', async () => {
+    const verse = '﴿هُوَ الَّذِي أَنزَلَ عَلَيْكَ الْكِتَابَ﴾';
+    const base = manifest();
+    const value = manifest({
+      contentUnits: [
+        {
+          ...base.contentUnits[0]!,
+          sacred_quotes: [
+            {
+              kind: 'quran',
+              text: verse,
+              reference: 'سورة آل عمران الآية: 7',
+              source_block_id: 1,
+              sha256: createHash('sha256').update(verse, 'utf8').digest('hex'),
+              canonical_status: 'matched',
+            },
+          ],
+        },
+      ],
+    });
+    const bytes = await archive(value);
+    const source = await acquireNormalizedContentResource(
+      resource(bytes),
+      { type: 'lesson', id: 'li-1' },
+      { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never },
+    );
+    expect(source.manifest.contentUnits[0]!.sacred_quotes?.[0]?.text).toBe(verse);
+    // The prompt projection is unchanged by the field.
+    expect(source.text).toBe(adaptNormalizedText(manifest()));
+  });
+
+  it('fails closed on a malformed sacred_quotes field', async () => {
+    const base = manifest();
+    const value = manifest({
+      contentUnits: [
+        { ...base.contentUnits[0]!, sacred_quotes: [{ kind: 'poem', text: '' }] as never },
+      ],
+    });
+    const bytes = await archive(value);
+    await expect(
+      acquireNormalizedContentResource(
+        resource(bytes),
+        { type: 'lesson', id: 'li-1' },
+        { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never },
+      ),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
+  });
+
+  it('fails closed on a verse whose canonical check is a mismatch (S-6)', async () => {
+    const base = manifest();
+    const value = manifest({
+      contentUnits: [
+        {
+          ...base.contentUnits[0]!,
+          sacred_quotes: [
+            { kind: 'quran', text: '﴿هُوَ الَّذِي أَنزَلَ﴾', canonical_status: 'mismatch' },
+          ],
+        },
+      ],
+    });
+    const bytes = await archive(value);
+    await expect(
+      acquireNormalizedContentResource(
+        resource(bytes),
+        { type: 'lesson', id: 'li-1' },
+        { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never },
+      ),
+    ).rejects.toMatchObject({ code: 'SACRED_TEXT_CANONICAL_MISMATCH', retryable: false });
+  });
+
   it('rejects package checksum mismatch before opening the archive', async () => {
     const bytes = await archive();
     await expect(

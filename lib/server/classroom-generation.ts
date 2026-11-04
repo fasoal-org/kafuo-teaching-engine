@@ -124,6 +124,16 @@ import { chooseSplitUnitImageKeepers } from '@/lib/server/teaching-package/split
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 import { resolveImageTextPolicy } from '@/lib/server/visual-compliance/prompt-policy';
+import {
+  exerciseSceneIdsOf,
+  sacredQuotesForPrompt,
+  stripSacredExerciseItems,
+  stripSacredNarration,
+  stripSacredTextFromMediaRequests,
+  usedSacredQuotePins,
+  type SacredQuote,
+  type SacredQuotePin,
+} from '@/lib/server/teaching-package/sacred-text';
 
 const log = createLogger('Classroom');
 
@@ -508,6 +518,22 @@ export interface GenerateClassroomInput {
    */
   visibleWorkingSteps?: boolean;
   /**
+   * Quran and hadith (Kafuo plan Q-4 to Q-15): the protected quotes of the
+   * approved source. Present → every learner-text prompt carries the fixed
+   * policy and the cited quotes verbatim, narration and image prompts are
+   * stripped of quote text before TTS and media, and the package pins the
+   * quotes it shows. Absent → prompts and behaviour are unchanged.
+   */
+  sacredText?: {
+    quotes: readonly SacredQuote[];
+    mode?: 'full' | 'short';
+    /**
+     * g5.v8 (owner, 4 Nov 2026): the book's exercise and check units. Their
+     * slides drop every verse or hadith item, shown and spoken. Absent: off.
+     */
+    exerciseUnitIds?: readonly string[];
+  };
+  /**
    * g5.v8 (teacher-parity plan I-4.3): the slides that show a textbook image
    * another slide of the same unit illustrates better. Each is sent to the
    * per-slide visual re-plan without that image, so it gets a native diagram
@@ -659,6 +685,8 @@ export interface ClassroomPersistenceSink {
       /** Kafuo flow lineage + source-visual provenance (package sinks persist them). */
       teachingFlow?: AppTeachingFlowEntry[];
       sourceVisuals?: SourceVisualManifestEntry[];
+      /** Q-14: sha256 + source block id of each Quran / hadith quote the package shows. */
+      sacredQuotes?: SacredQuotePin[];
     },
     baseUrl: string,
   ): Promise<{ id: string; url: string; stage: Stage; scenes: Scene[]; createdAt: string }>;
@@ -1483,6 +1511,15 @@ export async function generateClassroom(
   // The shared TTS-ready spoken-script + signposting policy, from the same
   // authoritative inputs (absent → Action prompts render exactly as before).
   const spokenScript = resolveSpokenScriptOptions(input.language, registerPolicy);
+  // Quran and hadith (Q-4, S-9): the fixed policy and the protected quotes for
+  // every learner-text prompt (`full`), or only the one short line (`short`);
+  // absent → every prompt renders exactly as before.
+  const sacredPrompt = input.sacredText
+    ? {
+        quotes: sacredQuotesForPrompt(input.sacredText.quotes),
+        ...(input.sacredText.mode ? { mode: input.sacredText.mode } : {}),
+      }
+    : undefined;
   let courseTitle: string | undefined;
   let outlines: SceneOutline[];
   let modelLanguageDirective: string;
@@ -1580,6 +1617,7 @@ export async function generateClassroom(
           ...(outlineLanguage ? { language: outlineLanguage } : {}),
           ...(outlineTextDirection ? { textDirection: outlineTextDirection } : {}),
           ...(registerPolicy ? { authoritativeLanguageDirective: registerPolicy.directive } : {}),
+          ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
           // A run that can pause for a person receives admin-correctable
           // findings as diagnostics instead of a failed answer.
           ...(correction ? { collectCorrectableIssues: true } : {}),
@@ -2210,6 +2248,7 @@ export async function generateClassroom(
                     : {}),
                   ...(resolvedSkills ? { resolvedSkills } : {}),
                   ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                  ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                   ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
                   ...(outlineAssignedImages && outlineAssignedImages.length > 0
                     ? {
@@ -2459,6 +2498,7 @@ export async function generateClassroom(
                       ...(flowContext ? { flowContext } : {}),
                       ...(resolvedSkills ? { resolvedSkills } : {}),
                       ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                      ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                       ...(safeOutline.type === 'slide' && hasSourceVisuals
                         ? {
                             imageNotes: buildNarrationImageNotes(
@@ -2616,6 +2656,13 @@ export async function generateClassroom(
       applySourceVisualPrecedence(freshScenes, freshOutlines, sourceServingMapping);
     }
 
+    // Q-11: no Quran or hadith text ever reaches an image or video prompt, and
+    // a prompt about scripture asks for no scripture in the picture.
+    if (input.sacredText) {
+      const stripped = stripSacredTextFromMediaRequests(freshOutlines, input.sacredText.quotes);
+      if (stripped > 0) log.warn(`Removed sacred text from ${stripped} media prompt(s)`);
+    }
+
     // Phase: Media generation (after all scenes generated)
     if (input.enableImageGeneration || input.enableVideoGeneration) {
       await options.onProgress?.({
@@ -2685,6 +2732,7 @@ export async function generateClassroom(
           editDirective: NATIVE_VISUAL_DIRECTIVE,
           baselineContent: { elements: canvas.elements as never, background: canvas.background },
           ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
+          ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
           ...(input.governed ? { onVisualIssue: (issue) => void nativeIssues.push(issue) } : {}),
         });
       } catch (error) {
@@ -2723,6 +2771,7 @@ export async function generateClassroom(
             ...(spokenScript ? { spokenScript } : {}),
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+            ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
           }),
         registerPolicy,
         { title: scene.title, outlineId: planned.id },
@@ -2759,6 +2808,25 @@ export async function generateClassroom(
       if (repaired > 0) {
         log.warn(`Removed invalid Actions from ${repaired} scene(s); marked them for review`);
       }
+    }
+
+    // Q-7 / Q-11 (owner decision): narration and characters never speak a Quran
+    // verse or hadith; each spoken quote becomes «تأمّل الآية المعروضة» /
+    // «تأمّل الحديث المعروض». Before TTS, so no audio of a quote is made.
+    if (input.sacredText?.exerciseUnitIds) {
+      // 4 Nov 2026: a verse or hadith is never an exercise or check item.
+      const removed = stripSacredExerciseItems(freshScenes, input.sacredText.quotes, {
+        exerciseSceneIds: exerciseSceneIdsOf(
+          freshScenes,
+          outlines,
+          new Set(input.sacredText.exerciseUnitIds),
+        ),
+      });
+      if (removed > 0) log.warn(`Removed verse or hadith items from ${removed} exercise scene(s)`);
+    }
+    if (input.sacredText) {
+      const stripped = stripSacredNarration(freshScenes, input.sacredText.quotes);
+      if (stripped > 0) log.warn(`Replaced spoken sacred text in ${stripped} narration line(s)`);
     }
 
     // Phase: TTS generation
@@ -2813,6 +2881,11 @@ export async function generateClassroom(
           ? { teachingFlow: input.teachingFlow }
           : {}),
         ...(sourceManifest.length > 0 ? { sourceVisuals: sourceManifest } : {}),
+        // Q-14: the quotes this package shows, pinned (always present on a run
+        // with the policy, so an editor write can never add an unpinned one).
+        ...(input.sacredText
+          ? { sacredQuotes: usedSacredQuotePins(scenes, input.sacredText.quotes) }
+          : {}),
       },
       options.baseUrl,
     );

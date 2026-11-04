@@ -550,7 +550,14 @@ export interface GenerationCheckpointSourceRefs {
    */
   bookUnitFacts?: Record<
     string,
-    { itemLabels: string[]; hiddenSteps: Array<'ordered_named_set' | 'clock_time'> }
+    {
+      itemLabels: string[];
+      hiddenSteps: Array<'ordered_named_set' | 'clock_time'>;
+      /** The unit's numbered questions (3 Nov 2026); absent on older checkpoints. */
+      questionNumbers?: number[];
+      /** 4 Nov 2026: every item held a verse or hadith; never selected. */
+      noItemsLeft?: true;
+    }
   >;
   /** Content Unit choices for a person (id, order, title, role) — no text. */
   contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
@@ -908,6 +915,22 @@ export interface AggregateReadResponse {
   latestAttempt: GenerationAttempt | null;
   /** Watermark: highest webhook sequence allocated for the aggregate. */
   latestAggregateSequence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Quran and hadith pins (quran-text-handling-rules-plan Q-14). Persisted on
+// the outline record; carries no quote text.
+// ---------------------------------------------------------------------------
+
+export interface SacredQuotePin {
+  kind: 'quran' | 'hadith';
+  /** Hex sha256 of the quote's exact UTF-8 text (a verse includes its ﴿ ﴾). */
+  sha256: string;
+  sourceBlockId: string | null;
+  contentUnitId: string;
+  reference: string | null;
+  /** The generated package shows this quote. */
+  used: boolean;
 }
 
 // ---------------------------------------------------------------------------

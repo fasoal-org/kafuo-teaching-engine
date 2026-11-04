@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   duringGeneration: null as null | (() => Promise<void>),
   /** Runs between the new-run checks and T1 (the route is resolved there). */
   duringRoute: null as null | (() => Promise<void>),
+  warn: vi.fn(),
 }));
 
 vi.mock('@/lib/server/teaching-package/insert-one-scene', () => ({
@@ -65,7 +66,7 @@ vi.mock('@/lib/server/teaching-package/routed-insertion-call', () => ({
   }),
 }));
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn(), debug: vi.fn() }),
 }));
 
 class PGlitePool {
@@ -357,9 +358,13 @@ describe('reviewer-generated slide insertion routes', () => {
       status?: 'draft' | 'approved';
       units?: boolean;
       scenes?: (stageId: string) => AppScene[];
+      /** F-7: a g5.v8 version and outline overrides. */
+      teachingModel?: { key: string; version: string };
+      outline?: Partial<ReturnType<typeof makeOutline>>;
     } = {},
   ): Promise<Seed> {
     const governed = options.governed ?? false;
+    const model = options.teachingModel ?? { key: 'g5', version: 'g5.v1' };
     const stageId = unique('stage-ins');
     const versionId = unique('tpv');
     const attemptId = unique('tpa');
@@ -369,7 +374,7 @@ describe('reviewer-generated slide insertion routes', () => {
         stageId,
         'Insertion package',
         (options.scenes ?? ((id) => lessonScenes(id, governed)))(stageId),
-        makeOutline('insertion'),
+        { ...makeOutline('insertion'), ...options.outline },
       ),
     );
     await insertVersion(qp(), {
@@ -379,7 +384,7 @@ describe('reviewer-generated slide insertion routes', () => {
       status: options.status ?? 'draft',
       currentStageId: stageId,
       currentAttemptId: attemptId,
-      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingModel: model,
       now: 1,
     });
     await insertAttempt(qp(), {
@@ -388,11 +393,11 @@ describe('reviewer-generated slide insertion routes', () => {
       kind: 'initial',
       status: 'succeeded',
       requestedByActorRef: 'kafuo',
-      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingModel: model,
       ...(governed ? { teachingSkillsContract: 'kafuo.teaching-skills.v1' } : {}),
       inputSnapshot: {
         learningItem: item,
-        teachingModel: { key: 'g5', version: 'g5.v1' },
+        teachingModel: model,
         learningObjectives: [],
         contentUnitRefs: [],
         sourceRefs: [],
@@ -537,6 +542,56 @@ describe('reviewer-generated slide insertion routes', () => {
   }
 
   // -------------------------------------------------------------- success
+
+  it('F-7: a g5.v8 attempt with no book map keeps the exercise rule on (outline ids, else role scope) and warns with ids only', async () => {
+    const v8 = { key: 'g5', version: 'g5.v8' };
+    const sacredQuotes = [
+      {
+        kind: 'quran',
+        sha256: 'b'.repeat(64),
+        sourceBlockId: null,
+        contentUnitId: 'cu_3',
+        reference: null,
+        used: false,
+      },
+    ];
+    const withOutline = await seed({
+      teachingModel: v8,
+      outline: {
+        sacredQuotes,
+        outlines: [
+          {
+            id: 'o-ex',
+            type: 'slide',
+            title: 'Practice',
+            description: 'practice',
+            keyPoints: [],
+            order: 99,
+            contentRole: 'practice',
+            sourceContentUnitIds: ['cu_ex'],
+          },
+        ],
+      } as never,
+    });
+    const bare = await seed({ teachingModel: v8, outline: { sacredQuotes } as never });
+    mocks.warn.mockClear();
+    await post(withOutline, body());
+    await post(bare, body());
+    const calls = mocks.insert.mock.calls.map((call) => (call[0] as InsertOneSceneInput).sacred);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.exerciseUnitIds).toEqual(['cu_ex']);
+    // No unit ids anywhere: the role/stage scope (an empty id list), never off.
+    expect(calls[1]?.exerciseUnitIds).toEqual([]);
+    const warnings = mocks.warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith('SACRED_EXERCISE_SCOPE_FALLBACK'));
+    expect(warnings).toEqual([
+      expect.stringContaining(`version=${withOutline.versionId} attempt=`),
+      expect.stringContaining(`version=${bare.versionId} attempt=`),
+    ]);
+    expect(warnings[0]).toMatch(/scope=outline$/);
+    expect(warnings[1]).toMatch(/scope=role$/);
+  });
 
   it('inserts one grounded slide atomically, shifts only orders, and keeps the outline byte-equal', async () => {
     const seeded = await seed();
