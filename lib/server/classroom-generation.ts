@@ -882,6 +882,12 @@ export interface GenerationCorrectionOptions {
     aiCall: AICallFn,
   ) => Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
   /**
+   * The final plan, cleaned of planner-only text before any Scene is generated
+   * (e.g. Content Unit id labels a key point copied from the exercises block).
+   * Runs after the correction checkpoint, on fresh and resumed runs alike.
+   */
+  finalizeOutlines?: (outlines: SceneOutline[]) => SceneOutline[];
+  /**
    * Resume from a saved, administrator-corrected outline candidate: no
    * research and no outline generation; the candidate is revalidated with the
    * same analysis before anything is reserved.
@@ -2030,6 +2036,9 @@ export async function generateClassroom(
         repairs: outlineRepairs,
       });
     }
+  }
+  if (correction?.finalizeOutlines) {
+    outlines = correction.finalizeOutlines(outlines);
   }
 
   // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective

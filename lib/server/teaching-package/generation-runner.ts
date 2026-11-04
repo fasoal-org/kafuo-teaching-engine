@@ -96,6 +96,7 @@ import {
   teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
 import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
   detectSacredQuotes,
   exerciseSceneIdsOf,
@@ -818,6 +819,17 @@ async function runKafuoAttempt(
                 { ...capture, generationRun: run, at: Date.now() },
               ].slice(-MAX_OUTLINE_ANSWER_DIAGNOSTICS),
             })),
+          // A Content Unit id the planner copied into learner text is removed
+          // before any Scene is generated (staging lesson 426, 4 Nov 2026).
+          ...(normalizedSource
+            ? {
+                finalizeOutlines: (outlines: SceneOutline[]) =>
+                  stripContentUnitIdLabels(
+                    outlines,
+                    normalizedSource.manifest.contentUnits.map((unit) => unit.id),
+                  ),
+              }
+            : {}),
           collectOutlineIssues: (outlines: SceneOutline[]) => {
             recordCoverageGaps(outlines);
             // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.
