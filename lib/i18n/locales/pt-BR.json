@@ -773,6 +773,8 @@
       "positionLabel": "Position",
       "positionStart": "At the start",
       "positionAfter": "After slide {{number}} — {{title}}",
+      "slideRef": "slide {{number}} — {{title}}",
+      "offendingSlides": "The slide to fix: {{slides}}.",
       "positionUnknown": "This place is not saved yet. Wait a moment for your changes to save, then open this again.",
       "stageLabel": "Teaching stage",
       "stageNone": "No teaching stage at this position allows a new slide. Choose another position.",

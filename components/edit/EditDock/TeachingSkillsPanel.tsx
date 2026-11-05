@@ -139,6 +139,12 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
   const editable = inspection.editable === true && inspection.capability === 'write';
   const canConfirm = editable && !scene.alignment.aligned;
+  // A stored value outside the closed vocabulary (a generation defect) is shown
+  // as a disabled choice, so picking a valid one is a real change; Primary and
+  // Supporting edits send `instructional` instead of a value the route refuses.
+  const classificationValid =
+    scene.classification === 'instructional' || scene.classification === 'non-instructional';
+  const selectionClassification = classificationValid ? scene.classification : 'instructional';
 
   const mutate = async (body: Record<string, unknown>, endpoint: 'skills' | 'confirm') => {
     if (isStageEditingLocked(stageId)) return;
@@ -223,6 +229,11 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                       })
                     }
                   >
+                    {classificationValid ? null : (
+                      <option value={scene.classification ?? ''} disabled>
+                        {scene.classification ? `${scene.classification} (invalid)` : '— choose —'}
+                      </option>
+                    )}
                     <option value="instructional">instructional</option>
                     <option value="non-instructional">non-instructional</option>
                   </select>
@@ -253,7 +264,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                               ),
                             }
                           : {}),
-                        classification: scene.classification ?? 'instructional',
+                        classification: selectionClassification,
                       });
                     }}
                   >

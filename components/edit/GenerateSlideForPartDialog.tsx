@@ -176,6 +176,26 @@ export function insertionFailureMessage(code: string, t: Translate): string {
     : t('edit.slideInsertion.errors.generic', { code });
 }
 
+/** The slides a refusal names (`details.offendingSceneIds`), as "slide N — title". */
+export function offendingSlidesText(
+  details: unknown,
+  scenes: readonly InsertionSceneRef[],
+  t: Translate,
+  locale: string,
+): string | null {
+  const ids = (details as { offendingSceneIds?: unknown } | null | undefined)?.offendingSceneIds;
+  if (!Array.isArray(ids)) return null;
+  const items = ids.flatMap((id) => {
+    const index = scenes.findIndex((scene) => scene.id === id);
+    return index < 0
+      ? []
+      : [t('edit.slideInsertion.slideRef', { number: index + 1, title: scenes[index]!.title })];
+  });
+  return items.length > 0
+    ? t('edit.slideInsertion.offendingSlides', { slides: joinList(items, locale) })
+    : null;
+}
+
 function unitTitle(unit: ContentUnitSummary, t: Translate): string {
   return unit.title?.trim() || t('edit.slideInsertion.untitledPart', { order: unit.order });
 }
@@ -425,7 +445,14 @@ export function GenerateSlideForPartDialog({
           // new request, so it gets a new key and editable fields.
           keyRef.current = newInsertionKey();
           setFrozen(null);
-          setFailure(insertionFailureMessage(outcome.code, t));
+          setFailure(
+            [
+              insertionFailureMessage(outcome.code, t),
+              offendingSlidesText(outcome.details, scenes, t, locale),
+            ]
+              .filter(Boolean)
+              .join(' '),
+          );
           break;
         case 'unknown':
           // Keep the key and the exact body: the retry replays the outcome.

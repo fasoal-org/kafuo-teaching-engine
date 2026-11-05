@@ -60,6 +60,7 @@ import {
   describePendingKeys,
   insertionTextError,
   insertionUnitsError,
+  offendingSlidesText,
   stageChoiceFor,
   type GenerateSlideForPartDialogProps,
 } from '@/components/edit/GenerateSlideForPartDialog';
@@ -487,6 +488,16 @@ describe('GenerateSlideForPartDialog — outcomes', () => {
 
   it('describePendingKeys falls back to a generic phrase when no key is named', () => {
     expect(describePendingKeys([], SCENES, translate, 'en-US')).toBe('your latest changes');
+  });
+
+  it('offendingSlidesText names the refused slide by number and title (5 Nov 2026)', () => {
+    expect(
+      offendingSlidesText({ offendingSceneIds: ['s2', 'gone'] }, SCENES, translate, 'en-US'),
+    ).toBe('The slide to fix: slide 2 — The rule.');
+    expect(offendingSlidesText({ offendingSceneIds: ['gone'] }, SCENES, translate, 'en-US')).toBe(
+      null,
+    );
+    expect(offendingSlidesText(undefined, SCENES, translate, 'en-US')).toBe(null);
   });
 });
 

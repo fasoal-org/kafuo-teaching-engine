@@ -49,6 +49,7 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
 import { findOutlineSkillSelectionIssues } from '@/lib/server/teaching-package/skill-policy';
+import { validateSceneClassifications } from '@/lib/server/teaching-package/skill-validators';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationAttempt,
@@ -203,6 +204,27 @@ export function appOutlineDiagnostics(
         });
       }
     }
+    // The submit gate's classification check, per outline (5 Nov 2026): a
+    // model answer once put a Skill id ("feynman-learning") here, and the
+    // package could then never be submitted nor take a new slide. The value is
+    // never guessed (BR-TS-054): a person picks it in the correction editor.
+    // Only a value that is PRESENT and wrong is reported here; an absent one
+    // keeps its earlier behaviour (the submit gate still refuses it).
+    outlines.forEach((outline, outlineIndex) => {
+      if (outline.teachingSkills?.classification === undefined) return;
+      const failure = validateSceneClassifications([outline]);
+      if (!failure) return;
+      diagnostics.push({
+        code: failure.code,
+        disposition: 'admin_correctable',
+        outlineIndex,
+        ...(outline.id ? { outlineId: outline.id } : {}),
+        field: 'teachingSkills',
+        message: failure.message,
+        allowedValues: ['instructional', 'non-instructional'],
+        ...positionLabel(context.flow, outline),
+      });
+    });
   }
   // g5.v7: a required book element without its slide (P-6). Here, in the one
   // app-authority diagnosis, so a correction edit re-checks it like the runner.

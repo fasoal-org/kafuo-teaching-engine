@@ -788,6 +788,8 @@
       "positionLabel": "الموضع",
       "positionStart": "في البداية",
       "positionAfter": "بعد الشريحة {{number}} — {{title}}",
+      "slideRef": "الشريحة {{number}} — {{title}}",
+      "offendingSlides": "الشريحة المعنية: {{slides}}.",
       "positionUnknown": "هذا الموضع لم يُحفظ بعد. انتظر قليلًا حتى تُحفظ تعديلاتك، ثم افتح هذه النافذة مرة أخرى.",
       "stageLabel": "مرحلة التدريس",
       "stageNone": "لا توجد مرحلة تدريس في هذا الموضع تسمح بإضافة شريحة جديدة. اختر موضعًا آخر.",

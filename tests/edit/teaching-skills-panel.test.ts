@@ -268,6 +268,56 @@ describe('TeachingSkillsPanel', () => {
     ]);
   });
 
+  it('a stored classification outside the vocabulary is shown and can be corrected (5 Nov 2026)', async () => {
+    respond(
+      inspectionResponse([sceneView({ sceneId: 's1', classification: 'feynman-learning' })], true),
+    );
+    await renderAndWait('s1');
+    const toggle = container.querySelector('[data-testid="teaching-skills-toggle"]')!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('[data-testid="teaching-skills-panel"]')!;
+    const classificationInput = panel.querySelector(
+      '[data-testid="teaching-skills-classification-input"]',
+    ) as HTMLSelectElement;
+    // The bad value is the selected, disabled choice — not a silent "instructional".
+    expect(classificationInput.value).toBe('feynman-learning');
+    expect(classificationInput.selectedOptions[0]!.disabled).toBe(true);
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    await act(async () => {
+      classificationInput.value = 'instructional';
+      classificationInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const put = fetchMock.mock.calls.find((call) => String(call[1]?.method) === 'PUT')!;
+    expect(put[1].body).toContain('"classification":"instructional"');
+    expect(put[1].body).toContain('"skillId":"feynman-learning"');
+  });
+
+  it('a Primary change never forwards an invalid classification the route refuses', async () => {
+    respond(
+      inspectionResponse([sceneView({ sceneId: 's1', classification: 'feynman-learning' })], true),
+    );
+    await renderAndWait('s1');
+    const toggle = container.querySelector('[data-testid="teaching-skills-toggle"]')!;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const panel = container.querySelector('[data-testid="teaching-skills-panel"]')!;
+    const primaryInput = panel.querySelector(
+      '[data-testid="teaching-skills-primary-input"]',
+    ) as HTMLSelectElement;
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    await act(async () => {
+      primaryInput.value = 'lecture-style@v1';
+      primaryInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const primaryPut = fetchMock.mock.calls.find((call) => String(call[1]?.method) === 'PUT')!;
+    expect(primaryPut[1].body).toContain('"classification":"instructional"');
+    expect(primaryPut[1].body).not.toContain('"classification":"feynman-learning"');
+  });
+
   it('refuses every server write while an AI slide insertion holds the Stage (plan §5.1)', async () => {
     respond(
       inspectionResponse(
