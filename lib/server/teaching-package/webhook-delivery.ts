@@ -30,6 +30,7 @@ import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 import { createLogger } from '@/lib/logger';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
 import { sweepPackageReviews } from '@/lib/server/teaching-package/package-review';
+import { sweepQuestionReviews } from '@/lib/server/teaching-package/question-review';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import type { TeachingPackageAggregateKey } from '@/lib/types/teaching-package';
 
@@ -248,6 +249,12 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
     ...(options?.now ? { now: options.now } : {}),
   }).catch((error) => {
     log.error('package review sweep failed:', describeErrorSafely(error));
+  });
+  await sweepQuestionReviews({
+    pool,
+    ...(options?.now ? { now: options.now } : {}),
+  }).catch((error) => {
+    log.error('question review sweep failed:', describeErrorSafely(error));
   });
   await deliverPendingWebhooks({
     workerId,

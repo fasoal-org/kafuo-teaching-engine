@@ -116,9 +116,11 @@ const WEBHOOK_EVENT_TYPES = [
   'teaching_engine.reviewer_provider_switched',
   // The terminal result of one package review (plan §4.6): ids, status, counts.
   'teaching_package.review_completed',
+  // The terminal result of one question-set review (plan §4.7): per-question verdicts.
+  'teaching_question_set.review_completed',
 ] as const;
 /** The newest event type: the delivery-table evolution is guarded on it. */
-const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_package.review_completed';
+const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_question_set.review_completed';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
@@ -710,6 +712,42 @@ CREATE INDEX IF NOT EXISTS tpr_version_idx
   ON teaching_package_reviews (tenant_id, version_id, created_at);
 CREATE INDEX IF NOT EXISTS tpr_open_idx
   ON teaching_package_reviews (status, lease_until)
+  WHERE status IN ('queued','running');
+
+-- One AI review of one generated question set (plan §4.7): asked for by Kafuo
+-- after it saved the set (202), run by the same in-process sweep under a
+-- lease, answered by 'teaching_question_set.review_completed'. 'request_id' is
+-- Kafuo's dedup key: a replay answers the same row and never pays twice. The
+-- questions are Kafuo's own copy (TE keeps no question bank).
+CREATE TABLE IF NOT EXISTS teaching_question_reviews (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  learning_item_type TEXT NOT NULL CHECK (learning_item_type IN ('lesson','section')),
+  learning_item_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL,
+  language TEXT NOT NULL,
+  objective_ref TEXT NOT NULL,
+  objective_text TEXT,
+  questions JSONB NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','unavailable')),
+  provider TEXT CHECK (provider IN ('anthropic','openai')),
+  model TEXT,
+  results JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_code TEXT,
+  run_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  started_at DOUBLE PRECISION,
+  completed_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tqr_tenant_request_unique
+  ON teaching_question_reviews (tenant_id, request_id);
+CREATE INDEX IF NOT EXISTS tqr_open_idx
+  ON teaching_question_reviews (status, lease_until)
   WHERE status IN ('queued','running');
 `;
 

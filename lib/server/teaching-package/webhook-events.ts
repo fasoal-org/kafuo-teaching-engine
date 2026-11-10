@@ -41,7 +41,8 @@ export async function enqueueWebhookEvent(
     | 'teaching_package.status_changed'
     | 'teaching_package.generation_awaiting_correction'
     | 'teaching_engine.reviewer_provider_switched'
-    | 'teaching_package.review_completed',
+    | 'teaching_package.review_completed'
+    | 'teaching_question_set.review_completed',
   buildPayload: (sequence: number, eventId: string) => Record<string, unknown>,
 ): Promise<void> {
   await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
