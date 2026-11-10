@@ -278,6 +278,33 @@ describe('slide regeneration routes', () => {
 
   // ------------------------------------------------------------------ AT-A
 
+  it('AI reviewer (plan §4.4): a system actor is recorded on the row and the audit events, with no session', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: 'system:package-reviewer',
+    };
+    const response = await regenerateSlideScene(grant, 'scene-1', body('key-reviewer-1'), {
+      pool: pool as never,
+      actor: { actorRef: 'system:package-reviewer', sessionRef: null },
+    });
+    expect(response.status).toBe(200);
+    const [row] = await rows();
+    expect(row).toMatchObject({
+      status: 'succeeded',
+      actor_ref: 'system:package-reviewer',
+      session_ref: null,
+    });
+    const audit = await events();
+    expect(audit.map((event) => event.actor_ref)).toEqual(
+      audit.map(() => 'system:package-reviewer'),
+    );
+    expect(audit.length).toBeGreaterThan(0);
+  });
+
   it('AT-A: a write grant on a draft regenerates exactly the one slide, atomically with its audit', async () => {
     const before1 = await sceneState('scene-1');
     const before2 = await sceneState('scene-2');

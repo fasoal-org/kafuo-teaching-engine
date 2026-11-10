@@ -2387,6 +2387,38 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       });
     });
 
+    it('Phase 3: the fix loop runs on the stored findings; everything fixed → fixed, with its progress kept', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const fixLoop = vi.fn(async (context: { findings: Array<Record<string, unknown>> }) => ({
+        findings: context.findings.map((f) => ({ ...f, status: 'fixed', teacherReason: null })),
+        fixes: [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed', code: null }],
+      }));
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S3',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ]),
+        fixLoop: fixLoop as never,
+      });
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      expect(done).toMatchObject({ status: 'fixed' });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'fixed',
+        counts: { findings: 1, open: 0, fixed: 1 },
+        openChecks: [],
+      });
+    });
+
     it('the version moved to another Stage → unavailable VERSION_CHANGED, the reviewer is never called', async () => {
       const attemptId = await startKafuo();
       const [review] = await queuedReview(attemptId);
@@ -2433,7 +2465,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       );
       const { sweepPackageReviews } = await import('@/lib/server/teaching-package/package-review');
       const callReviewer = answering([]);
-      const started = await sweepPackageReviews({ pool: txPool(), callReviewer });
+      // No fix loop here: this case is about the resume (the fix loop has its own file).
+      const started = await sweepPackageReviews({
+        pool: txPool(),
+        callReviewer,
+        fixLoop: undefined,
+      });
       expect(started).toEqual([review!.id]);
       await vi.waitFor(async () => {
         const [row] = await queuedReview(attemptId);

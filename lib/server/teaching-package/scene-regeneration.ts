@@ -225,6 +225,13 @@ export interface SceneRegenerationDeps {
   regenerate?: typeof regenerateOneScene;
   resolveGoverned?: typeof resolveGovernedRegenerationContext;
   routingMode?: 'enforced' | 'off';
+  /**
+   * A non-editor actor (ai-reviewer-layer plan §4.4: `system:package-reviewer`)
+   * recorded on the row and the review events instead of the editor grant's
+   * actor, with its own session reference (none for the reviewer). Absent →
+   * the editor actor and session, exactly as before.
+   */
+  actor?: { actorRef: string; sessionRef: string | null };
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -277,7 +284,7 @@ export async function regenerateSlideScene(
 ): Promise<SceneRegenerationResponse> {
   const { pool } = deps;
   const clock = deps.now ?? Date.now;
-  const actorRef = sceneRegenerationActorRef(grant.stageId);
+  const actorRef = deps.actor?.actorRef ?? sceneRegenerationActorRef(grant.stageId);
   const requestDigest = sceneRegenerationRequestDigest(sceneId, request);
 
   // Producing-attempt context: the routed subject and the recorded register.
@@ -341,7 +348,9 @@ export async function regenerateSlideScene(
     instruction: request.instruction,
     reason: request.reason,
     actorRef,
-    sessionRef: sceneRegenerationSessionRef(grant.tenantId, grant.versionId, grant.learnerKey),
+    sessionRef: deps.actor
+      ? deps.actor.sessionRef
+      : sceneRegenerationSessionRef(grant.tenantId, grant.versionId, grant.learnerKey),
     registerPolicy: {
       current: registerPolicy
         ? { policyVersion: registerPolicy.version, register: registerPolicy.register }

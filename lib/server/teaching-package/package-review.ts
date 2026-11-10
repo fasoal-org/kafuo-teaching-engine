@@ -44,7 +44,10 @@ import {
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
-  PACKAGE_QUIZ_CHECKS,
+  createPackageReviewFixLoop,
+  teacherOnlyReason,
+} from '@/lib/server/teaching-package/package-review-fix-loop';
+import {
   PACKAGE_REVIEW_SCHEMA,
   PACKAGE_REVIEW_SYSTEM,
   parseReviewerAnswer,
@@ -411,19 +414,7 @@ export async function runPackageReview(
   }
 }
 
-/** Findings no regeneration can fix (plan §4.3): they go straight to the teacher. */
-export function teacherOnlyReason(
-  finding: StoredFinding,
-  slides: readonly ReviewSlide[],
-): StoredFinding['teacherReason'] {
-  if (finding.check === 'S5') return 'S5_TEACHER_ONLY';
-  const slide = slides.find((candidate) => candidate.id === finding.targetId);
-  if (!slide) return 'S5_TEACHER_ONLY';
-  if (slide.bankQuiz) return 'BANK_QUIZ_NOT_REGENERABLE';
-  const isQuizCheck = (PACKAGE_QUIZ_CHECKS as readonly string[]).includes(finding.check);
-  if (isQuizCheck && slide.sceneType !== 'quiz') return 'REGENERATION_REFUSED';
-  return null;
-}
+export { teacherOnlyReason };
 
 const runningReviews = new Set<string>();
 
@@ -486,5 +477,6 @@ export function packageReviewWire(review: PackageReview) {
 
 /** Production wiring (Phase 3 adds the fix loop here). */
 export function defaultReviewDeps(): PackageReviewDeps {
-  return {};
+  // D-1: the reviewer fixes what it can by itself, once per slide.
+  return { fixLoop: createPackageReviewFixLoop() };
 }
