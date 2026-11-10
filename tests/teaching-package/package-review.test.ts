@@ -196,6 +196,17 @@ describe('parseReviewerAnswer', () => {
     });
   });
 
+  it('H-1: Sol answers in text mode — the system prompt carries the exact schema, and a fenced answer parses', () => {
+    expect(PACKAGE_REVIEW_SYSTEM).toContain(JSON.stringify(PACKAGE_REVIEW_SCHEMA));
+    expect(PACKAGE_REVIEW_SYSTEM).toContain('"findings"');
+    const solAnswer =
+      '```json\n' + JSON.stringify({ summary: 'ملخص', findings: [finding()] }) + '\n```';
+    expect(parseReviewerAnswer(solAnswer, scope).findings).toHaveLength(1);
+    expect(parseReviewerAnswer('```\n{"summary":"s","findings":[]}\n```', scope).findings).toEqual(
+      [],
+    );
+  });
+
   it('throws on a malformed answer (→ unusable_output → the fallback route)', () => {
     expect(() => parseReviewerAnswer('not json', scope)).toThrow();
     expect(() => parseReviewerAnswer(JSON.stringify({ findings: [] }), scope)).toThrow(/summary/);

@@ -436,6 +436,20 @@ describe('question review prompt and answer', () => {
     ).toThrow(/unknown check/);
   });
 
+  it('H-1: the system prompt carries the exact schema for Sol, and a fenced answer parses', async () => {
+    const { QUESTION_REVIEW_SCHEMA, QUESTION_REVIEW_SYSTEM } =
+      await import('@/lib/server/teaching-package/question-review');
+    expect(QUESTION_REVIEW_SYSTEM).toContain(JSON.stringify(QUESTION_REVIEW_SCHEMA));
+    expect(QUESTION_REVIEW_SYSTEM).toContain('"results"');
+    const fenced =
+      '```json\n' +
+      JSON.stringify({ results: [{ question_id: 'q-101', verdict: 'pass', findings: [] }] }) +
+      '\n```';
+    expect(parseQuestionReviewAnswer(fenced, ['q-101'])).toEqual([
+      { questionId: 'q-101', verdict: 'pass', findings: [], fixNote: null },
+    ]);
+  });
+
   it('combinedFixNote joins the notes by check', () => {
     expect(combinedFixNote([])).toBeNull();
     expect(

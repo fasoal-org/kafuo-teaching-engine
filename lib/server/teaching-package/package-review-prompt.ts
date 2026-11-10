@@ -50,7 +50,7 @@ const QUOTE_MAX = 1_200;
 const SUMMARY_MAX = 3_000;
 const FINDINGS_MAX = 80;
 
-export const PACKAGE_REVIEW_SYSTEM = `You are the senior subject reviewer of a Saudi school lesson ("Teaching Package") that was generated from a textbook. You read the book text the lesson was built from and check every slide and every in-lesson quiz against a fixed checklist. You only report real errors; you never report taste or style preferences that the checklist does not name.
+const PACKAGE_REVIEW_INSTRUCTIONS = `You are the senior subject reviewer of a Saudi school lesson ("Teaching Package") that was generated from a textbook. You read the book text the lesson was built from and check every slide and every in-lesson quiz against a fixed checklist. You only report real errors; you never report taste or style preferences that the checklist does not name.
 
 CHECKLIST (use exactly these codes)
 - S1: The slide and its narration match the book. Nothing is added that the book does not say, and nothing contradicts it.
@@ -102,6 +102,27 @@ export const PACKAGE_REVIEW_SCHEMA: Record<string, unknown> = {
     },
   },
 };
+
+/**
+ * The schema, verbatim, at the end of the fixed instructions. Only Anthropic
+ * receives it as native structured output (`execute.ts`); GPT-6 Sol answers in
+ * text mode, so it must read the exact key names here (review finding H-1).
+ */
+export function schemaInstruction(schema: Record<string, unknown>): string {
+  return `OUTPUT: exactly one JSON object that matches this JSON schema, with these exact key names. No markdown, no code fence, no text before or after it.\n${JSON.stringify(schema)}`;
+}
+
+export const PACKAGE_REVIEW_SYSTEM = `${PACKAGE_REVIEW_INSTRUCTIONS}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA)}`;
+
+/**
+ * The JSON text of an answer: a model in text mode may still wrap it in a
+ * markdown fence; nothing else is repaired.
+ */
+export function unwrapJsonAnswer(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(trimmed);
+  return fenced ? fenced[1]!.trim() : trimmed;
+}
 
 /** The stable, cache-marked block: the book units, once. */
 export function renderBookBlock(units: readonly ReviewBookUnit[]): string {
@@ -170,7 +191,7 @@ export function parseReviewerAnswer(
     focusIds?: ReadonlySet<string>;
   },
 ): ReviewerAnswer {
-  const value = JSON.parse(raw) as Record<string, unknown>;
+  const value = JSON.parse(unwrapJsonAnswer(raw)) as Record<string, unknown>;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('the answer must be a JSON object');
   }

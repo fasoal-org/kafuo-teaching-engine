@@ -29,7 +29,11 @@ import {
   stripTags,
   type ReviewBookUnit,
 } from '@/lib/server/teaching-package/package-review-input';
-import { renderBookBlock } from '@/lib/server/teaching-package/package-review-prompt';
+import {
+  renderBookBlock,
+  schemaInstruction,
+  unwrapJsonAnswer,
+} from '@/lib/server/teaching-package/package-review-prompt';
 import {
   claimQuestionReview,
   finishQuestionReview,
@@ -52,7 +56,7 @@ export const QUESTION_REVIEW_LIMITS = { questions: { min: 1, max: 40 }, textMax:
 const QUESTION_CHECKS: readonly QuestionCheck[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5'];
 const NOTE_MAX = 2_000;
 
-export const QUESTION_REVIEW_SYSTEM = `You are the senior subject reviewer of school assessment questions that were generated for one lesson of a Saudi textbook. You read the book text the lesson was built from and the lesson objective, then check every question against a fixed checklist. You only report real errors.
+const QUESTION_REVIEW_INSTRUCTIONS = `You are the senior subject reviewer of school assessment questions that were generated for one lesson of a Saudi textbook. You read the book text the lesson was built from and the lesson objective, then check every question against a fixed checklist. You only report real errors.
 
 CHECKLIST (use exactly these codes)
 - Q1: Solve the question yourself first. The marked answer is right, and no other choice is also right.
@@ -110,6 +114,9 @@ export const QUESTION_REVIEW_SCHEMA: Record<string, unknown> = {
   },
 };
 
+/** The schema is in the fixed instructions too: Sol answers in text mode (review finding H-1). */
+export const QUESTION_REVIEW_SYSTEM = `${QUESTION_REVIEW_INSTRUCTIONS}\n\n${schemaInstruction(QUESTION_REVIEW_SCHEMA)}`;
+
 function clip(value: string, max: number): string {
   const trimmed = value.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
@@ -162,7 +169,7 @@ export function parseQuestionReviewAnswer(
   raw: string,
   questionIds: readonly string[],
 ): QuestionResult[] {
-  const value = JSON.parse(raw) as { results?: unknown };
+  const value = JSON.parse(unwrapJsonAnswer(raw)) as { results?: unknown };
   if (!value || typeof value !== 'object' || !Array.isArray(value.results)) {
     throw new Error('results must be an array');
   }
