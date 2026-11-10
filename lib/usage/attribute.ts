@@ -12,8 +12,15 @@
  * | family    | total ⊇ read | total ⊇ write | output ⊇ reasoning | fresh                          |
  * | openai    | yes          | no write field| yes                | total − read_if_reported       |
  * | qwen      | yes          | yes if reported| yes               | total − read − write (if rep.) |
- * | anthropic | no           | no            | yes                | total                          |
+ * | anthropic | yes          | yes if reported| yes               | total − read − write (if rep.) |
  * | default   | as openai (the OpenAI-compatible convention every other registered provider follows) |
+ *
+ * Anthropic's raw `input_tokens` excludes both cache classes, but the AI SDK
+ * (`@ai-sdk/anthropic` 3.x under `ai` 6) reports `inputTokens` as
+ * `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`, so
+ * the total the executor sees already holds both (ai-reviewer-layer plan §4.9:
+ * the reviewer is the first teaching call on Anthropic, and its cache reads
+ * would otherwise be charged at the full input rate as well).
  *
  * `usage_inconsistent` flags `fresh < 0` (cost still computed with fresh
  * clamped at 0). `visible_output = output − reasoning_if_reported` is
@@ -103,8 +110,6 @@ export function deriveTokenClasses(
   if (inputTotal !== null) {
     switch (family) {
       case 'anthropic':
-        fresh = inputTotal;
-        break;
       case 'qwen':
         fresh = inputTotal - (read ?? 0) - (write ?? 0);
         break;

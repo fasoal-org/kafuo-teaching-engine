@@ -123,12 +123,14 @@ describe('deriveTokenClasses — qwen family (total ⊇ read and ⊇ write when 
   });
 });
 
-describe('deriveTokenClasses — anthropic family (input_tokens excludes both)', () => {
-  it('fresh = total, read and write carried separately', () => {
+describe('deriveTokenClasses — anthropic family (the AI SDK total includes both)', () => {
+  it('fresh = total − read − write, read and write carried separately', () => {
+    // @ai-sdk/anthropic 3.x: inputTokens = input_tokens 300 + write 1000 + read 5000.
     const classes = deriveTokenClasses(
-      usage({ inputTokens: 300, outputTokens: 20, cacheReadTokens: 5000, cacheWriteTokens: 1000 }),
+      usage({ inputTokens: 6300, outputTokens: 20, cacheReadTokens: 5000, cacheWriteTokens: 1000 }),
       'anthropic',
     );
+    expect(classes.inputTokensTotal).toBe(6300);
     expect(classes.freshInputTokens).toBe(300);
     expect(classes.cacheReadTokens).toBe(5000);
     expect(classes.cacheWriteTokens).toBe(1000);

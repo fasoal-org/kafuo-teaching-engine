@@ -74,6 +74,21 @@ describe('model metadata thinking capabilities', () => {
     expect(getCatalogThinkingCapability('lemonade', 'Gemma-4-26B-A4B-it-GGUF')).toBeDefined();
   });
 
+  it('AI reviewer models: Opus 5.5 is adaptive-only (never disabled), GPT-6 Sol takes effort', () => {
+    const opus = getCatalogThinkingCapability('anthropic', 'claude-opus-5-5');
+    expect(opus).toMatchObject({
+      control: 'effort',
+      requestAdapter: 'anthropic',
+      toggleable: false,
+      anthropicThinking: { type: 'adaptive' },
+    });
+    expect(opus?.effortValues).toContain('high');
+    expect(opus?.effortValues).not.toContain('none');
+    const sol = getCatalogThinkingCapability('openai', 'gpt-6-sol');
+    expect(sol).toEqual(getCatalogThinkingCapability('openai', 'gpt-6-luna'));
+    expect(sol?.effortValues).toContain('high');
+  });
+
   it('resolves GPT-5.6 Sol alias metadata through the canonical model ID', () => {
     expect(getCatalogThinkingCapability('openai', 'gpt-5.6-sol')).toEqual(
       getCatalogThinkingCapability('openai', 'gpt-5.6'),

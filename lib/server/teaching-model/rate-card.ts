@@ -22,6 +22,15 @@
  *    contributes nothing to a ledger cost.
  *  - gpt-6-luna: official OpenAI Standard short-context rates: 0.10 fresh input,
  *    0.01 cached input, 0.125 cache write, 0.50 output per 1M tokens.
+ *  - claude-opus-5-5 (the AI reviewer's primary, ai-reviewer-layer plan §4.9):
+ *    Anthropic pricing page, 10 Nov 2026: 4 input, 5 cache write (5 minutes),
+ *    0.20 cache hit, 20 output per 1M tokens; the full 1M window at one rate.
+ *  - gpt-6-sol (the AI reviewer's fallback): OpenAI model page, 10 Nov 2026:
+ *    2 input, 0.20 cached input, 2.50 cache write, 10 output per 1M tokens. A
+ *    request over 272K input tokens is billed at 2x input and cache, 1.5x output.
+ *
+ * The reviewer entries are additive: no existing model is re-priced, so the
+ * version string is unchanged.
  */
 
 export const RATE_CARD_VERSION = 'rc-2026-09-23';
@@ -72,6 +81,24 @@ const QWEN_TIERS: RateTier[] = [
   },
 ];
 
+/** GPT-6 Sol: Standard rates, and the long-context rates past 272K input tokens. */
+const SOL_TIERS: RateTier[] = [
+  {
+    maxInputTokens: 272_000,
+    inputPerM: 2,
+    cachedInputPerM: 0.2,
+    cacheWritePerM: 2.5,
+    outputPerM: 10,
+  },
+  {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    inputPerM: 4,
+    cachedInputPerM: 0.4,
+    cacheWritePerM: 5,
+    outputPerM: 15,
+  },
+];
+
 export const BASE_RATE_CARD: RateCard = Object.freeze({
   version: RATE_CARD_VERSION,
   entries: Object.freeze({
@@ -96,6 +123,16 @@ export const BASE_RATE_CARD: RateCard = Object.freeze({
       cachedInputPerM: 0.01,
       cacheWritePerM: 0.125,
       outputPerM: 0.5,
+    },
+    'anthropic:claude-opus-5-5': {
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: 5,
+      outputPerM: 20,
+    },
+    'openai:gpt-6-sol': {
+      ...SOL_TIERS[0]!,
+      tiers: SOL_TIERS,
     },
   }),
 });

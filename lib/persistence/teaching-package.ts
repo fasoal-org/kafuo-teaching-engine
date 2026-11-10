@@ -110,7 +110,13 @@ const WEBHOOK_EVENT_TYPES = [
   'teaching_package.generation_failed',
   'teaching_package.status_changed',
   'teaching_package.generation_awaiting_correction',
+  // The AI reviewer layer (ai-reviewer-layer plan §4.5): the reviewer moved
+  // between Opus and Sol. It rides on the aggregate of the review that
+  // triggered it; Kafuo must accept it (and advance the sequence) first.
+  'teaching_engine.reviewer_provider_switched',
 ] as const;
+/** The newest event type: the delivery-table evolution is guarded on it. */
+const NEWEST_WEBHOOK_EVENT_TYPE = 'reviewer_provider_switched';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
@@ -235,8 +241,10 @@ CREATE INDEX IF NOT EXISTS tpwd_terminal_failed_idx
 `;
 
 /**
- * Widen the inline event-type CHECK of an existing delivery table for the
- * admin-correction pause event. Guarded on the constraint's own text.
+ * Widen the inline event-type CHECK of an existing delivery table to every
+ * type in `WEBHOOK_EVENT_TYPES` (first the admin-correction pause, then the AI
+ * reviewer events). Guarded on the constraint's own text holding the newest
+ * type, so an older ledger widens once and a re-boot is a no-op. Never narrowed.
  */
 const WEBHOOK_DELIVERY_EVOLUTION = `
 DO $$
@@ -244,7 +252,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conname = 'teaching_package_webhook_deliveries_event_type_check'
-       AND pg_get_constraintdef(oid) LIKE '%generation_awaiting_correction%'
+       AND pg_get_constraintdef(oid) LIKE '%${NEWEST_WEBHOOK_EVENT_TYPE}%'
   ) THEN
     ALTER TABLE teaching_package_webhook_deliveries
       DROP CONSTRAINT IF EXISTS teaching_package_webhook_deliveries_event_type_check;
@@ -644,6 +652,25 @@ const OBSOLETE_INDEX_NAMES = [
   'tpa_tenant_single_inflight',
 ] as const;
 
+/**
+ * The AI reviewer layer (ai-reviewer-layer plan §4.5, §4.6).
+ *
+ * `reviewer_provider_state` is ONE global row (the provider accounts are the
+ * TE's, shared by every tenant): which provider the reviewer uses now, when
+ * and why it last switched, and when the O-2 probe may next try Opus. No row
+ * means the normal route (Opus primary). Epoch milliseconds.
+ */
+const REVIEWER_TABLES = `
+CREATE TABLE IF NOT EXISTS reviewer_provider_state (
+  id TEXT PRIMARY KEY CHECK (id = 'reviewer'),
+  active_provider TEXT NOT NULL CHECK (active_provider IN ('anthropic','openai')),
+  switched_at DOUBLE PRECISION,
+  reason TEXT,
+  next_probe_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+`;
+
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}
 ${TEACHING_PACKAGE_INDEXES}`;
 
@@ -681,6 +708,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(GENERATION_CHECKPOINT_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(REVIEWER_TABLES)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique

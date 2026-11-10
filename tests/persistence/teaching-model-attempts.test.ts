@@ -127,6 +127,58 @@ describe('teaching_model_attempts ledger', () => {
     expect(indexes.rows).toHaveLength(1);
   });
 
+  it('AI reviewer: the three capabilities, the credit-exhausted outcome and review_id are accepted', async () => {
+    for (const capability of ['package_review', 'question_review', 'outline_review'] as const) {
+      const id = `tma-${capability}`;
+      await insertStartedAttempt(
+        pool,
+        started({
+          id,
+          capability,
+          association: { kind: 'generation', generationAttemptId: 'ga-1', reviewId: 'tpr-1' },
+        }),
+      );
+      await completeAttempt(pool, id, completion({ outcome: 'provider_credit_exhausted' }));
+      const row = await readAttempt(pool, id);
+      expect(row).toMatchObject({
+        capability,
+        outcome: 'provider_credit_exhausted',
+        review_id: 'tpr-1',
+      });
+    }
+  });
+
+  it('evolution widens an older ledger once: capability and outcome CHECKs gain the reviewer values', async () => {
+    // Rebuild the pre-reviewer CHECKs and drop the column, as a ledger booted before this change.
+    await pool.query(`ALTER TABLE teaching_model_attempts DROP COLUMN review_id`);
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_capability_check`,
+    );
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_capability_check
+         CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration','scene_insertion'))`,
+    );
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts DROP CONSTRAINT teaching_model_attempts_outcome_check`,
+    );
+    await pool.query(
+      `ALTER TABLE teaching_model_attempts ADD CONSTRAINT teaching_model_attempts_outcome_check
+         CHECK (outcome IN ('succeeded','empty_output','unusable_output','provider_error','rate_limited','timeout',
+                            'provider_content_filter','request_rejected','safety_refused','aborted','budget_assertion_failed'))`,
+    );
+    await expect(
+      insertStartedAttempt(pool, started({ id: 'old', capability: 'package_review' })),
+    ).rejects.toThrow(/check|violates|review_id/i);
+
+    await ensureTeachingModelAttemptsSchema(pool);
+    await ensureTeachingModelAttemptsSchema(pool);
+    await insertStartedAttempt(pool, started({ id: 'new', capability: 'package_review' }));
+    await completeAttempt(pool, 'new', completion({ outcome: 'provider_credit_exhausted' }));
+    expect(await readAttempt(pool, 'new')).toMatchObject({ outcome: 'provider_credit_exhausted' });
+    // Never narrowed: an older capability still lands.
+    await insertStartedAttempt(pool, started({ id: 'older', capability: 'scene_insertion' }));
+  });
+
   it('CHECK constraints refuse bad capability, role, outcome and a row with no/both associations', async () => {
     await expect(
       insertStartedAttempt(pool, started({ capability: 'chat' as never })),
