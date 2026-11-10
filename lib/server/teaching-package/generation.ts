@@ -37,6 +37,10 @@ import {
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
+import {
+  insertQueuedReview,
+  newPackageReviewId,
+} from '@/lib/server/teaching-package/package-review-store';
 import { isPgUniqueViolation, TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   assertActorRef,
@@ -421,12 +425,40 @@ function scenesNeedingReviewOf(attempt: GenerationAttempt): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
 }
 
+/**
+ * AI reviewer layer (plan §4.6): a Kafuo binding queues its package review in
+ * the SAME transaction as the binding and the `generation_succeeded` event, so
+ * Kafuo can never see a reviewable version without its review, nor a review
+ * without its version. Returns the queued review's reference for the event.
+ */
+async function queuePackageReview(
+  tx: import('@openmaic/storage/document/pg').Queryable,
+  attempt: GenerationAttempt,
+  version: TeachingPackageVersion,
+  stageId: string,
+  review: { subjectCode: string | null },
+  now: number,
+): Promise<{ id: string; status: 'queued' }> {
+  const id = newPackageReviewId();
+  await insertQueuedReview(tx, {
+    id,
+    aggregate: { tenantId: attempt.tenantId, learningItem: attempt.learningItem },
+    versionId: version.id,
+    attemptId: attempt.id,
+    stageId,
+    subjectCode: review.subjectCode,
+    now,
+  });
+  return { id, status: 'queued' };
+}
+
 /** Emit `teaching_package.generation_succeeded` inside the binding transaction. */
 async function emitGenerationSucceeded(
   tx: import('@openmaic/storage/document/pg').Queryable,
   attempt: GenerationAttempt,
   version: TeachingPackageVersion,
   now: number,
+  review: { id: string; status: 'queued' } | null = null,
 ): Promise<void> {
   const aggregate: TeachingPackageAggregateKey = {
     tenantId: attempt.tenantId,
@@ -454,6 +486,8 @@ async function emitGenerationSucceeded(
       teachingModel: version.teachingModel,
       updatedAt: version.updatedAt,
     },
+    // Additive (contract §3.1): only a reviewed (Kafuo) binding carries it.
+    ...(review ? { review } : {}),
   }));
 }
 
@@ -605,6 +639,11 @@ export async function completeGenerationAttempt(
   pool: ConnectableQueryable,
   attemptId: string,
   stageId: string,
+  /**
+   * AI reviewer layer: present for a Kafuo attempt, whose binding queues a
+   * package review. The legacy runner path passes nothing and is unchanged.
+   */
+  options: { review?: { subjectCode: string | null } } = {},
 ): Promise<GenerationAttempt | null> {
   const attempt = await readAttemptById(pool, attemptId);
   if (!attempt) {
@@ -640,7 +679,10 @@ export async function completeGenerationAttempt(
           versionId: created.id,
           now,
         });
-        await emitGenerationSucceeded(tx, succeeded!, created, now);
+        const review = options.review
+          ? await queuePackageReview(tx, succeeded!, created, stageId, options.review, now)
+          : null;
+        await emitGenerationSucceeded(tx, succeeded!, created, now, review);
         return succeeded;
       }
 
@@ -664,7 +706,10 @@ export async function completeGenerationAttempt(
         versionId: version.id,
         now,
       });
-      await emitGenerationSucceeded(tx, succeeded!, version, now);
+      const review = options.review
+        ? await queuePackageReview(tx, succeeded!, version, stageId, options.review, now)
+        : null;
+      await emitGenerationSucceeded(tx, succeeded!, version, now, review);
       return succeeded;
     });
   } catch (error) {

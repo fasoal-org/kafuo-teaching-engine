@@ -2252,4 +2252,251 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(mocks.generateClassroom).not.toHaveBeenCalled();
     });
   });
+
+  describe('AI package review (ai-reviewer-layer plan §4.6, Phase 2)', () => {
+    const OPUS = 'anthropic:claude-opus-5-5';
+
+    async function queuedReview(attemptId: string) {
+      const rows = await pool.query(
+        `SELECT id, status, version_id, stage_id, subject_code FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      return rows.rows as Array<{
+        id: string;
+        status: string;
+        version_id: string;
+        stage_id: string;
+        subject_code: string;
+      }>;
+    }
+
+    async function events(type: string) {
+      const rows = await pool.query(
+        `SELECT payload FROM teaching_package_webhook_deliveries WHERE event_type = $1 ORDER BY sequence`,
+        [type],
+      );
+      return (rows.rows as Array<{ payload: Record<string, unknown> }>).map((r) => r.payload);
+    }
+
+    function answering(findings: Array<Record<string, unknown>>, summary = 'ملخص') {
+      return vi.fn(async () => ({
+        answer: { summary, findings: findings as never },
+        call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+      }));
+    }
+
+    it('a Kafuo binding queues ONE review in the binding transaction and names it on generation_succeeded', async () => {
+      const attemptId = await startKafuo();
+      const reviews = await queuedReview(attemptId);
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]).toMatchObject({ status: 'queued', subject_code: 'MATH' });
+      const [succeeded] = await events('teaching_package.generation_succeeded');
+      expect(succeeded!.review).toEqual({ id: reviews[0]!.id, status: 'queued' });
+      expect((succeeded!.version as { id: string }).id).toBe(reviews[0]!.version_id);
+    });
+
+    it('no findings → passed, one review_completed event with counts; a second run claims nothing', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([], 'لا توجد أخطاء.');
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'passed', provider: 'anthropic', model: OPUS });
+      // The reviewer read the slides as text, and the retained book text (PDF fallback) once.
+      const [request] = callReviewer.mock.calls[0] as unknown as [
+        { units: Array<{ text: string }>; slides: Array<{ id: string }> },
+      ];
+      expect(request.units).toEqual([expect.objectContaining({ id: 'book', text: 'pdf text' })]);
+      expect(request.slides.map((slide) => slide.id)).toEqual(['scene-f1', 'scene-f2']);
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed).toEqual({
+        review: expect.objectContaining({
+          id: review!.id,
+          status: 'passed',
+          provider: 'anthropic',
+          model: OPUS,
+          counts: { findings: 0, open: 0, fixed: 0 },
+          openChecks: [],
+          errorCode: null,
+        }),
+      });
+      expect(await runPackageReview(review!.id, { pool: txPool(), callReviewer })).toBeNull();
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+    });
+
+    it('findings → needs_teacher; each open finding names why it waits; the event carries no book text', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S2',
+            severity: 'high',
+            bookEvidence: { quote: 'BOOKQUOTEMARKER requirement', unitId: null },
+            whatIsWrong: 'الناتج خطأ',
+            fixNote: 'صحح الناتج إلى ١٢',
+          },
+          {
+            targetId: '',
+            check: 'S5',
+            severity: 'medium',
+            bookEvidence: { quote: 'تأكد', unitId: null },
+            whatIsWrong: 'جزء ناقص',
+            fixNote: 'أضف الجزء',
+          },
+        ]),
+      });
+      expect(done?.status).toBe('needs_teacher');
+      expect(done?.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+        ['f1', 'S2', 'open', 'NOT_ATTEMPTED'],
+        ['f2', 'S5', 'open', 'S5_TEACHER_ONLY'],
+      ]);
+      expect(done?.findings[0]).toMatchObject({ targetTitle: 'S', targetOrder: 1 });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'needs_teacher',
+        counts: { findings: 2, open: 2, fixed: 0 },
+        openChecks: ['S2', 'S5'],
+      });
+      expect(JSON.stringify(completed)).not.toContain('BOOKQUOTEMARKER');
+    });
+
+    it('reviewer unavailable (both routes failed) → unavailable + the event: the Backend gate never waits forever', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => {
+          throw new TeachingModelUnavailableError('both failed', {
+            attemptIds: [],
+            outcomes: [],
+            retryable: true,
+          });
+        }),
+      });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEWER_UNAVAILABLE' });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'unavailable',
+        errorCode: 'REVIEWER_UNAVAILABLE',
+      });
+    });
+
+    it('the version moved to another Stage → unavailable VERSION_CHANGED, the reviewer is never called', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      await pool.query(
+        `UPDATE teaching_package_reviews SET stage_id = 'stage-elsewhere' WHERE id = $1`,
+        [review!.id],
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'VERSION_CHANGED' });
+      expect(callReviewer).not.toHaveBeenCalled();
+    });
+
+    it('a crashed worker’s review is resumed by the sweep and never pays for the first answer twice', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // A previous worker stored the paid answer, then died holding the lease.
+      await pool.query(
+        `UPDATE teaching_package_reviews
+            SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 1,
+                reviewed_at = 5, summary = 'محفوظ', provider = 'anthropic', model = $2,
+                findings = $3::jsonb
+          WHERE id = $1`,
+        [
+          review!.id,
+          OPUS,
+          JSON.stringify([
+            {
+              id: 'f1',
+              targetId: 'scene-f2',
+              targetTitle: 'S',
+              targetOrder: 2,
+              check: 'S4',
+              severity: 'low',
+              bookEvidence: { quote: 'q', unitId: null },
+              whatIsWrong: 'w',
+              fixNote: 'n',
+              status: 'open',
+              teacherReason: null,
+            },
+          ]),
+        ],
+      );
+      const { sweepPackageReviews } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const started = await sweepPackageReviews({ pool: txPool(), callReviewer });
+      expect(started).toEqual([review!.id]);
+      await vi.waitFor(async () => {
+        const [row] = await queuedReview(attemptId);
+        expect(row!.status).toBe('needs_teacher');
+      });
+      expect(callReviewer).not.toHaveBeenCalled();
+    });
+
+    it('the signed GET routes return the review text to the Backend, scoped to the tenant', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'نص الكتاب', unitId: null },
+            whatIsWrong: 'يخالف الكتاب',
+            fixNote: 'التزم بنص الكتاب',
+          },
+        ]),
+      });
+      const { NextRequest } = await import('next/server');
+      const one = await import('@/app/api/teaching-packages/[id]/reviews/[reviewId]/route');
+      const list = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const auth = { headers: { authorization: 'Bearer review-route-key' } };
+      const base = `http://localhost/api/teaching-packages/${review!.version_id}/reviews`;
+      const ok = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(ok.status).toBe(200);
+      const body = (await ok.json()) as { review: Record<string, unknown> };
+      expect(body.review).toMatchObject({
+        id: review!.id,
+        status: 'needs_teacher',
+        summary: 'ملخص',
+        counts: { findings: 1, open: 1, fixed: 0 },
+        findings: [
+          expect.objectContaining({
+            check: 'S1',
+            bookEvidence: { quote: 'نص الكتاب', unitId: null },
+          }),
+        ],
+      });
+      const other = await one.GET(
+        new NextRequest(`${base}/${review!.id}?tenantId=tenant-other`, auth),
+        {
+          params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+        },
+      );
+      expect(other.status).toBe(404);
+      const unsigned = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(unsigned.status).toBe(401);
+      const listed = await list.GET(new NextRequest(`${base}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id }),
+      });
+      expect(((await listed.json()) as { reviews: unknown[] }).reviews).toHaveLength(1);
+    });
+  });
 });

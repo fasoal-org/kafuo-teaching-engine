@@ -114,9 +114,11 @@ const WEBHOOK_EVENT_TYPES = [
   // between Opus and Sol. It rides on the aggregate of the review that
   // triggered it; Kafuo must accept it (and advance the sequence) first.
   'teaching_engine.reviewer_provider_switched',
+  // The terminal result of one package review (plan §4.6): ids, status, counts.
+  'teaching_package.review_completed',
 ] as const;
 /** The newest event type: the delivery-table evolution is guarded on it. */
-const NEWEST_WEBHOOK_EVENT_TYPE = 'reviewer_provider_switched';
+const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_package.review_completed';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
@@ -669,6 +671,46 @@ CREATE TABLE IF NOT EXISTS reviewer_provider_state (
   next_probe_at DOUBLE PRECISION,
   updated_at DOUBLE PRECISION NOT NULL
 );
+
+-- One AI review per bound Kafuo generation attempt (plan §4.6). Inserted
+-- 'queued' in the binding transaction; run by the in-process sweep under a
+-- lease; a stale 'queued'/'running' row is resumed, never failed. 'reviewed_at'
+-- marks that the paid first review is stored, so a resume never pays twice.
+CREATE TABLE IF NOT EXISTS teaching_package_reviews (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  learning_item_type TEXT NOT NULL CHECK (learning_item_type IN ('lesson','section')),
+  learning_item_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  attempt_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  subject_code TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','passed','fixed','needs_teacher','unavailable')),
+  provider TEXT CHECK (provider IN ('anthropic','openai')),
+  model TEXT,
+  summary TEXT,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  fixes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_code TEXT,
+  input_tokens BIGINT,
+  output_tokens BIGINT,
+  cost_usd NUMERIC(14,8),
+  run_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until DOUBLE PRECISION,
+  reviewed_at DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  started_at DOUBLE PRECISION,
+  completed_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
+CREATE INDEX IF NOT EXISTS tpr_version_idx
+  ON teaching_package_reviews (tenant_id, version_id, created_at);
+CREATE INDEX IF NOT EXISTS tpr_open_idx
+  ON teaching_package_reviews (status, lease_until)
+  WHERE status IN ('queued','running');
 `;
 
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}

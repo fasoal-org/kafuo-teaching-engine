@@ -11,6 +11,7 @@
  * (`teaching_model_attempts`), classification and fallback stay in one place.
  * Prompts, book text and answers are never logged.
  */
+import type { ModelMessage } from 'ai';
 import type { Queryable } from '@openmaic/storage/document/pg';
 import {
   nodePostgresTransaction,
@@ -67,9 +68,35 @@ export interface ReviewerCallInput {
   /** The aggregate a provider-switch event rides on (the reviewed package). */
   aggregate: TeachingPackageAggregateKey;
   system: string;
+  /**
+   * The stable part of the user turn (the book units). Sent first, as its own
+   * block with an Anthropic cache marker, so a re-review with the same book
+   * reads it from the prompt cache (plan §4.2). OpenAI caches prefixes itself.
+   */
+  stablePrompt?: string;
   prompt: string;
   output: StructuredOutputSpec;
   signal?: AbortSignal;
+}
+
+/** The user turn: `[stable (cache-marked)] + variable`, or the variable text alone. */
+function userTurn(input: ReviewerCallInput): { messages: ModelMessage[] } | { prompt: string } {
+  if (!input.stablePrompt) return { prompt: input.prompt };
+  return {
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: input.stablePrompt,
+            providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+          },
+          { type: 'text', text: input.prompt },
+        ],
+      },
+    ],
+  };
 }
 
 export interface ReviewerCallDeps {
@@ -181,7 +208,7 @@ export async function runReviewerCall(
       },
       {
         system: input.system,
-        prompt: input.prompt,
+        ...userTurn(input),
         maxOutputTokens: REVIEWER_MAX_OUTPUT_TOKENS,
         output: input.output,
       },

@@ -29,6 +29,7 @@ import { getServerPersistenceProvider } from '@/lib/persistence/server-provider'
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 import { createLogger } from '@/lib/logger';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
+import { sweepPackageReviews } from '@/lib/server/teaching-package/package-review';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import type { TeachingPackageAggregateKey } from '@/lib/types/teaching-package';
 
@@ -239,6 +240,15 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
   if (reclaimed.length > 0) {
     log.warn(`reclaimed ${reclaimed.length} stale generation attempt(s) via sweep`);
   }
+  // AI reviewer layer (plan §4.6): start queued package reviews and resume any
+  // whose worker died (lapsed lease). Runs them in the background; never blocks
+  // or fails the delivery below.
+  await sweepPackageReviews({
+    pool,
+    ...(options?.now ? { now: options.now } : {}),
+  }).catch((error) => {
+    log.error('package review sweep failed:', describeErrorSafely(error));
+  });
   await deliverPendingWebhooks({
     workerId,
     ...(options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

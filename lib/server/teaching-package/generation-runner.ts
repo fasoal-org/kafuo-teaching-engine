@@ -1161,8 +1161,13 @@ async function runKafuoAttempt(
         }));
       }
 
-      // Valid Stage → the ONLY binding path.
-      await completeGenerationAttempt(pool, attemptId, result.id);
+      // Valid Stage → the ONLY binding path. AI reviewer layer (plan §4.1): the
+      // binding queues the package review in the same transaction; the
+      // in-process review sweep runs it after this attempt is done, so the
+      // review never holds a generation slot or races the stale reclaim.
+      await completeGenerationAttempt(pool, attemptId, result.id, {
+        review: { subjectCode: kafuo.subjectCode ?? null },
+      });
       return;
     } catch (error) {
       if (isGenerationCorrectionRequired(error)) {
