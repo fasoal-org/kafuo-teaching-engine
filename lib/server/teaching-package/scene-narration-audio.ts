@@ -265,6 +265,13 @@ export async function regenerateSceneNarrationAudio(
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
   } catch (error) {
+    if (deps.signal?.aborted) {
+      // LOW-4: synthesis stopped because the reviewer run was evicted.
+      throw new TeachingPackageError(
+        'ABORTED',
+        'the narration audio was stopped: the review run that asked for it was evicted; nothing was written',
+      );
+    }
     log.warn(`narration audio for scene ${sceneId} could not be generated`, error);
     throw new TeachingPackageError(
       'NARRATION_AUDIO_GENERATION_FAILED',

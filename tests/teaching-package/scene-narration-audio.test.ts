@@ -302,6 +302,28 @@ describe('regenerateSceneNarrationAudio', () => {
     expect(plain.writes).toHaveLength(1);
   });
 
+  it('LOW-4: synthesis that throws because the run was evicted reports ABORTED, not a generation failure', async () => {
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const controller = new AbortController();
+    const synthesize = vi.fn(async () => {
+      controller.abort();
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    });
+    const { value, writes } = deps({ synthesize, signal: controller.signal });
+    await expect(regenerateSceneNarrationAudio(GRANT, 'scene-q', value)).rejects.toMatchObject({
+      code: 'ABORTED',
+    });
+    expect(writes).toHaveLength(0);
+    // Without a signal, the same throw keeps today's code.
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const failing = vi.fn(async () => {
+      throw new Error('timeout');
+    });
+    await expect(
+      regenerateSceneNarrationAudio(GRANT, 'scene-q', deps({ synthesize: failing }).value),
+    ).rejects.toMatchObject({ code: 'NARRATION_AUDIO_GENERATION_FAILED' });
+  });
+
   it('refuses while a regeneration of the same scene is running, before any synthesis', async () => {
     storeState.live = { scene: quiz([line('a1')]), rev: 1 };
     storeState.running = ['scene-q'];
