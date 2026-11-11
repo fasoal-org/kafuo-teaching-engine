@@ -2584,6 +2584,119 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toEqual([]);
     });
 
+    it('M-A / LOW-5: an eviction during a fix-loop renewal stops the regeneration, or the TTS after it; the lease is then released', async () => {
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { createPackageReviewFixLoop } =
+        await import('@/lib/server/teaching-package/package-review-fix-loop');
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      /** Aborts the run while its Nth lease renewal is in flight (1 = before the first call). */
+      const run = async (abortOnRenewal: number) => {
+        const [review] = await queuedReview(await startKafuo());
+        const controller = new AbortController();
+        let renewals = 0;
+        const pooled = {
+          query: async (text: string, params?: unknown[]) => {
+            const result = await pool.query(text, params);
+            if (text.includes('SET lease_until')) {
+              renewals += 1;
+              if (renewals === abortOnRenewal) controller.abort();
+            }
+            return result;
+          },
+          connect: () => pool.connect(),
+        } as unknown as ConnectableQueryable;
+        const regenerated = {
+          id: 'scene-f1',
+          order: 1,
+          title: 'S',
+          content: { type: 'slide', canvas: { elements: [] } },
+          actions: [],
+        };
+        const regenerate = vi.fn(async () => ({
+          status: 200,
+          body: {
+            regenerationId: 'tsr-x',
+            status: 'succeeded',
+            replayed: false,
+            sceneId: 'scene-f1',
+            scene: regenerated,
+            resultSceneRev: 2,
+            current: { rev: 2, scene: regenerated },
+          },
+        }));
+        const regenerateAudio = vi.fn(async () => ({
+          sceneId: 'scene-f1',
+          scene: regenerated,
+          rev: 3,
+          generated: 1,
+          missing: 0,
+        }));
+        const done = await runPackageReview(review!.id, {
+          pool: pooled,
+          signal: controller.signal,
+          callReviewer: answering([finding]),
+          fixLoop: createPackageReviewFixLoop({
+            regenerate: regenerate as never,
+            regenerateAudio: regenerateAudio as never,
+          }),
+        });
+        return { review: review!, done, regenerate, regenerateAudio };
+      };
+
+      // The renewal right before the paid regeneration (the 2nd) is evicted.
+      const beforeRegeneration = await run(2);
+      expect(beforeRegeneration.done).toBeNull();
+      expect(beforeRegeneration.regenerate).not.toHaveBeenCalled();
+      expect(beforeRegeneration.regenerateAudio).not.toHaveBeenCalled();
+      await vi.waitFor(async () =>
+        expect((await statusOf(beforeRegeneration.review.id)).lease_owner).toBeNull(),
+      );
+
+      // The renewal right before the TTS (the 3rd) is evicted.
+      const beforeTts = await run(3);
+      expect(beforeTts.done).toBeNull();
+      expect(beforeTts.regenerate).toHaveBeenCalledTimes(1);
+      expect(beforeTts.regenerateAudio).not.toHaveBeenCalled();
+      await vi.waitFor(async () =>
+        expect((await statusOf(beforeTts.review.id)).lease_owner).toBeNull(),
+      );
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('LOW-5: an eviction during the finalize ledger read (the 2nd check in end) finalizes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      const evictingDuringFinalizeRead = {
+        query: async (text: string, params?: unknown[]) => {
+          const result = await pool.query(text, params);
+          if (text.includes('review_id = $3')) controller.abort();
+          return result;
+        },
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const callReviewer = answering([]);
+      expect(
+        await runPackageReview(review!.id, {
+          pool: evictingDuringFinalizeRead,
+          signal: controller.signal,
+          callReviewer,
+        }),
+      ).toBeNull();
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      // The first answer was stored before the abort; the review is not finalized.
+      expect(await statusOf(review!.id)).toMatchObject({ status: 'running' });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+    });
+
     it('L-A: an eviction that lands during the spend read skips the usage and failed-spend writes', async () => {
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
       const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
@@ -2601,21 +2714,24 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const [answered] = await queuedReview(await startKafuo());
       await ledgerAttempt('tma-la-1', OPUS, { input: 100, output: 10, cost: 0.01 });
       const first = new AbortController();
+      const answeredCall = vi.fn(async () => ({
+        answer: { summary: 'جديد', findings: [] },
+        call: {
+          provider: 'anthropic',
+          modelString: OPUS,
+          usage: null,
+          attemptIds: ['tma-la-1'],
+        },
+      }));
       expect(
         await runPackageReview(answered!.id, {
           pool: evictingDuringSpendRead(first),
           signal: first.signal,
-          callReviewer: vi.fn(async () => ({
-            answer: { summary: 'جديد', findings: [] },
-            call: {
-              provider: 'anthropic',
-              modelString: OPUS,
-              usage: null,
-              attemptIds: ['tma-la-1'],
-            },
-          })) as never,
+          callReviewer: answeredCall as never,
         }),
       ).toBeNull();
+      // LOW-5: the call did run; only its write after the abort was skipped.
+      expect(answeredCall).toHaveBeenCalledTimes(1);
       const kept = await pool.query(
         `SELECT summary, reviewed_at, input_tokens FROM teaching_package_reviews WHERE id = $1`,
         [answered!.id],
@@ -2626,19 +2742,21 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const [failed] = await queuedReview(await startKafuo());
       await ledgerAttempt('tma-la-2', OPUS, { input: 400, output: 0, cost: 0.1 });
       const second = new AbortController();
+      const failing = vi.fn(async () => {
+        throw new TeachingModelUnavailableError('both failed', {
+          attemptIds: ['tma-la-2'],
+          outcomes: [],
+          retryable: true,
+        });
+      });
       expect(
         await runPackageReview(failed!.id, {
           pool: evictingDuringSpendRead(second),
           signal: second.signal,
-          callReviewer: vi.fn(async () => {
-            throw new TeachingModelUnavailableError('both failed', {
-              attemptIds: ['tma-la-2'],
-              outcomes: [],
-              retryable: true,
-            });
-          }),
+          callReviewer: failing,
         }),
       ).toBeNull();
+      expect(failing).toHaveBeenCalledTimes(1);
       const spent = await pool.query(
         `SELECT status, input_tokens FROM teaching_package_reviews WHERE id = $1`,
         [failed!.id],
@@ -3143,12 +3261,33 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
     it('L-4: the row sums every paid attempt (a failed one too); provider and model stay the first review’s', async () => {
       const SOL = 'openai:gpt-6-sol';
-      const [review] = await queuedReview(await startKafuo());
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // LOW-5: real ledger rows of this review (review_id set), as the executor writes them.
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
       // First review: Opus answered truncated (paid), then Sol served.
-      await ledgerAttempt('tma-l4-opus', OPUS, { input: 1000, output: 500, cost: 0.5 });
-      await ledgerAttempt('tma-l4-sol', SOL, { input: 800, output: 300, cost: 0.2 });
+      await ledgerAttempt(
+        'tma-l4-opus',
+        OPUS,
+        { input: 1000, output: 500, cost: 0.5 },
+        'tenant-k',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-l4-sol',
+        SOL,
+        { input: 800, output: 300, cost: 0.2 },
+        'tenant-k',
+        link,
+      );
       // The re-review was served by Opus.
-      await ledgerAttempt('tma-l4-rereview', OPUS, { input: 100, output: 50, cost: 0.05 });
+      await ledgerAttempt(
+        'tma-l4-rereview',
+        OPUS,
+        { input: 100, output: 50, cost: 0.05 },
+        'tenant-k',
+        link,
+      );
       const finding = {
         targetId: 'scene-f1',
         check: 'S3',
@@ -3212,19 +3351,31 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     });
 
     it('L-4: a reviewer call that failed after paying still adds its spend to the unavailable row', async () => {
-      const [review] = await queuedReview(await startKafuo());
-      await ledgerAttempt('tma-l4-down-1', OPUS, { input: 400, output: 0, cost: 0.1 });
-      await ledgerAttempt('tma-l4-down-2', 'openai:gpt-6-sol', {
-        input: 300,
-        output: 0,
-        cost: 0.05,
-      });
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // LOW-5: real ledger rows of this review (review_id set), as the executor writes them.
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
+      await ledgerAttempt(
+        'tma-l4-down-1',
+        OPUS,
+        { input: 400, output: 0, cost: 0.1 },
+        'tenant-k',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-l4-down-2',
+        'openai:gpt-6-sol',
+        { input: 300, output: 0, cost: 0.05 },
+        'tenant-k',
+        link,
+      );
       // LOW-3: an attempt id of ANOTHER tenant never counts on this tenant's row.
       await ledgerAttempt(
         'tma-l4-foreign',
         OPUS,
         { input: 9_000, output: 9_000, cost: 9 },
         'tenant-other',
+        link,
       );
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
       const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
