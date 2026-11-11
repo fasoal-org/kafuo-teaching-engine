@@ -472,6 +472,28 @@ describe('package review fix loop (D-1)', () => {
     ]);
   });
 
+  it('LOW-5: a re-review that reports an S5 already open on the slide adds no duplicate', async () => {
+    const { run } = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2'), finding('f2', 's2', 'S5')],
+      rereview: (focus) => [
+        {
+          targetId: focus,
+          check: 'S5',
+          severity: 'medium',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'جزء من الدرس خارج ترتيبه',
+          fixNote: 'n',
+        },
+      ],
+    });
+    const result = await run();
+    expect(result.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+      ['f1', 'S2', 'fixed', null],
+      ['f2', 'S5', 'open', 'S5_TEACHER_ONLY'],
+    ]);
+  });
+
   it('LOW-4: a run that loses its lease during the regeneration never pays for the narration audio', async () => {
     const { regenerate, regenerateAudio, callReviewer } = setup({
       scenes,

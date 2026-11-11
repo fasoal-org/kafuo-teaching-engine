@@ -337,27 +337,42 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         }
       }
       const originalChecks = new Set(sceneFindings.map((finding) => finding.check));
+      // LOW-5: an error already open on this slide outside this regeneration
+      // (a teacher-only S5, say) is not added a second time.
+      const targetedIds = new Set(sceneFindings.map((finding) => finding.id));
+      const alreadyOpen = new Set(
+        findings
+          .filter(
+            (finding) =>
+              finding.targetId === slide.id &&
+              finding.status === 'open' &&
+              !targetedIds.has(finding.id),
+          )
+          .map((finding) => finding.check),
+      );
       findings.push(
-        ...rereview.map((finding, index) => {
-          const added: StoredFinding = {
-            id: `r-${slide.order}-${index + 1}`,
-            targetId: slide.id,
-            targetTitle: changed.title,
-            targetOrder: changed.order,
-            check: finding.check,
-            severity: finding.severity,
-            bookEvidence: finding.bookEvidence,
-            whatIsWrong: finding.whatIsWrong,
-            fixNote: finding.fixNote,
-            status: 'open',
-            teacherReason: null,
-          };
-          // A new error the one regeneration did not target was never attempted.
-          added.teacherReason = originalChecks.has(finding.check)
-            ? 'STILL_WRONG'
-            : (teacherOnlyReason(added, nowSlides) ?? 'NOT_ATTEMPTED');
-          return added;
-        }),
+        ...rereview
+          .filter((finding) => !alreadyOpen.has(finding.check))
+          .map((finding, index) => {
+            const added: StoredFinding = {
+              id: `r-${slide.order}-${index + 1}`,
+              targetId: slide.id,
+              targetTitle: changed.title,
+              targetOrder: changed.order,
+              check: finding.check,
+              severity: finding.severity,
+              bookEvidence: finding.bookEvidence,
+              whatIsWrong: finding.whatIsWrong,
+              fixNote: finding.fixNote,
+              status: 'open',
+              teacherReason: null,
+            };
+            // A new error the one regeneration did not target was never attempted.
+            added.teacherReason = originalChecks.has(finding.check)
+              ? 'STILL_WRONG'
+              : (teacherOnlyReason(added, nowSlides) ?? 'NOT_ATTEMPTED');
+            return added;
+          }),
       );
       fixes.push({
         sceneId: slide.id,
