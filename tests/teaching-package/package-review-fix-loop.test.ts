@@ -577,6 +577,62 @@ describe('package review fix loop (D-1)', () => {
     expect(result.findings[0]).toMatchObject({ status: 'open', teacherReason: 'VERSION_CHANGED' });
   });
 
+  it('L-3: a lease check that throws after a paid regeneration is an audio failure; the fix row keeps its regenerationId', async () => {
+    const { regenerate, regenerateAudio, callReviewer } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+    });
+    const loop = createPackageReviewFixLoop({
+      regenerate: regenerate as never,
+      regenerateAudio: regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'tpv-1',
+        tenantId: 't-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        const scene = scenes.find((s) => s.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    // Before the regeneration: kept. After it: the check throws. Before the re-review: kept.
+    const beats: Array<() => boolean> = [
+      () => true,
+      () => {
+        throw new Error('database blip');
+      },
+      () => true,
+    ];
+    const result = await loop({
+      pool: {} as never,
+      review: REVIEW,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf(scenes),
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+      heartbeat: async () => (beats.shift() ?? (() => false))(),
+      callReviewer: callReviewer as never,
+      recordProgress: vi.fn(async () => {}),
+      now: () => 1,
+    });
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(callReviewer).toHaveBeenCalledTimes(1);
+    expect(result.findings[0]).toMatchObject({
+      status: 'open',
+      teacherReason: 'NARRATION_AUDIO_FAILED',
+    });
+    expect(result.fixes).toEqual([
+      expect.objectContaining({
+        sceneId: 's1',
+        outcome: 'fixed',
+        code: 'NARRATION_AUDIO_FAILED',
+        regenerationId: 'tpsr-s1',
+      }),
+    ]);
+  });
+
   it('instruction and key stay within the regeneration limits', () => {
     const long = Array.from({ length: 40 }, (_, i) => ({
       ...finding(`f${i}`, 's1', 'S1'),

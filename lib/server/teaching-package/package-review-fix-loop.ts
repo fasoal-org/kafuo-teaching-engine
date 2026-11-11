@@ -266,23 +266,39 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       // LOW-4: the regeneration may have taken long; a run that lost its lease
       // never pays for the narration audio (TTS) — the run that took over does.
-      if (!(await context.heartbeat())) {
+      let audioCode: string | null = null;
+      let leaseKept: boolean;
+      try {
+        leaseKept = await context.heartbeat();
+      } catch (error) {
+        // L-3: the slide is already regenerated (paid); a lease check that
+        // fails is an audio failure, never a review that ends without the
+        // fix row of a live regenerated slide.
+        log.warn(
+          `review ${review.id}: lease check after regenerating ${slide.id} failed; no audio`,
+          JSON.stringify(describeErrorSafely(error)),
+        );
+        audioCode = 'NARRATION_AUDIO_FAILED';
+        leaseKept = true;
+      }
+      if (!leaseKept) {
         stopped = true;
         mark(slide.id, 'VERSION_CHANGED');
         continue;
       }
 
       // The new slide's narration audio (a regeneration never runs TTS).
-      let audioCode: string | null = null;
-      try {
-        const audio = await regenerateAudio(grant, slide.id, { pool });
-        regenerated = audio.scene;
-        if (audio.missing > 0) audioCode = 'NARRATION_AUDIO_PARTIAL';
-      } catch (error) {
-        audioCode = error instanceof TeachingPackageError ? error.code : 'NARRATION_AUDIO_FAILED';
-        log.warn(
-          `review ${review.id}: narration audio for ${slide.id} not regenerated (${audioCode})`,
-        );
+      if (audioCode === null) {
+        try {
+          const audio = await regenerateAudio(grant, slide.id, { pool });
+          regenerated = audio.scene;
+          if (audio.missing > 0) audioCode = 'NARRATION_AUDIO_PARTIAL';
+        } catch (error) {
+          audioCode = error instanceof TeachingPackageError ? error.code : 'NARRATION_AUDIO_FAILED';
+          log.warn(
+            `review ${review.id}: narration audio for ${slide.id} not regenerated (${audioCode})`,
+          );
+        }
       }
       scenesById.set(slide.id, regenerated);
 
