@@ -40,6 +40,7 @@ import {
   claimQuestionReview,
   finishQuestionReview,
   listClaimableQuestionReviewIds,
+  releaseQuestionReviewLease,
   renewQuestionReviewLease,
   saveQuestionReviewAnswer,
   type QuestionCheck,
@@ -477,16 +478,16 @@ export async function runQuestionReview(
 /** The question reviews this process is running (see `sweepPackageReviews`). */
 const runningQuestionReviews = new Map<
   string,
-  { token: string; leaseKeptAt: number; controller: AbortController }
+  { token: string; leaseOwner: string; leaseKeptAt: number; controller: AbortController }
 >();
 
 /**
  * Start or resume claimable question reviews in the background (the webhook
  * sweep), at most `MAX_QUESTION_REVIEWS_IN_FLIGHT` at once (D-6). A run that
- * has not kept its lease for a whole lease period is hung: it is evicted and
- * its reviewer call aborted so the review can be resumed (L-10, HIGH-1); every
- * run claims under its own lease owner and renews it before the paid call, so
- * the evicted run neither pays nor writes if it wakes up.
+ * has not kept its lease for a whole lease period is hung: it is evicted, its
+ * reviewer call aborted and its lease revoked so the review can be resumed
+ * (L-10, HIGH-1); every run claims under its own lease owner and renews it
+ * before the paid call, so the evicted run neither pays nor writes if it wakes.
  */
 export async function sweepQuestionReviews(
   deps: QuestionReviewDeps & { pool: ConnectableQueryable },
@@ -497,6 +498,19 @@ export async function sweepQuestionReviews(
       runningQuestionReviews.delete(id);
       entry.controller.abort();
       log.warn(`question review ${id} did not keep its lease; evicted from this process`);
+      // HIGH-1: revoke its lease, so the evicted run's later save or finish is
+      // refused, even if no run resumes the review in this sweep.
+      try {
+        await releaseQuestionReviewLease(deps.pool as unknown as Queryable, id, {
+          workerId: entry.leaseOwner,
+          now: now(),
+        });
+      } catch (error) {
+        log.error(
+          `question review ${id}: the evicted lease could not be revoked`,
+          error instanceof Error ? error.name : 'Error',
+        );
+      }
     }
   }
   const free = MAX_QUESTION_REVIEWS_IN_FLIGHT - runningQuestionReviews.size;
@@ -512,12 +526,17 @@ export async function sweepQuestionReviews(
   for (const id of ids) {
     if (runningQuestionReviews.has(id)) continue;
     const token = randomBytes(4).toString('hex');
-    const entry = { token, leaseKeptAt: now(), controller: new AbortController() };
+    const entry = {
+      token,
+      leaseOwner: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      leaseKeptAt: now(),
+      controller: new AbortController(),
+    };
     runningQuestionReviews.set(id, entry);
     started.push(id);
     void runQuestionReview(id, {
       ...deps,
-      workerId: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      workerId: entry.leaseOwner,
       onLeaseKept: () => {
         entry.leaseKeptAt = now();
       },

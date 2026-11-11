@@ -62,6 +62,7 @@ import {
   claimReview,
   finishReview,
   listClaimableReviewIds,
+  releaseReviewLease,
   renewReviewLease,
   saveReviewProgress,
   type PackageReview,
@@ -540,6 +541,8 @@ export { teacherOnlyReason };
  */
 interface RunningReview {
   token: string;
+  /** The run's lease owner (`<worker>#<token>`), revoked when it is evicted. */
+  leaseOwner: string;
   leaseKeptAt: number;
   controller: AbortController;
 }
@@ -551,10 +554,10 @@ const runningReviews = new Map<string, RunningReview>();
  * webhook sweep; never awaits a review, never throws.
  *
  * A run that has not kept its lease for a whole lease period is hung (its row
- * is claimable again): it is evicted and its reviewer call aborted, so this
- * process may resume the review (L-10, HIGH-1). Every run claims under its own
- * lease owner and checks its lease before the first paid call, so an evicted
- * run that wakes up later neither pays nor writes.
+ * is claimable again): it is evicted, its reviewer call aborted and its lease
+ * revoked, so this process may resume the review (L-10, HIGH-1). Every run
+ * claims under its own lease owner and checks its lease before each paid step,
+ * so an evicted run that wakes up later neither pays nor writes.
  */
 export async function sweepPackageReviews(
   deps: PackageReviewDeps & { pool: ConnectableQueryable },
@@ -565,6 +568,19 @@ export async function sweepPackageReviews(
       runningReviews.delete(id);
       entry.controller.abort();
       log.warn(`package review ${id} did not keep its lease; evicted from this process`);
+      // HIGH-1: revoke its lease, so whatever the evicted run does later (a
+      // heartbeat, a save, the finish) is refused, even if no run resumes it now.
+      try {
+        await releaseReviewLease(deps.pool as unknown as Queryable, id, {
+          workerId: entry.leaseOwner,
+          now: now(),
+        });
+      } catch (error) {
+        log.error(
+          `package review ${id}: the evicted lease could not be revoked`,
+          error instanceof Error ? error.name : 'Error',
+        );
+      }
     }
   }
   const free = MAX_PACKAGE_REVIEWS_IN_FLIGHT - runningReviews.size;
@@ -580,13 +596,18 @@ export async function sweepPackageReviews(
   for (const id of ids) {
     if (runningReviews.has(id)) continue;
     const token = randomBytes(4).toString('hex');
-    const entry = { token, leaseKeptAt: now(), controller: new AbortController() };
+    const entry: RunningReview = {
+      token,
+      leaseOwner: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      leaseKeptAt: now(),
+      controller: new AbortController(),
+    };
     runningReviews.set(id, entry);
     started.push(id);
     void runPackageReview(id, {
       ...defaultReviewDeps(),
       ...deps,
-      workerId: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      workerId: entry.leaseOwner,
       onLeaseKept: () => {
         entry.leaseKeptAt = now();
       },

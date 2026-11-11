@@ -703,6 +703,51 @@ describe('question-set review (Phase 4)', () => {
     expect(await events()).toHaveLength(1);
   });
 
+  it('HIGH-1: eviction revokes the question lease even when no run resumes it; the stale run neither saves nor finishes', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { sweepQuestionReviews, QUESTION_REVIEW_LEASE_MS } =
+      await import('@/lib/server/teaching-package/question-review');
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const gates: Array<(fail?: boolean) => void> = [];
+    const callReviewer = vi.fn(
+      () =>
+        new Promise<typeof answer>((resolve, reject) => {
+          gates.push((fail) => (fail ? reject(new Error('aborted')) : resolve(answer)));
+        }),
+    );
+    let t = Date.now();
+    const deps = { pool: txPool(), callReviewer, now: () => t };
+    expect(await sweepQuestionReviews(deps)).toEqual([id]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+    const listingDown = {
+      query: (text: string, params?: unknown[]) =>
+        text.includes('FROM teaching_question_reviews') && text.includes('LIMIT')
+          ? Promise.reject(new Error('listing down'))
+          : pool.query(text, params),
+      connect: () => pool.connect(),
+    } as unknown as ConnectableQueryable;
+    t += QUESTION_REVIEW_LEASE_MS + 1_000;
+    expect(await sweepQuestionReviews({ ...deps, pool: listingDown })).toEqual([]);
+    expect((await reviewRow(id)).lease_owner).toBeNull();
+    // The aborted call fails in the evicted run: its `unavailable` finish is refused.
+    gates[0]!(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await reviewRow(id)).toMatchObject({
+      status: 'running',
+      lease_owner: null,
+      reviewed_at: null,
+    });
+    expect(await events()).toEqual([]);
+    expect(await sweepQuestionReviews(deps)).toEqual([id]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+    gates[1]!();
+    await vi.waitFor(async () => expect((await reviewRow(id)).status).toBe('completed'));
+    expect(await events()).toHaveLength(1);
+  });
+
   it('D-6: the sweep runs at most 2 question reviews at once; the next starts after one ends', async () => {
     const seeded = await seed();
     const ids: string[] = [];

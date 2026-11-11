@@ -228,6 +228,25 @@ export async function renewReviewLease(
   return result.rows.length > 0;
 }
 
+/**
+ * HIGH-1: revoke a lease this process gave up on (an evicted, hung run). The
+ * row stays `running` and is claimable at once; every later write or renewal
+ * of the revoked run is refused by the `lease_owner` guard.
+ */
+export async function releaseReviewLease(
+  queryable: Queryable,
+  id: string,
+  input: { workerId: string; now: number },
+): Promise<boolean> {
+  const result = await queryable.query(
+    `UPDATE teaching_package_reviews SET lease_owner = NULL, lease_until = NULL, updated_at = $3
+      WHERE id = $1 AND status = 'running' AND lease_owner = $2
+      RETURNING id`,
+    [id, input.workerId, input.now],
+  );
+  return result.rows.length > 0;
+}
+
 export interface ReviewProgress {
   summary?: string | null;
   findings?: StoredFinding[];

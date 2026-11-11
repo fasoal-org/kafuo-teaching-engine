@@ -2654,6 +2654,55 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toHaveLength(1);
     });
 
+    it('HIGH-1: eviction revokes the lease even when no run resumes the review in that sweep', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { gates, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      // The evicting sweep cannot list what to start (the listing query fails).
+      const listingDown = {
+        query: (text: string, params?: unknown[]) =>
+          text.includes('FROM teaching_package_reviews') && text.includes('LIMIT')
+            ? Promise.reject(new Error('listing down'))
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      t += REVIEW_LEASE_MS + 1_000;
+      expect(await sweepPackageReviews({ ...deps, pool: listingDown })).toEqual([]);
+      expect((await statusOf(review!.id)).lease_owner).toBeNull();
+      // The evicted run wakes up with an answer: nothing it writes lands.
+      gates[0]!({
+        summary: 'قديم',
+        findings: [
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: null,
+        summary: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      // A normal sweep then resumes the review.
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      gates[1]!({ summary: 'جديد', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).status).toBe('passed'));
+      expect(await events('teaching_package.review_completed')).toHaveLength(1);
+    });
+
     /** One paid reviewer attempt in the ledger (the authority the row totals read). */
     async function ledgerAttempt(
       id: string,
