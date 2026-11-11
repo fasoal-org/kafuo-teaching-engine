@@ -40,6 +40,7 @@ import {
   claimQuestionReview,
   finishQuestionReview,
   listClaimableQuestionReviewIds,
+  renewQuestionReviewLease,
   saveQuestionReviewAnswer,
   type QuestionCheck,
   type QuestionFinding,
@@ -226,6 +227,8 @@ export interface QuestionReviewCallRequest {
   units: readonly ReviewBookUnit[];
   attemptId: string;
   subjectCode: string;
+  /** The run's abort signal: aborted when the sweep evicts a hung run (set by the job). */
+  signal?: AbortSignal;
 }
 
 export interface QuestionReviewCallAnswer {
@@ -262,6 +265,7 @@ export async function callQuestionReviewer(
       validate: (raw) => parseQuestionReviewAnswer(raw, ids),
       jsonSchema: QUESTION_REVIEW_SCHEMA,
     },
+    ...(request.signal ? { signal: request.signal } : {}),
   });
   return {
     results: call.parsed as QuestionResult[],
@@ -276,8 +280,12 @@ export interface QuestionReviewDeps {
   callReviewer?: (
     request: QuestionReviewCallRequest & { pool: ConnectableQueryable },
   ) => Promise<QuestionReviewCallAnswer>;
-  /** The sweep's tracker: called after the claim. */
+  /** The sweep's tracker: called after the claim and after the renewed lease. */
   onLeaseKept?: () => void;
+  /** Aborted by the sweep when it evicts this run; the reviewer call stops with it. */
+  signal?: AbortSignal;
+  /** Test seam: the book read (production: `loadReviewBookUnits`). */
+  loadBook?: typeof loadReviewBookUnits;
 }
 
 /** The event (contract §3.4): verdicts and check codes, never the notes. */
@@ -356,7 +364,7 @@ export async function runQuestionReview(
       },
     );
     if (!retained) return await finish({ status: 'unavailable', errorCode: 'NO_BOOK_SOURCE' });
-    const book = await loadReviewBookUnits(pool as unknown as Queryable, {
+    const book = await (deps.loadBook ?? loadReviewBookUnits)(pool as unknown as Queryable, {
       tenantId: claimed.tenantId,
       attemptId: retained.attemptId,
     });
@@ -365,12 +373,27 @@ export async function runQuestionReview(
     }
     const subjectCode = (retained.inputSnapshot as { subjectCode?: unknown } | undefined)
       ?.subjectCode;
+    // HIGH-1: the reads above may have stalled past the lease (evicted, or
+    // claimed elsewhere): never start the paid call under a lost lease.
+    if (
+      deps.signal?.aborted ||
+      !(await renewQuestionReviewLease(pool as unknown as Queryable, claimed.id, {
+        workerId,
+        now: now(),
+        leaseMs: QUESTION_REVIEW_LEASE_MS,
+      }))
+    ) {
+      log.warn(`question review ${claimed.id}: the lease moved on before the call`);
+      return null;
+    }
+    deps.onLeaseKept?.();
     const answered = await (deps.callReviewer ?? callQuestionReviewer)({
       pool,
       review: claimed,
       units: book.units,
       attemptId: retained.attemptId,
       subjectCode: typeof subjectCode === 'string' ? subjectCode : 'UNKNOWN',
+      ...(deps.signal ? { signal: deps.signal } : {}),
     });
     const answer = {
       results: answered.results,
@@ -428,14 +451,18 @@ export async function runQuestionReview(
 }
 
 /** The question reviews this process is running (see `sweepPackageReviews`). */
-const runningQuestionReviews = new Map<string, { token: string; leaseKeptAt: number }>();
+const runningQuestionReviews = new Map<
+  string,
+  { token: string; leaseKeptAt: number; controller: AbortController }
+>();
 
 /**
  * Start or resume claimable question reviews in the background (the webhook
  * sweep), at most `MAX_QUESTION_REVIEWS_IN_FLIGHT` at once (D-6). A run that
- * has held its claim for a whole lease without finishing is hung: it is
- * evicted so the review can be resumed (L-10); every run claims under its own
- * lease owner, so the evicted run writes nothing if it wakes up.
+ * has not kept its lease for a whole lease period is hung: it is evicted and
+ * its reviewer call aborted so the review can be resumed (L-10, HIGH-1); every
+ * run claims under its own lease owner and renews it before the paid call, so
+ * the evicted run neither pays nor writes if it wakes up.
  */
 export async function sweepQuestionReviews(
   deps: QuestionReviewDeps & { pool: ConnectableQueryable },
@@ -444,6 +471,7 @@ export async function sweepQuestionReviews(
   for (const [id, entry] of runningQuestionReviews) {
     if (now() - entry.leaseKeptAt > QUESTION_REVIEW_LEASE_MS) {
       runningQuestionReviews.delete(id);
+      entry.controller.abort();
       log.warn(`question review ${id} did not keep its lease; evicted from this process`);
     }
   }
@@ -460,7 +488,7 @@ export async function sweepQuestionReviews(
   for (const id of ids) {
     if (runningQuestionReviews.has(id)) continue;
     const token = randomBytes(4).toString('hex');
-    const entry = { token, leaseKeptAt: now() };
+    const entry = { token, leaseKeptAt: now(), controller: new AbortController() };
     runningQuestionReviews.set(id, entry);
     started.push(id);
     void runQuestionReview(id, {
@@ -469,6 +497,7 @@ export async function sweepQuestionReviews(
       onLeaseKept: () => {
         entry.leaseKeptAt = now();
       },
+      signal: entry.controller.signal,
     })
       .catch((error) => {
         log.error(`question review ${id} crashed`, JSON.stringify(describeErrorSafely(error)));

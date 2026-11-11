@@ -98,6 +98,8 @@ export interface ReviewCallRequest {
   focusIds?: ReadonlySet<string>;
   /** D-8: the book was cut; the book block says so (set by the job on every call). */
   bookTruncated?: boolean;
+  /** The run's abort signal: aborted when the sweep evicts a hung run (set by the job). */
+  signal?: AbortSignal;
 }
 
 export interface ReviewCallAnswer {
@@ -146,6 +148,8 @@ export interface PackageReviewDeps {
   loadScenes?: (pool: ConnectableQueryable, stageId: string) => Promise<AppScene[] | null>;
   /** The sweep's tracker: called after the claim and after every renewed lease. */
   onLeaseKept?: () => void;
+  /** Aborted by the sweep when it evicts this run; every reviewer call stops with it. */
+  signal?: AbortSignal;
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -197,6 +201,7 @@ export async function callPackageReviewer(
       validate: (text) => parseReviewerAnswer(text, { slideIds, quizIds, focusIds }),
       jsonSchema: PACKAGE_REVIEW_SCHEMA,
     },
+    ...(request.signal ? { signal: request.signal } : {}),
   });
   return {
     answer: call.parsed as ReviewerAnswer,
@@ -399,6 +404,7 @@ export async function runPackageReview(
         return await (deps.callReviewer ?? callPackageReviewer)({
           ...request,
           bookTruncated: book.truncated,
+          ...(deps.signal ? { signal: deps.signal } : {}),
           pool,
         });
       } catch (error) {
@@ -433,6 +439,12 @@ export async function runPackageReview(
     let review = claimed;
     let findings: StoredFinding[];
     if (claimed.reviewedAt === null) {
+      // HIGH-1: the reads above may have stalled past the lease (evicted, or
+      // claimed elsewhere): never start the paid call under a lost lease.
+      if (deps.signal?.aborted || !(await heartbeat())) {
+        log.warn(`package review ${claimed.id}: the lease moved on before the first call`);
+        return null;
+      }
       // The paid first review: the whole package in one call.
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
       findings = toStoredFindings(answer, slides);
@@ -517,9 +529,15 @@ export { teacherOnlyReason };
 /**
  * The reviews this process is running. `leaseKeptAt` moves on every claim and
  * renewed lease; `token` names the run, so a run that settles late never
- * removes the entry of the run that replaced it.
+ * removes the entry of the run that replaced it; `controller` aborts the run's
+ * reviewer call when it is evicted.
  */
-const runningReviews = new Map<string, { token: string; leaseKeptAt: number }>();
+interface RunningReview {
+  token: string;
+  leaseKeptAt: number;
+  controller: AbortController;
+}
+const runningReviews = new Map<string, RunningReview>();
 
 /**
  * Start (or resume) claimable reviews in the background, at most
@@ -527,9 +545,10 @@ const runningReviews = new Map<string, { token: string; leaseKeptAt: number }>()
  * webhook sweep; never awaits a review, never throws.
  *
  * A run that has not kept its lease for a whole lease period is hung (its row
- * is claimable again): it is evicted, so this process may resume the review
- * (L-10). Every run claims under its own lease owner, so an evicted run that
- * wakes up later writes nothing.
+ * is claimable again): it is evicted and its reviewer call aborted, so this
+ * process may resume the review (L-10, HIGH-1). Every run claims under its own
+ * lease owner and checks its lease before the first paid call, so an evicted
+ * run that wakes up later neither pays nor writes.
  */
 export async function sweepPackageReviews(
   deps: PackageReviewDeps & { pool: ConnectableQueryable },
@@ -538,6 +557,7 @@ export async function sweepPackageReviews(
   for (const [id, entry] of runningReviews) {
     if (now() - entry.leaseKeptAt > REVIEW_LEASE_MS) {
       runningReviews.delete(id);
+      entry.controller.abort();
       log.warn(`package review ${id} did not keep its lease; evicted from this process`);
     }
   }
@@ -554,7 +574,7 @@ export async function sweepPackageReviews(
   for (const id of ids) {
     if (runningReviews.has(id)) continue;
     const token = randomBytes(4).toString('hex');
-    const entry = { token, leaseKeptAt: now() };
+    const entry = { token, leaseKeptAt: now(), controller: new AbortController() };
     runningReviews.set(id, entry);
     started.push(id);
     void runPackageReview(id, {
@@ -564,6 +584,7 @@ export async function sweepPackageReviews(
       onLeaseKept: () => {
         entry.leaseKeptAt = now();
       },
+      signal: entry.controller.signal,
     })
       .catch((error) => {
         log.error(`package review ${id} crashed`, JSON.stringify(describeErrorSafely(error)));

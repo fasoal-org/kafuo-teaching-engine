@@ -501,6 +501,93 @@ describe('question-set review (Phase 4)', () => {
     expect(event!.questionReview).toMatchObject({ status: 'completed', model: OPUS });
   });
 
+  const reviewRow = async (id: string) =>
+    (
+      await pool.query(
+        `SELECT status, lease_owner, reviewed_at FROM teaching_question_reviews WHERE id = $1`,
+        [id],
+      )
+    ).rows[0] as { status: string; lease_owner: string | null; reviewed_at: number | null };
+
+  it('HIGH-1: a question run stalled BEFORE its call whose lease moved on never pays and writes nothing', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    const { loadReviewBookUnits } =
+      await import('@/lib/server/teaching-package/package-review-input');
+    let release!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const loadBook = vi.fn(async (...args: Parameters<typeof loadReviewBookUnits>) => {
+      await stalled;
+      return loadReviewBookUnits(...args);
+    });
+    const running = runQuestionReview(id, {
+      pool: txPool(),
+      callReviewer: failingQ1,
+      loadBook,
+      workerId: 'stale-worker',
+    });
+    await vi.waitFor(() => expect(loadBook).toHaveBeenCalledTimes(1));
+    await pool.query(
+      `UPDATE teaching_question_reviews SET lease_owner = 'other-worker' WHERE id = $1`,
+      [id],
+    );
+    release();
+    expect(await running).toBeNull();
+    expect(failingQ1).not.toHaveBeenCalled();
+    expect(await reviewRow(id)).toMatchObject({
+      status: 'running',
+      lease_owner: 'other-worker',
+      reviewed_at: null,
+    });
+    expect(await events()).toEqual([]);
+  });
+
+  it('L-10 / HIGH-1: a hung question run is evicted (its call aborted) and resumed; the stale answer is refused', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { sweepQuestionReviews, QUESTION_REVIEW_LEASE_MS } =
+      await import('@/lib/server/teaching-package/question-review');
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const gates: Array<() => void> = [];
+    const callReviewer = vi.fn(
+      (_request: { signal?: AbortSignal }) =>
+        new Promise<typeof answer>((resolve) => {
+          gates.push(() => resolve(answer));
+        }),
+    );
+    let t = Date.now();
+    const deps = { pool: txPool(), callReviewer, now: () => t };
+    expect(await sweepQuestionReviews(deps)).toEqual([id]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+    const firstOwner = (await reviewRow(id)).lease_owner;
+    t += QUESTION_REVIEW_LEASE_MS - 1_000;
+    expect(await sweepQuestionReviews(deps)).toEqual([]);
+    t += 2_000;
+    expect(await sweepQuestionReviews(deps)).toEqual([id]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+    expect(callReviewer.mock.calls[0]![0].signal?.aborted).toBe(true);
+    expect(callReviewer.mock.calls[1]![0].signal?.aborted).toBe(false);
+    const secondOwner = (await reviewRow(id)).lease_owner;
+    expect(secondOwner).not.toBe(firstOwner);
+    // The stale run's answer arrives: its save is refused by the lease guard.
+    gates[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await reviewRow(id)).toMatchObject({
+      status: 'running',
+      lease_owner: secondOwner,
+      reviewed_at: null,
+    });
+    gates[1]!();
+    await vi.waitFor(async () => expect((await reviewRow(id)).status).toBe('completed'));
+    expect(await events()).toHaveLength(1);
+  });
+
   it('D-6: the sweep runs at most 2 question reviews at once; the next starts after one ends', async () => {
     const seeded = await seed();
     const ids: string[] = [];

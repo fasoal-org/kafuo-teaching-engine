@@ -165,6 +165,24 @@ export async function claimQuestionReview(
 }
 
 /**
+ * Renew the lease before the paid call (HIGH-1). False when the lease is no
+ * longer this worker's (evicted, or claimed by another worker).
+ */
+export async function renewQuestionReviewLease(
+  queryable: Queryable,
+  id: string,
+  input: { workerId: string; now: number; leaseMs: number },
+): Promise<boolean> {
+  const result = await queryable.query(
+    `UPDATE teaching_question_reviews SET lease_until = $3, updated_at = $4
+      WHERE id = $1 AND status = 'running' AND lease_owner = $2
+      RETURNING id`,
+    [id, input.workerId, input.now + input.leaseMs, input.now],
+  );
+  return result.rows.length > 0;
+}
+
+/**
  * Store the paid answer under the worker's lease, before the terminal write
  * (M-4). False when the lease is no longer this worker's.
  */

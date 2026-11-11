@@ -2558,6 +2558,50 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       await vi.waitFor(async () => expect((await statusOf(ids[2]!)).status).toBe('passed'));
     });
 
+    it('HIGH-1: a run stalled BEFORE its first call whose lease moved on never pays and writes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      let release!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // The reads before the call hang (no pool timeout) …
+      const loadScenes = vi.fn(async () => {
+        await stalled;
+        return [
+          {
+            id: 'scene-f1',
+            order: 1,
+            title: 'S',
+            content: { type: 'slide', canvas: { elements: [] } },
+            actions: [],
+          },
+        ] as never;
+      });
+      const callReviewer = answering([]);
+      const running = runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer,
+        loadScenes,
+        workerId: 'stale-worker',
+      });
+      await vi.waitFor(() => expect(loadScenes).toHaveBeenCalledTimes(1));
+      // … meanwhile the lease lapsed and another worker claimed the review.
+      await pool.query(
+        `UPDATE teaching_package_reviews SET lease_owner = 'other-worker' WHERE id = $1`,
+        [review!.id],
+      );
+      release();
+      expect(await running).toBeNull();
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: 'other-worker',
+        summary: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     it('L-10: a run that stops keeping its lease is evicted and resumed; the stale run writes nothing', async () => {
       const [review] = await queuedReview(await startKafuo());
       const { sweepPackageReviews, REVIEW_LEASE_MS } =
@@ -2575,6 +2619,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       t += 2_000;
       expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
       await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      // HIGH-1 (c): the evicted run's reviewer call is aborted; the new run's is not.
+      const signals = callReviewer.mock.calls.map(
+        (args) => (args as unknown as [{ signal?: AbortSignal }])[0].signal,
+      );
+      expect(signals[0]?.aborted).toBe(true);
+      expect(signals[1]?.aborted).toBe(false);
       const secondOwner = (await statusOf(review!.id)).lease_owner;
       expect(secondOwner).not.toBeNull();
       expect(secondOwner).not.toBe(firstOwner);
