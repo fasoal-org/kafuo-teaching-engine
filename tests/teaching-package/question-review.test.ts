@@ -666,6 +666,34 @@ describe('question-set review (Phase 4)', () => {
       )
     ).rows[0] as { status: string; lease_owner: string | null; reviewed_at: number | null };
 
+  it('L-D: with no revoke, an aborted question run stores nothing and gives its own lease up at once', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    const { listClaimableQuestionReviewIds } =
+      await import('@/lib/server/teaching-package/question-review-store');
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const controller = new AbortController();
+    const t = Date.now();
+    const done = await runQuestionReview(id, {
+      pool: txPool(),
+      workerId: 'w-evicted',
+      signal: controller.signal,
+      now: () => t,
+      callReviewer: vi.fn(async () => {
+        controller.abort();
+        return answer;
+      }),
+    });
+    expect(done).toBeNull();
+    await vi.waitFor(async () => expect((await reviewRow(id)).lease_owner).toBeNull());
+    expect(await reviewRow(id)).toMatchObject({ status: 'running', reviewed_at: null });
+    expect(await listClaimableQuestionReviewIds(pool as never, t)).toEqual([id]);
+    expect(await events()).toEqual([]);
+  });
+
   it('HIGH-1: a question run stalled BEFORE its call whose lease moved on never pays and writes nothing', async () => {
     const seeded = await seed();
     const { json } = await queue(seeded);

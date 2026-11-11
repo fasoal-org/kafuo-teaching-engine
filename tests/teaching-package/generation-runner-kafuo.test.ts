@@ -2647,6 +2647,47 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toEqual([]);
     });
 
+    it('L-D / item 5: with no revoke, an answer after the abort is dropped and the run gives its own lease up at once', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { listClaimableReviewIds } =
+        await import('@/lib/server/teaching-package/package-review-store');
+      const controller = new AbortController();
+      const t = Date.now();
+      // The sweep's revoke never ran (or failed): only the run itself can let go.
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        now: () => t,
+        callReviewer: vi.fn(async () => {
+          controller.abort();
+          return {
+            answer: {
+              summary: 'قديم',
+              findings: [
+                {
+                  targetId: 'scene-f1',
+                  check: 'S1',
+                  severity: 'high',
+                  bookEvidence: { quote: 'q', unitId: null },
+                  whatIsWrong: 'w',
+                  fixNote: 'n',
+                },
+              ],
+            },
+            call: { provider: 'anthropic', modelString: OPUS, usage: null },
+          };
+        }) as never,
+      });
+      expect(done).toBeNull();
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+      expect(await statusOf(review!.id)).toMatchObject({ status: 'running', summary: null });
+      // Claimable at once, not 40 minutes later.
+      expect(await listClaimableReviewIds(pool as never, t)).toEqual([review!.id]);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     it('HIGH-1: a run stalled BEFORE its first call whose lease moved on never pays and writes nothing', async () => {
       const [review] = await queuedReview(await startKafuo());
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');

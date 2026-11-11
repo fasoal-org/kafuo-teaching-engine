@@ -546,6 +546,21 @@ export async function runPackageReview(
       );
       return null;
     }
+  } finally {
+    // L-D: a run that stopped because it was evicted gives up its own lease at
+    // once (best effort, exact owner), so the review is claimable now rather
+    // than when the lease lapses — even when the sweep's revoke failed.
+    if (deps.signal?.aborted) {
+      void releaseReviewLease(pool as unknown as Queryable, claimed.id, {
+        workerId,
+        now: now(),
+      }).catch((error: unknown) => {
+        log.error(
+          `package review ${claimed.id}: its own lease could not be released`,
+          error instanceof Error ? error.name : 'Error',
+        );
+      });
+    }
   }
 }
 
