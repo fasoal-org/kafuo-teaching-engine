@@ -2958,6 +2958,123 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       );
     }
 
+    it('item 5: an aborted call that throws (like the executor) ends nothing and adds no spend', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-ab-1', OPUS, { input: 300, output: 0, cost: 0.05 });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingCallAbortedError } = await import('@/lib/server/teaching-model/execute');
+      const controller = new AbortController();
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        callReviewer: vi.fn(async () => {
+          controller.abort(); // the sweep evicts the run mid-call
+          throw new TeachingCallAbortedError(['tma-ab-1']);
+        }),
+      });
+      expect(done).toBeNull();
+      // Not `unavailable` / REVIEW_FAILED, no spend written (recordFailedSpend skipped), no event.
+      const row = await pool.query(
+        `SELECT status, error_code, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect(row.rows[0]).toMatchObject({
+        status: 'running',
+        error_code: null,
+        input_tokens: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+    });
+
+    it('item 5: with its lease still held (failed revoke), an aborted run skips the re-review usage and progress writes', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-skip-first', OPUS, { input: 100, output: 10, cost: 0.01 });
+      await ledgerAttempt('tma-skip-rereview', OPUS, { input: 50, output: 5, cost: 0.005 });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      const callReviewer = vi
+        .fn()
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [finding] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-skip-first'],
+          },
+        })
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-skip-rereview'],
+          },
+        });
+      const fixLoop = vi.fn(
+        async (context: {
+          review: unknown;
+          units: unknown;
+          slides: unknown;
+          findings: Array<Record<string, unknown>>;
+          callReviewer: (request: unknown) => Promise<unknown>;
+          recordProgress: (findings: unknown[], fixes: unknown[]) => Promise<void>;
+        }) => {
+          controller.abort(); // evicted while fixing; the revoke never landed
+          await context.callReviewer({
+            review: context.review,
+            units: context.units,
+            slides: context.slides,
+            focusIds: new Set(['scene-f1']),
+          });
+          const fixed = context.findings.map((f) => ({
+            ...f,
+            status: 'fixed',
+            teacherReason: null,
+          }));
+          const fixes = [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed', code: null }];
+          await context.recordProgress(fixed, fixes);
+          return { findings: fixed, fixes };
+        },
+      );
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        callReviewer: callReviewer as never,
+        fixLoop: fixLoop as never,
+      });
+      expect(done).toBeNull();
+      expect(callReviewer).toHaveBeenCalledTimes(2);
+      const row = await pool.query(
+        `SELECT status, input_tokens, findings, fixes FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      const stored = row.rows[0] as {
+        status: string;
+        input_tokens: string | number;
+        findings: Array<{ status: string }>;
+        fixes: unknown[];
+      };
+      // Only the first answer (before the abort) is on the row.
+      expect(stored.status).toBe('running');
+      expect(Number(stored.input_tokens)).toBe(100);
+      expect(stored.findings.map((f) => f.status)).toEqual(['open']);
+      expect(stored.fixes).toEqual([]);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     it('L-B: at the end the row totals are the ledger’s for the review id — an evicted run’s paid attempt included', async () => {
       const attemptId = await startKafuo();
       const [review] = await queuedReview(attemptId);

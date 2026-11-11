@@ -116,6 +116,26 @@ describe('runReviewerCall — provider switch', () => {
     expect(await events()).toEqual([]);
   });
 
+  it('item 5: the caller’s abort signal reaches the executor’s call context', async () => {
+    const { runReviewerCall } = await import('@/lib/server/teaching-model/reviewer-call');
+    const executeStream = served([{ role: 'primary', outcome: 'succeeded', modelString: OPUS }]);
+    const controller = new AbortController();
+    await runReviewerCall(
+      { ...input(), signal: controller.signal },
+      { now: () => t, resolveRoute: resolveRoute as never, executeStream: executeStream as never },
+    );
+    const [, ctx] = executeStream.mock.calls[0] as unknown as [unknown, { signal?: AbortSignal }];
+    expect(ctx.signal).toBe(controller.signal);
+    // Without one, no signal is set.
+    await runReviewerCall(input(), {
+      now: () => t,
+      resolveRoute: resolveRoute as never,
+      executeStream: executeStream as never,
+    });
+    const [, plain] = executeStream.mock.calls[1] as unknown as [unknown, { signal?: AbortSignal }];
+    expect(plain.signal).toBeUndefined();
+  });
+
   it('Opus credit exhausted → served by Sol, ONE switch row + ONE signed event; later reviews go to Sol only', async () => {
     const { runReviewerCall } = await import('@/lib/server/teaching-model/reviewer-call');
     const exhausted = [

@@ -404,13 +404,13 @@ describe('question-set review (Phase 4)', () => {
     run.mockRestore();
   });
 
-  it('L-5: a correctAnswer nested deeper than 20 levels is refused (400 INVALID_REQUEST)', async () => {
+  it('L-5: the correctAnswer nesting bound — 20 objects deep (nested(19)) is accepted, 21 (nested(20)) is refused', async () => {
     const seeded = await seed();
     const route = await import('@/app/api/teaching-packages/[id]/question-reviews/route');
     const params = { params: Promise.resolve({ id: seeded.versionId }) };
     const nested = (depth: number): Record<string, unknown> =>
       depth === 0 ? { value: 'a' } : { next: nested(depth - 1) };
-    const deep = { ...QUESTIONS[0], correctAnswer: nested(25) };
+    const deep = { ...QUESTIONS[0], correctAnswer: nested(20) };
     const refused = await route.POST(
       post(seeded.versionId, { ...body(seeded, 'qr-deep'), questions: [deep] }),
       params,
@@ -419,8 +419,8 @@ describe('question-set review (Phase 4)', () => {
     const json = (await refused.json()) as { error: { code: string; message: string } };
     expect(json.error.code).toBe('INVALID_REQUEST');
     expect(json.error.message).toContain('nested too deeply');
-    // Within the depth bound it is accepted.
-    const shallow = { ...QUESTIONS[0], correctAnswer: nested(10) };
+    // The last depth inside the bound is accepted.
+    const shallow = { ...QUESTIONS[0], correctAnswer: nested(19) };
     const accepted = await route.POST(
       post(seeded.versionId, { ...body(seeded, 'qr-shallow'), questions: [shallow] }),
       params,
