@@ -2558,6 +2558,32 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       await vi.waitFor(async () => expect((await statusOf(ids[2]!)).status).toBe('passed'));
     });
 
+    it('M-A: an eviction that lands while the lease renewal is in flight still stops the paid call', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      // The renewal before the first call succeeds in the database, but the
+      // sweep evicts the run while it is in flight.
+      const evictingDuringRenewal = {
+        query: async (text: string, params?: unknown[]) => {
+          const result = await pool.query(text, params);
+          if (text.includes('SET lease_until')) controller.abort();
+          return result;
+        },
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const callReviewer = answering([]);
+      expect(
+        await runPackageReview(review!.id, {
+          pool: evictingDuringRenewal,
+          callReviewer,
+          signal: controller.signal,
+        }),
+      ).toBeNull();
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     it('HIGH-1: a run stalled BEFORE its first call whose lease moved on never pays and writes nothing', async () => {
       const [review] = await queuedReview(await startKafuo());
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');

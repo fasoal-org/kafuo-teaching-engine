@@ -426,8 +426,11 @@ export async function runPackageReview(
         now: now(),
         leaseMs: REVIEW_LEASE_MS,
       });
-      if (kept) deps.onLeaseKept?.();
-      return kept;
+      // M-A: an eviction that lands while the renewal is in flight still stops
+      // the run before its next paid step.
+      if (!kept || deps.signal?.aborted) return false;
+      deps.onLeaseKept?.();
+      return true;
     };
     /**
      * L-4: the row's tokens and cost add up every paid attempt of every call;
