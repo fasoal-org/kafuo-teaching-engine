@@ -122,6 +122,19 @@ describe('createRegenerationRoute', () => {
     expect(plainOptions).not.toHaveProperty('signal');
   });
 
+  it('LOW-2: without a caller signal an abort error keeps the old mapping (not remembered, not ABORTED)', async () => {
+    const execute = vi.fn(async () => {
+      throw new TeachingCallAbortedError(['a']);
+    });
+    const route = await createRegenerationRoute({ ...base, execute: execute as never });
+    const thrown = await route
+      .aiCallFor('scene-content:slide')('s', 'u')
+      .catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(TeachingCallAbortedError);
+    expect(thrown).not.toHaveProperty('isRetryable');
+    expect(() => route.assertAvailable()).not.toThrow();
+  });
+
   it('routing off uses the stage routes and records no subject', async () => {
     const route = await createRegenerationRoute({
       ...base,

@@ -141,8 +141,9 @@ export async function createRegenerationRoute(
         );
         return result.text;
       } catch (error) {
-        if (error instanceof TeachingCallAbortedError) {
-          // The reviewer run was evicted: stop, never retry.
+        if (input.signal && error instanceof TeachingCallAbortedError) {
+          // The reviewer run was evicted: stop, never retry. LOW-2: only with
+          // a caller signal; without one the editor keeps its old mapping.
           failure ??= new TeachingPackageError(
             'ABORTED',
             'the regeneration was stopped: the review run that asked for it was evicted',
