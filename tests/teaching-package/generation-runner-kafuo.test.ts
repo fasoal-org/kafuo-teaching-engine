@@ -3033,14 +3033,18 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         usage: null,
         switched: null,
       });
+      const controller = new AbortController();
       await callPackageReviewer({
         review: done!,
         units: [{ id: 'book', title: null, role: null, text: 'x' }],
         slides: [],
         bookTruncated: true,
+        signal: controller.signal,
         pool: txPool(),
       });
       expect(run.mock.calls[0]![0].stablePrompt).toContain(BOOK_TRUNCATED_NOTE);
+      // L-5: the run's abort signal reaches the reviewer call (eviction stops it).
+      expect(run.mock.calls[0]![0].signal).toBe(controller.signal);
       run.mockRestore();
       const { NextRequest } = await import('next/server');
       const one = await import('@/app/api/teaching-packages/[id]/reviews/[reviewId]/route');

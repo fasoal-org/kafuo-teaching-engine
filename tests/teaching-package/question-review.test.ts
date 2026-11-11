@@ -388,11 +388,44 @@ describe('question-set review (Phase 4)', () => {
     } as never;
     const units = [{ id: 'book', title: null, role: null, text: 'x' }];
     const base = { review, units, attemptId: seeded.attemptId, subjectCode: 'MATH' };
-    await callQuestionReviewer({ ...base, bookTruncated: true, pool: txPool() });
+    const controller = new AbortController();
+    await callQuestionReviewer({
+      ...base,
+      bookTruncated: true,
+      signal: controller.signal,
+      pool: txPool(),
+    });
     await callQuestionReviewer({ ...base, pool: txPool() });
     expect(run.mock.calls[0]![0].stablePrompt).toContain(BOOK_TRUNCATED_NOTE);
     expect(run.mock.calls[1]![0].stablePrompt).not.toContain(BOOK_TRUNCATED_NOTE);
+    // L-5: the run's abort signal reaches the reviewer call (eviction stops it).
+    expect(run.mock.calls[0]![0].signal).toBe(controller.signal);
+    expect(run.mock.calls[1]![0].signal).toBeUndefined();
     run.mockRestore();
+  });
+
+  it('L-5: a correctAnswer nested deeper than 20 levels is refused (400 INVALID_REQUEST)', async () => {
+    const seeded = await seed();
+    const route = await import('@/app/api/teaching-packages/[id]/question-reviews/route');
+    const params = { params: Promise.resolve({ id: seeded.versionId }) };
+    const nested = (depth: number): Record<string, unknown> =>
+      depth === 0 ? { value: 'a' } : { next: nested(depth - 1) };
+    const deep = { ...QUESTIONS[0], correctAnswer: nested(25) };
+    const refused = await route.POST(
+      post(seeded.versionId, { ...body(seeded, 'qr-deep'), questions: [deep] }),
+      params,
+    );
+    expect(refused.status).toBe(400);
+    const json = (await refused.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe('INVALID_REQUEST');
+    expect(json.error.message).toContain('nested too deeply');
+    // Within the depth bound it is accepted.
+    const shallow = { ...QUESTIONS[0], correctAnswer: nested(10) };
+    const accepted = await route.POST(
+      post(seeded.versionId, { ...body(seeded, 'qr-shallow'), questions: [shallow] }),
+      params,
+    );
+    expect(accepted.status).toBe(202);
   });
 
   it('the signed GET returns the findings and the combined repair note, scoped to the tenant', async () => {
