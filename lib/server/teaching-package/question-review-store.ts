@@ -57,6 +57,8 @@ export interface QuestionReview {
   results: QuestionResult[];
   errorCode: string | null;
   runAttempts: number;
+  /** Set when the paid answer is stored (M-4): a resume finishes from it, never pays again. */
+  reviewedAt: number | null;
   createdAt: number;
   completedAt: number | null;
 }
@@ -88,6 +90,8 @@ function rowToQuestionReview(row: Record<string, unknown>): QuestionReview {
     results: (Array.isArray(row.results) ? row.results : []) as QuestionResult[],
     errorCode: typeof row.error_code === 'string' ? row.error_code : null,
     runAttempts: Number(row.run_attempts ?? 0),
+    reviewedAt:
+      row.reviewed_at === null || row.reviewed_at === undefined ? null : Number(row.reviewed_at),
     createdAt: Number(row.created_at),
     completedAt:
       row.completed_at === null || row.completed_at === undefined ? null : Number(row.completed_at),
@@ -158,6 +162,31 @@ export async function claimQuestionReview(
   );
   const row = result.rows[0];
   return row ? rowToQuestionReview(row) : null;
+}
+
+/**
+ * Store the paid answer under the worker's lease, before the terminal write
+ * (M-4). False when the lease is no longer this worker's.
+ */
+export async function saveQuestionReviewAnswer(
+  queryable: Queryable,
+  id: string,
+  workerId: string,
+  answer: {
+    results: QuestionResult[];
+    provider: 'anthropic' | 'openai' | null;
+    model: string | null;
+  },
+  now: number,
+): Promise<boolean> {
+  const result = await queryable.query(
+    `UPDATE teaching_question_reviews
+        SET results = $3::jsonb, provider = $4, model = $5, reviewed_at = $6, updated_at = $6
+      WHERE id = $1 AND status = 'running' AND lease_owner = $2
+      RETURNING id`,
+    [id, workerId, JSON.stringify(answer.results), answer.provider, answer.model, now],
+  );
+  return result.rows.length > 0;
 }
 
 export async function finishQuestionReview(

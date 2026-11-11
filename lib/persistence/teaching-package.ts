@@ -738,11 +738,16 @@ CREATE TABLE IF NOT EXISTS teaching_question_reviews (
   run_attempts INTEGER NOT NULL DEFAULT 0,
   lease_owner TEXT,
   lease_until DOUBLE PRECISION,
+  reviewed_at DOUBLE PRECISION,
   created_at DOUBLE PRECISION NOT NULL,
   started_at DOUBLE PRECISION,
   completed_at DOUBLE PRECISION,
   updated_at DOUBLE PRECISION NOT NULL
 );
+
+-- Review fixes M-4: the paid answer is stored under the lease before the
+-- terminal write, and reviewed_at marks it, so a resume never pays twice.
+ALTER TABLE teaching_question_reviews ADD COLUMN IF NOT EXISTS reviewed_at DOUBLE PRECISION;
 
 CREATE UNIQUE INDEX IF NOT EXISTS tqr_tenant_request_unique
   ON teaching_question_reviews (tenant_id, request_id);

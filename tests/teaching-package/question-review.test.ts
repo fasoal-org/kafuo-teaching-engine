@@ -378,6 +378,95 @@ describe('question-set review (Phase 4)', () => {
     });
   });
 
+  it('M-4: the paid answer is stored under the lease before the terminal write; a failed finish resumes from it without a second call', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    // The terminal transaction fails once (its outbox table is away) AFTER the paid call.
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const callReviewer = vi.fn(async () => {
+      await pool.query(
+        `ALTER TABLE teaching_package_webhook_deliveries RENAME TO tpwd_away_for_test`,
+      );
+      return answer;
+    });
+    expect(await runQuestionReview(id, { pool: txPool(), callReviewer })).toBeNull();
+    await pool.query(
+      `ALTER TABLE tpwd_away_for_test RENAME TO teaching_package_webhook_deliveries`,
+    );
+    const stored = (
+      await pool.query(
+        `SELECT status, reviewed_at, provider, results FROM teaching_question_reviews WHERE id = $1`,
+        [id],
+      )
+    ).rows[0] as {
+      status: string;
+      reviewed_at: number | null;
+      provider: string;
+      results: Array<{ questionId: string; verdict: string }>;
+    };
+    expect(stored.status).toBe('running');
+    expect(stored.reviewed_at).not.toBeNull();
+    expect(stored.provider).toBe('anthropic');
+    expect(stored.results.map((r) => [r.questionId, r.verdict])).toEqual([
+      ['q-101', 'pass'],
+      ['q-102', 'fail'],
+    ]);
+    // A running answer is not yet the review's result.
+    const route =
+      await import('@/app/api/teaching-packages/[id]/question-reviews/[reviewId]/route');
+    const read = await route.GET(
+      new NextRequest(
+        `http://localhost/api/teaching-packages/${seeded.versionId}/question-reviews/${id}?tenantId=${TENANT}`,
+        { headers: { authorization: `Bearer ${KEY}` } },
+      ),
+      { params: Promise.resolve({ id: seeded.versionId, reviewId: id }) },
+    );
+    expect(
+      ((await read.json()) as { questionReview: { results: unknown[] } }).questionReview,
+    ).toMatchObject({ status: 'running', results: [] });
+    expect(await events()).toEqual([]);
+
+    // The lease lapses; the resume finishes from the stored answer and never pays again.
+    await pool.query(`UPDATE teaching_question_reviews SET lease_until = 1 WHERE id = $1`, [id]);
+    const done = await runQuestionReview(id, { pool: txPool(), callReviewer });
+    expect(done).toMatchObject({ status: 'completed', provider: 'anthropic', model: OPUS });
+    expect(callReviewer).toHaveBeenCalledTimes(1);
+    const [event] = await events();
+    expect((event!.questionReview as { results: unknown[] }).results).toEqual([
+      { questionId: 'q-101', verdict: 'pass', checks: [], autoFixable: false },
+      { questionId: 'q-102', verdict: 'fail', checks: ['Q5'], autoFixable: true },
+    ]);
+  });
+
+  it('M-4: a crashed worker’s stored answer is finished by the sweep with no reviewer call', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    await pool.query(
+      `UPDATE teaching_question_reviews
+          SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 1,
+              reviewed_at = 5, provider = 'anthropic', model = $2, results = $3::jsonb
+        WHERE id = $1`,
+      [id, OPUS, JSON.stringify(answer.results)],
+    );
+    const { sweepQuestionReviews } = await import('@/lib/server/teaching-package/question-review');
+    expect(await sweepQuestionReviews({ pool: txPool(), callReviewer: failingQ1 })).toEqual([id]);
+    await vi.waitFor(async () => {
+      const rows = await pool.query(`SELECT status FROM teaching_question_reviews WHERE id = $1`, [
+        id,
+      ]);
+      expect((rows.rows[0] as { status: string }).status).toBe('completed');
+    });
+    expect(failingQ1).not.toHaveBeenCalled();
+    const [event] = await events();
+    expect(event!.questionReview).toMatchObject({ status: 'completed', model: OPUS });
+  });
+
   it('D-6: the sweep runs at most 2 question reviews at once; the next starts after one ends', async () => {
     const seeded = await seed();
     const ids: string[] = [];

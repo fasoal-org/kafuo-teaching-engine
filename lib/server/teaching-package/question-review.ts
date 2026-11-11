@@ -40,6 +40,7 @@ import {
   claimQuestionReview,
   finishQuestionReview,
   listClaimableQuestionReviewIds,
+  saveQuestionReviewAnswer,
   type QuestionCheck,
   type QuestionFinding,
   type QuestionResult,
@@ -326,7 +327,19 @@ export async function runQuestionReview(
       return finished;
     });
 
+  // M-4: once the paid answer is stored, a failure only lets the lease lapse;
+  // the resume finishes from the stored answer instead of ending unavailable.
+  let answerStored = claimed.reviewedAt !== null;
   try {
+    if (claimed.reviewedAt !== null) {
+      // A resume after the paid call: finish from the stored answer, never pay twice.
+      return await finish({
+        status: 'completed',
+        results: claimed.results,
+        provider: claimed.provider,
+        model: claimed.model,
+      });
+    }
     if (claimed.runAttempts > MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
       return await finish({ status: 'unavailable', errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
     }
@@ -354,13 +367,36 @@ export async function runQuestionReview(
       attemptId: retained.attemptId,
       subjectCode: typeof subjectCode === 'string' ? subjectCode : 'UNKNOWN',
     });
-    return await finish({
-      status: 'completed',
+    const answer = {
       results: answered.results,
       provider: answered.call.provider,
       model: answered.call.modelString,
-    });
+    };
+    // M-4: the paid answer is stored under the lease BEFORE the terminal write.
+    if (
+      !(await saveQuestionReviewAnswer(
+        pool as unknown as Queryable,
+        claimed.id,
+        workerId,
+        answer,
+        now(),
+      ))
+    ) {
+      log.warn(`question review ${claimed.id}: the lease moved on before the answer was stored`);
+      return null;
+    }
+    answerStored = true;
+    return await finish({ status: 'completed', ...answer });
   } catch (error) {
+    if (answerStored && claimed.runAttempts < MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
+      // The answer is kept: the lease lapses and the next sweep finishes from it
+      // (bounded by the claim cap, so a finish that always fails still ends).
+      log.error(
+        `question review ${claimed.id} could not be finalized; it resumes from the stored answer`,
+        JSON.stringify(describeErrorSafely(error)),
+      );
+      return null;
+    }
     log.warn(
       `question review ${claimed.id} ended unavailable`,
       JSON.stringify(describeErrorSafely(error)),
@@ -439,7 +475,11 @@ export async function sweepQuestionReviews(
   return started;
 }
 
-/** Contract §4.4: the signed read model, notes included. */
+/**
+ * Contract §4.4: the signed read model, notes included. The verdicts are read
+ * only once the review completed: an answer stored under a running lease
+ * (M-4) is not yet the review's result.
+ */
 export function questionReviewWire(review: QuestionReview) {
   return {
     id: review.id,
@@ -448,7 +488,7 @@ export function questionReviewWire(review: QuestionReview) {
     status: review.status,
     provider: review.provider,
     model: review.model,
-    results: review.results,
+    results: review.status === 'completed' ? review.results : [],
     errorCode: review.errorCode,
     completedAt: review.completedAt,
   };
