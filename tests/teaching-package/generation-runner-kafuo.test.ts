@@ -2584,6 +2584,69 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toEqual([]);
     });
 
+    it('L-A: an eviction that lands during the spend read skips the usage and failed-spend writes', async () => {
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const evictingDuringSpendRead = (controller: AbortController) =>
+        ({
+          query: async (text: string, params?: unknown[]) => {
+            const result = await pool.query(text, params);
+            if (text.includes('FROM teaching_model_attempts')) controller.abort();
+            return result;
+          },
+          connect: () => pool.connect(),
+        }) as unknown as ConnectableQueryable;
+
+      // recordUsage: the first answer is not stored.
+      const [answered] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-la-1', OPUS, { input: 100, output: 10, cost: 0.01 });
+      const first = new AbortController();
+      expect(
+        await runPackageReview(answered!.id, {
+          pool: evictingDuringSpendRead(first),
+          signal: first.signal,
+          callReviewer: vi.fn(async () => ({
+            answer: { summary: 'جديد', findings: [] },
+            call: {
+              provider: 'anthropic',
+              modelString: OPUS,
+              usage: null,
+              attemptIds: ['tma-la-1'],
+            },
+          })) as never,
+        }),
+      ).toBeNull();
+      const kept = await pool.query(
+        `SELECT summary, reviewed_at, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [answered!.id],
+      );
+      expect(kept.rows[0]).toMatchObject({ summary: null, reviewed_at: null, input_tokens: null });
+
+      // recordFailedSpend: a failed call's spend is not added.
+      const [failed] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-la-2', OPUS, { input: 400, output: 0, cost: 0.1 });
+      const second = new AbortController();
+      expect(
+        await runPackageReview(failed!.id, {
+          pool: evictingDuringSpendRead(second),
+          signal: second.signal,
+          callReviewer: vi.fn(async () => {
+            throw new TeachingModelUnavailableError('both failed', {
+              attemptIds: ['tma-la-2'],
+              outcomes: [],
+              retryable: true,
+            });
+          }),
+        }),
+      ).toBeNull();
+      const spent = await pool.query(
+        `SELECT status, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [failed!.id],
+      );
+      expect(spent.rows[0]).toMatchObject({ status: 'running', input_tokens: null });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     it('HIGH-1: a run stalled BEFORE its first call whose lease moved on never pays and writes nothing', async () => {
       const [review] = await queuedReview(await startKafuo());
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');

@@ -391,7 +391,8 @@ export async function runPackageReview(
       if (deps.signal?.aborted || !Array.isArray(attemptIds) || attemptIds.length === 0) return;
       try {
         const usage = await callSpend(pool, claimed.tenantId, attemptIds as string[], null);
-        if (usage) {
+        // L-A: the eviction may have landed during the spend read.
+        if (usage && !deps.signal?.aborted) {
           await saveReviewProgress(
             pool as unknown as Queryable,
             claimed.id,
@@ -444,6 +445,7 @@ export async function runPackageReview(
         call.attemptIds,
         servedUsage(call.usage),
       );
+      if (deps.signal?.aborted) return; // L-A: the eviction landed during the spend read
       await saveReviewProgress(
         pool as unknown as Queryable,
         claimed.id,
