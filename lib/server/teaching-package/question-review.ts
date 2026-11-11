@@ -358,7 +358,8 @@ export async function runQuestionReview(
 
   // M-4: once the paid answer is stored, a failure only lets the lease lapse;
   // the resume finishes from the stored answer instead of ending unavailable.
-  // LOW-1: a stored answer counts only when it answers every sent question.
+  // LOW-1: a stored answer counts only when it answers every sent question
+  // (L-4: an incomplete one ends `unavailable`, never a second paid call).
   const storedAnswerUsable =
     claimed.reviewedAt !== null &&
     claimed.results.length === claimed.questions.length &&
@@ -381,7 +382,10 @@ export async function runQuestionReview(
       });
     }
     if (claimed.reviewedAt !== null) {
-      log.warn(`question review ${claimed.id}: the stored answer is incomplete; reviewing again`);
+      // L-4: a paid answer is stored but does not answer every question. A
+      // resume never pays twice (contract), so fail closed instead.
+      log.warn(`question review ${claimed.id}: the stored answer is incomplete`);
+      return await finish({ status: 'unavailable', errorCode: 'STORED_ANSWER_INCOMPLETE' });
     }
     const retained = await readRetainedVersionContext(
       pool as unknown as Queryable,

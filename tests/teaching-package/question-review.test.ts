@@ -596,7 +596,7 @@ describe('question-set review (Phase 4)', () => {
     expect(event!.questionReview).toMatchObject({ status: 'unavailable', results: [] });
   });
 
-  it('LOW-1: a stored answer that does not answer every question is not trusted; the set is reviewed again', async () => {
+  it('L-4: a stored answer that does not answer every question fails closed (STORED_ANSWER_INCOMPLETE), never a second paid call', async () => {
     const seeded = await seed();
     const { json } = await queue(seeded);
     const id = json.questionReview.id;
@@ -611,9 +611,18 @@ describe('question-set review (Phase 4)', () => {
     );
     const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
     const done = await runQuestionReview(id, { pool: txPool(), callReviewer: failingQ1 });
-    expect(failingQ1).toHaveBeenCalledTimes(1);
-    expect(done).toMatchObject({ status: 'completed' });
-    expect(done!.results.map((r) => r.questionId)).toEqual(['q-101', 'q-102']);
+    expect(failingQ1).not.toHaveBeenCalled();
+    expect(done).toMatchObject({
+      status: 'unavailable',
+      errorCode: 'STORED_ANSWER_INCOMPLETE',
+      results: [],
+    });
+    const [event] = await events();
+    expect(event!.questionReview).toMatchObject({
+      status: 'unavailable',
+      errorCode: 'STORED_ANSWER_INCOMPLETE',
+      results: [],
+    });
   });
 
   const reviewRow = async (id: string) =>
