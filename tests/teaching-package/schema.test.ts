@@ -142,13 +142,19 @@ describe('teaching package schema', () => {
   it('evolves an existing reviewer table: the review-fix columns are added in place (idempotent)', async () => {
     // A database whose reviewer tables were created before the review fixes.
     await pool.query(`ALTER TABLE teaching_question_reviews DROP COLUMN reviewed_at`);
+    await pool.query(`ALTER TABLE teaching_package_reviews DROP COLUMN book_truncated`);
     await ensureTeachingPackageSchema(qp());
     await ensureTeachingPackageSchema(qp());
     const columns = await pool.query<{ table_name: string; column_name: string }>(
       `SELECT table_name, column_name FROM information_schema.columns
-        WHERE table_name = 'teaching_question_reviews' AND column_name = 'reviewed_at'`,
+        WHERE (table_name = 'teaching_question_reviews' AND column_name = 'reviewed_at')
+           OR (table_name = 'teaching_package_reviews' AND column_name = 'book_truncated')
+        ORDER BY table_name`,
     );
-    expect(columns.rows).toHaveLength(1);
+    expect(columns.rows).toEqual([
+      { table_name: 'teaching_package_reviews', column_name: 'book_truncated' },
+      { table_name: 'teaching_question_reviews', column_name: 'reviewed_at' },
+    ]);
   });
 
   it('creates only tenant-scoped unique indexes on a fresh database', async () => {

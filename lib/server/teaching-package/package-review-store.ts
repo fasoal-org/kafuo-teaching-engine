@@ -82,6 +82,8 @@ export interface PackageReview {
   inputTokens: number | null;
   outputTokens: number | null;
   costUsd: number | null;
+  /** D-8: the reviewer read a cut book (stored with the first answer). */
+  bookTruncated: boolean;
   runAttempts: number;
   leaseOwner: string | null;
   leaseUntil: number | null;
@@ -126,6 +128,7 @@ function rowToReview(row: Record<string, unknown>): PackageReview {
     inputTokens: num(row.input_tokens),
     outputTokens: num(row.output_tokens),
     costUsd: num(row.cost_usd),
+    bookTruncated: row.book_truncated === true,
     runAttempts: Number(row.run_attempts ?? 0),
     leaseOwner: typeof row.lease_owner === 'string' ? row.lease_owner : null,
     leaseUntil: num(row.lease_until),
@@ -216,6 +219,8 @@ export interface ReviewProgress {
   /** Added to the running totals (every reviewer call of this review). */
   usage?: { inputTokens: number | null; outputTokens: number | null; costUsd: number | null };
   reviewedAt?: number;
+  /** D-8: saved with the first answer. */
+  bookTruncated?: boolean;
 }
 
 /** Store progress under the worker's lease (the first answer, then each fix). */
@@ -237,6 +242,7 @@ export async function saveReviewProgress(
             output_tokens = CASE WHEN $9::bigint IS NULL THEN output_tokens ELSE COALESCE(output_tokens, 0) + $9::bigint END,
             cost_usd = CASE WHEN $10::numeric IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + $10::numeric END,
             reviewed_at = COALESCE($11, reviewed_at),
+            book_truncated = COALESCE($13::boolean, book_truncated),
             updated_at = $12
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING id`,
@@ -253,6 +259,7 @@ export async function saveReviewProgress(
       progress.usage?.costUsd ?? null,
       progress.reviewedAt ?? null,
       now,
+      progress.bookTruncated ?? null,
     ],
   );
   return result.rows.length > 0;

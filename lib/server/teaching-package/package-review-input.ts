@@ -155,24 +155,40 @@ export function sceneToReviewSlide(scene: AppScene): ReviewSlide {
   };
 }
 
+export interface ReviewBook {
+  sourceKind: PackageReviewInput['sourceKind'];
+  units: ReviewBookUnit[];
+  /**
+   * D-8: the reviewer did not read the whole book — a unit was cut at
+   * `REVIEW_UNIT_TEXT_MAX_CHARS`, later units were dropped at
+   * `REVIEW_BOOK_TOTAL_MAX_CHARS`, or the PDF text was cut.
+   */
+  truncated: boolean;
+}
+
 /** The reviewed attempt's book text: its retained units, else its retained PDF text. */
 export async function loadReviewBookUnits(
   queryable: Queryable,
   scope: { tenantId: string; attemptId: string },
-): Promise<{ sourceKind: PackageReviewInput['sourceKind']; units: ReviewBookUnit[] }> {
+): Promise<ReviewBook> {
   const rows = await readContentUnitsForAttempt(queryable, scope.attemptId, {
     tenantId: scope.tenantId,
   });
   if (rows.length > 0) {
     let total = 0;
+    let truncated = false;
     const units: ReviewBookUnit[] = [];
     for (const row of rows) {
       const text = clip(row.normalizedText, REVIEW_UNIT_TEXT_MAX_CHARS);
-      if (total + text.length > REVIEW_BOOK_TOTAL_MAX_CHARS) break;
+      if (total + text.length > REVIEW_BOOK_TOTAL_MAX_CHARS) {
+        truncated = true;
+        break;
+      }
+      if (row.normalizedText.length > REVIEW_UNIT_TEXT_MAX_CHARS) truncated = true;
       total += text.length;
       units.push({ id: row.unitId, title: row.title, role: row.role, text });
     }
-    return { sourceKind: 'content_units', units };
+    return { sourceKind: 'content_units', units, truncated };
   }
   const source = await queryable.query<{ text: string }>(
     `SELECT text FROM teaching_package_source_contexts WHERE attempt_id = $1 AND tenant_id = $2`,
@@ -185,9 +201,10 @@ export async function loadReviewBookUnits(
       units: [
         { id: 'book', title: null, role: null, text: clip(text, REVIEW_BOOK_TOTAL_MAX_CHARS) },
       ],
+      truncated: text.length > REVIEW_BOOK_TOTAL_MAX_CHARS,
     };
   }
-  return { sourceKind: 'content_units', units: [] };
+  return { sourceKind: 'content_units', units: [], truncated: false };
 }
 
 /** Scenes in display order. */

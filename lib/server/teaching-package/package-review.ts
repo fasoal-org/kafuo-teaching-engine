@@ -94,6 +94,8 @@ export interface ReviewCallRequest {
   slides: readonly ReviewSlide[];
   /** Re-review: only these slides are judged; the rest are neighbours. */
   focusIds?: ReadonlySet<string>;
+  /** D-8: the book was cut; the book block says so (set by the job on every call). */
+  bookTruncated?: boolean;
 }
 
 export interface ReviewCallAnswer {
@@ -180,7 +182,7 @@ export async function callPackageReviewer(
     },
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
     system: PACKAGE_REVIEW_SYSTEM,
-    stablePrompt: renderBookBlock(units),
+    stablePrompt: renderBookBlock(units, { truncated: request.bookTruncated === true }),
     prompt: renderSlidesBlock(slides, focusIds),
     output: {
       kind: 'json',
@@ -323,7 +325,11 @@ export async function runPackageReview(
     const slides = reviewSlidesOf(scenes);
 
     const callReviewer = (request: ReviewCallRequest) =>
-      (deps.callReviewer ?? callPackageReviewer)({ ...request, pool });
+      (deps.callReviewer ?? callPackageReviewer)({
+        ...request,
+        bookTruncated: book.truncated,
+        pool,
+      });
     const heartbeat = async () => {
       const kept = await renewReviewLease(pool as unknown as Queryable, claimed.id, {
         workerId,
@@ -361,13 +367,19 @@ export async function runPackageReview(
       // The paid first review: the whole package in one call.
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
       findings = toStoredFindings(answer, slides);
-      await recordUsage(call, { summary: answer.summary, findings, reviewedAt: now() });
+      await recordUsage(call, {
+        summary: answer.summary,
+        findings,
+        reviewedAt: now(),
+        bookTruncated: book.truncated,
+      });
       review = {
         ...claimed,
         summary: answer.summary,
         findings,
         provider: call.provider,
         model: call.modelString,
+        bookTruncated: book.truncated,
       };
     } else {
       // A resume: the first answer is stored; never pay for it twice.
@@ -512,6 +524,8 @@ export function packageReviewWire(review: PackageReview) {
       code: fix.code,
     })),
     counts: { findings: review.findings.length, open, fixed: review.findings.length - open },
+    /** D-8: the reviewer did not read the whole book (the report shows one warning line). */
+    bookTruncated: review.bookTruncated,
     errorCode: review.errorCode,
     createdAt: review.createdAt,
     completedAt: review.completedAt,

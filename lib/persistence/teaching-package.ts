@@ -697,6 +697,7 @@ CREATE TABLE IF NOT EXISTS teaching_package_reviews (
   input_tokens BIGINT,
   output_tokens BIGINT,
   cost_usd NUMERIC(14,8),
+  book_truncated BOOLEAN NOT NULL DEFAULT FALSE,
   run_attempts INTEGER NOT NULL DEFAULT 0,
   lease_owner TEXT,
   lease_until DOUBLE PRECISION,
@@ -706,6 +707,10 @@ CREATE TABLE IF NOT EXISTS teaching_package_reviews (
   completed_at DOUBLE PRECISION,
   updated_at DOUBLE PRECISION NOT NULL
 );
+
+-- Review fixes D-8: the reviewer read a cut book, saved with the first answer
+-- and read by the teacher report as one warning line.
+ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS book_truncated BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
 CREATE INDEX IF NOT EXISTS tpr_version_idx

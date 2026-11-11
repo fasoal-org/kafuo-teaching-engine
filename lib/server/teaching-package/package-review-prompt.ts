@@ -124,9 +124,20 @@ export function unwrapJsonAnswer(raw: string): string {
   return fenced ? fenced[1]!.trim() : trimmed;
 }
 
-/** The stable, cache-marked block: the book units, once. */
-export function renderBookBlock(units: readonly ReviewBookUnit[]): string {
+/** D-8: the one sentence the reviewer reads when it does not see the whole book. */
+export const BOOK_TRUNCATED_NOTE =
+  'NOTE: this book text was cut to fit one review, so part of the book is missing here; never report a lesson part as missing (S5) only because it is not in this text.';
+
+/**
+ * The stable, cache-marked block: the book units, once. A cut book (D-8) adds
+ * one sentence saying so; an uncut book renders exactly as before.
+ */
+export function renderBookBlock(
+  units: readonly ReviewBookUnit[],
+  options: { truncated?: boolean } = {},
+): string {
   const lines = ['BOOK TEXT (the authority):'];
+  if (options.truncated) lines.push(BOOK_TRUNCATED_NOTE);
   for (const unit of units) {
     const head = [
       `unit_id=${unit.id}`,

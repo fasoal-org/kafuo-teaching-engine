@@ -19,6 +19,7 @@ import {
   stripTags,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
+  BOOK_TRUNCATED_NOTE,
   PACKAGE_REVIEW_SCHEMA,
   PACKAGE_REVIEW_SYSTEM,
   parseReviewerAnswer,
@@ -160,6 +161,19 @@ describe('package review prompt', () => {
       'what_is_wrong',
       'fix_note',
     ]);
+  });
+
+  it('D-8: a cut book adds one sentence saying so; an uncut book renders exactly as before', () => {
+    const units = [{ id: '4489', title: null, role: null, text: 'نص' }];
+    const whole = renderBookBlock(units);
+    expect(whole).toBe('BOOK TEXT (the authority):\n<<UNIT unit_id=4489>>\nنص\n<<END UNIT>>');
+    expect(renderBookBlock(units, { truncated: false })).toBe(whole);
+    const cut = renderBookBlock(units, { truncated: true });
+    expect(cut).toBe(
+      `BOOK TEXT (the authority):\n${BOOK_TRUNCATED_NOTE}\n<<UNIT unit_id=4489>>\nنص\n<<END UNIT>>`,
+    );
+    expect(BOOK_TRUNCATED_NOTE).toMatch(/cut/);
+    expect(BOOK_TRUNCATED_NOTE.split('. ')).toHaveLength(1);
   });
 
   it('a re-review names the focus slides and keeps the neighbours as context', () => {

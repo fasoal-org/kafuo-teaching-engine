@@ -60,6 +60,7 @@ const REVIEW: PackageReview = {
   inputTokens: null,
   outputTokens: null,
   costUsd: null,
+  bookTruncated: false,
   runAttempts: 1,
   leaseOwner: 'w',
   leaseUntil: 1,

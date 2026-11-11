@@ -2635,6 +2635,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         id: review!.id,
         status: 'needs_teacher',
         summary: 'ملخص',
+        bookTruncated: false,
         counts: { findings: 1, open: 1, fixed: 0 },
         findings: [
           expect.objectContaining({
@@ -2658,6 +2659,67 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         params: Promise.resolve({ id: review!.version_id }),
       });
       expect(((await listed.json()) as { reviews: unknown[] }).reviews).toHaveLength(1);
+    });
+
+    it('D-8: a book cut to fit the review is recorded (bookTruncated) on the row, the GET and the list, and the reviewer is told', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      await pool.query(
+        `UPDATE teaching_package_source_contexts SET text = repeat('ك', 120001) WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const { runPackageReview, callPackageReviewer } =
+        await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'passed', bookTruncated: true });
+      const [request] = callReviewer.mock.calls[0] as unknown as [{ bookTruncated?: boolean }];
+      expect(request.bookTruncated).toBe(true);
+      const row = await pool.query(
+        `SELECT book_truncated FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect((row.rows[0] as { book_truncated: boolean }).book_truncated).toBe(true);
+      // The production call puts the one sentence in the book block it sends.
+      const { BOOK_TRUNCATED_NOTE } =
+        await import('@/lib/server/teaching-package/package-review-prompt');
+      const reviewerCall = await import('@/lib/server/teaching-model/reviewer-call');
+      const run = vi.spyOn(reviewerCall, 'runReviewerCall').mockResolvedValue({
+        parsed: { summary: 's', findings: [] },
+        provider: 'anthropic',
+        modelString: OPUS,
+        attemptIds: [],
+        usage: null,
+        switched: null,
+      });
+      await callPackageReviewer({
+        review: done!,
+        units: [{ id: 'book', title: null, role: null, text: 'x' }],
+        slides: [],
+        bookTruncated: true,
+        pool: txPool(),
+      });
+      expect(run.mock.calls[0]![0].stablePrompt).toContain(BOOK_TRUNCATED_NOTE);
+      run.mockRestore();
+      const { NextRequest } = await import('next/server');
+      const one = await import('@/app/api/teaching-packages/[id]/reviews/[reviewId]/route');
+      const list = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const auth = { headers: { authorization: 'Bearer review-route-key' } };
+      const base = `http://localhost/api/teaching-packages/${review!.version_id}/reviews`;
+      const ok = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(
+        ((await ok.json()) as { review: { bookTruncated: boolean } }).review.bookTruncated,
+      ).toBe(true);
+      const listed = await list.GET(new NextRequest(`${base}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id }),
+      });
+      expect(
+        ((await listed.json()) as { reviews: Array<{ bookTruncated: boolean }> }).reviews[0]!
+          .bookTruncated,
+      ).toBe(true);
     });
   });
 });
