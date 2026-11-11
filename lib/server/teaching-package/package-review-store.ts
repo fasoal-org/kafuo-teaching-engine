@@ -156,14 +156,19 @@ export interface QueuedReviewInput {
   now: number;
 }
 
-/** Inside the binding transaction: one `queued` row per attempt. */
-export async function insertQueuedReview(tx: Queryable, input: QueuedReviewInput): Promise<void> {
-  await tx.query(
+/**
+ * Inside the binding transaction: one `queued` row per attempt. Returns the
+ * STORED review id (L-5): when the attempt already has a review, its id, never
+ * the unused new one, so the event names a review that exists.
+ */
+export async function insertQueuedReview(tx: Queryable, input: QueuedReviewInput): Promise<string> {
+  const inserted = await tx.query<{ id: string }>(
     `INSERT INTO teaching_package_reviews
        (id, tenant_id, learning_item_type, learning_item_id, version_id, attempt_id, stage_id,
         subject_code, status, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $9)
-     ON CONFLICT (attempt_id) DO NOTHING`,
+     ON CONFLICT (attempt_id) DO NOTHING
+     RETURNING id`,
     [
       input.id,
       input.aggregate.tenantId,
@@ -176,6 +181,12 @@ export async function insertQueuedReview(tx: Queryable, input: QueuedReviewInput
       input.now,
     ],
   );
+  if (inserted.rows[0]) return String(inserted.rows[0].id);
+  const existing = await tx.query<{ id: string }>(
+    `SELECT id FROM teaching_package_reviews WHERE attempt_id = $1`,
+    [input.attemptId],
+  );
+  return String(existing.rows[0]!.id);
 }
 
 /**

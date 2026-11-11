@@ -2295,6 +2295,24 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect((succeeded!.version as { id: string }).id).toBe(reviews[0]!.version_id);
     });
 
+    it('L-5: queuing a review for an attempt that already has one returns the stored id, never a new one', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { insertQueuedReview } =
+        await import('@/lib/server/teaching-package/package-review-store');
+      const id = await insertQueuedReview(pool as never, {
+        id: 'tpr-never-stored',
+        aggregate: { tenantId: 'tenant-k', learningItem: { type: 'lesson', id: 'li-x' } },
+        versionId: review!.version_id,
+        attemptId,
+        stageId: review!.stage_id,
+        subjectCode: 'MATH',
+        now: 1,
+      });
+      expect(id).toBe(review!.id);
+      expect(await queuedReview(attemptId)).toHaveLength(1);
+    });
+
     it('no findings → passed, one review_completed event with counts; a second run claims nothing', async () => {
       const attemptId = await startKafuo();
       const [review] = await queuedReview(attemptId);

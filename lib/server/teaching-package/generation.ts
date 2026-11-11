@@ -439,9 +439,9 @@ async function queuePackageReview(
   review: { subjectCode: string | null },
   now: number,
 ): Promise<{ id: string; status: 'queued' }> {
-  const id = newPackageReviewId();
-  await insertQueuedReview(tx, {
-    id,
+  // L-5: the event names the review the database holds for this attempt.
+  const id = await insertQueuedReview(tx, {
+    id: newPackageReviewId(),
     aggregate: { tenantId: attempt.tenantId, learningItem: attempt.learningItem },
     versionId: version.id,
     attemptId: attempt.id,
