@@ -58,7 +58,12 @@ export const QUESTION_REVIEW_LEASE_MS = 40 * 60 * 1000;
 export const MAX_QUESTION_REVIEW_RUN_ATTEMPTS = 3;
 /** D-6: question reviews this process runs at once. */
 export const MAX_QUESTION_REVIEWS_IN_FLIGHT = 2;
-export const QUESTION_REVIEW_LIMITS = { questions: { min: 1, max: 40 }, textMax: 4_000 } as const;
+export const QUESTION_REVIEW_LIMITS = {
+  questions: { min: 1, max: 40 },
+  textMax: 4_000,
+  /** L-6: `correctAnswer`, measured as its JSON text. */
+  correctAnswerMax: 4_000,
+} as const;
 const QUESTION_CHECKS: readonly QuestionCheck[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5'];
 const NOTE_MAX = 2_000;
 
@@ -516,6 +521,19 @@ export function parseReviewedQuestions(value: unknown): ReviewedQuestion[] {
     if (!Array.isArray(choices) || choices.length > 12) {
       throw new Error(`questions[${index}].choices must be an array of at most 12 choices`);
     }
+    const correctAnswer =
+      q.correctAnswer && typeof q.correctAnswer === 'object' && !Array.isArray(q.correctAnswer)
+        ? (q.correctAnswer as Record<string, unknown>)
+        : null;
+    // L-6: bounded like the texts (contract §4.3), measured serialized.
+    if (
+      correctAnswer &&
+      JSON.stringify(correctAnswer).length > QUESTION_REVIEW_LIMITS.correctAnswerMax
+    ) {
+      throw new Error(
+        `questions[${index}].correctAnswer must serialize to at most ${QUESTION_REVIEW_LIMITS.correctAnswerMax} characters`,
+      );
+    }
     return {
       questionId: q.questionId,
       questionType: typeof q.questionType === 'string' ? clip(q.questionType, 50) : 'unknown',
@@ -532,10 +550,7 @@ export function parseReviewedQuestions(value: unknown): ReviewedQuestion[] {
           isCorrect: c.isCorrect === true,
         };
       }),
-      correctAnswer:
-        q.correctAnswer && typeof q.correctAnswer === 'object' && !Array.isArray(q.correctAnswer)
-          ? (q.correctAnswer as Record<string, unknown>)
-          : null,
+      correctAnswer,
       explanation:
         typeof q.explanation === 'string' && q.explanation.trim()
           ? clip(q.explanation, QUESTION_REVIEW_LIMITS.textMax)

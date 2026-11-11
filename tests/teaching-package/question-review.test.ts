@@ -249,6 +249,40 @@ describe('question-set review (Phase 4)', () => {
     expect(other.status).toBe(404);
   });
 
+  it('L-6: a requestId replayed on ANOTHER version is a 409, never that version’s review', async () => {
+    const first = await seed();
+    const second = await seed();
+    const queued = await queue(first, 'qr-shared');
+    expect(queued.response.status).toBe(202);
+    const replayed = await queue(second, 'qr-shared');
+    expect(replayed.response.status).toBe(409);
+    expect((replayed.json as unknown as { error: { code: string } }).error.code).toBe(
+      'IDEMPOTENCY_CONFLICT',
+    );
+    // The same version still replays its own review.
+    const again = await queue(first, 'qr-shared');
+    expect(again.response.status).toBe(202);
+    expect(again.json.questionReview.id).toBe(queued.json.questionReview.id);
+  });
+
+  it('L-6: correctAnswer is bounded (4,000 characters serialized) like the texts', async () => {
+    const seeded = await seed();
+    const route = await import('@/app/api/teaching-packages/[id]/question-reviews/route');
+    const params = { params: Promise.resolve({ id: seeded.versionId }) };
+    const big = { ...QUESTIONS[0], correctAnswer: { working: 'x'.repeat(4_000) } };
+    const refused = await route.POST(
+      post(seeded.versionId, { ...body(seeded), questions: [big] }),
+      params,
+    );
+    expect(refused.status).toBe(400);
+    const fits = { ...QUESTIONS[0], correctAnswer: { working: 'x'.repeat(3_900) } };
+    const accepted = await route.POST(
+      post(seeded.versionId, { ...body(seeded, 'qr-fits'), questions: [fits] }),
+      params,
+    );
+    expect(accepted.status).toBe(202);
+  });
+
   it('the job: the whole set in one call, the book once; verdict event with check codes and no notes', async () => {
     const seeded = await seed();
     const { json } = await queue(seeded);

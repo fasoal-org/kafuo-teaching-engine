@@ -77,7 +77,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       throw new TeachingPackageError('NOT_FOUND', `teaching package ${id} not found`);
     }
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
-    const { review } = await queueQuestionReview(pool as never, {
+    const { review, created } = await queueQuestionReview(pool as never, {
       id: newQuestionReviewId(),
       tenantId,
       learningItem: version.learningItem,
@@ -92,6 +92,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       questions: questions!,
       now: Date.now(),
     });
+    if (!created && review.versionId !== version.id) {
+      // L-6: a requestId replayed on another version is a conflict, never that
+      // version's review (its GET would answer 404).
+      throw new TeachingPackageError(
+        'IDEMPOTENCY_CONFLICT',
+        'requestId was already used for another teaching package version',
+      );
+    }
     return NextResponse.json(
       { questionReview: { id: review.id, status: review.status } },
       { status: 202 },
