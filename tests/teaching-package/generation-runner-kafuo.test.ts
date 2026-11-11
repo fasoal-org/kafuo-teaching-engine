@@ -2703,6 +2703,74 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toHaveLength(1);
     });
 
+    it('HIGH-1: when the revoke of an evicted lease fails, the evicted run still never renews nor finalizes', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      // The fix loop stalls (a long TTS, say), then tries to keep its lease.
+      let release!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const kept: boolean[] = [];
+      const fixLoop = vi.fn(
+        async (context: {
+          findings: Array<Record<string, unknown>>;
+          heartbeat: () => Promise<boolean>;
+        }) => {
+          await stalled;
+          kept.push(await context.heartbeat());
+          return { findings: context.findings, fixes: [] };
+        },
+      );
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      // The revoke and (in the evicting sweep) the listing both fail.
+      let listingDown = false;
+      const flaky = {
+        query: (text: string, params?: unknown[]) =>
+          text.includes('SET lease_owner = NULL') ||
+          (listingDown && text.includes('FROM teaching_package_reviews') && text.includes('LIMIT'))
+            ? Promise.reject(new Error('database blip'))
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const deps = {
+        pool: flaky,
+        callReviewer: answering([finding]),
+        fixLoop: fixLoop as never,
+        now: () => t,
+      };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(fixLoop).toHaveBeenCalledTimes(1));
+      const staleOwner = (await statusOf(review!.id)).lease_owner;
+      t += REVIEW_LEASE_MS + 1_000;
+      listingDown = true;
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      listingDown = false;
+      // The revoke failed: the row still names the evicted run.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect((await statusOf(review!.id)).lease_owner).toBe(staleOwner);
+      release();
+      await vi.waitFor(() => expect(kept).toEqual([false]));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Not renewed, not finalized, no event: the review is left to be resumed.
+      const row = await pool.query(
+        `SELECT status, lease_owner, lease_until FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect(row.rows[0]).toMatchObject({ status: 'running', lease_owner: staleOwner });
+      expect(Number((row.rows[0] as { lease_until: number }).lease_until)).toBeLessThan(t);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
     /** One paid reviewer attempt in the ledger (the authority the row totals read). */
     async function ledgerAttempt(
       id: string,

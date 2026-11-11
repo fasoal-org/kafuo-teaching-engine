@@ -361,7 +361,10 @@ export async function runPackageReview(
   if (!claimed) return null;
   deps.onLeaseKept?.();
 
-  const end = (outcome: ReviewOutcome) => finalize(pool, claimed, workerId, outcome, now());
+  // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
+  // its lease failed — so the run that resumes the review owns its ending.
+  const end = async (outcome: ReviewOutcome) =>
+    deps.signal?.aborted ? null : finalize(pool, claimed, workerId, outcome, now());
   const unavailable = (errorCode: string) => end({ status: 'unavailable', errorCode });
 
   try {
@@ -385,7 +388,7 @@ export async function runPackageReview(
     /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
     const recordFailedSpend = async (error: unknown) => {
       const attemptIds = (error as { attemptIds?: unknown } | null)?.attemptIds;
-      if (!Array.isArray(attemptIds) || attemptIds.length === 0) return;
+      if (deps.signal?.aborted || !Array.isArray(attemptIds) || attemptIds.length === 0) return;
       try {
         const usage = await callSpend(pool, claimed.tenantId, attemptIds as string[], null);
         if (usage) {
@@ -415,6 +418,9 @@ export async function runPackageReview(
       }
     };
     const heartbeat = async () => {
+      // HIGH-1: an evicted run never renews, even when the revoke of its lease
+      // failed, so it can never keep paying outside the in-flight cap.
+      if (deps.signal?.aborted) return false;
       const kept = await renewReviewLease(pool as unknown as Queryable, claimed.id, {
         workerId,
         now: now(),
@@ -428,6 +434,7 @@ export async function runPackageReview(
      * its provider and model are the first review's (set only by that save).
      */
     const recordUsage = async (call: ReviewCallAnswer['call'], extra: ReviewProgress) => {
+      if (deps.signal?.aborted) return; // an evicted run writes nothing
       const usage = await callSpend(
         pool,
         claimed.tenantId,
@@ -448,12 +455,14 @@ export async function runPackageReview(
     if (claimed.reviewedAt === null) {
       // HIGH-1: the reads above may have stalled past the lease (evicted, or
       // claimed elsewhere): never start the paid call under a lost lease.
-      if (deps.signal?.aborted || !(await heartbeat())) {
+      if (!(await heartbeat())) {
         log.warn(`package review ${claimed.id}: the lease moved on before the first call`);
         return null;
       }
       // The paid first review: the whole package in one call.
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
+      // An answer that arrives after the eviction is the resumed run's to get.
+      if (deps.signal?.aborted) return null;
       findings = toStoredFindings(answer, slides);
       await recordUsage(call, {
         summary: answer.summary,
@@ -492,6 +501,7 @@ export async function runPackageReview(
           return answered;
         },
         recordProgress: async (nextFindings, nextFixes) => {
+          if (deps.signal?.aborted) return; // an evicted run writes nothing
           await saveReviewProgress(
             pool as unknown as Queryable,
             claimed.id,
@@ -514,6 +524,9 @@ export async function runPackageReview(
     }
     return await end({ status: reviewStatusOf(findings), findings, fixes });
   } catch (error) {
+    // L-1: an evicted run's aborted call is not the review's failure; the
+    // eviction exists so the review is resumed.
+    if (deps.signal?.aborted) return null;
     log.warn(
       `package review ${claimed.id} ended unavailable`,
       JSON.stringify(describeErrorSafely(error)),

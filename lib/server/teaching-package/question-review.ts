@@ -337,7 +337,7 @@ export async function runQuestionReview(
   if (!claimed) return null;
   deps.onLeaseKept?.();
 
-  const finish = (outcome: Parameters<typeof finishQuestionReview>[3]) =>
+  const finishInTransaction = (outcome: Parameters<typeof finishQuestionReview>[3]) =>
     nodePostgresTransaction(pool)(async (tx: Queryable) => {
       // LOW-1: an `unavailable` review keeps no verdicts, even a stored answer.
       const terminal = outcome.status === 'unavailable' ? { ...outcome, results: [] } : outcome;
@@ -351,6 +351,10 @@ export async function runQuestionReview(
       );
       return finished;
     });
+  // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
+  // its lease failed — so the run that resumes the review owns its ending.
+  const finish = async (outcome: Parameters<typeof finishQuestionReview>[3]) =>
+    deps.signal?.aborted ? null : finishInTransaction(outcome);
 
   // M-4: once the paid answer is stored, a failure only lets the lease lapse;
   // the resume finishes from the stored answer instead of ending unavailable.
@@ -424,6 +428,8 @@ export async function runQuestionReview(
       provider: answered.call.provider,
       model: answered.call.modelString,
     };
+    // An answer that arrives after the eviction is the resumed run's to get.
+    if (deps.signal?.aborted) return null;
     // M-4: the paid answer is stored under the lease BEFORE the terminal write.
     if (
       !(await saveQuestionReviewAnswer(
@@ -440,6 +446,9 @@ export async function runQuestionReview(
     answerStored = true;
     return await finish({ status: 'completed', ...answer });
   } catch (error) {
+    // L-1: an evicted run's aborted call is not the review's failure; the
+    // eviction exists so the review is resumed.
+    if (deps.signal?.aborted) return null;
     if (answerStored && claimed.runAttempts < MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
       // The answer is kept: the lease lapses and the next sweep finishes from it.
       // Bounded: on the last allowed claim a failing finish falls through to

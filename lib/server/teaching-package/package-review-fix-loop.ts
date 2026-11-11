@@ -187,11 +187,6 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       );
       // The second guard (plan §4.6): still the draft on the reviewed Stage, and
       // the slide is what the reviewer read. Checked before every paid step.
-      if (!(await context.heartbeat())) {
-        stopped = true;
-        mark(slide.id, 'VERSION_CHANGED');
-        continue;
-      }
       const version = await readVersion(pool, review.versionId);
       const live = await readScene(pool, review.stageId, slide.id);
       if (
@@ -210,6 +205,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           code: 'VERSION_CHANGED',
         });
         await context.recordProgress(findings, fixes);
+        continue;
+      }
+      // HIGH-1: the lease, renewed AFTER those reads and right before the paid
+      // regeneration — a stall in the reads never pays under a lost lease.
+      if (!(await context.heartbeat())) {
+        stopped = true;
+        mark(slide.id, 'VERSION_CHANGED');
         continue;
       }
 

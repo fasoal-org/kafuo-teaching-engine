@@ -748,6 +748,52 @@ describe('question-set review (Phase 4)', () => {
     expect(await events()).toHaveLength(1);
   });
 
+  it('HIGH-1 / L-1: when the revoke fails, the evicted question run still neither saves nor finalizes', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { sweepQuestionReviews, QUESTION_REVIEW_LEASE_MS } =
+      await import('@/lib/server/teaching-package/question-review');
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const gates: Array<(fail: boolean) => void> = [];
+    const callReviewer = vi.fn(
+      () =>
+        new Promise<typeof answer>((resolve, reject) => {
+          gates.push((fail) => (fail ? reject(new Error('aborted')) : resolve(answer)));
+        }),
+    );
+    let listingDown = false;
+    const flaky = {
+      query: (text: string, params?: unknown[]) =>
+        text.includes('SET lease_owner = NULL') ||
+        (listingDown && text.includes('FROM teaching_question_reviews') && text.includes('LIMIT'))
+          ? Promise.reject(new Error('database blip'))
+          : pool.query(text, params),
+      connect: () => pool.connect(),
+    } as unknown as ConnectableQueryable;
+    let t = Date.now();
+    const deps = { pool: flaky, callReviewer, now: () => t };
+    expect(await sweepQuestionReviews(deps)).toEqual([id]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+    const staleOwner = (await reviewRow(id)).lease_owner;
+    t += QUESTION_REVIEW_LEASE_MS + 1_000;
+    listingDown = true;
+    expect(await sweepQuestionReviews(deps)).toEqual([]);
+    listingDown = false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await reviewRow(id)).lease_owner).toBe(staleOwner);
+    // The aborted call fails: no `unavailable` / REVIEW_FAILED ending, no event.
+    gates[0]!(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await reviewRow(id)).toMatchObject({
+      status: 'running',
+      lease_owner: staleOwner,
+      reviewed_at: null,
+    });
+    expect(await events()).toEqual([]);
+  });
+
   it('D-6: the sweep runs at most 2 question reviews at once; the next starts after one ends', async () => {
     const seeded = await seed();
     const ids: string[] = [];

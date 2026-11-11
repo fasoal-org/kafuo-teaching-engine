@@ -536,6 +536,47 @@ describe('package review fix loop (D-1)', () => {
     ]);
   });
 
+  it('HIGH-1: a stall in the guard reads that loses the lease never reaches the paid regeneration', async () => {
+    const { regenerate, regenerateAudio, callReviewer } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+    });
+    // The lease is ours until the scene read stalls past it.
+    let leaseLost = false;
+    const loop = createPackageReviewFixLoop({
+      regenerate: regenerate as never,
+      regenerateAudio: regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'tpv-1',
+        tenantId: 't-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        leaseLost = true; // a long stall: the lease lapsed and was revoked meanwhile
+        const scene = scenes.find((s) => s.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    const heartbeat = vi.fn(async () => !leaseLost);
+    const result = await loop({
+      pool: {} as never,
+      review: REVIEW,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf(scenes),
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+      heartbeat,
+      callReviewer: callReviewer as never,
+      recordProgress: vi.fn(async () => {}),
+      now: () => 1,
+    });
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(result.findings[0]).toMatchObject({ status: 'open', teacherReason: 'VERSION_CHANGED' });
+  });
+
   it('instruction and key stay within the regeneration limits', () => {
     const long = Array.from({ length: 40 }, (_, i) => ({
       ...finding(`f${i}`, 's1', 'S1'),
