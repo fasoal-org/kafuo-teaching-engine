@@ -377,6 +377,48 @@ describe('question-set review (Phase 4)', () => {
       expect((rows.rows[0] as { status: string }).status).toBe('completed');
     });
   });
+
+  it('D-6: the sweep runs at most 2 question reviews at once; the next starts after one ends', async () => {
+    const seeded = await seed();
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const { json } = await queue(seeded, `qr-cap-${index}`);
+      await pool.query(`UPDATE teaching_question_reviews SET created_at = $2 WHERE id = $1`, [
+        json.questionReview.id,
+        index + 1,
+      ]);
+      ids.push(json.questionReview.id);
+    }
+    const gateOf = new Map<string, () => void>();
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    const callReviewer = vi.fn(
+      (request: { review: { id: string } }) =>
+        new Promise<typeof answer>((resolve) => {
+          gateOf.set(request.review.id, () => resolve(answer));
+        }),
+    );
+    const status = async (id: string) =>
+      (
+        (await pool.query(`SELECT status FROM teaching_question_reviews WHERE id = $1`, [id]))
+          .rows[0] as { status: string }
+      ).status;
+    const { sweepQuestionReviews } = await import('@/lib/server/teaching-package/question-review');
+    const deps = { pool: txPool(), callReviewer };
+    expect(await sweepQuestionReviews(deps)).toEqual([ids[0], ids[1]]);
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+    expect(await sweepQuestionReviews(deps)).toEqual([]);
+    gateOf.get(ids[0]!)!();
+    await vi.waitFor(async () => expect(await status(ids[0]!)).toBe('completed'));
+    await vi.waitFor(async () => expect(await sweepQuestionReviews(deps)).toEqual([ids[2]]));
+    await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(3));
+    // One at a time: the test database is a single connection, so two finishing
+    // transactions must not interleave.
+    gateOf.get(ids[1]!)!();
+    await vi.waitFor(async () => expect(await status(ids[1]!)).toBe('completed'));
+    gateOf.get(ids[2]!)!();
+    await vi.waitFor(async () => expect(await status(ids[2]!)).toBe('completed'));
+  });
 });
 
 describe('question review prompt and answer', () => {

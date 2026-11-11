@@ -10,6 +10,8 @@
  * and asks again for the repaired questions only; the TE never edits Kafuo's
  * questions. The notes travel through the signed GET, never the webhook.
  */
+import { randomBytes } from 'node:crypto';
+
 import type { Queryable } from '@openmaic/storage/document/pg';
 import {
   nodePostgresTransaction,
@@ -50,8 +52,11 @@ import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-event
 const log = createLogger('QuestionReview');
 
 export const QUESTION_REVIEW_STAGE = 'question-review';
-export const QUESTION_REVIEW_LEASE_MS = 20 * 60 * 1000;
+/** D-7: above one worst-case reviewer call (primary + fallback, 15 min each) with margin. */
+export const QUESTION_REVIEW_LEASE_MS = 40 * 60 * 1000;
 export const MAX_QUESTION_REVIEW_RUN_ATTEMPTS = 3;
+/** D-6: question reviews this process runs at once. */
+export const MAX_QUESTION_REVIEWS_IN_FLIGHT = 2;
 export const QUESTION_REVIEW_LIMITS = { questions: { min: 1, max: 40 }, textMax: 4_000 } as const;
 const QUESTION_CHECKS: readonly QuestionCheck[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5'];
 const NOTE_MAX = 2_000;
@@ -265,6 +270,8 @@ export interface QuestionReviewDeps {
   callReviewer?: (
     request: QuestionReviewCallRequest & { pool: ConnectableQueryable },
   ) => Promise<QuestionReviewCallAnswer>;
+  /** The sweep's tracker: called after the claim. */
+  onLeaseKept?: () => void;
 }
 
 /** The event (contract §3.4): verdicts and check codes, never the notes. */
@@ -304,6 +311,7 @@ export async function runQuestionReview(
     leaseMs: QUESTION_REVIEW_LEASE_MS,
   });
   if (!claimed) return null;
+  deps.onLeaseKept?.();
 
   const finish = (outcome: Parameters<typeof finishQuestionReview>[3]) =>
     nodePostgresTransaction(pool)(async (tx: Queryable) => {
@@ -378,16 +386,31 @@ export async function runQuestionReview(
   }
 }
 
-const runningQuestionReviews = new Set<string>();
+/** The question reviews this process is running (see `sweepPackageReviews`). */
+const runningQuestionReviews = new Map<string, { token: string; leaseKeptAt: number }>();
 
-/** Start or resume every claimable question review in the background (the webhook sweep). */
+/**
+ * Start or resume claimable question reviews in the background (the webhook
+ * sweep), at most `MAX_QUESTION_REVIEWS_IN_FLIGHT` at once (D-6). A run that
+ * has held its claim for a whole lease without finishing is hung: it is
+ * evicted so the review can be resumed (L-10); every run claims under its own
+ * lease owner, so the evicted run writes nothing if it wakes up.
+ */
 export async function sweepQuestionReviews(
   deps: QuestionReviewDeps & { pool: ConnectableQueryable },
 ): Promise<string[]> {
   const now = deps.now ?? Date.now;
+  for (const [id, entry] of runningQuestionReviews) {
+    if (now() - entry.leaseKeptAt > QUESTION_REVIEW_LEASE_MS) {
+      runningQuestionReviews.delete(id);
+      log.warn(`question review ${id} did not keep its lease; evicted from this process`);
+    }
+  }
+  const free = MAX_QUESTION_REVIEWS_IN_FLIGHT - runningQuestionReviews.size;
+  if (free <= 0) return [];
   let ids: string[] = [];
   try {
-    ids = await listClaimableQuestionReviewIds(deps.pool as unknown as Queryable, now());
+    ids = await listClaimableQuestionReviewIds(deps.pool as unknown as Queryable, now(), free);
   } catch (error) {
     log.error('question review sweep failed', JSON.stringify(describeErrorSafely(error)));
     return [];
@@ -395,14 +418,22 @@ export async function sweepQuestionReviews(
   const started: string[] = [];
   for (const id of ids) {
     if (runningQuestionReviews.has(id)) continue;
-    runningQuestionReviews.add(id);
+    const token = randomBytes(4).toString('hex');
+    const entry = { token, leaseKeptAt: now() };
+    runningQuestionReviews.set(id, entry);
     started.push(id);
-    void runQuestionReview(id, deps)
+    void runQuestionReview(id, {
+      ...deps,
+      workerId: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      onLeaseKept: () => {
+        entry.leaseKeptAt = now();
+      },
+    })
       .catch((error) => {
         log.error(`question review ${id} crashed`, JSON.stringify(describeErrorSafely(error)));
       })
       .finally(() => {
-        runningQuestionReviews.delete(id);
+        if (runningQuestionReviews.get(id)?.token === token) runningQuestionReviews.delete(id);
       });
   }
   return started;

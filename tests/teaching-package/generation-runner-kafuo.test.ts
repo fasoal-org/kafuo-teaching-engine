@@ -2479,6 +2479,130 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(callReviewer).not.toHaveBeenCalled();
     });
 
+    /** A reviewer that answers only when the test opens its gate (one per call, in call order). */
+    function gatedReviewer() {
+      const gates: Array<(answer: { summary: string; findings: unknown[] }) => void> = [];
+      const gateOf = new Map<string, (answer: { summary: string; findings: unknown[] }) => void>();
+      const callReviewer = vi.fn(
+        (request: { review: { id: string } }) =>
+          new Promise((resolve) => {
+            const open = (answer: { summary: string; findings: unknown[] }) =>
+              resolve({
+                answer,
+                call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+              });
+            gates.push(open);
+            gateOf.set(request.review.id, open);
+          }),
+      );
+      return {
+        gates,
+        gateOf,
+        callReviewer: callReviewer as unknown as ReturnType<typeof answering>,
+      };
+    }
+
+    async function statusOf(id: string) {
+      const rows = await pool.query(
+        `SELECT status, lease_owner, summary FROM teaching_package_reviews WHERE id = $1`,
+        [id],
+      );
+      return rows.rows[0] as { status: string; lease_owner: string | null; summary: string | null };
+    }
+
+    it('D-6: the sweep runs at most 2 reviews at once; the next one starts only after one ends', async () => {
+      const ids: string[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const [queued] = await queuedReview(await startKafuo());
+        // A fixed creation order: the sweep takes the oldest first.
+        await pool.query(`UPDATE teaching_package_reviews SET created_at = $2 WHERE id = $1`, [
+          queued!.id,
+          index + 1,
+        ]);
+        ids.push(queued!.id);
+      }
+      const { sweepPackageReviews } = await import('@/lib/server/teaching-package/package-review');
+      const { gateOf, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined };
+      expect(await sweepPackageReviews(deps)).toEqual([ids[0], ids[1]]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      // Both slots are taken: nothing else is even listed.
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      gateOf.get(ids[0]!)!({ summary: 'لا توجد أخطاء.', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[0]!)).status).toBe('passed'));
+      await vi.waitFor(async () => expect(await sweepPackageReviews(deps)).toEqual([ids[2]]));
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(3));
+      // One at a time: the test database is a single connection, so two finishing
+      // transactions must not interleave.
+      gateOf.get(ids[1]!)!({ summary: 's', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[1]!)).status).toBe('passed'));
+      gateOf.get(ids[2]!)!({ summary: 's', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[2]!)).status).toBe('passed'));
+    });
+
+    it('L-10: a run that stops keeping its lease is evicted and resumed; the stale run writes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { gates, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      const firstOwner = (await statusOf(review!.id)).lease_owner;
+      // Inside the lease: the run is alive, nothing is started twice.
+      t += REVIEW_LEASE_MS - 1_000;
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      // A whole lease without a renewal: hung → evicted → resumed under a new owner.
+      t += 2_000;
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      const secondOwner = (await statusOf(review!.id)).lease_owner;
+      expect(secondOwner).not.toBeNull();
+      expect(secondOwner).not.toBe(firstOwner);
+      // The stale run wakes up with an answer: every write is refused by the lease guard.
+      gates[0]!({
+        summary: 'قديم',
+        findings: [
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: secondOwner,
+        summary: null,
+      });
+      gates[1]!({ summary: 'جديد', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).status).toBe('passed'));
+      expect((await statusOf(review!.id)).summary).toBe('جديد');
+      expect(await events('teaching_package.review_completed')).toHaveLength(1);
+    });
+
+    it('a review claimed more than 3 times ends unavailable REVIEW_ATTEMPTS_EXHAUSTED without a call', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await pool.query(
+        `UPDATE teaching_package_reviews
+            SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 3
+          WHERE id = $1`,
+        [review!.id],
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+      expect(callReviewer).not.toHaveBeenCalled();
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({ errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+    });
+
     it('the signed GET routes return the review text to the Backend, scoped to the tenant', async () => {
       vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
       const attemptId = await startKafuo();

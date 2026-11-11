@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AppScene } from '@/lib/types/stage';
+import { REVIEWER_CALL_TIMEOUT_MS } from '@/lib/server/teaching-model/reviewer-policy';
 import {
+  MAX_PACKAGE_REVIEWS_IN_FLIGHT,
+  REVIEW_LEASE_MS,
   reviewStatusOf,
   teacherOnlyReason,
   toStoredFindings,
 } from '@/lib/server/teaching-package/package-review';
+import {
+  MAX_QUESTION_REVIEWS_IN_FLIGHT,
+  QUESTION_REVIEW_LEASE_MS,
+} from '@/lib/server/teaching-package/question-review';
 import {
   reviewSlidesOf,
   sceneToReviewSlide,
@@ -313,5 +320,20 @@ describe('findings and status', () => {
     expect(reviewStatusOf([stored({ status: 'fixed' }), stored({ id: 'f2' })])).toBe(
       'needs_teacher',
     );
+  });
+});
+
+describe('leases and in-flight caps (D-6, D-7)', () => {
+  it('each lease outlasts one worst-case reviewer call (primary + fallback) with margin', () => {
+    const worstCall = 2 * REVIEWER_CALL_TIMEOUT_MS;
+    expect(REVIEW_LEASE_MS).toBeGreaterThan(worstCall);
+    expect(QUESTION_REVIEW_LEASE_MS).toBeGreaterThan(worstCall);
+    expect(REVIEW_LEASE_MS).toBe(40 * 60 * 1000);
+    expect(QUESTION_REVIEW_LEASE_MS).toBe(40 * 60 * 1000);
+  });
+
+  it('at most 2 package reviews and 2 question reviews run at once per process', () => {
+    expect(MAX_PACKAGE_REVIEWS_IN_FLIGHT).toBe(2);
+    expect(MAX_QUESTION_REVIEWS_IN_FLIGHT).toBe(2);
   });
 });

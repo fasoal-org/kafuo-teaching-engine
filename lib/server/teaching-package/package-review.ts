@@ -16,6 +16,8 @@
  * a review that will not finish (`unavailable` + `errorCode`). A partial
  * review is never reported as passed.
  */
+import { randomBytes } from 'node:crypto';
+
 import type { Queryable } from '@openmaic/storage/document/pg';
 import {
   nodePostgresTransaction,
@@ -72,10 +74,17 @@ import type { AppScene } from '@/lib/types/stage';
 
 const log = createLogger('PackageReview');
 
-/** One reviewer call is bounded at 15 min; the lease covers it with margin and is renewed per step. */
-export const REVIEW_LEASE_MS = 20 * 60 * 1000;
+/**
+ * D-7: one reviewer call is bounded at 15 min per attempt, so a primary plus
+ * its fallback can take 30 min. The lease covers that whole call with margin
+ * (renewed before every further step), so a second worker never claims a
+ * review whose call is still running.
+ */
+export const REVIEW_LEASE_MS = 40 * 60 * 1000;
 /** A review claimed this many times without finishing ends `unavailable`. */
 export const MAX_REVIEW_RUN_ATTEMPTS = 3;
+/** D-6: package reviews this process runs at once (provider limits, live generation). */
+export const MAX_PACKAGE_REVIEWS_IN_FLIGHT = 2;
 /** Ledger stage of the package reviewer's calls (the consumption report's `feature`). */
 export const PACKAGE_REVIEW_STAGE = 'package-review';
 
@@ -125,6 +134,8 @@ export interface PackageReviewDeps {
   /** Phase 3: regenerate and re-review. Absent → every finding goes to the teacher. */
   fixLoop?: FixLoop;
   loadScenes?: (pool: ConnectableQueryable, stageId: string) => Promise<AppScene[] | null>;
+  /** The sweep's tracker: called after the claim and after every renewed lease. */
+  onLeaseKept?: () => void;
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -288,6 +299,7 @@ export async function runPackageReview(
     leaseMs: REVIEW_LEASE_MS,
   });
   if (!claimed) return null;
+  deps.onLeaseKept?.();
 
   const end = (outcome: ReviewOutcome) => finalize(pool, claimed, workerId, outcome, now());
   const unavailable = (errorCode: string) => end({ status: 'unavailable', errorCode });
@@ -312,12 +324,15 @@ export async function runPackageReview(
 
     const callReviewer = (request: ReviewCallRequest) =>
       (deps.callReviewer ?? callPackageReviewer)({ ...request, pool });
-    const heartbeat = () =>
-      renewReviewLease(pool as unknown as Queryable, claimed.id, {
+    const heartbeat = async () => {
+      const kept = await renewReviewLease(pool as unknown as Queryable, claimed.id, {
         workerId,
         now: now(),
         leaseMs: REVIEW_LEASE_MS,
       });
+      if (kept) deps.onLeaseKept?.();
+      return kept;
+    };
     const recordUsage = async (
       call: ReviewCallAnswer['call'],
       extra: Parameters<typeof saveReviewProgress>[3],
@@ -416,19 +431,38 @@ export async function runPackageReview(
 
 export { teacherOnlyReason };
 
-const runningReviews = new Set<string>();
+/**
+ * The reviews this process is running. `leaseKeptAt` moves on every claim and
+ * renewed lease; `token` names the run, so a run that settles late never
+ * removes the entry of the run that replaced it.
+ */
+const runningReviews = new Map<string, { token: string; leaseKeptAt: number }>();
 
 /**
- * Start (or resume) every claimable review in the background. Called by the
- * boot + interval webhook sweep; never awaits a review, never throws.
+ * Start (or resume) claimable reviews in the background, at most
+ * `MAX_PACKAGE_REVIEWS_IN_FLIGHT` at once (D-6). Called by the boot + interval
+ * webhook sweep; never awaits a review, never throws.
+ *
+ * A run that has not kept its lease for a whole lease period is hung (its row
+ * is claimable again): it is evicted, so this process may resume the review
+ * (L-10). Every run claims under its own lease owner, so an evicted run that
+ * wakes up later writes nothing.
  */
 export async function sweepPackageReviews(
   deps: PackageReviewDeps & { pool: ConnectableQueryable },
 ): Promise<string[]> {
   const now = deps.now ?? Date.now;
+  for (const [id, entry] of runningReviews) {
+    if (now() - entry.leaseKeptAt > REVIEW_LEASE_MS) {
+      runningReviews.delete(id);
+      log.warn(`package review ${id} did not keep its lease; evicted from this process`);
+    }
+  }
+  const free = MAX_PACKAGE_REVIEWS_IN_FLIGHT - runningReviews.size;
+  if (free <= 0) return [];
   let ids: string[] = [];
   try {
-    ids = await listClaimableReviewIds(deps.pool as unknown as Queryable, now());
+    ids = await listClaimableReviewIds(deps.pool as unknown as Queryable, now(), free);
   } catch (error) {
     log.error('package review sweep failed', JSON.stringify(describeErrorSafely(error)));
     return [];
@@ -436,14 +470,23 @@ export async function sweepPackageReviews(
   const started: string[] = [];
   for (const id of ids) {
     if (runningReviews.has(id)) continue;
-    runningReviews.add(id);
+    const token = randomBytes(4).toString('hex');
+    const entry = { token, leaseKeptAt: now() };
+    runningReviews.set(id, entry);
     started.push(id);
-    void runPackageReview(id, { ...defaultReviewDeps(), ...deps })
+    void runPackageReview(id, {
+      ...defaultReviewDeps(),
+      ...deps,
+      workerId: `${deps.workerId ?? currentWorkerId()}#${token}`,
+      onLeaseKept: () => {
+        entry.leaseKeptAt = now();
+      },
+    })
       .catch((error) => {
         log.error(`package review ${id} crashed`, JSON.stringify(describeErrorSafely(error)));
       })
       .finally(() => {
-        runningReviews.delete(id);
+        if (runningReviews.get(id)?.token === token) runningReviews.delete(id);
       });
   }
   return started;
