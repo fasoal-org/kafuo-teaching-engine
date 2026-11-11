@@ -33,6 +33,7 @@ import {
 } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { readVersionById } from '@/lib/persistence/teaching-package';
+import { sumAttemptSpend } from '@/lib/persistence/teaching-model-attempts';
 import {
   runReviewerCall,
   type ReviewerCallResult,
@@ -65,6 +66,7 @@ import {
   saveReviewProgress,
   type PackageReview,
   type ReviewOutcome,
+  type ReviewProgress,
   type StoredFinding,
   type StoredFix,
 } from '@/lib/server/teaching-package/package-review-store';
@@ -100,7 +102,13 @@ export interface ReviewCallRequest {
 
 export interface ReviewCallAnswer {
   answer: ReviewerAnswer;
-  call: Pick<ReviewerCallResult, 'provider' | 'modelString' | 'usage'>;
+  /**
+   * `usage` is the served attempt's; `attemptIds` names every paid attempt of
+   * the call (L-4: the row totals sum them from the ledger).
+   */
+  call: Pick<ReviewerCallResult, 'provider' | 'modelString' | 'usage'> & {
+    attemptIds?: readonly string[];
+  };
 }
 
 /** The fix loop's view of one claimed review (Phase 3 fills it). */
@@ -192,8 +200,51 @@ export async function callPackageReviewer(
   });
   return {
     answer: call.parsed as ReviewerAnswer,
-    call: { provider: call.provider, modelString: call.modelString, usage: call.usage },
+    call: {
+      provider: call.provider,
+      modelString: call.modelString,
+      usage: call.usage,
+      attemptIds: call.attemptIds,
+    },
   };
+}
+
+type RowUsage = NonNullable<ReviewProgress['usage']>;
+
+function servedUsage(usage: ReviewCallAnswer['call']['usage']): RowUsage {
+  return {
+    inputTokens: usage?.classes.inputTokensTotal ?? null,
+    outputTokens: usage?.classes.outputTokensTotal ?? null,
+    costUsd: usage?.cost.costUsd ?? null,
+  };
+}
+
+/**
+ * L-4: what one reviewer call cost, every paid attempt included (a truncated
+ * Opus answer before the Sol fallback, say), summed from the ledger. Falls back
+ * to the served attempt's usage when the ledger has none of them; accounting
+ * never fails a review.
+ */
+async function callSpend(
+  pool: ConnectableQueryable,
+  attemptIds: readonly string[] | undefined,
+  served: RowUsage | null,
+): Promise<RowUsage | null> {
+  if (attemptIds && attemptIds.length > 0) {
+    try {
+      const spend = await sumAttemptSpend(pool as unknown as Queryable, attemptIds);
+      if (spend.rows > 0) {
+        return {
+          inputTokens: spend.inputTokens,
+          outputTokens: spend.outputTokens,
+          costUsd: spend.costUsd,
+        };
+      }
+    } catch (error) {
+      log.warn('reviewer spend read failed', JSON.stringify(describeErrorSafely(error)));
+    }
+  }
+  return served;
 }
 
 /** The answer as stored findings, each anchored to its slide's title and order. */
@@ -324,12 +375,37 @@ export async function runPackageReview(
     if (!scenes) return await unavailable('STAGE_NOT_LIVE');
     const slides = reviewSlidesOf(scenes);
 
-    const callReviewer = (request: ReviewCallRequest) =>
-      (deps.callReviewer ?? callPackageReviewer)({
-        ...request,
-        bookTruncated: book.truncated,
-        pool,
-      });
+    /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
+    const recordFailedSpend = async (error: unknown) => {
+      const attemptIds = (error as { attemptIds?: unknown } | null)?.attemptIds;
+      if (!Array.isArray(attemptIds) || attemptIds.length === 0) return;
+      try {
+        const usage = await callSpend(pool, attemptIds as string[], null);
+        if (usage) {
+          await saveReviewProgress(
+            pool as unknown as Queryable,
+            claimed.id,
+            workerId,
+            { usage },
+            now(),
+          );
+        }
+      } catch (spendError) {
+        log.warn('reviewer spend write failed', JSON.stringify(describeErrorSafely(spendError)));
+      }
+    };
+    const callReviewer = async (request: ReviewCallRequest) => {
+      try {
+        return await (deps.callReviewer ?? callPackageReviewer)({
+          ...request,
+          bookTruncated: book.truncated,
+          pool,
+        });
+      } catch (error) {
+        await recordFailedSpend(error);
+        throw error;
+      }
+    };
     const heartbeat = async () => {
       const kept = await renewReviewLease(pool as unknown as Queryable, claimed.id, {
         workerId,
@@ -339,24 +415,17 @@ export async function runPackageReview(
       if (kept) deps.onLeaseKept?.();
       return kept;
     };
-    const recordUsage = async (
-      call: ReviewCallAnswer['call'],
-      extra: Parameters<typeof saveReviewProgress>[3],
-    ) => {
+    /**
+     * L-4: the row's tokens and cost add up every paid attempt of every call;
+     * its provider and model are the first review's (set only by that save).
+     */
+    const recordUsage = async (call: ReviewCallAnswer['call'], extra: ReviewProgress) => {
+      const usage = await callSpend(pool, call.attemptIds, servedUsage(call.usage));
       await saveReviewProgress(
         pool as unknown as Queryable,
         claimed.id,
         workerId,
-        {
-          ...extra,
-          provider: call.provider,
-          model: call.modelString,
-          usage: {
-            inputTokens: call.usage?.classes.inputTokensTotal ?? null,
-            outputTokens: call.usage?.classes.outputTokensTotal ?? null,
-            costUsd: call.usage?.cost.costUsd ?? null,
-          },
-        },
+        { ...extra, ...(usage ? { usage } : {}) },
         now(),
       );
     };
@@ -370,6 +439,8 @@ export async function runPackageReview(
       await recordUsage(call, {
         summary: answer.summary,
         findings,
+        provider: call.provider,
+        model: call.modelString,
         reviewedAt: now(),
         bookTruncated: book.truncated,
       });

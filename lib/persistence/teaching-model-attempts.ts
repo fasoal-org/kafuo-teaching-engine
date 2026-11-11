@@ -852,6 +852,46 @@ export async function readAttempt(
   return (result.rows[0] as unknown as TeachingModelAttemptRow | undefined) ?? null;
 }
 
+export interface AttemptSpend {
+  /** How many of the asked attempts the ledger holds. */
+  rows: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+}
+
+/**
+ * The summed tokens and cost of some attempts (by primary key), served or not:
+ * a failed but paid attempt counts too. Used by the AI reviewer's own row
+ * totals; the ledger stays the authority.
+ */
+export async function sumAttemptSpend(
+  queryable: Queryable,
+  attemptIds: readonly string[],
+): Promise<AttemptSpend> {
+  if (attemptIds.length === 0) {
+    return { rows: 0, inputTokens: null, outputTokens: null, costUsd: null };
+  }
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT count(*)::int AS attempt_count,
+            sum(input_tokens_total)::bigint AS input_tokens,
+            sum(output_tokens_total)::bigint AS output_tokens,
+            sum(cost_usd)::numeric AS cost_usd
+       FROM teaching_model_attempts
+      WHERE id = ANY($1::text[])`,
+    [[...attemptIds]],
+  );
+  const row = result.rows[0] ?? {};
+  const num = (value: unknown) =>
+    value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+  return {
+    rows: Number(row.attempt_count ?? 0),
+    inputTokens: num(row.input_tokens),
+    outputTokens: num(row.output_tokens),
+    costUsd: num(row.cost_usd),
+  };
+}
+
 export interface IncompleteAttemptSummary {
   id: string;
   accountingStatus: AccountingStatus;

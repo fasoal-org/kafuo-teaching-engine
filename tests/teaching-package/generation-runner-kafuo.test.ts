@@ -2586,6 +2586,127 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(await events('teaching_package.review_completed')).toHaveLength(1);
     });
 
+    /** One paid reviewer attempt in the ledger (the authority the row totals read). */
+    async function ledgerAttempt(
+      id: string,
+      modelString: string,
+      spend: { input: number; output: number; cost: number },
+    ) {
+      await pool.query(
+        `INSERT INTO teaching_model_attempts
+           (id, tenant_id, capability, subject_code, policy_version, stage, provider_id, model_id,
+            model_string, role, attempt_index, accounting_status, origin, generation_attempt_id,
+            worker_id, created_at, started_at, input_tokens_total, output_tokens_total, cost_usd)
+         VALUES ($1, 'tenant-k', 'package_review', 'MATH', 'reviewer-2026-11', 'package-review',
+                 $2, $3, $4, 'primary', 1, 'complete', 'openmaic_runtime', 'ga-l4', 'w', 1, 1,
+                 $5, $6, $7)`,
+        [
+          id,
+          modelString.split(':')[0],
+          modelString.split(':')[1],
+          modelString,
+          spend.input,
+          spend.output,
+          spend.cost,
+        ],
+      );
+    }
+
+    it('L-4: the row sums every paid attempt (a failed one too); provider and model stay the first review’s', async () => {
+      const SOL = 'openai:gpt-6-sol';
+      const [review] = await queuedReview(await startKafuo());
+      // First review: Opus answered truncated (paid), then Sol served.
+      await ledgerAttempt('tma-l4-opus', OPUS, { input: 1000, output: 500, cost: 0.5 });
+      await ledgerAttempt('tma-l4-sol', SOL, { input: 800, output: 300, cost: 0.2 });
+      // The re-review was served by Opus.
+      await ledgerAttempt('tma-l4-rereview', OPUS, { input: 100, output: 50, cost: 0.05 });
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S3',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      const callReviewer = vi
+        .fn()
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [finding] },
+          call: {
+            provider: 'openai',
+            modelString: SOL,
+            usage: null,
+            attemptIds: ['tma-l4-opus', 'tma-l4-sol'],
+          },
+        })
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-l4-rereview'],
+          },
+        });
+      const fixLoop = vi.fn(
+        async (context: {
+          findings: Array<Record<string, unknown>>;
+          callReviewer: (request: unknown) => Promise<unknown>;
+          review: unknown;
+          units: unknown;
+          slides: unknown;
+        }) => {
+          await context.callReviewer({
+            review: context.review,
+            units: context.units,
+            slides: context.slides,
+            focusIds: new Set(['scene-f1']),
+          });
+          return {
+            findings: context.findings.map((f) => ({ ...f, status: 'fixed', teacherReason: null })),
+            fixes: [],
+          };
+        },
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: callReviewer as never,
+        fixLoop: fixLoop as never,
+      });
+      expect(done).toMatchObject({ status: 'fixed', provider: 'openai', model: SOL });
+      expect(done!.inputTokens).toBe(1900);
+      expect(done!.outputTokens).toBe(850);
+      expect(done!.costUsd).toBeCloseTo(0.75, 8);
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({ provider: 'openai', model: SOL });
+    });
+
+    it('L-4: a reviewer call that failed after paying still adds its spend to the unavailable row', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-l4-down-1', OPUS, { input: 400, output: 0, cost: 0.1 });
+      await ledgerAttempt('tma-l4-down-2', 'openai:gpt-6-sol', {
+        input: 300,
+        output: 0,
+        cost: 0.05,
+      });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => {
+          throw new TeachingModelUnavailableError('both failed', {
+            attemptIds: ['tma-l4-down-1', 'tma-l4-down-2'],
+            outcomes: [],
+            retryable: true,
+          });
+        }),
+      });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEWER_UNAVAILABLE' });
+      expect(done!.inputTokens).toBe(700);
+      expect(done!.costUsd).toBeCloseTo(0.15, 8);
+    });
+
     it('a review claimed more than 3 times ends unavailable REVIEW_ATTEMPTS_EXHAUSTED without a call', async () => {
       const [review] = await queuedReview(await startKafuo());
       await pool.query(
