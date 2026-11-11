@@ -493,6 +493,133 @@ describe('slide regeneration routes', () => {
     expect(await rows()).toHaveLength(2);
   });
 
+  it('LOW-2: the evicted run’s T2 on the real clock after its lease ran out (no reclaim yet) fails REGENERATION_LEASE_LOST; the resume fixes the slide under K-r with one model call', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const {
+      createPackageReviewFixLoop,
+      fixIdempotencyKey,
+      fixInstruction,
+      fixRetryIdempotencyKey,
+      PACKAGE_REVIEWER_ACTOR,
+    } = await import('@/lib/server/teaching-package/package-review-fix-loop');
+    const { reviewSlidesOf } = await import('@/lib/server/teaching-package/package-review-input');
+    const findings = () => [
+      {
+        id: 'f1',
+        targetId: 'scene-1',
+        targetTitle: '',
+        targetOrder: 1,
+        check: 'S1' as const,
+        severity: 'high' as const,
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'خطأ',
+        fixNote: 'صحح الشريحة',
+        status: 'open' as const,
+        teacherReason: null,
+      },
+    ];
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: PACKAGE_REVIEWER_ACTOR,
+    };
+    const K = fixIdempotencyKey('tpr-late-t2', 'scene-1');
+    const Kr = fixRetryIdempotencyKey('tpr-late-t2', 'scene-1');
+    const before = (await sceneState('scene-1'))!;
+
+    // The evicted run: T1 ten minutes ago with a 60 s lease; its model call
+    // returns now, and its T2 runs on the real clock — before anything
+    // reclaimed the row.
+    let clock = Date.now() - 10 * 60 * 1000;
+    mocks.regenerate.mockImplementationOnce(async (input: RegenerateOneSceneInput) => {
+      clock = Date.now();
+      return { ok: true, scene: generatedFrom(input.scene, 'stale') };
+    });
+    await expect(
+      regenerateSlideScene(
+        grant,
+        'scene-1',
+        {
+          instruction: fixInstruction(findings()),
+          reason: 'مراجعة الذكاء الاصطناعي tpr-late-t2: S1',
+          idempotencyKey: K,
+        },
+        {
+          pool: pool as never,
+          actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null },
+          now: () => clock,
+          leaseSeconds: 60,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'REGENERATION_LEASE_LOST' });
+    expect((await rows()).map((row) => [row.status, row.error_code])).toEqual([
+      ['failed', 'REGENERATION_LEASE_LOST'],
+    ]);
+    expect((await sceneState('scene-1'))!.rev).toBe(before.rev);
+
+    // The resumed review: the real fix loop over the real service.
+    const modelRuns = mocks.regenerate.mock.calls.length;
+    const live = (await sceneState('scene-1'))!;
+    const result = await createPackageReviewFixLoop({
+      regenerateAudio: vi.fn(async (_grant: unknown, sceneId: string) => ({
+        sceneId,
+        scene: (await sceneState(sceneId))!.scene,
+        rev: 0,
+        generated: 1,
+        missing: 0,
+      })) as never,
+    })({
+      pool: pool as never,
+      review: {
+        id: 'tpr-late-t2',
+        tenantId: 'tenant-test',
+        learningItem: { type: 'lesson', id: `li-${STAGE}` },
+        versionId: `tpv-${STAGE}`,
+        attemptId: 'tpa-x',
+        stageId: STAGE,
+        subjectCode: 'MATH',
+        status: 'running',
+        provider: 'anthropic',
+        model: 'anthropic:claude-opus-5-5',
+        summary: 's',
+        findings: [],
+        fixes: [],
+        errorCode: null,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: null,
+        bookTruncated: false,
+        runAttempts: 2,
+        leaseOwner: 'w',
+        leaseUntil: 1,
+        reviewedAt: 1,
+        createdAt: 1,
+        startedAt: 1,
+        completedAt: null,
+      } as never,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf([live.scene]),
+      scenes: [live.scene],
+      findings: findings(),
+      heartbeat: async () => true,
+      callReviewer: vi.fn(async () => ({
+        answer: { summary: 's', findings: [] },
+        call: { provider: 'anthropic', modelString: 'anthropic:claude-opus-5-5', usage: null },
+      })) as never,
+      recordProgress: vi.fn(async () => {}),
+      now: Date.now,
+    });
+    expect(result.findings[0]).toMatchObject({ status: 'fixed', teacherReason: null });
+    expect(mocks.regenerate.mock.calls.length).toBe(modelRuns + 1);
+    expect((await rows()).map((row) => [row.idempotency_key, row.status, row.error_code])).toEqual([
+      [K, 'failed', 'REGENERATION_LEASE_LOST'],
+      [Kr, 'succeeded', null],
+    ]);
+    expect((await sceneState('scene-1'))!.rev).toBe(before.rev + 1);
+  });
+
   it('LOW-1 / MEDIUM-1: a mid-call abort is stored as ABORTED and replays as ABORTED; the derived key regenerates once', async () => {
     const { regenerateSlideScene } =
       await import('@/lib/server/teaching-package/scene-regeneration');
