@@ -33,7 +33,7 @@ import {
 } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { readVersionById } from '@/lib/persistence/teaching-package';
-import { sumAttemptSpend } from '@/lib/persistence/teaching-model-attempts';
+import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
 import {
   runReviewerCall,
   type ReviewerCallResult,
@@ -363,8 +363,35 @@ export async function runPackageReview(
 
   // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
   // its lease failed — so the run that resumes the review owns its ending.
-  const end = async (outcome: ReviewOutcome) =>
-    deps.signal?.aborted ? null : finalize(pool, claimed, workerId, outcome, now());
+  const end = async (outcome: ReviewOutcome) => {
+    if (deps.signal?.aborted) return null;
+    const usage = await reviewSpend();
+    if (deps.signal?.aborted) return null;
+    return finalize(pool, claimed, workerId, usage ? { ...outcome, usage } : outcome, now());
+  };
+  /**
+   * L-B: at the end, the row's totals are the ledger's for this review id —
+   * every paid attempt of every run, an evicted run's included. No ledger row
+   * (or a failed read) keeps the running totals; accounting never fails a review.
+   */
+  const reviewSpend = async (): Promise<ReviewOutcome['usage'] | null> => {
+    try {
+      const spend = await sumReviewSpend(pool as unknown as Queryable, {
+        tenantId: claimed.tenantId,
+        generationAttemptId: claimed.attemptId,
+        reviewId: claimed.id,
+      });
+      if (spend.rows === 0) return null;
+      return {
+        inputTokens: spend.inputTokens,
+        outputTokens: spend.outputTokens,
+        costUsd: spend.costUsd,
+      };
+    } catch (error) {
+      log.warn('reviewer spend read failed', JSON.stringify(describeErrorSafely(error)));
+      return null;
+    }
+  };
   const unavailable = (errorCode: string) => end({ status: 'unavailable', errorCode });
 
   try {

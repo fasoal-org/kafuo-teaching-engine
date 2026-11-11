@@ -883,15 +883,40 @@ export async function sumAttemptSpend(
       WHERE id = ANY($1::text[]) AND tenant_id = $2`,
     [[...attemptIds], scope.tenantId],
   );
-  const row = result.rows[0] ?? {};
+  return spendOf(result.rows[0]);
+}
+
+function spendOf(row: Record<string, unknown> | undefined): AttemptSpend {
   const num = (value: unknown) =>
     value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
   return {
-    rows: Number(row.attempt_count ?? 0),
-    inputTokens: num(row.input_tokens),
-    outputTokens: num(row.output_tokens),
-    costUsd: num(row.cost_usd),
+    rows: Number(row?.attempt_count ?? 0),
+    inputTokens: num(row?.input_tokens),
+    outputTokens: num(row?.output_tokens),
+    costUsd: num(row?.cost_usd),
   };
+}
+
+/**
+ * Every paid attempt of ONE AI review (its `review_id`), whichever run made
+ * it — an evicted run's calls included (review fix L-B). Narrowed by the
+ * review's generation attempt, so it reads through `tma_generation_attempt_idx`,
+ * and scoped to the tenant.
+ */
+export async function sumReviewSpend(
+  queryable: Queryable,
+  scope: { tenantId: string; generationAttemptId: string; reviewId: string },
+): Promise<AttemptSpend> {
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT count(*)::int AS attempt_count,
+            sum(input_tokens_total)::bigint AS input_tokens,
+            sum(output_tokens_total)::bigint AS output_tokens,
+            sum(cost_usd)::numeric AS cost_usd
+       FROM teaching_model_attempts
+      WHERE generation_attempt_id = $1 AND tenant_id = $2 AND review_id = $3`,
+    [scope.generationAttemptId, scope.tenantId, scope.reviewId],
+  );
+  return spendOf(result.rows[0]);
 }
 
 export interface IncompleteAttemptSummary {

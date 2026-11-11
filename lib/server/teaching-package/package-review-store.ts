@@ -308,6 +308,11 @@ export interface ReviewOutcome {
   summary?: string | null;
   findings?: StoredFinding[];
   fixes?: StoredFix[];
+  /**
+   * L-B: the review's totals from the ledger (every paid attempt of every run),
+   * SET as they are; absent → the running totals stay.
+   */
+  usage?: { inputTokens: number | null; outputTokens: number | null; costUsd: number | null };
 }
 
 /**
@@ -327,6 +332,9 @@ export async function finishReview(
             summary = COALESCE($5, summary),
             findings = COALESCE($6::jsonb, findings),
             fixes = COALESCE($7::jsonb, fixes),
+            input_tokens = CASE WHEN $9::boolean THEN $10::bigint ELSE input_tokens END,
+            output_tokens = CASE WHEN $9::boolean THEN $11::bigint ELSE output_tokens END,
+            cost_usd = CASE WHEN $9::boolean THEN $12::numeric ELSE cost_usd END,
             lease_owner = NULL, lease_until = NULL,
             completed_at = $8, updated_at = $8
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
@@ -340,6 +348,10 @@ export async function finishReview(
       outcome.findings ? JSON.stringify(outcome.findings) : null,
       outcome.fixes ? JSON.stringify(outcome.fixes) : null,
       now,
+      outcome.usage !== undefined,
+      outcome.usage?.inputTokens ?? null,
+      outcome.usage?.outputTokens ?? null,
+      outcome.usage?.costUsd ?? null,
     ],
   );
   const row = result.rows[0];

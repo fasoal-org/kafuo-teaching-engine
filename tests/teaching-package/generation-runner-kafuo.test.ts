@@ -2932,15 +2932,17 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       modelString: string,
       spend: { input: number; output: number; cost: number },
       tenantId = 'tenant-k',
+      link: { reviewId?: string; generationAttemptId?: string } = {},
     ) {
       await pool.query(
         `INSERT INTO teaching_model_attempts
            (id, tenant_id, capability, subject_code, policy_version, stage, provider_id, model_id,
             model_string, role, attempt_index, accounting_status, origin, generation_attempt_id,
-            worker_id, created_at, started_at, input_tokens_total, output_tokens_total, cost_usd)
+            worker_id, created_at, started_at, input_tokens_total, output_tokens_total, cost_usd,
+            review_id)
          VALUES ($1, $8, 'package_review', 'MATH', 'reviewer-2026-11', 'package-review',
-                 $2, $3, $4, 'primary', 1, 'complete', 'openmaic_runtime', 'ga-l4', 'w', 1, 1,
-                 $5, $6, $7)`,
+                 $2, $3, $4, 'primary', 1, 'complete', 'openmaic_runtime', $9, 'w', 1, 1,
+                 $5, $6, $7, $10)`,
         [
           id,
           modelString.split(':')[0],
@@ -2950,9 +2952,68 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           spend.output,
           spend.cost,
           tenantId,
+          link.generationAttemptId ?? 'ga-l4',
+          link.reviewId ?? null,
         ],
       );
     }
+
+    it('L-B: at the end the row totals are the ledger’s for the review id — an evicted run’s paid attempt included', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
+      // An evicted run paid for a call it never recorded on the row …
+      await ledgerAttempt(
+        'tma-lb-evicted',
+        OPUS,
+        { input: 500, output: 100, cost: 0.3 },
+        'tenant-k',
+        link,
+      );
+      // … the resumed run's own call …
+      await ledgerAttempt(
+        'tma-lb-served',
+        OPUS,
+        { input: 200, output: 50, cost: 0.1 },
+        'tenant-k',
+        link,
+      );
+      // … and neither another tenant's row nor another review's row counts.
+      await ledgerAttempt(
+        'tma-lb-foreign',
+        OPUS,
+        { input: 9_000, output: 9_000, cost: 9 },
+        'tenant-other',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-lb-other',
+        OPUS,
+        { input: 7_000, output: 7_000, cost: 7 },
+        'tenant-k',
+        {
+          reviewId: 'tpr-other',
+          generationAttemptId: attemptId,
+        },
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => ({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-lb-served'],
+          },
+        })) as never,
+      });
+      expect(done).toMatchObject({ status: 'passed' });
+      expect(done!.inputTokens).toBe(700);
+      expect(done!.outputTokens).toBe(150);
+      expect(done!.costUsd).toBeCloseTo(0.4, 8);
+    });
 
     it('L-4: the row sums every paid attempt (a failed one too); provider and model stay the first review’s', async () => {
       const SOL = 'openai:gpt-6-sol';
