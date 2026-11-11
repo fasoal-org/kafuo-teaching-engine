@@ -305,6 +305,48 @@ describe('slide regeneration routes', () => {
     expect(audit.length).toBeGreaterThan(0);
   });
 
+  it('LOW-1: a reviewer run signal reaches the model route; aborted after generation, nothing is committed', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: 'system:package-reviewer',
+    };
+    const before = await sceneState('scene-1');
+    const controller = new AbortController();
+    // The review run is evicted while the slide is being written.
+    mocks.duringGeneration = async () => controller.abort();
+    await expect(
+      regenerateSlideScene(grant, 'scene-1', body('key-reviewer-abort'), {
+        pool: pool as never,
+        actor: { actorRef: 'system:package-reviewer', sessionRef: null },
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({ signal: controller.signal });
+    const [row] = await rows();
+    expect(row).toMatchObject({ status: 'failed', error_code: 'ABORTED' });
+    expect(await sceneState('scene-1')).toEqual(before);
+  });
+
+  it('LOW-1: without a signal (the editor) the route gets none and the regeneration runs as before', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: 'system:package-reviewer',
+    };
+    const response = await regenerateSlideScene(grant, 'scene-1', body('key-editor-plain'), {
+      pool: pool as never,
+    });
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).not.toHaveProperty('signal');
+  });
+
   it('AT-A: a write grant on a draft regenerates exactly the one slide, atomically with its audit', async () => {
     const before1 = await sceneState('scene-1');
     const before2 = await sceneState('scene-2');

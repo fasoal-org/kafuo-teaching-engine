@@ -70,6 +70,11 @@ export interface NarrationAudioRegenerationResult {
 export interface NarrationAudioDeps {
   pool: ConnectableQueryable;
   now?: () => number;
+  /**
+   * The AI reviewer's run signal (review fix LOW-1): synthesis stops with it,
+   * and an aborted run writes no audio. Absent (the editor) → exactly as before.
+   */
+  signal?: AbortSignal;
   /** Test seams. */
   synthesize?: typeof synthesizeSceneNarration;
   loadStage?: (pool: ConnectableQueryable, stageId: string) => Promise<AppStage | null>;
@@ -257,6 +262,7 @@ export async function regenerateSceneNarrationAudio(
       persist: { kind: 'audio-dir' },
       transientAttempts: 2,
       entry: 'batch',
+      ...(deps.signal ? { signal: deps.signal } : {}),
     });
   } catch (error) {
     log.warn(`narration audio for scene ${sceneId} could not be generated`, error);
@@ -289,6 +295,13 @@ export async function regenerateSceneNarrationAudio(
     return { sceneId, scene: live.scene, rev: live.rev, generated: 0, missing: gap.missing };
   }
 
+  if (deps.signal?.aborted) {
+    // LOW-1: the reviewer run that asked for this audio was evicted.
+    throw new TeachingPackageError(
+      'ABORTED',
+      'the narration audio was stopped: the review run that asked for it was evicted; nothing was written',
+    );
+  }
   const { generationIssues: _previous, ...rest } = clearInvalidationOfVoicedLines(
     live.scene,
     working,

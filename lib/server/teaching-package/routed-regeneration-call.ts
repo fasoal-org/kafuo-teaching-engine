@@ -26,6 +26,7 @@ import type { LlmStage } from '@/lib/server/model-routes';
 import {
   AccountingUnavailableError,
   executeTeachingCall,
+  TeachingCallAbortedError,
   TeachingModelUnavailableError,
 } from '@/lib/server/teaching-model/execute';
 import { resolveSubjectModelPolicy } from '@/lib/server/teaching-model/resolve-policy';
@@ -53,6 +54,12 @@ export interface RegenerationRouteInput {
   /** The Stage's recorded subject, when it records one. */
   stageSubjectCode: string | undefined;
   queryable?: Queryable;
+  /**
+   * The AI reviewer's run signal (review fix LOW-1): every provider call of
+   * this regeneration stops with it. Absent (the editor's regeneration) →
+   * exactly as before. The `off` routing mode has no ledger route and ignores it.
+   */
+  signal?: AbortSignal;
   /** Test seams. */
   mode?: 'enforced' | 'off';
   execute?: typeof executeTeachingCall;
@@ -129,11 +136,19 @@ export async function createRegenerationRoute(
           {
             ...(withImages ? { images } : {}),
             ...(input.queryable ? { queryable: input.queryable } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
           },
         );
         return result.text;
       } catch (error) {
-        if (error instanceof TeachingModelUnavailableError) {
+        if (error instanceof TeachingCallAbortedError) {
+          // The reviewer run was evicted: stop, never retry.
+          failure ??= new TeachingPackageError(
+            'ABORTED',
+            'the regeneration was stopped: the review run that asked for it was evicted',
+          );
+          Object.assign(error, { isRetryable: false });
+        } else if (error instanceof TeachingModelUnavailableError) {
           failure ??= new TeachingPackageError('TEACHING_MODEL_UNAVAILABLE', error.message, {
             subjectCode: policy.subjectCode,
             attemptIds: error.attemptIds,

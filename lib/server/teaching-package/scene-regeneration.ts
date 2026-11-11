@@ -232,6 +232,11 @@ export interface SceneRegenerationDeps {
    * the editor actor and session, exactly as before.
    */
   actor?: { actorRef: string; sessionRef: string | null };
+  /**
+   * The AI reviewer's run signal (review fix LOW-1): the regeneration's model
+   * calls stop with it (`ABORTED`). Absent (the editor) → exactly as before.
+   */
+  signal?: AbortSignal;
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -333,6 +338,7 @@ export async function regenerateSlideScene(
         stageSubjectCode: stage.subjectCode,
         queryable: pool,
         ...(deps.routingMode ? { mode: deps.routingMode } : {}),
+        ...(deps.signal ? { signal: deps.signal } : {}),
       })
     : null;
 
@@ -457,6 +463,17 @@ export async function regenerateSlideScene(
     }
     await fail('SCENE_CONTENT_GENERATION_FAILED');
     throw error;
+  }
+
+  if (deps.signal?.aborted) {
+    // LOW-1: the reviewer run that asked for this regeneration was evicted
+    // after the last model call: its candidate is never committed.
+    await fail('ABORTED');
+    throw new TeachingPackageError(
+      'ABORTED',
+      'the regeneration was stopped: the review run that asked for it was evicted',
+      { regenerationId: row.id },
+    );
   }
 
   // T2.

@@ -633,6 +633,46 @@ describe('package review fix loop (D-1)', () => {
     ]);
   });
 
+  it('LOW-1: the run signal reaches the paid regeneration and the TTS; without one, neither gets a signal', async () => {
+    const withSignal = setup({ scenes, findings: [finding('f1', 's1', 'S1')] });
+    const controller = new AbortController();
+    const loop = createPackageReviewFixLoop({
+      regenerate: withSignal.regenerate as never,
+      regenerateAudio: withSignal.regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'tpv-1',
+        tenantId: 't-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        const scene = scenes.find((s) => s.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    await loop({
+      pool: {} as never,
+      review: REVIEW,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf(scenes),
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+      heartbeat: async () => true,
+      callReviewer: withSignal.callReviewer as never,
+      recordProgress: vi.fn(async () => {}),
+      now: () => 1,
+      signal: controller.signal,
+    });
+    expect(withSignal.regenerate.mock.calls[0]![3]).toMatchObject({ signal: controller.signal });
+    expect(withSignal.regenerateAudio.mock.calls[0]![2]).toMatchObject({
+      signal: controller.signal,
+    });
+    const plain = setup({ scenes, findings: [finding('f1', 's1', 'S1')] });
+    await plain.run();
+    expect(plain.regenerate.mock.calls[0]![3]).not.toHaveProperty('signal');
+    expect(plain.regenerateAudio.mock.calls[0]![2]).not.toHaveProperty('signal');
+  });
+
   it('instruction and key stay within the regeneration limits', () => {
     const long = Array.from({ length: 40 }, (_, i) => ({
       ...finding(`f${i}`, 's1', 'S1'),

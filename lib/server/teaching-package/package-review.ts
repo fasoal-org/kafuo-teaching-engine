@@ -127,6 +127,8 @@ export interface FixLoopContext {
   callReviewer: (request: ReviewCallRequest) => Promise<ReviewCallAnswer>;
   recordProgress: (findings: StoredFinding[], fixes: StoredFix[]) => Promise<void>;
   now: () => number;
+  /** The run's abort signal (LOW-1): the paid regeneration and TTS stop with it. */
+  signal?: AbortSignal;
 }
 
 export interface FixLoopResult {
@@ -543,6 +545,7 @@ export async function runPackageReview(
           );
         },
         now,
+        ...(deps.signal ? { signal: deps.signal } : {}),
       });
       findings = result.findings;
       fixes = result.fixes;

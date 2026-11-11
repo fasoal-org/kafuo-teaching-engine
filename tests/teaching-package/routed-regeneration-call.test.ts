@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRegenerationRoute } from '@/lib/server/teaching-package/routed-regeneration-call';
-import { TeachingModelUnavailableError } from '@/lib/server/teaching-model/execute';
+import {
+  TeachingCallAbortedError,
+  TeachingModelUnavailableError,
+} from '@/lib/server/teaching-model/execute';
 
 vi.mock('@/lib/server/teaching-model/resolve-policy', () => ({
   resolveSubjectModelPolicy: async (code: string) => ({
@@ -85,6 +88,38 @@ describe('createRegenerationRoute', () => {
     expect(() => route.assertAvailable()).toThrow(
       expect.objectContaining({ code: 'TEACHING_MODEL_UNAVAILABLE' }),
     );
+  });
+
+  it('LOW-1: a reviewer run signal reaches every call; an aborted call is remembered as ABORTED (no signal: as before)', async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(async () => {
+      throw new TeachingCallAbortedError(['a']);
+    });
+    const route = await createRegenerationRoute({
+      ...base,
+      execute: execute as never,
+      signal: controller.signal,
+    });
+    await expect(route.aiCallFor('scene-content:slide')('s', 'u')).rejects.toThrow('aborted');
+    const [, , , options] = execute.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      { signal?: AbortSignal },
+    ];
+    expect(options.signal).toBe(controller.signal);
+    expect(() => route.assertAvailable()).toThrow(expect.objectContaining({ code: 'ABORTED' }));
+    // The editor's regeneration passes no signal.
+    const plainExecute = vi.fn(async () => ({ text: 'ok' }));
+    const plain = await createRegenerationRoute({ ...base, execute: plainExecute as never });
+    await plain.aiCallFor('scene-actions')('s', 'u');
+    const [, , , plainOptions] = plainExecute.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(plainOptions).not.toHaveProperty('signal');
   });
 
   it('routing off uses the stage routes and records no subject', async () => {

@@ -226,7 +226,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             reason: `مراجعة الذكاء الاصطناعي ${review.id}: ${[...new Set(sceneFindings.map((f) => f.check))].join(', ')}`,
             idempotencyKey: fixIdempotencyKey(review.id, slide.id),
           },
-          { pool, actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null } },
+          {
+            pool,
+            actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null },
+            // LOW-1: an evicted run's regeneration stops with its signal.
+            ...(context.signal ? { signal: context.signal } : {}),
+          },
         );
         if (response.status !== 200) {
           throw new TeachingPackageError(
@@ -290,7 +295,11 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // The new slide's narration audio (a regeneration never runs TTS).
       if (audioCode === null) {
         try {
-          const audio = await regenerateAudio(grant, slide.id, { pool });
+          const audio = await regenerateAudio(grant, slide.id, {
+            pool,
+            // LOW-1: an evicted run's TTS stops with its signal and writes no audio.
+            ...(context.signal ? { signal: context.signal } : {}),
+          });
           regenerated = audio.scene;
           if (audio.missing > 0) audioCode = 'NARRATION_AUDIO_PARTIAL';
         } catch (error) {
