@@ -2988,12 +2988,13 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
     });
 
-    it('item 5: with its lease still held (failed revoke), an aborted run skips the re-review usage and progress writes', async () => {
+    it('item 5 / LOW-3: with its lease still held (failed revoke), an aborted run makes no re-review call and writes no progress', async () => {
       const [review] = await queuedReview(await startKafuo());
       await ledgerAttempt('tma-skip-first', OPUS, { input: 100, output: 10, cost: 0.01 });
       await ledgerAttempt('tma-skip-rereview', OPUS, { input: 50, output: 5, cost: 0.005 });
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
       const controller = new AbortController();
+      let rereviewRefusal: unknown = null;
       const finding = {
         targetId: 'scene-f1',
         check: 'S1',
@@ -3032,12 +3033,17 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           recordProgress: (findings: unknown[], fixes: unknown[]) => Promise<void>;
         }) => {
           controller.abort(); // evicted while fixing; the revoke never landed
-          await context.callReviewer({
-            review: context.review,
-            units: context.units,
-            slides: context.slides,
-            focusIds: new Set(['scene-f1']),
-          });
+          // LOW-3: the re-review is refused before any paid call.
+          try {
+            await context.callReviewer({
+              review: context.review,
+              units: context.units,
+              slides: context.slides,
+              focusIds: new Set(['scene-f1']),
+            });
+          } catch (error) {
+            rereviewRefusal = error;
+          }
           const fixed = context.findings.map((f) => ({
             ...f,
             status: 'fixed',
@@ -3056,7 +3062,10 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         fixLoop: fixLoop as never,
       });
       expect(done).toBeNull();
-      expect(callReviewer).toHaveBeenCalledTimes(2);
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      // Only the first review reached the reviewer; the re-review after the abort never did.
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      expect(rereviewRefusal).toMatchObject({ name: 'TeachingCallAbortedError' });
       const row = await pool.query(
         `SELECT status, input_tokens, findings, fixes FROM teaching_package_reviews WHERE id = $1`,
         [review!.id],

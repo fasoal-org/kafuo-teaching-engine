@@ -34,6 +34,7 @@ import {
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
+import { TeachingCallAbortedError } from '@/lib/server/teaching-model/execute';
 import {
   runReviewerCall,
   type ReviewerCallResult,
@@ -435,6 +436,8 @@ export async function runPackageReview(
       }
     };
     const callReviewer = async (request: ReviewCallRequest) => {
+      // LOW-3: an evicted run never starts another paid reviewer call.
+      if (deps.signal?.aborted) throw new TeachingCallAbortedError([]);
       try {
         return await (deps.callReviewer ?? callPackageReviewer)({
           ...request,
