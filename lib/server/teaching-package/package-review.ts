@@ -376,6 +376,9 @@ export async function runPackageReview(
    * L-B: at the end, the row's totals are the ledger's for this review id —
    * every paid attempt of every run, an evicted run's included. No ledger row
    * (or a failed read) keeps the running totals; accounting never fails a review.
+   * LOW-4: an attempt still `started` at this moment (an evicted run's call in
+   * flight) has no token columns yet, so it is not in these totals; the
+   * ledger stays the authority for the review's spend.
    */
   const reviewSpend = async (): Promise<ReviewOutcome['usage'] | null> => {
     try {
