@@ -250,3 +250,29 @@ describe('runReviewerCall — provider switch', () => {
     expect(await events()).toHaveLength(1);
   });
 });
+
+describe('resolveReviewerRoute — each target on its own', () => {
+  const resolving =
+    (unavailable: ReadonlySet<string>) =>
+    async (role: 'primary' | 'fallback', target: { model: string }) => {
+      if (unavailable.has(target.model)) throw new Error(`${target.model} has no key`);
+      return { role, modelString: target.model } as never;
+    };
+
+  it('L-8: in sol mode a Sol that cannot resolve is replaced by Opus alone (never no review)', async () => {
+    const { resolveReviewerRoute } = await import('@/lib/server/teaching-model/reviewer-policy');
+    const route = await resolveReviewerRoute('MATH', 'sol', resolving(new Set([SOL])) as never);
+    expect(route.primaryOnly).toBe(true);
+    expect(route.policy.primary).toMatchObject({ role: 'primary', modelString: OPUS });
+    expect(route.policy.fallback).toMatchObject({ modelString: OPUS });
+  });
+
+  it('sol mode with Sol resolving stays on Sol alone; nothing resolving still refuses', async () => {
+    const { resolveReviewerRoute } = await import('@/lib/server/teaching-model/reviewer-policy');
+    const onSol = await resolveReviewerRoute('MATH', 'sol', resolving(new Set()) as never);
+    expect(onSol).toMatchObject({ primaryOnly: true, policy: { primary: { modelString: SOL } } });
+    await expect(
+      resolveReviewerRoute('MATH', 'sol', resolving(new Set([SOL, OPUS])) as never),
+    ).rejects.toMatchObject({ code: 'SUBJECT_ROUTE_UNAVAILABLE' });
+  });
+});

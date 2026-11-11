@@ -151,8 +151,10 @@ export interface ResolvedReviewerRoute {
  *  - `sol`:  Sol alone (D-3: after the switch every review goes to Sol).
  *
  * Each target resolves on its own: a missing Anthropic key still leaves Sol,
- * and a missing Sol key still leaves Opus. Only when nothing resolves does
- * this throw `SUBJECT_ROUTE_UNAVAILABLE`; the review then ends `unavailable`.
+ * and a missing Sol key still leaves Opus — in `sol` mode too, where a Sol
+ * that cannot resolve is replaced by Opus alone (L-8). Only when nothing
+ * resolves does this throw `SUBJECT_ROUTE_UNAVAILABLE`; the review then ends
+ * `unavailable`.
  *
  * `subjectCode` is the reviewed package's subject, recorded on the ledger row
  * only (its `subject_code` column is free text; the executor does not route
@@ -183,6 +185,15 @@ export async function resolveReviewerRoute(
   if (sol.status === 'fulfilled') {
     const asPrimary: ResolvedTarget = { ...sol.value, role: 'primary' };
     return { policy: policy(asPrimary, asPrimary), primaryOnly: true };
+  }
+  if (mode === 'sol') {
+    // L-8: on Sol, but Sol cannot resolve: Opus alone rather than no review at all.
+    try {
+      const opusAlone = await resolve('primary', OPUS_HIGH);
+      return { policy: policy(opusAlone, opusAlone), primaryOnly: true };
+    } catch {
+      // Neither resolves: the Sol reason below names the route the switch chose.
+    }
   }
   const reason = sol.reason instanceof Error ? sol.reason.message : String(sol.reason);
   throw new TeachingPackageError(
