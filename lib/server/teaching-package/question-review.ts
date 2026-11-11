@@ -288,8 +288,12 @@ export interface QuestionReviewDeps {
   loadBook?: typeof loadReviewBookUnits;
 }
 
-/** The event (contract §3.4): verdicts and check codes, never the notes. */
+/**
+ * The event (contract §3.4): verdicts and check codes, never the notes. The
+ * verdicts travel only on a `completed` review (LOW-1).
+ */
 function completedPayload(review: QuestionReview) {
+  const results = review.status === 'completed' ? review.results : [];
   return {
     questionReview: {
       id: review.id,
@@ -298,7 +302,7 @@ function completedPayload(review: QuestionReview) {
       status: review.status,
       provider: review.provider,
       model: review.model,
-      results: review.results.map((result) => ({
+      results: results.map((result) => ({
         questionId: result.questionId,
         verdict: result.verdict,
         checks: [...new Set(result.findings.map((finding) => finding.check))].sort(),
@@ -329,7 +333,9 @@ export async function runQuestionReview(
 
   const finish = (outcome: Parameters<typeof finishQuestionReview>[3]) =>
     nodePostgresTransaction(pool)(async (tx: Queryable) => {
-      const finished = await finishQuestionReview(tx, claimed.id, workerId, outcome, now());
+      // LOW-1: an `unavailable` review keeps no verdicts, even a stored answer.
+      const terminal = outcome.status === 'unavailable' ? { ...outcome, results: [] } : outcome;
+      const finished = await finishQuestionReview(tx, claimed.id, workerId, terminal, now());
       if (!finished) return null;
       await enqueueWebhookEvent(
         tx,
@@ -342,9 +348,20 @@ export async function runQuestionReview(
 
   // M-4: once the paid answer is stored, a failure only lets the lease lapse;
   // the resume finishes from the stored answer instead of ending unavailable.
-  let answerStored = claimed.reviewedAt !== null;
+  // LOW-1: a stored answer counts only when it answers every sent question.
+  const storedAnswerUsable =
+    claimed.reviewedAt !== null &&
+    claimed.results.length === claimed.questions.length &&
+    claimed.questions.every((question, index) => {
+      return claimed.results[index]?.questionId === question.questionId;
+    });
+  let answerStored = storedAnswerUsable;
   try {
-    if (claimed.reviewedAt !== null) {
+    // LOW-1: the claim cap comes first, so a finish that keeps failing still ends.
+    if (claimed.runAttempts > MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
+      return await finish({ status: 'unavailable', errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+    }
+    if (storedAnswerUsable) {
       // A resume after the paid call: finish from the stored answer, never pay twice.
       return await finish({
         status: 'completed',
@@ -353,8 +370,8 @@ export async function runQuestionReview(
         model: claimed.model,
       });
     }
-    if (claimed.runAttempts > MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
-      return await finish({ status: 'unavailable', errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+    if (claimed.reviewedAt !== null) {
+      log.warn(`question review ${claimed.id}: the stored answer is incomplete; reviewing again`);
     }
     const retained = await readRetainedVersionContext(
       pool as unknown as Queryable,
@@ -417,8 +434,9 @@ export async function runQuestionReview(
     return await finish({ status: 'completed', ...answer });
   } catch (error) {
     if (answerStored && claimed.runAttempts < MAX_QUESTION_REVIEW_RUN_ATTEMPTS) {
-      // The answer is kept: the lease lapses and the next sweep finishes from it
-      // (bounded by the claim cap, so a finish that always fails still ends).
+      // The answer is kept: the lease lapses and the next sweep finishes from it.
+      // Bounded: on the last allowed claim a failing finish falls through to
+      // `unavailable` below, and a claim past the cap ends `unavailable` first.
       log.error(
         `question review ${claimed.id} could not be finalized; it resumes from the stored answer`,
         JSON.stringify(describeErrorSafely(error)),

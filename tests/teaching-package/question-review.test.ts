@@ -501,6 +501,51 @@ describe('question-set review (Phase 4)', () => {
     expect(event!.questionReview).toMatchObject({ status: 'completed', model: OPUS });
   });
 
+  it('LOW-1: past the claim cap a stored answer ends unavailable with NO verdicts (row and event)', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    await pool.query(
+      `UPDATE teaching_question_reviews
+          SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 3,
+              reviewed_at = 5, provider = 'anthropic', model = $2, results = $3::jsonb
+        WHERE id = $1`,
+      [id, OPUS, JSON.stringify(answer.results)],
+    );
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    const done = await runQuestionReview(id, { pool: txPool(), callReviewer: failingQ1 });
+    expect(done).toMatchObject({
+      status: 'unavailable',
+      errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED',
+      results: [],
+    });
+    expect(failingQ1).not.toHaveBeenCalled();
+    const [event] = await events();
+    expect(event!.questionReview).toMatchObject({ status: 'unavailable', results: [] });
+  });
+
+  it('LOW-1: a stored answer that does not answer every question is not trusted; the set is reviewed again', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const answer = await failingQ1();
+    failingQ1.mockClear();
+    await pool.query(
+      `UPDATE teaching_question_reviews
+          SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 1,
+              reviewed_at = 5, provider = 'anthropic', model = $2, results = $3::jsonb
+        WHERE id = $1`,
+      [id, OPUS, JSON.stringify(answer.results.slice(0, 1))],
+    );
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    const done = await runQuestionReview(id, { pool: txPool(), callReviewer: failingQ1 });
+    expect(failingQ1).toHaveBeenCalledTimes(1);
+    expect(done).toMatchObject({ status: 'completed' });
+    expect(done!.results.map((r) => r.questionId)).toEqual(['q-101', 'q-102']);
+  });
+
   const reviewRow = async (id: string) =>
     (
       await pool.query(
