@@ -472,6 +472,48 @@ describe('package review fix loop (D-1)', () => {
     ]);
   });
 
+  it('LOW-4: a run that loses its lease during the regeneration never pays for the narration audio', async () => {
+    const { regenerate, regenerateAudio, callReviewer } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S1'), finding('f2', 's2', 'S1')],
+    });
+    // The lease is kept before the regeneration, then lost (another worker took over).
+    const beats = [true, false];
+    const loop = createPackageReviewFixLoop({
+      regenerate: regenerate as never,
+      regenerateAudio: regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'tpv-1',
+        tenantId: 't-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        const scene = scenes.find((s) => s.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    const result = await loop({
+      pool: {} as never,
+      review: REVIEW,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf(scenes),
+      scenes,
+      findings: [finding('f1', 's1', 'S1'), finding('f2', 's2', 'S1')],
+      heartbeat: async () => beats.shift() ?? false,
+      callReviewer: callReviewer as never,
+      recordProgress: vi.fn(async () => {}),
+      now: () => 1,
+    });
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(callReviewer).not.toHaveBeenCalled();
+    expect(result.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+      ['f1', 'open', 'VERSION_CHANGED'],
+      ['f2', 'open', 'VERSION_CHANGED'],
+    ]);
+  });
+
   it('instruction and key stay within the regeneration limits', () => {
     const long = Array.from({ length: 40 }, (_, i) => ({
       ...finding(`f${i}`, 's1', 'S1'),

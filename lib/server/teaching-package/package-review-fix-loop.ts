@@ -262,6 +262,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         continue;
       }
 
+      // LOW-4: the regeneration may have taken long; a run that lost its lease
+      // never pays for the narration audio (TTS) — the run that took over does.
+      if (!(await context.heartbeat())) {
+        stopped = true;
+        mark(slide.id, 'VERSION_CHANGED');
+        continue;
+      }
+
       // The new slide's narration audio (a regeneration never runs TTS).
       let audioCode: string | null = null;
       try {
