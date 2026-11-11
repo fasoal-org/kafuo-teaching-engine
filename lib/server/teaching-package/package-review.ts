@@ -232,12 +232,13 @@ function servedUsage(usage: ReviewCallAnswer['call']['usage']): RowUsage {
  */
 async function callSpend(
   pool: ConnectableQueryable,
+  tenantId: string,
   attemptIds: readonly string[] | undefined,
   served: RowUsage | null,
 ): Promise<RowUsage | null> {
   if (attemptIds && attemptIds.length > 0) {
     try {
-      const spend = await sumAttemptSpend(pool as unknown as Queryable, attemptIds);
+      const spend = await sumAttemptSpend(pool as unknown as Queryable, attemptIds, { tenantId });
       if (spend.rows > 0) {
         return {
           inputTokens: spend.inputTokens,
@@ -385,7 +386,7 @@ export async function runPackageReview(
       const attemptIds = (error as { attemptIds?: unknown } | null)?.attemptIds;
       if (!Array.isArray(attemptIds) || attemptIds.length === 0) return;
       try {
-        const usage = await callSpend(pool, attemptIds as string[], null);
+        const usage = await callSpend(pool, claimed.tenantId, attemptIds as string[], null);
         if (usage) {
           await saveReviewProgress(
             pool as unknown as Queryable,
@@ -426,7 +427,12 @@ export async function runPackageReview(
      * its provider and model are the first review's (set only by that save).
      */
     const recordUsage = async (call: ReviewCallAnswer['call'], extra: ReviewProgress) => {
-      const usage = await callSpend(pool, call.attemptIds, servedUsage(call.usage));
+      const usage = await callSpend(
+        pool,
+        claimed.tenantId,
+        call.attemptIds,
+        servedUsage(call.usage),
+      );
       await saveReviewProgress(
         pool as unknown as Queryable,
         claimed.id,

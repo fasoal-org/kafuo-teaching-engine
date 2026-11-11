@@ -862,12 +862,14 @@ export interface AttemptSpend {
 
 /**
  * The summed tokens and cost of some attempts (by primary key), served or not:
- * a failed but paid attempt counts too. Used by the AI reviewer's own row
- * totals; the ledger stays the authority.
+ * a failed but paid attempt counts too, within ONE tenant (an id of another
+ * tenant counts nothing). Used by the AI reviewer's own row totals; the ledger
+ * stays the authority.
  */
 export async function sumAttemptSpend(
   queryable: Queryable,
   attemptIds: readonly string[],
+  scope: { tenantId: string },
 ): Promise<AttemptSpend> {
   if (attemptIds.length === 0) {
     return { rows: 0, inputTokens: null, outputTokens: null, costUsd: null };
@@ -878,8 +880,8 @@ export async function sumAttemptSpend(
             sum(output_tokens_total)::bigint AS output_tokens,
             sum(cost_usd)::numeric AS cost_usd
        FROM teaching_model_attempts
-      WHERE id = ANY($1::text[])`,
-    [[...attemptIds]],
+      WHERE id = ANY($1::text[]) AND tenant_id = $2`,
+    [[...attemptIds], scope.tenantId],
   );
   const row = result.rows[0] ?? {};
   const num = (value: unknown) =>

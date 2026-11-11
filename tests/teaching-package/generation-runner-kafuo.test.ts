@@ -2659,13 +2659,14 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       id: string,
       modelString: string,
       spend: { input: number; output: number; cost: number },
+      tenantId = 'tenant-k',
     ) {
       await pool.query(
         `INSERT INTO teaching_model_attempts
            (id, tenant_id, capability, subject_code, policy_version, stage, provider_id, model_id,
             model_string, role, attempt_index, accounting_status, origin, generation_attempt_id,
             worker_id, created_at, started_at, input_tokens_total, output_tokens_total, cost_usd)
-         VALUES ($1, 'tenant-k', 'package_review', 'MATH', 'reviewer-2026-11', 'package-review',
+         VALUES ($1, $8, 'package_review', 'MATH', 'reviewer-2026-11', 'package-review',
                  $2, $3, $4, 'primary', 1, 'complete', 'openmaic_runtime', 'ga-l4', 'w', 1, 1,
                  $5, $6, $7)`,
         [
@@ -2676,6 +2677,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           spend.input,
           spend.output,
           spend.cost,
+          tenantId,
         ],
       );
     }
@@ -2758,13 +2760,20 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         output: 0,
         cost: 0.05,
       });
+      // LOW-3: an attempt id of ANOTHER tenant never counts on this tenant's row.
+      await ledgerAttempt(
+        'tma-l4-foreign',
+        OPUS,
+        { input: 9_000, output: 9_000, cost: 9 },
+        'tenant-other',
+      );
       const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
       const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
       const done = await runPackageReview(review!.id, {
         pool: txPool(),
         callReviewer: vi.fn(async () => {
           throw new TeachingModelUnavailableError('both failed', {
-            attemptIds: ['tma-l4-down-1', 'tma-l4-down-2'],
+            attemptIds: ['tma-l4-down-1', 'tma-l4-down-2', 'tma-l4-foreign'],
             outcomes: [],
             retryable: true,
           });
