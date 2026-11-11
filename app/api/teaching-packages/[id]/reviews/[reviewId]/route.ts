@@ -10,8 +10,10 @@ import { NextResponse } from 'next/server';
 import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
-import { packageReviewWire } from '@/lib/server/teaching-package/package-review';
-import { readPackageReview } from '@/lib/server/teaching-package/package-review-store';
+import {
+  packageReviewWire,
+  readPackageReview,
+} from '@/lib/server/teaching-package/package-review-store';
 import { getTeachingPackageVersion } from '@/lib/server/teaching-package/resolve';
 import {
   parseTenantId,

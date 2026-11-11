@@ -40,6 +40,7 @@ import {
   claimQuestionReview,
   finishQuestionReview,
   listClaimableQuestionReviewIds,
+  questionReviewWire,
   releaseQuestionReviewLease,
   renewQuestionReviewLease,
   saveQuestionReviewAnswer,
@@ -582,23 +583,10 @@ export async function sweepQuestionReviews(
 }
 
 /**
- * Contract §4.4: the signed read model, notes included. The verdicts are read
- * only once the review completed: an answer stored under a running lease
- * (M-4) is not yet the review's result.
+ * The signed read model (contract §4.4) lives with the store, so the read
+ * route never loads the reviewer call; re-exported here for the existing imports.
  */
-export function questionReviewWire(review: QuestionReview) {
-  return {
-    id: review.id,
-    versionId: review.versionId,
-    requestId: review.requestId,
-    status: review.status,
-    provider: review.provider,
-    model: review.model,
-    results: review.status === 'completed' ? review.results : [],
-    errorCode: review.errorCode,
-    completedAt: review.completedAt,
-  };
-}
+export { questionReviewWire };
 
 const CORRECT_ANSWER_MAX_DEPTH = 20;
 

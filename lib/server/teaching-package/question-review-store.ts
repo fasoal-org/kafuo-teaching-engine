@@ -290,3 +290,23 @@ export async function listClaimableQuestionReviewIds(
   );
   return result.rows.map((row) => String(row.id));
 }
+
+/**
+ * Contract §4.4: the signed read model, notes included. The verdicts are read
+ * only once the review completed: an answer stored under a running lease
+ * (M-4) is not yet the review's result. Pure, and kept here so the read route
+ * never loads the reviewer call (`question-review.ts` re-exports it).
+ */
+export function questionReviewWire(review: QuestionReview) {
+  return {
+    id: review.id,
+    versionId: review.versionId,
+    requestId: review.requestId,
+    status: review.status,
+    provider: review.provider,
+    model: review.model,
+    results: review.status === 'completed' ? review.results : [],
+    errorCode: review.errorCode,
+    completedAt: review.completedAt,
+  };
+}

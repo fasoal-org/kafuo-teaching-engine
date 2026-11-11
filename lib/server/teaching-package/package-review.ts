@@ -63,6 +63,7 @@ import {
   claimReview,
   finishReview,
   listClaimableReviewIds,
+  packageReviewWire,
   releaseReviewLease,
   renewReviewLease,
   saveReviewProgress,
@@ -693,33 +694,12 @@ export async function sweepPackageReviews(
   return started;
 }
 
-/** The signed read model (contract §4.1): everything the teacher's report needs. */
-export function packageReviewWire(review: PackageReview) {
-  const open = review.findings.filter((finding) => finding.status === 'open').length;
-  return {
-    id: review.id,
-    versionId: review.versionId,
-    stageId: review.stageId,
-    attemptId: review.attemptId,
-    status: review.status,
-    provider: review.provider,
-    model: review.model,
-    summary: review.summary,
-    findings: review.findings,
-    fixes: review.fixes.map((fix) => ({
-      sceneId: fix.sceneId,
-      findingIds: fix.findingIds,
-      outcome: fix.outcome,
-      code: fix.code,
-    })),
-    counts: { findings: review.findings.length, open, fixed: review.findings.length - open },
-    /** D-8: the reviewer did not read the whole book (the report shows one warning line). */
-    bookTruncated: review.bookTruncated,
-    errorCode: review.errorCode,
-    createdAt: review.createdAt,
-    completedAt: review.completedAt,
-  };
-}
+/**
+ * The signed read model (contract §4.1) lives with the store, so a read route
+ * never loads the fix loop or the generation graph; re-exported here for the
+ * existing imports.
+ */
+export { packageReviewWire };
 
 /** Production wiring (Phase 3 adds the fix loop here). */
 export function defaultReviewDeps(): PackageReviewDeps {
