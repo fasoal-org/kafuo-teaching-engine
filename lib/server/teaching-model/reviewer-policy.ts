@@ -53,8 +53,26 @@ export const REVIEWER_SERVER_SIDE_REFUSAL_FALLBACK = false;
  */
 export const REVIEWER_CALL_TIMEOUT_MS = 15 * 60 * 1000;
 
-/** Reviewer output bound: findings and a summary, never the slides themselves. */
-export const REVIEWER_MAX_OUTPUT_TOKENS = 32_000;
+/**
+ * D-4: reviewer output bound (adaptive thinking at effort `high` plus the JSON
+ * findings, never the slides themselves). Each call is further capped by the
+ * real output window of the models it may run on (`reviewerMaxOutputTokens`).
+ */
+export const REVIEWER_MAX_OUTPUT_TOKENS = 64_000;
+
+/**
+ * The output bound of one reviewer call: `REVIEWER_MAX_OUTPUT_TOKENS`, never
+ * above the registry's `outputWindow` of either resolved target (one bound is
+ * sent to both the primary and the fallback).
+ */
+export function reviewerMaxOutputTokens(
+  policy: Pick<ResolvedSubjectPolicy, 'primary' | 'fallback'>,
+): number {
+  const windows = [policy.primary, policy.fallback]
+    .map((target) => target.modelInfo?.outputWindow)
+    .filter((window): window is number => typeof window === 'number' && window > 0);
+  return Math.min(REVIEWER_MAX_OUTPUT_TOKENS, ...windows);
+}
 
 interface ReviewerTarget {
   readonly model: string;

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { PROVIDERS } from '@/lib/ai/providers';
+import { getModelInfo, PROVIDERS } from '@/lib/ai/providers';
 import { getCatalogThinkingCapability, getModelMetadataKey } from '@/lib/ai/model-metadata';
+import {
+  REVIEWER_MAX_OUTPUT_TOKENS,
+  reviewerMaxOutputTokens,
+} from '@/lib/server/teaching-model/reviewer-policy';
 import type { ProviderConfig, ProviderId } from '@/lib/types/provider';
 
 // These models intentionally do not expose a configurable thinking control.
@@ -87,6 +91,27 @@ describe('model metadata thinking capabilities', () => {
     const sol = getCatalogThinkingCapability('openai', 'gpt-6-sol');
     expect(sol).toEqual(getCatalogThinkingCapability('openai', 'gpt-6-luna'));
     expect(sol?.effortValues).toContain('high');
+  });
+
+  it('D-4: the reviewer output bound (64k) sits inside both reviewer models’ real output windows', () => {
+    const opus = getModelInfo('anthropic', 'claude-opus-5-5');
+    const sol = getModelInfo('openai', 'gpt-6-sol');
+    expect(opus?.outputWindow).toBe(128_000);
+    expect(sol?.outputWindow).toBe(128_000);
+    expect(REVIEWER_MAX_OUTPUT_TOKENS).toBe(64_000);
+    expect(
+      reviewerMaxOutputTokens({
+        primary: { modelInfo: opus } as never,
+        fallback: { modelInfo: sol } as never,
+      }),
+    ).toBe(64_000);
+    // A smaller window on either route caps the one bound both routes receive.
+    expect(
+      reviewerMaxOutputTokens({
+        primary: { modelInfo: opus } as never,
+        fallback: { modelInfo: { ...sol, outputWindow: 48_000 } } as never,
+      }),
+    ).toBe(48_000);
   });
 
   it('resolves GPT-5.6 Sol alias metadata through the canonical model ID', () => {

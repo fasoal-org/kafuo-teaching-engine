@@ -102,13 +102,15 @@ describe('runReviewerCall — provider switch', () => {
     });
     expect(resolveRoute).toHaveBeenCalledWith('MATH', 'opus');
     expect(result).toMatchObject({ provider: 'anthropic', modelString: OPUS, switched: null });
-    const [, , , , options] = executeStream.mock.calls[0] as unknown as [
-      unknown,
-      unknown,
+    const [, , params, , options] = executeStream.mock.calls[0] as unknown as [
       unknown,
       unknown,
       Record<string, unknown>,
+      unknown,
+      Record<string, unknown>,
     ];
+    // D-4: 64k, the route's targets carry no smaller output window here.
+    expect(params.maxOutputTokens).toBe(64_000);
     expect(options).toMatchObject({ fallbackOnRefusal: true, primaryOnly: false });
     expect(options.timeoutMs).toBeGreaterThan(110_000);
     expect(await events()).toEqual([]);

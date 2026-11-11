@@ -33,9 +33,9 @@ import {
 import {
   REVIEWER_CALL_TIMEOUT_MS,
   REVIEWER_FALLBACK_MODEL,
-  REVIEWER_MAX_OUTPUT_TOKENS,
   REVIEWER_PRIMARY_MODEL,
   resolveReviewerRoute,
+  reviewerMaxOutputTokens,
   reviewerProviderOf,
   type ReviewerProvider,
 } from '@/lib/server/teaching-model/reviewer-policy';
@@ -209,7 +209,7 @@ export async function runReviewerCall(
       {
         system: input.system,
         ...userTurn(input),
-        maxOutputTokens: REVIEWER_MAX_OUTPUT_TOKENS,
+        maxOutputTokens: reviewerMaxOutputTokens(route.policy),
         output: input.output,
       },
       NOOP_SINK,
