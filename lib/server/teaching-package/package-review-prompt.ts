@@ -124,9 +124,13 @@ export function unwrapJsonAnswer(raw: string): string {
   return fenced ? fenced[1]!.trim() : trimmed;
 }
 
-/** D-8: the one sentence the reviewer reads when it does not see the whole book. */
+/**
+ * D-8: the one sentence a reviewer reads when it does not see the whole book.
+ * Shared by the package and the question review (LOW-6b), so it names no
+ * checklist code.
+ */
 export const BOOK_TRUNCATED_NOTE =
-  'NOTE: this book text was cut to fit one review, so part of the book is missing here; never report a lesson part as missing (S5) only because it is not in this text.';
+  'NOTE: this book text was cut to fit one review, so part of the book is missing here; never report a lesson part or a fact as missing from the book only because it is not in this text.';
 
 /**
  * The stable, cache-marked block: the book units, once. A cut book (D-8) adds

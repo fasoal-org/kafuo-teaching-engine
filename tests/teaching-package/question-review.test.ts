@@ -350,6 +350,51 @@ describe('question-set review (Phase 4)', () => {
     ).toBeNull();
   });
 
+  it('LOW-6b: a cut book is said in the question reviewer’s book block (one sentence); an uncut one is not', async () => {
+    const seeded = await seed();
+    await pool.query(
+      `UPDATE teaching_package_source_contexts SET text = repeat('ك', 120001) WHERE attempt_id = $1`,
+      [seeded.attemptId],
+    );
+    const { json } = await queue(seeded);
+    const { runQuestionReview, callQuestionReviewer } =
+      await import('@/lib/server/teaching-package/question-review');
+    await runQuestionReview(json.questionReview.id, { pool: txPool(), callReviewer: failingQ1 });
+    const [request] = failingQ1.mock.calls[0] as unknown as [{ bookTruncated?: boolean }];
+    expect(request.bookTruncated).toBe(true);
+    // The production call puts the shared sentence in the book block it sends.
+    const { BOOK_TRUNCATED_NOTE } =
+      await import('@/lib/server/teaching-package/package-review-prompt');
+    const reviewerCall = await import('@/lib/server/teaching-model/reviewer-call');
+    const parsed = (await failingQ1()).results;
+    const run = vi.spyOn(reviewerCall, 'runReviewerCall').mockResolvedValue({
+      parsed,
+      provider: 'anthropic',
+      modelString: OPUS,
+      attemptIds: [],
+      usage: null,
+      switched: null,
+    });
+    const review = {
+      id: 'tqr-x',
+      tenantId: TENANT,
+      learningItem: seeded.learningItem,
+      versionId: seeded.versionId,
+      requestId: 'r',
+      language: 'ar',
+      objectiveRef: '48',
+      objectiveText: null,
+      questions: QUESTIONS,
+    } as never;
+    const units = [{ id: 'book', title: null, role: null, text: 'x' }];
+    const base = { review, units, attemptId: seeded.attemptId, subjectCode: 'MATH' };
+    await callQuestionReviewer({ ...base, bookTruncated: true, pool: txPool() });
+    await callQuestionReviewer({ ...base, pool: txPool() });
+    expect(run.mock.calls[0]![0].stablePrompt).toContain(BOOK_TRUNCATED_NOTE);
+    expect(run.mock.calls[1]![0].stablePrompt).not.toContain(BOOK_TRUNCATED_NOTE);
+    run.mockRestore();
+  });
+
   it('the signed GET returns the findings and the combined repair note, scoped to the tenant', async () => {
     const seeded = await seed();
     const { json } = await queue(seeded);

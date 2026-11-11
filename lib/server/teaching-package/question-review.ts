@@ -232,6 +232,8 @@ export interface QuestionReviewCallRequest {
   subjectCode: string;
   /** The run's abort signal: aborted when the sweep evicts a hung run (set by the job). */
   signal?: AbortSignal;
+  /** LOW-6b: the book was cut; the book block says so in one sentence (set by the job). */
+  bookTruncated?: boolean;
 }
 
 export interface QuestionReviewCallAnswer {
@@ -261,7 +263,7 @@ export async function callQuestionReviewer(
     },
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
     system: QUESTION_REVIEW_SYSTEM,
-    stablePrompt: renderBookBlock(request.units),
+    stablePrompt: renderBookBlock(request.units, { truncated: request.bookTruncated === true }),
     prompt: renderQuestionsBlock(review),
     output: {
       kind: 'json',
@@ -413,6 +415,7 @@ export async function runQuestionReview(
       units: book.units,
       attemptId: retained.attemptId,
       subjectCode: typeof subjectCode === 'string' ? subjectCode : 'UNKNOWN',
+      bookTruncated: book.truncated,
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
     const answer = {
