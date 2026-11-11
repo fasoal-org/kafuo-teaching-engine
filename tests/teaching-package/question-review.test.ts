@@ -265,22 +265,47 @@ describe('question-set review (Phase 4)', () => {
     expect(again.json.questionReview.id).toBe(queued.json.questionReview.id);
   });
 
-  it('L-6: correctAnswer is bounded (4,000 characters serialized) like the texts', async () => {
+  it('L-6 / LOW-6: correctAnswer strings are trimmed to 4,000 characters; only a still-oversized object refuses', async () => {
     const seeded = await seed();
     const route = await import('@/app/api/teaching-packages/[id]/question-reviews/route');
     const params = { params: Promise.resolve({ id: seeded.versionId }) };
-    const big = { ...QUESTIONS[0], correctAnswer: { working: 'x'.repeat(4_000) } };
-    const refused = await route.POST(
-      post(seeded.versionId, { ...body(seeded), questions: [big] }),
-      params,
-    );
-    expect(refused.status).toBe(400);
-    const fits = { ...QUESTIONS[0], correctAnswer: { working: 'x'.repeat(3_900) } };
+    // One long working text is trimmed, never a refusal of the whole set.
+    const long = {
+      ...QUESTIONS[0],
+      correctAnswer: { choiceId: 'a', steps: ['خطوة', 'x'.repeat(10_000)] },
+    };
     const accepted = await route.POST(
-      post(seeded.versionId, { ...body(seeded, 'qr-fits'), questions: [fits] }),
+      post(seeded.versionId, { ...body(seeded, 'qr-long'), questions: [long, QUESTIONS[1]] }),
       params,
     );
     expect(accepted.status).toBe(202);
+    const stored = (
+      await pool.query(`SELECT questions FROM teaching_question_reviews WHERE request_id = $1`, [
+        'qr-long',
+      ])
+    ).rows[0] as { questions: Array<{ correctAnswer: { choiceId: string; steps: string[] } }> };
+    expect(stored.questions[0]!.correctAnswer.choiceId).toBe('a');
+    expect(stored.questions[0]!.correctAnswer.steps[0]).toBe('خطوة');
+    expect(stored.questions[0]!.correctAnswer.steps[1]).toBe(`${'x'.repeat(4_000)}…`);
+    // Still over 16,000 characters after trimming every string: refused.
+    const huge = {
+      ...QUESTIONS[0],
+      correctAnswer: {
+        a: 'x'.repeat(4_000),
+        b: 'x'.repeat(4_000),
+        c: 'x'.repeat(4_000),
+        d: 'x'.repeat(4_000),
+        e: 'x',
+      },
+    };
+    const refused = await route.POST(
+      post(seeded.versionId, { ...body(seeded, 'qr-huge'), questions: [huge] }),
+      params,
+    );
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+      'INVALID_REQUEST',
+    );
   });
 
   it('the job: the whole set in one call, the book once; verdict event with check codes and no notes', async () => {

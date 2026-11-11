@@ -62,8 +62,11 @@ export const MAX_QUESTION_REVIEWS_IN_FLIGHT = 2;
 export const QUESTION_REVIEW_LIMITS = {
   questions: { min: 1, max: 40 },
   textMax: 4_000,
-  /** L-6: `correctAnswer`, measured as its JSON text. */
-  correctAnswerMax: 4_000,
+  /**
+   * L-6 / LOW-6: `correctAnswer` as its JSON text, after every string inside
+   * it was cut to `textMax`.
+   */
+  correctAnswerMax: 16_000,
 } as const;
 const QUESTION_CHECKS: readonly QuestionCheck[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5'];
 const NOTE_MAX = 2_000;
@@ -546,6 +549,27 @@ export function questionReviewWire(review: QuestionReview) {
   };
 }
 
+const CORRECT_ANSWER_MAX_DEPTH = 20;
+
+/**
+ * Every string inside `correctAnswer` cut to the text bound (values kept as
+ * sent otherwise). Throws when the object nests deeper than
+ * `CORRECT_ANSWER_MAX_DEPTH`.
+ */
+function trimStringLeaves(value: unknown, depth: number): unknown {
+  const max = QUESTION_REVIEW_LIMITS.textMax;
+  if (typeof value === 'string') return value.length > max ? `${value.slice(0, max)}…` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= CORRECT_ANSWER_MAX_DEPTH) throw new Error('nested too deeply');
+  if (Array.isArray(value)) return value.map((item) => trimStringLeaves(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      trimStringLeaves(item, depth + 1),
+    ]),
+  );
+}
+
 /** Validate the 202 route body's questions (contract §4.3). Throws a message for INVALID_REQUEST. */
 export function parseReviewedQuestions(value: unknown): ReviewedQuestion[] {
   const { min, max } = QUESTION_REVIEW_LIMITS.questions;
@@ -568,18 +592,20 @@ export function parseReviewedQuestions(value: unknown): ReviewedQuestion[] {
     if (!Array.isArray(choices) || choices.length > 12) {
       throw new Error(`questions[${index}].choices must be an array of at most 12 choices`);
     }
-    const correctAnswer =
-      q.correctAnswer && typeof q.correctAnswer === 'object' && !Array.isArray(q.correctAnswer)
-        ? (q.correctAnswer as Record<string, unknown>)
-        : null;
-    // L-6: bounded like the texts (contract §4.3), measured serialized.
-    if (
-      correctAnswer &&
-      JSON.stringify(correctAnswer).length > QUESTION_REVIEW_LIMITS.correctAnswerMax
-    ) {
-      throw new Error(
-        `questions[${index}].correctAnswer must serialize to at most ${QUESTION_REVIEW_LIMITS.correctAnswerMax} characters`,
-      );
+    // L-6 / LOW-6: trimmed like the texts (contract §4.3): every string inside is
+    // cut to the text bound; only an object still too large after that refuses.
+    let correctAnswer: Record<string, unknown> | null = null;
+    if (q.correctAnswer && typeof q.correctAnswer === 'object' && !Array.isArray(q.correctAnswer)) {
+      try {
+        correctAnswer = trimStringLeaves(q.correctAnswer, 0) as Record<string, unknown>;
+      } catch {
+        throw new Error(`questions[${index}].correctAnswer is nested too deeply`);
+      }
+      if (JSON.stringify(correctAnswer).length > QUESTION_REVIEW_LIMITS.correctAnswerMax) {
+        throw new Error(
+          `questions[${index}].correctAnswer must serialize to at most ${QUESTION_REVIEW_LIMITS.correctAnswerMax} characters`,
+        );
+      }
     }
     return {
       questionId: q.questionId,
