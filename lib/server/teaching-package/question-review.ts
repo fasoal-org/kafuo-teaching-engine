@@ -406,14 +406,15 @@ export async function runQuestionReview(
       ?.subjectCode;
     // HIGH-1: the reads above may have stalled past the lease (evicted, or
     // claimed elsewhere): never start the paid call under a lost lease.
-    if (
-      deps.signal?.aborted ||
-      !(await renewQuestionReviewLease(pool as unknown as Queryable, claimed.id, {
-        workerId,
-        now: now(),
-        leaseMs: QUESTION_REVIEW_LEASE_MS,
-      }))
-    ) {
+    if (deps.signal?.aborted) return null;
+    const kept = await renewQuestionReviewLease(pool as unknown as Queryable, claimed.id, {
+      workerId,
+      now: now(),
+      leaseMs: QUESTION_REVIEW_LEASE_MS,
+    });
+    // LOW-2 (as M-A): an eviction that lands while the renewal is in flight
+    // still stops the paid call.
+    if (!kept || deps.signal?.aborted) {
       log.warn(`question review ${claimed.id}: the lease moved on before the call`);
       return null;
     }

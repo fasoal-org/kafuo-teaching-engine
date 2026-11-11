@@ -666,6 +666,33 @@ describe('question-set review (Phase 4)', () => {
       )
     ).rows[0] as { status: string; lease_owner: string | null; reviewed_at: number | null };
 
+  it('LOW-2: an eviction that lands while the question lease renewal is in flight still stops the paid call', async () => {
+    const seeded = await seed();
+    const { json } = await queue(seeded);
+    const id = json.questionReview.id;
+    const { runQuestionReview } = await import('@/lib/server/teaching-package/question-review');
+    const controller = new AbortController();
+    const evictingDuringRenewal = {
+      query: async (text: string, params?: unknown[]) => {
+        const result = await pool.query(text, params);
+        if (text.includes('SET lease_until')) controller.abort();
+        return result;
+      },
+      connect: () => pool.connect(),
+    } as unknown as ConnectableQueryable;
+    expect(
+      await runQuestionReview(id, {
+        pool: evictingDuringRenewal,
+        callReviewer: failingQ1,
+        signal: controller.signal,
+      }),
+    ).toBeNull();
+    expect(failingQ1).not.toHaveBeenCalled();
+    expect(await events()).toEqual([]);
+    // The run gives its own lease up (L-D).
+    await vi.waitFor(async () => expect((await reviewRow(id)).lease_owner).toBeNull());
+  });
+
   it('L-D: with no revoke, an aborted question run stores nothing and gives its own lease up at once', async () => {
     const seeded = await seed();
     const { json } = await queue(seeded);
