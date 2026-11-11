@@ -93,6 +93,7 @@ describe('createRegenerationRoute', () => {
   it('LOW-1: a reviewer run signal reaches every call; an aborted call is remembered as ABORTED (no signal: as before)', async () => {
     const controller = new AbortController();
     const execute = vi.fn(async () => {
+      controller.abort(); // the executor throws this only once the caller aborted
       throw new TeachingCallAbortedError(['a']);
     });
     const route = await createRegenerationRoute({
@@ -120,6 +121,19 @@ describe('createRegenerationRoute', () => {
       Record<string, unknown>,
     ];
     expect(plainOptions).not.toHaveProperty('signal');
+  });
+
+  it('nit: a signal that was not aborted keeps the old mapping for an abort error too', async () => {
+    const execute = vi.fn(async () => {
+      throw new TeachingCallAbortedError(['a']);
+    });
+    const route = await createRegenerationRoute({
+      ...base,
+      execute: execute as never,
+      signal: new AbortController().signal,
+    });
+    await expect(route.aiCallFor('scene-content:slide')('s', 'u')).rejects.toThrow('aborted');
+    expect(() => route.assertAvailable()).not.toThrow();
   });
 
   it('LOW-2: without a caller signal an abort error keeps the old mapping (not remembered, not ABORTED)', async () => {

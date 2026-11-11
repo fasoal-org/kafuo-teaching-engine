@@ -141,7 +141,7 @@ export async function createRegenerationRoute(
         );
         return result.text;
       } catch (error) {
-        if (input.signal && error instanceof TeachingCallAbortedError) {
+        if (input.signal?.aborted && error instanceof TeachingCallAbortedError) {
           // The reviewer run was evicted: stop, never retry. LOW-2: only with
           // a caller signal; without one the editor keeps its old mapping.
           failure ??= new TeachingPackageError(
