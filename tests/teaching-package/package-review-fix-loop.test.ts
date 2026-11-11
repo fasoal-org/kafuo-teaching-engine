@@ -9,7 +9,11 @@ import {
   fixRetryIdempotencyKey,
   PACKAGE_REVIEWER_ACTOR,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
-import { reviewStatusOf } from '@/lib/server/teaching-package/package-review';
+import { REVIEW_LEASE_MS, reviewStatusOf } from '@/lib/server/teaching-package/package-review';
+import {
+  DEFAULT_SCENE_REGENERATION_LEASE_SECONDS,
+  sceneRegenerationLeaseSeconds,
+} from '@/lib/server/teaching-package/scene-regeneration-store';
 import { reviewSlidesOf } from '@/lib/server/teaching-package/package-review-input';
 import type {
   PackageReview,
@@ -844,6 +848,18 @@ describe('package review fix loop (D-1)', () => {
         `${fixIdempotencyKey('tpr-abc', 's1')}-r`,
       );
     });
+  });
+
+  it('LOW-3: the slide regeneration lease stays below the review lease (an evicted run’s T2 can never commit after a resume)', () => {
+    expect(DEFAULT_SCENE_REGENERATION_LEASE_SECONDS * 1000).toBeLessThan(REVIEW_LEASE_MS);
+    // What the service uses when SCENE_REGENERATION_LEASE_SECONDS is not set.
+    const saved = process.env.SCENE_REGENERATION_LEASE_SECONDS;
+    delete process.env.SCENE_REGENERATION_LEASE_SECONDS;
+    try {
+      expect(sceneRegenerationLeaseSeconds() * 1000).toBeLessThan(REVIEW_LEASE_MS);
+    } finally {
+      if (saved !== undefined) process.env.SCENE_REGENERATION_LEASE_SECONDS = saved;
+    }
   });
 
   it('instruction and key stay within the regeneration limits', () => {
