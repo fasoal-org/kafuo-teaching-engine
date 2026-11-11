@@ -289,7 +289,8 @@ async function subjectRoutedModelPort(scope: QuestionRouteScope): Promise<Questi
           throw new TeachingPackageError('TEACHING_MODEL_UNAVAILABLE', error.message, {
             subjectCode: policy.subjectCode,
             attemptIds: error.attemptIds,
-            outcomes: error.outcomes,
+            // L-7: the 503 details keep their earlier shape — no model strings.
+            outcomes: error.outcomes.map(({ role, outcome }) => ({ role, outcome })),
             retryable: error.retryable,
           });
         }

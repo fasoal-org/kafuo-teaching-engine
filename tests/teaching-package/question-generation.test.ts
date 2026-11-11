@@ -410,11 +410,21 @@ describe('teaching question generation from an approved package', () => {
     it('both routes unusable → TEACHING_MODEL_UNAVAILABLE (503, retryable); nothing off-shape is handed to Kafuo', async () => {
       const seeded = await seed({ subjectCode: 'MATH' });
       mocks.callLLM.mockResolvedValue(ok('not json at all'));
-      await expect(generateTeachingQuestionSet(qp(), request(seeded))).rejects.toMatchObject({
+      const refusal = generateTeachingQuestionSet(qp(), request(seeded));
+      await expect(refusal).rejects.toMatchObject({
         code: 'TEACHING_MODEL_UNAVAILABLE',
         status: 503,
         details: expect.objectContaining({ subjectCode: 'MATH', retryable: true }),
       });
+      // L-7: the 503 details keep their earlier shape — role and outcome only, no model strings.
+      const details = ((await refusal.catch((error: unknown) => error)) as { details: unknown })
+        .details as { outcomes: unknown[] };
+      expect(details.outcomes).toEqual([
+        { role: 'primary', outcome: 'unusable_output' },
+        { role: 'fallback', outcome: 'unusable_output' },
+      ]);
+      expect(JSON.stringify(details)).not.toContain('gpt-6-luna');
+      expect(JSON.stringify(details)).not.toContain('qwen3.7-flash');
       expect(mocks.callLLM).toHaveBeenCalledTimes(2);
       expect((await ledger()).map((row) => row.outcome)).toEqual([
         'unusable_output',
