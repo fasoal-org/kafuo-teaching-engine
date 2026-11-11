@@ -379,6 +379,28 @@ describe('package review fix loop (D-1)', () => {
     expect(result.fixes[0]).toMatchObject({ code: 'REREVIEW_UNAVAILABLE' });
   });
 
+  it('LOW-2: a failed re-review after an audio failure keeps the audio code on the fix row', async () => {
+    const { run } = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2')],
+      regenerateAudio: vi.fn(async () => {
+        throw new TeachingPackageError('NARRATION_AUDIO_UNAVAILABLE', 'voice down');
+      }),
+      rereview: () => {
+        throw new Error('both reviewer routes failed');
+      },
+    });
+    const result = await run();
+    expect(result.findings[0]).toMatchObject({
+      status: 'open',
+      teacherReason: 'REREVIEW_UNAVAILABLE',
+    });
+    expect(result.fixes[0]).toMatchObject({
+      outcome: 'still_wrong',
+      code: 'NARRATION_AUDIO_UNAVAILABLE',
+    });
+  });
+
   it('L-2: a re-review with only a different error closes the original as fixed and adds the new one open', async () => {
     const { run } = setup({
       scenes,

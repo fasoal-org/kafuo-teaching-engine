@@ -298,13 +298,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       }
 
       if (rereview === null) {
-        // L-2: the new slide was never checked again — not "still wrong".
+        // L-2: the new slide was never checked again — not "still wrong" (the
+        // finding's reason says so). LOW-2: an audio failure keeps its code here.
         mark(slide.id, 'REREVIEW_UNAVAILABLE');
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
           outcome: 'still_wrong',
-          code: 'REREVIEW_UNAVAILABLE',
+          code: audioCode ?? 'REREVIEW_UNAVAILABLE',
           regenerationId,
         });
         await context.recordProgress(findings, fixes);
