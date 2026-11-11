@@ -7,9 +7,12 @@
  *      instruction (the only text the slide writer sees);
  *   2. re-synthesise its narration through `scene-narration-audio.ts`, so a
  *      learner never hears old audio over a new slide;
- *   3. re-review ONLY that slide, with its neighbours as context.
- * Clean → its findings are `fixed`. Still wrong, refused, or not attempted →
- * they stay open with the reason the teacher reads.
+ *   3. re-review ONLY that slide, with its neighbours (as they are now) as context.
+ * A finding whose check the re-review no longer reports is `fixed` — unless the
+ * slide's narration audio failed (`NARRATION_AUDIO_FAILED`, D-5). Reported
+ * again, refused, not re-reviewed (`REREVIEW_UNAVAILABLE`) or not attempted →
+ * it stays open with the reason the teacher reads; a new, different error the
+ * re-review found is added open (`NOT_ATTEMPTED`).
  *
  * Teacher-only, never regenerated: S5 (a slide cannot be added or moved after
  * Scenes exist), a bank quiz, and a quiz check on a non-quiz Scene.
@@ -29,7 +32,10 @@ import {
   sceneToReviewSlide,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
-import { PACKAGE_QUIZ_CHECKS } from '@/lib/server/teaching-package/package-review-prompt';
+import {
+  PACKAGE_QUIZ_CHECKS,
+  type ReviewerFinding,
+} from '@/lib/server/teaching-package/package-review-prompt';
 import type {
   StoredFinding,
   StoredFix,
@@ -147,6 +153,9 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       ),
     );
     const scenesById = new Map(context.scenes.map((scene) => [scene.id, scene]));
+    // L-3: the slides as they are now — a slide regenerated earlier in this loop
+    // is shown to a later re-review in its new form.
+    const currentSlides = new Map(slides.map((candidate) => [candidate.id, candidate]));
     const mark = (sceneId: string, reason: TeacherReason) => {
       for (const finding of findings) {
         if (
@@ -267,21 +276,61 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       }
       scenesById.set(slide.id, regenerated);
 
-      // Re-review this slide only, with its neighbours as context.
+      // Re-review this slide only, with its neighbours (as they are now) as context.
       const changed = sceneToReviewSlide(regenerated);
-      let stillWrong: StoredFinding[] = [];
-      let rereviewCode: string | null = null;
+      currentSlides.set(slide.id, changed);
+      const nowSlides = slides.map((candidate) => currentSlides.get(candidate.id) ?? candidate);
+      let rereview: ReviewerFinding[] | null = null;
       try {
         if (!(await context.heartbeat())) throw new Error('lease lost');
         const { answer } = await context.callReviewer({
           review,
           units: context.units,
-          slides: neighbourhood(slides, changed),
+          slides: neighbourhood(nowSlides, changed),
           focusIds: new Set([slide.id]),
         });
-        stillWrong = answer.findings
-          .filter((finding) => finding.targetId === slide.id)
-          .map((finding, index) => ({
+        rereview = answer.findings.filter((finding) => finding.targetId === slide.id);
+      } catch (error) {
+        log.warn(
+          `review ${review.id}: re-review of ${slide.id} failed`,
+          JSON.stringify(describeErrorSafely(error)),
+        );
+      }
+
+      if (rereview === null) {
+        // L-2: the new slide was never checked again — not "still wrong".
+        mark(slide.id, 'REREVIEW_UNAVAILABLE');
+        fixes.push({
+          sceneId: slide.id,
+          findingIds: sceneFindings.map((f) => f.id),
+          outcome: 'still_wrong',
+          code: 'REREVIEW_UNAVAILABLE',
+          regenerationId,
+        });
+        await context.recordProgress(findings, fixes);
+        continue;
+      }
+
+      // L-2: an original finding stays wrong only when the re-review reports its
+      // check again; a re-review with only different findings closes it.
+      const reportedChecks = new Set(rereview.map((finding) => finding.check));
+      let stillWrong = false;
+      for (const finding of sceneFindings) {
+        if (reportedChecks.has(finding.check)) {
+          finding.teacherReason = 'STILL_WRONG';
+          stillWrong = true;
+        } else if (audioCode !== null) {
+          // D-5: the content is fixed, but the slide has no (or partial) audio.
+          finding.teacherReason = 'NARRATION_AUDIO_FAILED';
+        } else {
+          finding.status = 'fixed';
+          finding.teacherReason = null;
+        }
+      }
+      const originalChecks = new Set(sceneFindings.map((finding) => finding.check));
+      findings.push(
+        ...rereview.map((finding, index) => {
+          const added: StoredFinding = {
             id: `r-${slide.order}-${index + 1}`,
             targetId: slide.id,
             targetTitle: changed.title,
@@ -291,40 +340,23 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             bookEvidence: finding.bookEvidence,
             whatIsWrong: finding.whatIsWrong,
             fixNote: finding.fixNote,
-            status: 'open' as const,
-            teacherReason: 'STILL_WRONG' as const,
-          }));
-      } catch (error) {
-        rereviewCode = 'REREVIEW_UNAVAILABLE';
-        log.warn(
-          `review ${review.id}: re-review of ${slide.id} failed`,
-          JSON.stringify(describeErrorSafely(error)),
-        );
-      }
-
-      if (rereviewCode === null && stillWrong.length === 0) {
-        for (const finding of sceneFindings) {
-          finding.status = 'fixed';
-          finding.teacherReason = null;
-        }
-        fixes.push({
-          sceneId: slide.id,
-          findingIds: sceneFindings.map((f) => f.id),
-          outcome: 'fixed',
-          code: audioCode,
-          regenerationId,
-        });
-      } else {
-        mark(slide.id, 'STILL_WRONG');
-        findings.push(...stillWrong);
-        fixes.push({
-          sceneId: slide.id,
-          findingIds: sceneFindings.map((f) => f.id),
-          outcome: 'still_wrong',
-          code: rereviewCode ?? audioCode,
-          regenerationId,
-        });
-      }
+            status: 'open',
+            teacherReason: null,
+          };
+          // A new error the one regeneration did not target was never attempted.
+          added.teacherReason = originalChecks.has(finding.check)
+            ? 'STILL_WRONG'
+            : (teacherOnlyReason(added, nowSlides) ?? 'NOT_ATTEMPTED');
+          return added;
+        }),
+      );
+      fixes.push({
+        sceneId: slide.id,
+        findingIds: sceneFindings.map((f) => f.id),
+        outcome: stillWrong ? 'still_wrong' : 'fixed',
+        code: audioCode,
+        regenerationId,
+      });
       await context.recordProgress(findings, fixes);
     }
     return { findings, fixes };

@@ -33,14 +33,21 @@ export const TERMINAL_REVIEW_STATUSES: readonly PackageReviewStatus[] = [
   'unavailable',
 ];
 
-/** Why an open finding waits for a person (contract §2). */
+/**
+ * Why an open finding waits for a person (contract §2). Review fixes added:
+ * `NARRATION_AUDIO_FAILED` (D-5: the content was fixed, its narration audio
+ * failed or is partial) and `REREVIEW_UNAVAILABLE` (L-2: the regenerated slide
+ * could not be checked again).
+ */
 export type TeacherReason =
   | 'S5_TEACHER_ONLY'
   | 'BANK_QUIZ_NOT_REGENERABLE'
   | 'REGENERATION_REFUSED'
   | 'STILL_WRONG'
   | 'VERSION_CHANGED'
-  | 'NOT_ATTEMPTED';
+  | 'NOT_ATTEMPTED'
+  | 'NARRATION_AUDIO_FAILED'
+  | 'REREVIEW_UNAVAILABLE';
 
 export interface StoredFinding {
   id: string;

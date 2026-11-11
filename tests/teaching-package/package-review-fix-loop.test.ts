@@ -8,6 +8,7 @@ import {
   fixInstruction,
   PACKAGE_REVIEWER_ACTOR,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
+import { reviewStatusOf } from '@/lib/server/teaching-package/package-review';
 import { reviewSlidesOf } from '@/lib/server/teaching-package/package-review-input';
 import type {
   PackageReview,
@@ -321,7 +322,7 @@ describe('package review fix loop (D-1)', () => {
     expect(result.findings[0]).toMatchObject({ status: 'open', teacherReason: 'VERSION_CHANGED' });
   });
 
-  it('a narration audio failure keeps the content fix and records the audio code (the slide keeps its audio mark)', async () => {
+  it('D-5: a narration audio failure keeps the content fix but the finding stays open (NARRATION_AUDIO_FAILED)', async () => {
     const { run } = setup({
       scenes,
       findings: [finding('f1', 's1', 'S4')],
@@ -330,11 +331,123 @@ describe('package review fix loop (D-1)', () => {
       }),
     });
     const result = await run();
-    expect(result.findings[0]).toMatchObject({ status: 'fixed' });
+    expect(result.findings[0]).toMatchObject({
+      status: 'open',
+      teacherReason: 'NARRATION_AUDIO_FAILED',
+    });
+    expect(reviewStatusOf(result.findings)).toBe('needs_teacher');
     expect(result.fixes[0]).toMatchObject({
       outcome: 'fixed',
       code: 'NARRATION_AUDIO_UNAVAILABLE',
     });
+  });
+
+  it('D-5: partial narration audio also keeps the finding open', async () => {
+    const regenerated = slide('s1', 1, 'مصحح');
+    const { run } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S1')],
+      regenerateAudio: vi.fn(async () => ({
+        sceneId: 's1',
+        scene: regenerated,
+        rev: 3,
+        generated: 1,
+        missing: 2,
+      })),
+    });
+    const result = await run();
+    expect(result.findings[0]).toMatchObject({
+      status: 'open',
+      teacherReason: 'NARRATION_AUDIO_FAILED',
+    });
+    expect(result.fixes[0]).toMatchObject({ outcome: 'fixed', code: 'NARRATION_AUDIO_PARTIAL' });
+  });
+
+  it('L-2: a re-review that fails leaves the finding REREVIEW_UNAVAILABLE, never STILL_WRONG', async () => {
+    const { run, regenerate } = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2')],
+      rereview: () => {
+        throw new Error('both reviewer routes failed');
+      },
+    });
+    const result = await run();
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(result.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+      ['f1', 'open', 'REREVIEW_UNAVAILABLE'],
+    ]);
+    expect(result.fixes[0]).toMatchObject({ code: 'REREVIEW_UNAVAILABLE' });
+  });
+
+  it('L-2: a re-review with only a different error closes the original as fixed and adds the new one open', async () => {
+    const { run } = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2'), finding('f2', 's2', 'S4')],
+      rereview: (focus) => [
+        {
+          targetId: focus,
+          check: 'S2',
+          severity: 'high',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'ما زال الناتج خطأ',
+          fixNote: 'n',
+        },
+        {
+          targetId: focus,
+          check: 'S3',
+          severity: 'medium',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'رقم جديد مختلف عن الكتاب',
+          fixNote: 'n',
+        },
+      ],
+    });
+    const result = await run();
+    expect(result.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+      ['f1', 'S2', 'open', 'STILL_WRONG'],
+      ['f2', 'S4', 'fixed', null],
+      ['r-2-1', 'S2', 'open', 'STILL_WRONG'],
+      ['r-2-2', 'S3', 'open', 'NOT_ATTEMPTED'],
+    ]);
+    expect(result.fixes[0]).toMatchObject({ outcome: 'still_wrong' });
+
+    const onlyDifferent = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2')],
+      rereview: (focus) => [
+        {
+          targetId: focus,
+          check: 'S4',
+          severity: 'low',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'كلمة إنجليزية',
+          fixNote: 'n',
+        },
+      ],
+    });
+    const closed = await onlyDifferent.run();
+    expect(closed.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+      ['f1', 'S2', 'fixed', null],
+      ['r-2-1', 'S4', 'open', 'NOT_ATTEMPTED'],
+    ]);
+    expect(closed.fixes[0]).toMatchObject({ outcome: 'fixed' });
+    expect(reviewStatusOf(closed.findings)).toBe('needs_teacher');
+  });
+
+  it('L-3: a re-review sees a neighbour regenerated earlier in the same loop in its new form', async () => {
+    const { run, callReviewer } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S1'), finding('f2', 's2', 'S1')],
+    });
+    await run();
+    expect(callReviewer).toHaveBeenCalledTimes(2);
+    const [second] = callReviewer.mock.calls[1]!;
+    expect(second.slides.map((s: { id: string }) => s.id)).toEqual(['s1', 's2', 's3']);
+    expect(second.slides.map((s: { visibleText: string }) => s.visibleText)).toEqual([
+      'مصحح',
+      'مصحح',
+      'ج',
+    ]);
   });
 
   it('instruction and key stay within the regeneration limits', () => {
