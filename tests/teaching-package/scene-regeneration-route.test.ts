@@ -305,30 +305,96 @@ describe('slide regeneration routes', () => {
     expect(audit.length).toBeGreaterThan(0);
   });
 
-  it('LOW-1: a reviewer run signal reaches the model route; aborted after generation, nothing is committed', async () => {
+  const reviewerGrant = {
+    tenantId: 'tenant-test',
+    versionId: `tpv-${STAGE}`,
+    stageId: STAGE,
+    learnerKey: 'system:package-reviewer',
+  };
+  const reviewerActor = { actorRef: 'system:package-reviewer', sessionRef: null };
+
+  it('MEDIUM-1 (D-13): the signal reaches the model route, and an abort AFTER the paid model calls still commits the slide', async () => {
     const { regenerateSlideScene } =
       await import('@/lib/server/teaching-package/scene-regeneration');
-    const grant = {
-      tenantId: 'tenant-test',
-      versionId: `tpv-${STAGE}`,
-      stageId: STAGE,
-      learnerKey: 'system:package-reviewer',
-    };
     const before = await sceneState('scene-1');
     const controller = new AbortController();
-    // The review run is evicted while the slide is being written.
+    // The review run is evicted once the (paid) slide is written by the model.
     mocks.duringGeneration = async () => controller.abort();
+    const response = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body('key-reviewer-late-abort'),
+      { pool: pool as never, actor: reviewerActor, signal: controller.signal },
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({ signal: controller.signal });
+    const [row] = await rows();
+    expect(row).toMatchObject({ status: 'succeeded' });
+    expect((await sceneState('scene-1'))!.rev).toBe(before!.rev + 1);
+  });
+
+  it('LOW-3: an already-aborted reviewer run starts no regeneration — no row, no burnt key', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const controller = new AbortController();
+    controller.abort();
     await expect(
-      regenerateSlideScene(grant, 'scene-1', body('key-reviewer-abort'), {
+      regenerateSlideScene(reviewerGrant, 'scene-1', body('key-reviewer-pre-abort'), {
         pool: pool as never,
-        actor: { actorRef: 'system:package-reviewer', sessionRef: null },
+        actor: reviewerActor,
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ code: 'ABORTED' });
-    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({ signal: controller.signal });
-    const [row] = await rows();
-    expect(row).toMatchObject({ status: 'failed', error_code: 'ABORTED' });
-    expect(await sceneState('scene-1')).toEqual(before);
+    expect(await rows()).toEqual([]);
+    expect(mocks.regenerate).not.toHaveBeenCalled();
+    // The same key is still free for the run that resumes the review.
+    const response = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body('key-reviewer-pre-abort'),
+      { pool: pool as never, actor: reviewerActor },
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('LOW-1 / MEDIUM-1: a mid-call abort is stored as ABORTED and replays as ABORTED; the derived key regenerates once', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
+    const { fixIdempotencyKey, fixRetryIdempotencyKey } =
+      await import('@/lib/server/teaching-package/package-review-fix-loop');
+    const key = fixIdempotencyKey('tpr-abort', 'scene-1');
+    // The evicted run's model call was aborted mid-call (the route raises ABORTED).
+    mocks.regenerate.mockImplementationOnce(async () => {
+      throw new TeachingPackageError('ABORTED', 'the regeneration was stopped');
+    });
+    await expect(
+      regenerateSlideScene(reviewerGrant, 'scene-1', body(key), {
+        pool: pool as never,
+        actor: reviewerActor,
+      }),
+    ).rejects.toMatchObject({ code: 'ABORTED' });
+    expect((await rows())[0]).toMatchObject({ status: 'failed', error_code: 'ABORTED' });
+    // The resumed run's replay of the same key reports ABORTED (not a persistence failure).
+    await expect(
+      regenerateSlideScene(reviewerGrant, 'scene-1', body(key), {
+        pool: pool as never,
+        actor: reviewerActor,
+      }),
+    ).rejects.toMatchObject({
+      code: 'ABORTED',
+      details: { replayed: true, failureCode: 'ABORTED' },
+    });
+    // The derived key regenerates the slide once (nothing was committed before).
+    const before = await sceneState('scene-1');
+    const retried = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body(fixRetryIdempotencyKey('tpr-abort', 'scene-1')),
+      { pool: pool as never, actor: reviewerActor },
+    );
+    expect(retried.status).toBe(200);
+    expect((await sceneState('scene-1'))!.rev).toBe(before!.rev + 1);
   });
 
   it('LOW-1: without a signal (the editor) the route gets none and the regeneration runs as before', async () => {

@@ -175,6 +175,8 @@ const KNOWN_FAILURE_CODES = new Set<string>([
   'STAGE_NOT_LIVE',
   'SKILL_POLICY_REQUIRED',
   'REGENERATION_PERSISTENCE_FAILED',
+  // LOW-1: a regeneration stopped by an evicted reviewer run replays as itself.
+  'ABORTED',
 ]);
 
 /** The error a stored failure code replays as. */
@@ -342,6 +344,14 @@ export async function regenerateSlideScene(
       })
     : null;
 
+  // LOW-3: an evicted reviewer run starts nothing — no row, no burnt key.
+  if (deps.signal?.aborted) {
+    throw new TeachingPackageError(
+      'ABORTED',
+      'the regeneration was not started: the review run that asked for it was evicted',
+    );
+  }
+
   // T1.
   const started = await startSceneRegeneration(pool, {
     id: regenerationId,
@@ -465,16 +475,9 @@ export async function regenerateSlideScene(
     throw error;
   }
 
-  if (deps.signal?.aborted) {
-    // LOW-1: the reviewer run that asked for this regeneration was evicted
-    // after the last model call: its candidate is never committed.
-    await fail('ABORTED');
-    throw new TeachingPackageError(
-      'ABORTED',
-      'the regeneration was stopped: the review run that asked for it was evicted',
-      { regenerationId: row.id },
-    );
-  }
+  // MEDIUM-1 (D-13): no abort check here. Every model call is paid by now,
+  // and T2 is atomic and guarded by the attempt token and the revision, so a
+  // finished candidate is committed rather than thrown away.
 
   // T2.
   try {

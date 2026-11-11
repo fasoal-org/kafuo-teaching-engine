@@ -6,6 +6,7 @@ import {
   createPackageReviewFixLoop,
   fixIdempotencyKey,
   fixInstruction,
+  fixRetryIdempotencyKey,
   PACKAGE_REVIEWER_ACTOR,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import { reviewStatusOf } from '@/lib/server/teaching-package/package-review';
@@ -671,6 +672,96 @@ describe('package review fix loop (D-1)', () => {
     await plain.run();
     expect(plain.regenerate.mock.calls[0]![3]).not.toHaveProperty('signal');
     expect(plain.regenerateAudio.mock.calls[0]![2]).not.toHaveProperty('signal');
+  });
+
+  describe('MEDIUM-1 (D-13): a regeneration an evicted run stopped mid-call', () => {
+    const abortedReplay = () =>
+      new TeachingPackageError(
+        'ABORTED',
+        'this regeneration failed (ABORTED); nothing was written',
+        {
+          regenerationId: 'tsr-old',
+          failureCode: 'ABORTED',
+          replayed: true,
+        },
+      );
+    const succeeded = (sceneId: string) => {
+      const next = slide(sceneId, 1, 'مصحح');
+      return {
+        status: 200,
+        body: {
+          regenerationId: 'tsr-retry',
+          status: 'succeeded',
+          replayed: false,
+          sceneId,
+          scene: next,
+          resultSceneRev: 2,
+          current: { rev: 2, scene: next },
+        },
+      };
+    };
+
+    it('is fixed automatically on resume through the ONE derived key', async () => {
+      const base = fixIdempotencyKey('tpr-abc', 's1');
+      const regenerate = vi.fn(
+        async (_grant: unknown, sceneId: string, request: { idempotencyKey: string }) => {
+          if (request.idempotencyKey === base) throw abortedReplay();
+          return succeeded(sceneId);
+        },
+      );
+      const regenerateAudio = vi.fn(async (_grant: unknown, sceneId: string) => ({
+        sceneId,
+        scene: slide(sceneId, 1, 'مصحح'),
+        rev: 3,
+        generated: 1,
+        missing: 0,
+      }));
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's1', 'S1')],
+        regenerate,
+        regenerateAudio,
+      });
+      const result = await run();
+      expect(regenerate.mock.calls.map((call) => call[2].idempotencyKey)).toEqual([
+        base,
+        fixRetryIdempotencyKey('tpr-abc', 's1'),
+      ]);
+      expect(result.findings[0]).toMatchObject({ status: 'fixed', teacherReason: null });
+      expect(result.fixes[0]).toMatchObject({ outcome: 'fixed', regenerationId: 'tsr-retry' });
+    });
+
+    it('a second ABORTED goes to the teacher, with no third regeneration', async () => {
+      const regenerate = vi.fn(async () => {
+        throw abortedReplay();
+      });
+      const { run } = setup({ scenes, findings: [finding('f1', 's1', 'S1')], regenerate });
+      const result = await run();
+      expect(regenerate).toHaveBeenCalledTimes(2);
+      expect(result.findings[0]).toMatchObject({
+        status: 'open',
+        teacherReason: 'REGENERATION_REFUSED',
+      });
+      expect(result.fixes[0]).toMatchObject({ outcome: 'refused', code: 'ABORTED' });
+    });
+
+    it('any other refusal is not retried', async () => {
+      const regenerate = vi.fn(async () => {
+        throw new TeachingPackageError('SACRED_TEXT_ALTERED', 'sacred text protected');
+      });
+      const { run } = setup({ scenes, findings: [finding('f1', 's1', 'S1')], regenerate });
+      await run();
+      expect(regenerate).toHaveBeenCalledTimes(1);
+    });
+
+    it('the derived key stays within the key rules', () => {
+      const long = fixRetryIdempotencyKey('tpr-'.padEnd(120, 'x'), 'scene/with spaces');
+      expect(long).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
+      expect(long.endsWith('-r')).toBe(true);
+      expect(fixRetryIdempotencyKey('tpr-abc', 's1')).toBe(
+        `${fixIdempotencyKey('tpr-abc', 's1')}-r`,
+      );
+    });
   });
 
   it('instruction and key stay within the regeneration limits', () => {

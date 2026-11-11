@@ -91,6 +91,24 @@ export function fixIdempotencyKey(reviewId: string, sceneId: string): string {
     : key;
 }
 
+/**
+ * MEDIUM-1 (D-13): the one derived key used after an evicted run's
+ * regeneration of this slide was stopped mid-call (stored `ABORTED`, never
+ * committed). Deterministic, so a later resume replays it too.
+ */
+export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): string {
+  const base = fixIdempotencyKey(reviewId, sceneId);
+  const max = SCENE_REGENERATION_LIMITS.idempotencyKey.max;
+  return `${base.length > max - 2 ? base.slice(0, max - 2) : base}-r`;
+}
+
+/** A replay of a regeneration an evicted reviewer run stopped mid-call. */
+function isAbortedReplay(error: unknown): boolean {
+  if (!(error instanceof TeachingPackageError) || error.code !== 'ABORTED') return false;
+  const details = error.details as { replayed?: unknown; failureCode?: unknown } | undefined;
+  return details?.replayed === true && details.failureCode === 'ABORTED';
+}
+
 /** The slide and its neighbours by display order, the changed slide replaced. */
 function neighbourhood(slides: readonly ReviewSlide[], changed: ReviewSlide): ReviewSlide[] {
   const ordered = slides.map((slide) => (slide.id === changed.id ? changed : slide));
@@ -217,14 +235,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       let regenerated: AppScene;
       let regenerationId: string | null = null;
-      try {
-        const response = await regenerate(
+      const regenerateWith = (idempotencyKey: string) =>
+        regenerate(
           grant,
           slide.id,
           {
             instruction: fixInstruction(sceneFindings),
             reason: `مراجعة الذكاء الاصطناعي ${review.id}: ${[...new Set(sceneFindings.map((f) => f.check))].join(', ')}`,
-            idempotencyKey: fixIdempotencyKey(review.id, slide.id),
+            idempotencyKey,
           },
           {
             pool,
@@ -233,6 +251,19 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             ...(context.signal ? { signal: context.signal } : {}),
           },
         );
+      try {
+        let response: Awaited<ReturnType<typeof regenerate>>;
+        try {
+          response = await regenerateWith(fixIdempotencyKey(review.id, slide.id));
+        } catch (error) {
+          // MEDIUM-1 (D-13, zero manual corrections): an evicted run stopped
+          // this slide's regeneration mid-call, so its key replays ABORTED
+          // although no slide was ever committed. Regenerate ONCE more under
+          // the derived key; a second ABORTED goes to the teacher.
+          if (!isAbortedReplay(error)) throw error;
+          log.warn(`review ${review.id}: ${slide.id} was stopped by an evicted run; one retry`);
+          response = await regenerateWith(fixRetryIdempotencyKey(review.id, slide.id));
+        }
         if (response.status !== 200) {
           throw new TeachingPackageError(
             'SCENE_REGENERATION_IN_PROGRESS',
