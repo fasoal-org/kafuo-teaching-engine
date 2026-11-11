@@ -8,6 +8,7 @@ import {
   fixInstruction,
   fixRetryIdempotencyKey,
   PACKAGE_REVIEWER_ACTOR,
+  REVIEWER_REGENERATION_LEASE_MAX_SECONDS,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import { REVIEW_LEASE_MS, reviewStatusOf } from '@/lib/server/teaching-package/package-review';
 import {
@@ -860,6 +861,26 @@ describe('package review fix loop (D-1)', () => {
     } finally {
       if (saved !== undefined) process.env.SCENE_REGENERATION_LEASE_SECONDS = saved;
     }
+  });
+
+  it('LOW-1: even with SCENE_REGENERATION_LEASE_SECONDS=99999, the lease the fix loop passes stays below the review lease', async () => {
+    vi.stubEnv('SCENE_REGENERATION_LEASE_SECONDS', '99999');
+    try {
+      expect(sceneRegenerationLeaseSeconds()).toBe(99_999); // the editor's lease: unclamped
+      const { run, regenerate } = setup({ scenes, findings: [finding('f1', 's1', 'S1')] });
+      await run();
+      const passed = (regenerate.mock.calls[0]![3] as { leaseSeconds?: number }).leaseSeconds;
+      expect(passed).toBe(REVIEWER_REGENERATION_LEASE_MAX_SECONDS);
+      expect(passed! * 1000).toBeLessThan(REVIEW_LEASE_MS);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    // Unset: the default lease, already below the cap.
+    const { run, regenerate } = setup({ scenes, findings: [finding('f1', 's1', 'S1')] });
+    await run();
+    expect((regenerate.mock.calls[0]![3] as { leaseSeconds?: number }).leaseSeconds).toBe(
+      Math.min(sceneRegenerationLeaseSeconds(), REVIEWER_REGENERATION_LEASE_MAX_SECONDS),
+    );
   });
 
   it('instruction and key stay within the regeneration limits', () => {

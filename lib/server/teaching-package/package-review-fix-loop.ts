@@ -48,7 +48,10 @@ import {
   SCENE_REGENERATION_LIMITS,
   type RegenerationGrant,
 } from '@/lib/server/teaching-package/scene-regeneration';
-import { readLiveScene } from '@/lib/server/teaching-package/scene-regeneration-store';
+import {
+  readLiveScene,
+  sceneRegenerationLeaseSeconds,
+} from '@/lib/server/teaching-package/scene-regeneration-store';
 import type { AppScene } from '@/lib/types/stage';
 import type { FixLoop, FixLoopContext } from '@/lib/server/teaching-package/package-review';
 
@@ -92,9 +95,23 @@ export function fixIdempotencyKey(reviewId: string, sceneId: string): string {
 }
 
 /**
- * MEDIUM-1 (D-13): the one derived key used after an evicted run's
- * regeneration of this slide ended without a commit. Deterministic, so a
- * later resume replays it too (a succeeded K-r costs nothing again).
+ * LOW-1: the reviewer's slide regenerations never hold a lease as long as the
+ * review lease (40 min), whatever `SCENE_REGENERATION_LEASE_SECONDS` says, so
+ * an evicted run's T2 can never commit after the review was resumed. A local
+ * constant: importing the review lease from `package-review` would close an
+ * import cycle. The editor's own regenerations are untouched.
+ */
+export const REVIEWER_REGENERATION_LEASE_MAX_SECONDS = 20 * 60;
+
+/** The lease the reviewer's slide regenerations run under. */
+export function reviewerRegenerationLeaseSeconds(): number {
+  return Math.min(sceneRegenerationLeaseSeconds(), REVIEWER_REGENERATION_LEASE_MAX_SECONDS);
+}
+
+/**
+ * MEDIUM-1 (D-13): the one derived key used after this slide's regeneration
+ * was left uncommitted. Deterministic, so a later resume replays it too (a
+ * succeeded K-r costs nothing again).
  */
 export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): string {
   const base = fixIdempotencyKey(reviewId, sceneId);
@@ -103,13 +120,13 @@ export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): strin
 }
 
 /**
- * The stored failures of an evicted run's regeneration, in which nothing was
+ * The stored failures of a regeneration left uncommitted — nothing of it was
  * ever committed: T2's scene write and the move to `succeeded` are one
  * transaction, and the failure write and the lease reclaim touch only
- * `running` rows. With the default leases (regeneration 15 min, review
- * 40 min) the resumed run usually finds the row reclaimed (`LEASE_EXPIRED`) or
- * its late commit refused (`REGENERATION_LEASE_LOST`); `ABORTED` is a call the
- * eviction stopped.
+ * `running` rows. After an eviction (regeneration lease ≤ 20 min, review
+ * lease 40 min) the resumed run usually finds the row reclaimed
+ * (`LEASE_EXPIRED`) or its late commit refused (`REGENERATION_LEASE_LOST`);
+ * `ABORTED` is a call the eviction stopped.
  */
 const UNCOMMITTED_FAILURES: ReadonlySet<string> = new Set([
   'ABORTED',
@@ -117,7 +134,7 @@ const UNCOMMITTED_FAILURES: ReadonlySet<string> = new Set([
   'REGENERATION_LEASE_LOST',
 ]);
 
-/** A replay of a regeneration an evicted reviewer run left uncommitted. */
+/** A replay of a regeneration left uncommitted. */
 function isUncommittedReplay(error: unknown): boolean {
   if (!(error instanceof TeachingPackageError)) return false;
   const details = error.details as { replayed?: unknown; failureCode?: unknown } | undefined;
@@ -276,6 +293,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null },
             // LOW-1: an evicted run's regeneration stops with its signal.
             ...(context.signal ? { signal: context.signal } : {}),
+            // LOW-1 (last round): never a lease as long as the review lease.
+            leaseSeconds: reviewerRegenerationLeaseSeconds(),
           },
         );
       let attempt = await settle(regenerateWith(fixIdempotencyKey(review.id, slide.id)));
