@@ -98,24 +98,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         },
       },
       {
-        // The AI reviewer's fallback model (ai-reviewer-layer plan D-2). Official
-        // id and limits from OpenAI's model page, 10 Nov 2026.
-        id: 'gpt-6-sol',
-        name: 'GPT-6 Sol',
-        contextWindow: 1050000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
         id: 'gpt-5.6',
         name: 'GPT-5.6 Sol',
         contextWindow: 1050000,
@@ -246,6 +228,26 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
           },
         },
       },
+      {
+        // The AI reviewer's fallback model (ai-reviewer-layer plan D-2). Official
+        // id and limits from OpenAI's model page, 10 Nov 2026. Listed LAST on
+        // purpose: the picker order stays as it was; the reviewer resolves it
+        // by model string.
+        id: 'gpt-6-sol',
+        name: 'GPT-6 Sol',
+        contextWindow: 1050000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
     ],
   },
 
@@ -305,24 +307,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     icon: '/logos/claude.svg',
     models: [
-      {
-        // The AI reviewer's primary model (ai-reviewer-layer plan D-2, §4.2).
-        // Thinking is always adaptive: the API rejects `disabled`.
-        id: 'claude-opus-5-5',
-        name: 'Claude Opus 5.5',
-        contextWindow: 1000000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: false,
-            defaultEnabled: true,
-          },
-        },
-      },
       {
         id: 'claude-opus-5',
         name: 'Claude Opus 5',
@@ -464,6 +448,26 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
             toggleable: true,
             budgetAdjustable: true,
             defaultEnabled: false,
+          },
+        },
+      },
+      {
+        // The AI reviewer's primary model (ai-reviewer-layer plan D-2, §4.2).
+        // Thinking is always adaptive: the API rejects `disabled`. Listed LAST
+        // on purpose: the provider's default and the picker order stay as they
+        // were; the reviewer resolves it by model string.
+        id: 'claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        contextWindow: 1000000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: false,
+            defaultEnabled: true,
           },
         },
       },
