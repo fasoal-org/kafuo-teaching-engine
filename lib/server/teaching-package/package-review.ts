@@ -583,17 +583,18 @@ export async function sweepPackageReviews(
       log.warn(`package review ${id} did not keep its lease; evicted from this process`);
       // HIGH-1: revoke its lease, so whatever the evicted run does later (a
       // heartbeat, a save, the finish) is refused, even if no run resumes it now.
-      try {
-        await releaseReviewLease(deps.pool as unknown as Queryable, id, {
-          workerId: entry.leaseOwner,
-          now: now(),
-        });
-      } catch (error) {
+      // L-2: never awaited — a run stuck in its finalize must not hold up the
+      // sweep (and the webhook delivery after it); the exact-owner guard keeps
+      // a late revoke harmless.
+      void releaseReviewLease(deps.pool as unknown as Queryable, id, {
+        workerId: entry.leaseOwner,
+        now: now(),
+      }).catch((error: unknown) => {
         log.error(
           `package review ${id}: the evicted lease could not be revoked`,
           error instanceof Error ? error.name : 'Error',
         );
-      }
+      });
     }
   }
   const free = MAX_PACKAGE_REVIEWS_IN_FLIGHT - runningReviews.size;

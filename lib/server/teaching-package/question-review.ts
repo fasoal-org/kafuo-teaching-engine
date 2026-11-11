@@ -508,18 +508,18 @@ export async function sweepQuestionReviews(
       entry.controller.abort();
       log.warn(`question review ${id} did not keep its lease; evicted from this process`);
       // HIGH-1: revoke its lease, so the evicted run's later save or finish is
-      // refused, even if no run resumes the review in this sweep.
-      try {
-        await releaseQuestionReviewLease(deps.pool as unknown as Queryable, id, {
-          workerId: entry.leaseOwner,
-          now: now(),
-        });
-      } catch (error) {
+      // refused, even if no run resumes the review in this sweep. L-2: never
+      // awaited, so a stuck run cannot hold up the sweep; the exact-owner guard
+      // keeps a late revoke harmless.
+      void releaseQuestionReviewLease(deps.pool as unknown as Queryable, id, {
+        workerId: entry.leaseOwner,
+        now: now(),
+      }).catch((error: unknown) => {
         log.error(
           `question review ${id}: the evicted lease could not be revoked`,
           error instanceof Error ? error.name : 'Error',
         );
-      }
+      });
     }
   }
   const free = MAX_QUESTION_REVIEWS_IN_FLIGHT - runningQuestionReviews.size;

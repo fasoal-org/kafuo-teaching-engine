@@ -2673,7 +2673,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       } as unknown as ConnectableQueryable;
       t += REVIEW_LEASE_MS + 1_000;
       expect(await sweepPackageReviews({ ...deps, pool: listingDown })).toEqual([]);
-      expect((await statusOf(review!.id)).lease_owner).toBeNull();
+      // L-2: the revoke is not awaited by the sweep.
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
       // The evicted run wakes up with an answer: nothing it writes lands.
       gates[0]!({
         summary: 'قديم',
@@ -2701,6 +2702,30 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       gates[1]!({ summary: 'جديد', findings: [] });
       await vi.waitFor(async () => expect((await statusOf(review!.id)).status).toBe('passed'));
       expect(await events('teaching_package.review_completed')).toHaveLength(1);
+    });
+
+    it('L-2: a revoke that hangs never holds up the sweep', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { callReviewer } = gatedReviewer();
+      let hangRevoke = false;
+      const hanging = {
+        query: (text: string, params?: unknown[]) =>
+          hangRevoke && text.includes('SET lease_owner = NULL')
+            ? new Promise(() => {})
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const deps = { pool: hanging, callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      t += REVIEW_LEASE_MS + 1_000;
+      hangRevoke = true;
+      // The sweep returns (and resumes the review) although the revoke never settles.
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
     });
 
     it('HIGH-1: when the revoke of an evicted lease fails, the evicted run still never renews nor finalizes', async () => {

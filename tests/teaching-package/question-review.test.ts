@@ -731,7 +731,8 @@ describe('question-set review (Phase 4)', () => {
     } as unknown as ConnectableQueryable;
     t += QUESTION_REVIEW_LEASE_MS + 1_000;
     expect(await sweepQuestionReviews({ ...deps, pool: listingDown })).toEqual([]);
-    expect((await reviewRow(id)).lease_owner).toBeNull();
+    // L-2: the revoke is not awaited by the sweep.
+    await vi.waitFor(async () => expect((await reviewRow(id)).lease_owner).toBeNull());
     // The aborted call fails in the evicted run: its `unavailable` finish is refused.
     gates[0]!(true);
     await new Promise((resolve) => setTimeout(resolve, 100));
