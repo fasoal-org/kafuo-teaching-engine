@@ -674,7 +674,7 @@ describe('package review fix loop (D-1)', () => {
     expect(plain.regenerateAudio.mock.calls[0]![2]).not.toHaveProperty('signal');
   });
 
-  describe('MEDIUM-1 (D-13): a regeneration an evicted run stopped mid-call', () => {
+  describe('MEDIUM-1 (D-13): a regeneration an evicted run left uncommitted', () => {
     const abortedReplay = () =>
       new TeachingPackageError(
         'ABORTED',
@@ -743,6 +743,88 @@ describe('package review fix loop (D-1)', () => {
         teacherReason: 'REGENERATION_REFUSED',
       });
       expect(result.fixes[0]).toMatchObject({ outcome: 'refused', code: 'ABORTED' });
+    });
+
+    it('MEDIUM: a key reclaimed as LEASE_EXPIRED, or a late commit refused (REGENERATION_LEASE_LOST), is retried once too', async () => {
+      for (const failureCode of ['LEASE_EXPIRED', 'REGENERATION_LEASE_LOST']) {
+        const base = fixIdempotencyKey('tpr-abc', 's1');
+        const regenerate = vi.fn(
+          async (_grant: unknown, sceneId: string, request: { idempotencyKey: string }) => {
+            if (request.idempotencyKey === base) {
+              throw new TeachingPackageError('REGENERATION_LEASE_LOST', 'lease lost', {
+                regenerationId: 'tsr-old',
+                failureCode,
+                replayed: true,
+              });
+            }
+            return succeeded(sceneId);
+          },
+        );
+        const regenerateAudio = vi.fn(async (_grant: unknown, sceneId: string) => ({
+          sceneId,
+          scene: slide(sceneId, 1, 'مصحح'),
+          rev: 3,
+          generated: 1,
+          missing: 0,
+        }));
+        const { run } = setup({
+          scenes,
+          findings: [finding('f1', 's1', 'S1')],
+          regenerate,
+          regenerateAudio,
+        });
+        const result = await run();
+        expect(regenerate).toHaveBeenCalledTimes(2);
+        expect(result.findings[0]).toMatchObject({ status: 'fixed' });
+      }
+      // A FRESH lease loss (this run's own, not a replay) is never retried.
+      const fresh = vi.fn(async () => {
+        throw new TeachingPackageError('REGENERATION_LEASE_LOST', 'lease lost');
+      });
+      const { run } = setup({ scenes, findings: [finding('f1', 's1', 'S1')], regenerate: fresh });
+      await run();
+      expect(fresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('LOW: the lease is renewed right before the paid retry; lost → stop, no retry', async () => {
+      const regenerate = vi.fn(async () => {
+        throw abortedReplay();
+      });
+      const { regenerateAudio, callReviewer } = setup({ scenes, findings: [] });
+      const beats = [true, false];
+      const loop = createPackageReviewFixLoop({
+        regenerate: regenerate as never,
+        regenerateAudio: regenerateAudio as never,
+        readVersion: (async () => ({
+          id: 'tpv-1',
+          tenantId: 't-1',
+          status: 'draft',
+          currentStageId: 'stage-1',
+        })) as never,
+        readScene: async (_pool, _stage, sceneId) => {
+          const scene = scenes.find((s) => s.id === sceneId);
+          return scene ? { rev: 1, scene } : null;
+        },
+      });
+      const heartbeat = vi.fn(async () => beats.shift() ?? false);
+      const result = await loop({
+        pool: {} as never,
+        review: REVIEW,
+        units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+        slides: reviewSlidesOf(scenes),
+        scenes,
+        findings: [finding('f1', 's1', 'S1')],
+        heartbeat,
+        callReviewer: callReviewer as never,
+        recordProgress: vi.fn(async () => {}),
+        now: () => 1,
+      });
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+      expect(regenerate).toHaveBeenCalledTimes(1);
+      expect(result.findings[0]).toMatchObject({
+        status: 'open',
+        teacherReason: 'VERSION_CHANGED',
+      });
     });
 
     it('any other refusal is not retried', async () => {

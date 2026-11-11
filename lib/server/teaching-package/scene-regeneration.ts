@@ -475,9 +475,14 @@ export async function regenerateSlideScene(
     throw error;
   }
 
-  // MEDIUM-1 (D-13): no abort check here. Every model call is paid by now,
-  // and T2 is atomic and guarded by the attempt token and the revision, so a
-  // finished candidate is committed rather than thrown away.
+  // MEDIUM-1 (D-13): no abort check here — T2's own guards decide. T2 commits
+  // only while this attempt still holds a live lease (status, attempt token,
+  // lease_expires_at, revision). With the default leases (regeneration
+  // 15 min, review 40 min) a reviewer run is evicted only after its
+  // regeneration outlived its own lease, so an evicted run's T2 is always
+  // refused (REGENERATION_LEASE_LOST) or its row was already reclaimed
+  // (LEASE_EXPIRED); nothing of it is committed, and the resumed review
+  // regenerates the slide once under the derived key (the fix loop).
 
   // T2.
   try {

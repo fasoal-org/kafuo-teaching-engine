@@ -93,8 +93,8 @@ export function fixIdempotencyKey(reviewId: string, sceneId: string): string {
 
 /**
  * MEDIUM-1 (D-13): the one derived key used after an evicted run's
- * regeneration of this slide was stopped mid-call (stored `ABORTED`, never
- * committed). Deterministic, so a later resume replays it too.
+ * regeneration of this slide ended without a commit. Deterministic, so a
+ * later resume replays it too (a succeeded K-r costs nothing again).
  */
 export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): string {
   const base = fixIdempotencyKey(reviewId, sceneId);
@@ -102,11 +102,38 @@ export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): strin
   return `${base.length > max - 2 ? base.slice(0, max - 2) : base}-r`;
 }
 
-/** A replay of a regeneration an evicted reviewer run stopped mid-call. */
-function isAbortedReplay(error: unknown): boolean {
-  if (!(error instanceof TeachingPackageError) || error.code !== 'ABORTED') return false;
+/**
+ * The stored failures of an evicted run's regeneration, in which nothing was
+ * ever committed: T2's scene write and the move to `succeeded` are one
+ * transaction, and the failure write and the lease reclaim touch only
+ * `running` rows. With the default leases (regeneration 15 min, review
+ * 40 min) the resumed run usually finds the row reclaimed (`LEASE_EXPIRED`) or
+ * its late commit refused (`REGENERATION_LEASE_LOST`); `ABORTED` is a call the
+ * eviction stopped.
+ */
+const UNCOMMITTED_FAILURES: ReadonlySet<string> = new Set([
+  'ABORTED',
+  'LEASE_EXPIRED',
+  'REGENERATION_LEASE_LOST',
+]);
+
+/** A replay of a regeneration an evicted reviewer run left uncommitted. */
+function isUncommittedReplay(error: unknown): boolean {
+  if (!(error instanceof TeachingPackageError)) return false;
   const details = error.details as { replayed?: unknown; failureCode?: unknown } | undefined;
-  return details?.replayed === true && details.failureCode === 'ABORTED';
+  return (
+    details?.replayed === true &&
+    typeof details.failureCode === 'string' &&
+    UNCOMMITTED_FAILURES.has(details.failureCode)
+  );
+}
+
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+function settle<T>(promise: Promise<T>): Promise<Settled<T>> {
+  return promise.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
 }
 
 /** The slide and its neighbours by display order, the changed slide replaced. */
@@ -251,19 +278,26 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             ...(context.signal ? { signal: context.signal } : {}),
           },
         );
-      try {
-        let response: Awaited<ReturnType<typeof regenerate>>;
-        try {
-          response = await regenerateWith(fixIdempotencyKey(review.id, slide.id));
-        } catch (error) {
-          // MEDIUM-1 (D-13, zero manual corrections): an evicted run stopped
-          // this slide's regeneration mid-call, so its key replays ABORTED
-          // although no slide was ever committed. Regenerate ONCE more under
-          // the derived key; a second ABORTED goes to the teacher.
-          if (!isAbortedReplay(error)) throw error;
-          log.warn(`review ${review.id}: ${slide.id} was stopped by an evicted run; one retry`);
-          response = await regenerateWith(fixRetryIdempotencyKey(review.id, slide.id));
+      let attempt = await settle(regenerateWith(fixIdempotencyKey(review.id, slide.id)));
+      if (!attempt.ok && isUncommittedReplay(attempt.error)) {
+        // MEDIUM-1 (D-13, zero manual corrections): an evicted run's
+        // regeneration of this slide ended without a commit, so its key
+        // replays a failure. Regenerate ONCE more under the derived key; a
+        // failure of that one goes to the teacher.
+        log.warn(
+          `review ${review.id}: ${slide.id} was left uncommitted by an evicted run; one retry`,
+        );
+        // LOW: the lease again, right before the paid retry (as before the first).
+        if (!(await context.heartbeat())) {
+          stopped = true;
+          mark(slide.id, 'VERSION_CHANGED');
+          continue;
         }
+        attempt = await settle(regenerateWith(fixRetryIdempotencyKey(review.id, slide.id)));
+      }
+      try {
+        if (!attempt.ok) throw attempt.error;
+        const response = attempt.value;
         if (response.status !== 200) {
           throw new TeachingPackageError(
             'SCENE_REGENERATION_IN_PROGRESS',
