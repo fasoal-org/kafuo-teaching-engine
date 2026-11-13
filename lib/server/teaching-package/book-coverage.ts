@@ -546,8 +546,10 @@ function plannedExerciseItems(
 }
 
 const WORKING_STEP_LABELS: Readonly<Record<DetectedHiddenStepType, string>> = {
+  // Both cycles named: the diagnostic knows the step type, not which cycle the unit counts
+  // along, and a Hijri-only example read as wrong on a weekday item (13 Nov 2026).
   ordered_named_set:
-    'the numbered set (the whole cycle numbered, e.g. محرم = 1 … ذو الحجة = 12) before the step',
+    'the numbered set (the whole cycle numbered, e.g. السبت = 1 … الجمعة = 7, or محرم = 1 … ذو الحجة = 12) before the step',
   clock_time: 'the time worked step by step in minutes, crossing noon explicitly',
 };
 

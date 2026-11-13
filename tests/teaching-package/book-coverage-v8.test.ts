@@ -645,12 +645,90 @@ describe('hidden-step detector', () => {
     ).toEqual([]);
     // «الذي» and the particle «ذو» are no Hijri month beside «صفر».
     expect(detectHiddenStepTypes('العدد الذي صفر في رمضان، وعدد ذو صفر')).toEqual([]);
-    // A weekday after «يوم», and «صفر» as a month in a list, still count.
-    expect(detectHiddenStepTypes('يوم السبت ثم يوم الأحد')).toEqual(['ordered_named_set']);
-    // A one-letter prefix before the article still counts: a two-day list.
-    expect(detectHiddenStepTypes('يتدرب السبت والأحد')).toEqual(['ordered_named_set']);
-    expect(detectHiddenStepTypes('محرم، صفر')).toEqual(['ordered_named_set']);
-    expect(detectHiddenStepTypes('شهر صفر بعد شهر رجب')).toEqual(['ordered_named_set']);
+    // A weekday after «يوم», and «صفر» as a month in a list, still count (with a step).
+    expect(detectHiddenStepTypes('يوم السبت ثم يوم الأحد، فما اليوم بعد 8 أيام؟')).toEqual([
+      'ordered_named_set',
+    ]);
+    // A one-letter prefix before the article still counts: a two-day list and a dual step.
+    expect(detectHiddenStepTypes('يتدرب السبت والأحد، ويرتاح يومين')).toEqual([
+      'ordered_named_set',
+    ]);
+    expect(detectHiddenStepTypes('محرم، صفر، ربيع الأول')).toEqual(['ordered_named_set']);
+    expect(detectHiddenStepTypes('بعد سبعة أشهر من شهر رجب يأتي شهر صفر')).toEqual([
+      'ordered_named_set',
+    ]);
+  });
+
+  it('needs three names, or two with a counted step, before asking for the numbered set', () => {
+    // Lesson 328 unit 6139 (13 Nov 2026): two weekdays in a statement whose hypothesis and
+    // conclusion the learner names. Nothing is counted, so no numbered week is owed.
+    expect(
+      detectHiddenStepTypes(
+        'تأكد\n\nالمثال 1 حدّد الفرض والنتيجة في كلّ من العبارات الشرطية الآتية:\n\n' +
+          '(1 يوم غد هو السبت إذا كان اليوم هو الجمعة.\n\n(2 إذا كان 7 > 5 + 2x، فإن x > 1.\n\n' +
+          '(3 إذا كانت الزاويتان متكاملتين، فإن مجموع قياسيهما 180^\\text{o}',
+      ),
+    ).toEqual([]);
+    expect(detectHiddenStepTypes('يوم السبت ثم يوم الأحد')).toEqual([]);
+    expect(detectHiddenStepTypes('محرم، صفر')).toEqual([]);
+    expect(detectHiddenStepTypes('في يوم الخميس 3 حصص ويوم الجمعة عطلة')).toEqual([]);
+    // An item number before «يوم» is a label, not a count: «(1 يوم …», «2 يوم …» at line start.
+    expect(detectHiddenStepTypes('(1 يوم السبت\n2 يوم الأحد')).toEqual([]);
+    // Each counted step, beside two names.
+    for (const step of [
+      'بعد 10 أيام',
+      'بعد ١٠٠ يوم',
+      'بعد (10 أيام)',
+      'ب3 أيام',
+      'بعد خمسة أشهر',
+      'بعد خمسة وعشرين يومًا',
+      'بعد أسبوعين',
+      'بيومين',
+      'كم يومًا بينهما؟',
+      'فكم يومًا بينهما؟',
+      'how many days later?',
+    ]) {
+      expect(detectHiddenStepTypes(`إذا كان اليوم الجمعة فهل يكون السبت ${step}`)).toEqual([
+        'ordered_named_set',
+      ]);
+    }
+    expect(detectHiddenStepTypes('كم عدد الأيام من الأحد إلى الخميس؟')).toEqual([
+      'ordered_named_set',
+    ]);
+  });
+
+  it('never reads a date, a time or a scattered mention as a counted step', () => {
+    // A number before a singular unit that names the day is a date, not a count.
+    expect(detectHiddenStepTypes('باع 12 يوم السبت و15 يوم الأحد')).toEqual([]);
+    // The minutes of a time of day are no count of days.
+    expect(detectHiddenStepTypes('الساعة 7:30 يوم السبت ثم يوم الأحد')).toEqual([]);
+    // Names and a count in different items (a blank line between) do not add up.
+    expect(
+      detectHiddenStepTypes('(1 اليوم الجمعة.\n\n(2 بعد 10 أيام يبدأ الاختبار.\n\n(3 غدًا السبت.'),
+    ).toEqual([]);
+    // Three names scattered over separate statements are no written sequence.
+    expect(
+      detectHiddenStepTypes(
+        '(1 إذا كان اليوم الأحد فإن الدرس طويل.\n\n(2 يوم الثلاثاء عطلة.\n\n(3 الخميس آخر الأسبوع.',
+      ),
+    ).toEqual([]);
+    // Three names as a sequence still count, with «و» or «ثم» between them.
+    expect(detectHiddenStepTypes('يتدرب الأحد والثلاثاء والخميس')).toEqual(['ordered_named_set']);
+    expect(detectHiddenStepTypes('السبت ثم الأحد ثم الاثنين')).toEqual(['ordered_named_set']);
+    expect(detectHiddenStepTypes('محرم ثم صفر ثم ربيع الأول')).toEqual(['ordered_named_set']);
+  });
+
+  it('keeps an item whole across a blank line with no item number after it', () => {
+    // The stem counts, the choices name the days: one item, split only by a paragraph break.
+    expect(
+      detectHiddenStepTypes(
+        '(5 إذا كان اليوم الأحد، فما اليوم بعد 25 يومًا؟\n\nأ) الخميس ب) الجمعة',
+      ),
+    ).toEqual(['ordered_named_set']);
+    // «100 يوم» before a word that is no day or month name still counts.
+    expect(
+      detectHiddenStepTypes('إذا كان اليوم الجمعة فهل يكون السبت بعد 100 يوم الأولى؟'),
+    ).toEqual(['ordered_named_set']);
   });
 
   it('counts a clock time only with a time marker, never a ratio or scale', () => {

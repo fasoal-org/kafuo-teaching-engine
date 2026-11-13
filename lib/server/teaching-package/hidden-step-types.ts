@@ -102,8 +102,11 @@ const WORD_END = '(?![\\p{L}\\p{N}])';
 /** A word that names a Hijri month, for «صفر»'s list context. */
 const HIJRI_WORD =
   '(?<![\\p{L}])(?:محرم|المحرم|ربيع|جمادي|رجب|شعبان|رمضان|شوال|ذو\\s+ال(?:قعده|حجه)|ذي\\s+ال(?:قعده|حجه)|الحجه|القعده)';
-/** What separates two names of a written list: spaces, punctuation, numbers, «و». */
-const LIST_GAP = '[\\s\\d=:،,()\\-–→←.]{1,12}(?:و\\s*)?';
+/**
+ * What separates two names of a written list or sequence: spaces, punctuation, numbers,
+ * then «و» or «ثم» («محرم، صفر», «السبت ثم الأحد», «يناير / فبراير»).
+ */
+const LIST_GAP = '[\\s\\d=:،,;؛|/()\\-–→←.]{1,12}(?:(?:و|ثم)\\s*)?';
 
 /**
  * A name from a cycle, as a whole word. Months allow an article and a
@@ -139,11 +142,82 @@ const SET_MATCHERS: ReadonlyArray<{ set: string; names: RegExp[] }> = Object.ent
   names: names.map((name) => new RegExp(namePattern(set, name), 'u')),
 }));
 
-/** The cycles whose names the text uses: two distinct names of one cycle at least. */
-function orderedSetsIn(text: string): string[] {
-  return SET_MATCHERS.filter(
-    ({ names }) => names.filter((name) => name.test(text)).length >= 2,
-  ).map(({ set }) => set);
+/** Per cycle: three of its names written one after another, as a list or a sequence. */
+const SEQUENCE_MATCHERS: ReadonlyArray<RegExp> = SET_MATCHERS.map(({ names }) => {
+  const name = `(?:${names.map((pattern) => pattern.source).join('|')})`;
+  return new RegExp(`${name}(?:${LIST_GAP}${name}){2,}`, 'u');
+});
+
+/** Unit forms that, after a number, always count: plural and accusative (normalized). */
+const COUNTED_UNIT = '(?:ايام|يوما|اسابيع|اسبوعا|اشهر|شهرا|شهور|days|weeks|months)';
+/** Singular unit forms: after a number they also name a day or a month («12 يوم السبت»). */
+const SINGLE_UNIT = '(?:يوم|اسبوع|شهر)';
+/**
+ * What a singular unit names instead of counting: «يوم السبت», «يوم غد», «شهر رجب». Only
+ * a day or a month name: «100 يوم الأولى», «100 يوم إلى …» («إلى» normalizes to «الي»)
+ * still count.
+ */
+const NAMED_AFTER =
+  '(?![^\\S\\n]*(?:ال(?:احد|اثنين|اتنين|ثلاثاء|اربعاء|خميس|جمعه|سبت)|غد|امس' +
+  '|(?:ال)?(?:محرم|صفر|ربيع|جمادي|رجب|شعبان|رمضان|شوال)|ذو|ذي' +
+  '|يناير|فبراير|مارس|ابريل|مايو|يونيو|يوليو|اغسطس|سبتمبر|اكتوبر|نوفمبر|ديسمبر)(?![\\p{L}]))';
+/** A number written as words before a unit: «خمسة أيام», «خمسة وعشرين يومًا» (normalized). */
+const NUMBER_WORD =
+  '(?:عشرون|عشرين|ثلاثون|ثلاثين|اربعون|اربعين|خمسون|خمسين|ستون|ستين|سبعون|سبعين|ثمانون|ثمانين|تسعون|تسعين' +
+  '|ثلاثه|ثلاث|اربعه|اربع|خمسه|خمس|سته|ست|سبعه|سبع|ثمانيه|ثماني|ثمان|تسعه|تسع|عشره|عشر|مئه|مائه|الف)';
+/** A one-letter prefix a counted word may carry: «فكم», «بيومين», «وعشرين». */
+const PREFIX = '[وبلف]?';
+
+/**
+ * A step counted along the cycle:
+ * - digits before a plural unit («بعد 10 أيام», «(10 أيام)», «ب3 أيام»);
+ * - digits before a singular unit («100 يوم») that does not name a day or a month
+ *   («12 يوم السبت»), and is no item label: «(1 يوم غد …» (the OCR form «(N»), a number
+ *   opening a line, or the minutes of «7:30 يوم السبت»;
+ * - number words before a unit («خمسة أشهر», «خمسة وعشرين يومًا»);
+ * - a dual («يومين», «شهرين»);
+ * - a «كم» question («فكم يومًا», «كم عدد الأيام»).
+ * «يوم» alone («يوم غد», «يوم السبت») is no step.
+ */
+const COUNTING_CUE = new RegExp(
+  [
+    `(?<![\\p{N}.:])(?:(?<![\\p{L}])|(?<=(?<![\\p{L}])[وبلف]))\\d+[^\\S\\n]*${COUNTED_UNIT}${WORD_END}`,
+    `(?<![\\p{L}\\p{N}.:(])(?<!^[^\\S\\n]*)\\d+[^\\S\\n]*${SINGLE_UNIT}${WORD_END}${NAMED_AFTER}`,
+    `${WORD_START}${PREFIX}${NUMBER_WORD}\\s+(?:${COUNTED_UNIT}${WORD_END}|${SINGLE_UNIT}${WORD_END}${NAMED_AFTER})`,
+    `${WORD_START}${PREFIX}(?:يومين|يومان|اسبوعين|اسبوعان|شهرين|شهران)${WORD_END}`,
+    `${WORD_START}${PREFIX}كم\\s+(?:عدد\\s+)?(?:ال)?(?:${COUNTED_UNIT}|${SINGLE_UNIT})${WORD_END}`,
+    `${WORD_START}how\\s+many\\s+(?:days|weeks|months)${WORD_END}`,
+  ].join('|'),
+  'mu',
+);
+
+/**
+ * A blank line before an item number («(2 …», «2) …», «2. …»): where one book item ends and
+ * the next begins. A blank line alone is only a paragraph break: an item's choices
+ * («أ) الخميس ب) الجمعة») or a wrapped stem may follow it and still belong to the item.
+ */
+const ITEM_BREAK = /\n[^\S\n]*\n(?=[^\S\n]*\(?\d{1,3}[\s).\-])/u;
+
+/**
+ * Whether the text counts along a cycle of names, so its solution owes the numbered set:
+ * - three names of one cycle written as a sequence («الأحد، الثلاثاء، الخميس، …»), or
+ * - two names of one cycle with a counted step ({@link COUNTING_CUE}), in one item.
+ *
+ * Two names alone are not enough (13 Nov 2026, local run, lesson 328 unit 6139): «يوم غد
+ * هو السبت إذا كان اليوم هو الجمعة» is a statement whose hypothesis and conclusion the
+ * learner names; nothing is counted, and the gate blocked the package for a numbered week.
+ * Names and a count from different items (separated by a blank line) or names scattered
+ * over separate statements do not add up either.
+ */
+function countsAlongACycle(text: string): boolean {
+  if (SEQUENCE_MATCHERS.some((sequence) => sequence.test(text))) return true;
+  return text
+    .split(ITEM_BREAK)
+    .some(
+      (item) =>
+        COUNTING_CUE.test(item) &&
+        SET_MATCHERS.some(({ names }) => names.filter((name) => name.test(item)).length >= 2),
+    );
 }
 
 /** `10:15`, `3:00` — a time of day (minutes 00-59). */
@@ -168,7 +242,7 @@ const MARKED_CLOCK_TIME = new RegExp(
 export function detectHiddenStepTypes(text: string): DetectedHiddenStepType[] {
   const normalized = normalizeBookText(text);
   const types: DetectedHiddenStepType[] = [];
-  if (orderedSetsIn(normalized).length > 0) types.push('ordered_named_set');
+  if (countsAlongACycle(normalized)) types.push('ordered_named_set');
   if ((normalized.match(MARKED_CLOCK_TIME) ?? []).length >= 2) types.push('clock_time');
   return types;
 }
