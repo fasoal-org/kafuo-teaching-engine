@@ -2,7 +2,7 @@
   "contract": "kafuo.subject-teaching-skills.v1",
   "teachingModel": { "key": "g5", "versions": ["g5.v9"] },
   "stage": "outcome_visual_explanations",
-  "requirement": { "scope": "every_instructional_scene", "role": "supporting" },
+  "requirement": { "scope": "every_instructional_scene", "role": "primary" },
   "skills": {
     "MATH": { "skillId": "mathematics-academic-teaching", "version": "v1" },
     "PHYSICS": { "skillId": "physics-conceptual-teaching", "version": "v1" },

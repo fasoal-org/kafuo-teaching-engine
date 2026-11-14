@@ -4,8 +4,9 @@
  * - Each of the five Skills is registered and resolves at its exact version.
  * - The subject → Skill map is the shared one.
  * - The request seam refuses a policy that names another subject's Skill.
- * - g5.v9's policy makes the subject Skill a required supporting Skill on every
- *   instructional objective scene, enforced by the existing Stage-1 validator.
+ * - g5.v9's policy makes the subject Skill the required Primary Skill of every
+ *   instructional objective scene, enforced by the existing Stage-1 validator (owner,
+ *   14 Nov 2026, revising the same day's "supporting").
  * - g5.v9 keeps g5.v8's teacher-parity gates.
  */
 import { readFileSync } from 'node:fs';
@@ -71,7 +72,10 @@ describe('the five subject Teaching Skills are canonical and versioned', () => {
     expect(resolved.digest).toBe(skillSourceHash(active));
     expect(resolved.content).toContain(`name: ${skillId}\n`);
     expect(resolved.content).toContain(METHOD_HEADING[subject]);
-    expect(resolved.content).toContain('This is a SUPPORTING Skill.');
+    expect(resolved.content).toContain(
+      'This is the PRIMARY Skill of every teaching slide at this stage.',
+    );
+    expect(resolved.content).not.toContain('SUPPORTING Skill');
     // The shared principles (spec §2) ride every Skill's own immutable snapshot.
     expect(resolved.content).toContain('Never invent a misconception to fill a slot.');
     expect(resolved.content).toContain(
@@ -222,21 +226,21 @@ describe('g5.v9 selection respects the Primary/Supporting rules', () => {
     expect([...resolved.values()].filter((d) => subjectIds.has(d.skillId))).toHaveLength(1);
   });
 
-  it.each(SUBJECTS)(
-    '%s: the subject Skill as supporting under a pedagogical Primary passes',
-    (subject) => {
-      const outlines = [
-        objectiveOutline('s1', {
-          classification: 'instructional',
-          primary: UBD,
-          supporting: [skillOf(subject)],
-        }),
-        // A transition slide, explicitly non-instructional, is exempt.
-        objectiveOutline('s2', { classification: 'non-instructional' }),
-      ];
-      expect(findOutlineSkillSelectionIssues(outlines, g5V9Flow(subject), CATALOG)).toEqual([]);
-    },
-  );
+  it.each(SUBJECTS)('%s: the subject Skill as the Primary passes', (subject) => {
+    const outlines = [
+      // Lesson 329's shape: the subject Skill as the Primary of every teaching slide.
+      objectiveOutline('s1', { classification: 'instructional', primary: skillOf(subject) }),
+      // A pedagogical method may ride as supporting.
+      objectiveOutline('s2', {
+        classification: 'instructional',
+        primary: skillOf(subject),
+        supporting: [UBD],
+      }),
+      // A transition slide, explicitly non-instructional, is exempt.
+      objectiveOutline('s3', { classification: 'non-instructional' }),
+    ];
+    expect(findOutlineSkillSelectionIssues(outlines, g5V9Flow(subject), CATALOG)).toEqual([]);
+  });
 
   it.each(SUBJECTS)('%s: an instructional slide without it is refused', (subject) => {
     const outlines = [objectiveOutline('s1', { classification: 'instructional', primary: UBD })];
@@ -244,15 +248,19 @@ describe('g5.v9 selection respects the Primary/Supporting rules', () => {
     expect(issues.map((issue) => issue.code)).toEqual(['SKILL_REQUIREMENT_UNSATISFIED']);
     expect(issues[0]!.details).toMatchObject({
       skillId: skillOf(subject).skillId,
-      role: 'supporting',
+      role: 'primary',
       requiredScope: 'every_instructional_scene',
       offendingSceneIds: ['s1'],
     });
   });
 
-  it.each(SUBJECTS)('%s: it as the Primary instead of supporting is refused', (subject) => {
+  it.each(SUBJECTS)('%s: it as supporting under another Primary is refused', (subject) => {
     const outlines = [
-      objectiveOutline('s1', { classification: 'instructional', primary: skillOf(subject) }),
+      objectiveOutline('s1', {
+        classification: 'instructional',
+        primary: UBD,
+        supporting: [skillOf(subject)],
+      }),
     ];
     const issues = findOutlineSkillSelectionIssues(outlines, g5V9Flow(subject), CATALOG);
     expect(issues.map((issue) => issue.code)).toEqual(['SKILL_REQUIREMENT_UNSATISFIED']);
@@ -262,8 +270,8 @@ describe('g5.v9 selection respects the Primary/Supporting rules', () => {
     const outlines = [
       objectiveOutline('s1', {
         classification: 'instructional',
-        primary: UBD,
-        supporting: [skillOf('MATH'), skillOf('PHYSICS')],
+        primary: skillOf('MATH'),
+        supporting: [skillOf('PHYSICS')],
       }),
     ];
     const issues = findOutlineSkillSelectionIssues(outlines, g5V9Flow('MATH'), CATALOG);

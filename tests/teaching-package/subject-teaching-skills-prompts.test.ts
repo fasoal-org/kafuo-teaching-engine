@@ -6,7 +6,8 @@
  * path a governed g5.v9 run takes:
  * 1. Resolve the g5.v9 policy against the real registry (`resolveFlowSkillPolicies`, as
  *    `classroom-generation.ts` does).
- * 2. Put the subject Skill on the objective outline as the Primary's supporting Skill.
+ * 2. Put the subject Skill on the objective outline as its Primary, with the pedagogical
+ *    method (UbD) supporting it (owner, 14 Nov 2026: the subject Skill leads).
  * 3. Render the real slide-content and slide-actions (narration) prompts, with a
  *    capturing model stub. No model is called.
  *
@@ -120,10 +121,10 @@ describe.each(SUBJECTS)('%s lesson', (subject) => {
     order: 3,
     ...LESSONS[subject],
     teachingStage: { key: 'outcome_visual_explanations', flowIndex: OBJECTIVE_FLOW_INDEX },
-    teachingSkills: { classification: 'instructional', primary: UBD, supporting: [skill] },
+    teachingSkills: { classification: 'instructional', primary: skill, supporting: [UBD] },
   };
 
-  it('its Skill is in the slide-content prompt, beside the pedagogical Primary', async () => {
+  it('its Skill is the Primary of the slide-content prompt', async () => {
     const content: { system?: string } = {};
     await generateSceneContent(objectiveSlide, capture(content, SLIDE_CONTENT_RESPONSE), {
       languageDirective: 'Teach in Arabic.',
@@ -131,8 +132,8 @@ describe.each(SUBJECTS)('%s lesson', (subject) => {
     });
 
     expect(content.system).toContain('Teaching Skills — HOW this slide teaches');
-    expect(content.system).toContain('PRIMARY SKILL: understanding-by-design@v1');
-    expect(content.system).toContain(`SUPPORTING SKILL: ${skill.skillId}@v1`);
+    expect(content.system).toContain(`PRIMARY SKILL: ${skill.skillId}@v1`);
+    expect(content.system).toContain('SUPPORTING SKILL: understanding-by-design@v1');
     expect(content.system).toContain(OWN_INSTRUCTION[subject]);
     expect(content.system).toContain('Never invent a misconception to fill a slot.');
     for (const other of otherSubjects(subject)) {
@@ -151,7 +152,7 @@ describe.each(SUBJECTS)('%s lesson', (subject) => {
     );
 
     expect(actions.system).toContain('Teaching Skill Authority — HOW this scene teaches');
-    expect(actions.system).toContain(`SUPPORTING SKILL: ${skill.skillId}@v1`);
+    expect(actions.system).toContain(`PRIMARY SKILL: ${skill.skillId}@v1`);
     expect(actions.system).toContain(OWN_INSTRUCTION[subject]);
     for (const other of otherSubjects(subject)) {
       expect(actions.system).not.toContain(SUBJECT_TEACHING_SKILLS[other]!.skillId);

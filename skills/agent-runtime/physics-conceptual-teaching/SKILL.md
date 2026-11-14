@@ -1,7 +1,7 @@
 ---
 name: physics-conceptual-teaching
 title: "تدريس الفيزياء المفاهيمي"
-description: "Subject Teaching Skill for physics lessons in Kafuo Teaching Packages. Shapes how each slide builds physical understanding: observation first, then the quantities, the law and its conditions, then quantitative steps with units, dimensional checks and physical plausibility, while preventing common physics misconceptions. A supporting Skill: the Teaching Model Flow still decides which slides exist and in what order."
+description: "Subject Teaching Skill for physics lessons in Kafuo Teaching Packages. Shapes how each slide builds physical understanding: observation first, then the quantities, the law and its conditions, then quantitative steps with units, dimensional checks and physical plausibility, while preventing common physics misconceptions. The Primary Skill of every teaching slide: the Teaching Model Flow still decides which slides exist and in what order."
 ---
 
 # Physics Conceptual Teaching
@@ -10,7 +10,7 @@ Purpose: correct physical understanding through observation, scientific interpre
 
 ## How this Skill works in the lesson
 
-- This is a SUPPORTING Skill. It adds the subject method to the slide's Primary Skill. It never replaces it.
+- This is the PRIMARY Skill of every teaching slide at this stage. Its subject method leads how the slide teaches. A pedagogical Skill (UbD, Feynman and the like) may support it, never replace it.
 - The Teaching Model Flow instructions and the slide's role (explanation, worked_example, check_understanding, summary, transition) decide which slides exist, what each slide covers, and their order. Never add, merge, split or reorder slides because of this Skill.
 - The grounded textbook content is the authority for facts, definitions, notation, examples and answers. That means the cited Content Units and their book kinds: key concept, worked example, check, prior knowledge, exercise. Apply the method below only where that content supports it.
 - Follow the lesson's language directive and narration rules for the spoken register.

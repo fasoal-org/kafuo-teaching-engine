@@ -170,6 +170,10 @@ every backend slot is currently taken.
 
 ### 3.2 Role and placement in g5.v9
 
+> **Revised 14 Nov 2026 (decision 2, §9.1):** the subject Skill is now the required
+> **Primary** (`role: primary`), not supporting. The text below records the original
+> design.
+
 At **`outcome_visual_explanations`** only, for a lesson whose subject maps to a Skill:
 
 - **allowed** = v8's allowed + **that subject's Skill only**;
@@ -356,6 +360,19 @@ and feature flags.
 - **14 Nov 2026, decision 2 → supporting.** The subject Skill is a required
   **supporting** Skill (`every_instructional_scene`). The Primary stays the pedagogical
   method, as in §3.2.
+- **14 Nov 2026 (evening), decision 2 REVISED → primary.** The first g5.v9 run (lesson
+  329, attempt `tpa-vTtRwc6bnF4z`) stopped at the outline with 19
+  `SKILL_REQUIREMENT_UNSATISFIED`: the planner made `mathematics-academic-teaching` the
+  Primary of every teaching slide. Owner: «we have create the today skill to do this the
+  model is correct» and «أيوه، غيّرها». The rule is now
+  `{scope: every_instructional_scene, role: primary}`; a pedagogical method may ride as
+  supporting. Changed:
+  - backend `SUBJECT_TEACHING_SKILL_REQUIREMENT_ROLE = "primary"`;
+  - the shared fixture (both repositories, byte-identical);
+  - the five Skills' role wording, edited in place at v1, with new digests. v1 was never
+    deployed: the last staging TE deploy was 12 Nov, before `ed8a73b5`.
+  - the tests.
+  Lesson 329 needs a fresh, paid run; its stopped checkpoint must not be resumed.
 - **14 Nov 2026, decision 3 → objective teaching stage only.** The Skill applies at
   `outcome_visual_explanations` only. `lesson_opener`, `lesson_learning_map` and
   `outcome_check_understanding` keep v8's policy unchanged.
@@ -371,11 +388,14 @@ was made.
 
 | Skill | Version | Digest | Title |
 | --- | --- | --- | --- |
-| `mathematics-academic-teaching` | v1 | `4023261f96f94d9f` | تدريس الرياضيات الأكاديمي |
-| `physics-conceptual-teaching` | v1 | `db6e7d39b7f1648c` | تدريس الفيزياء المفاهيمي |
-| `chemistry-scientific-teaching` | v1 | `4df7ac13374d94d0` | تدريس الكيمياء العلمي |
-| `biology-structured-teaching` | v1 | `407ba33d5a610401` | تدريس الأحياء المنظّم |
-| `arabic-language-teaching` | v1 | `168d2c382a65c765` | تدريس اللغة العربية |
+| `mathematics-academic-teaching` | v1 | `c43c5ca36e7033a4` | تدريس الرياضيات الأكاديمي |
+| `physics-conceptual-teaching` | v1 | `6deb5692d2c9025b` | تدريس الفيزياء المفاهيمي |
+| `chemistry-scientific-teaching` | v1 | `743917903708511d` | تدريس الكيمياء العلمي |
+| `biology-structured-teaching` | v1 | `355b672fceff6315` | تدريس الأحياء المنظّم |
+| `arabic-language-teaching` | v1 | `943459b05c78519d` | تدريس اللغة العربية |
+
+Digests as of the decision 2 revision (14 Nov evening). The first build's were
+`4023261f…`, `db6e7d39…`, `4df7ac13…`, `407ba33d…` and `168d2c38…`, never deployed.
 
 Each Skill has `SKILL.md`, a byte-identical `versions/v1/SKILL.md`, and
 `skill-versions.json`. Each is 5.5–6.8 KB and has the same four parts:

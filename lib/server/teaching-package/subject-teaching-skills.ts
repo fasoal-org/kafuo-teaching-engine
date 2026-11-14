@@ -9,8 +9,9 @@
  * - Both sides pin the same shared fixture, `tests/fixtures/subject-teaching-skills.v1.json`.
  *
  * Kafuo (g5.v9 only) projects the subject's Skill into the objective position's Skill
- * Policy, as a required supporting rule on every instructional scene. The TE does not
- * derive or re-project policy (`skill-policy.ts`). This module only GUARDS what it
+ * Policy, as the required Primary rule of every instructional scene (owner, 14 Nov 2026,
+ * revising the same day's "supporting"). The TE does not derive or re-project policy
+ * (`skill-policy.ts`). This module only GUARDS what it
  * received: a governed request whose policies name a subject Teaching Skill must name
  * the one Skill its routing subject maps to, and nothing else. A request that names no
  * subject Skill, like every g5.v1–g5.v8 request, passes untouched.
