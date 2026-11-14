@@ -1253,13 +1253,15 @@ describe('reviewer-generated slide insertion routes', () => {
 
   // ---------------------------------------------- read routes
 
-  it('content units: coverage, suggested positions and allowed stages — never the unit text', async () => {
+  it('content units: coverage, suggested positions, allowed stages and each part text (editor grant)', async () => {
     const seeded = await seed();
     const response = await get('units', seeded);
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toContain('no-store');
     const text = await response.text();
-    expect(text).not.toContain('UNIT-THREE-TEXT');
+    // Owner, 14 Nov 2026: a teacher opens a part to read it in full, so the editor
+    // grant's response carries each unit's retained text.
+    expect(text).toContain('UNIT-THREE-TEXT about friction');
     const parsed = JSON.parse(text) as {
       lineageStatus: string;
       units: Array<{
@@ -1267,6 +1269,7 @@ describe('reviewer-generated slide insertion routes', () => {
         covered: boolean;
         instructional: boolean;
         suggestedPosition: unknown;
+        text: string | null;
       }>;
       positions: Array<{
         afterSceneId: string | null;

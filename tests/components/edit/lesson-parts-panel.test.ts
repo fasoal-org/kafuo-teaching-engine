@@ -193,3 +193,94 @@ describe('LessonPartsPanel', () => {
     expect(rows()).toHaveLength(4);
   });
 });
+
+describe('LessonPartsPanel — opening a part (owner, 14 Nov 2026)', () => {
+  const WITH_TEXT: ContentUnitsResponse = {
+    ...DATA,
+    units: [
+      unit('cu_1', 1, {
+        role: 'CONCEPT_EXPLANATION',
+        covered: true,
+        coveredBySlideIds: ['s_b', 's_a'],
+        text: 'العبارة الشرطية عبارة يمكن كتابتها على صورة إذا كان p فإن q.',
+        textLength: 61,
+      }),
+      unit('cu_2', 2, { text: null, textLength: 0 }),
+    ],
+  };
+  const SLIDES: Record<string, number> = { s_a: 3, s_b: 5 };
+  const toggle = (row: HTMLElement) =>
+    row.querySelector<HTMLButtonElement>('[data-testid="lesson-part-toggle"]')!;
+  const details = (row: HTMLElement) =>
+    row.querySelector<HTMLElement>('[data-testid="lesson-part-details"]');
+
+  function renderList() {
+    render(
+      createElement(LessonPartsList, {
+        mode: 'units',
+        data: WITH_TEXT,
+        loadFailed: false,
+        busy: false,
+        onGenerate: vi.fn(),
+        slideNumber: (sceneId: string) => SLIDES[sceneId] ?? null,
+      }),
+    );
+  }
+
+  it('is closed until pressed, then shows the type, size, slides and the full text', () => {
+    renderList();
+    const [first] = rows();
+    expect(details(first!)).toBeNull();
+    expect(toggle(first!).getAttribute('aria-expanded')).toBe('false');
+
+    act(() => toggle(first!).click());
+
+    expect(toggle(first!).getAttribute('aria-expanded')).toBe('true');
+    const opened = details(first!)!;
+    expect(opened.textContent).toContain('Concept explanation');
+    expect(opened.textContent).toContain('61 characters');
+    // The slides that teach it, by their position in the rail, in order.
+    expect(opened.querySelector('[data-testid="lesson-part-slides"]')!.textContent).toBe(
+      'Taught by slides: 3، 5',
+    );
+    expect(opened.querySelector('[data-testid="lesson-part-text"]')!.textContent).toBe(
+      'العبارة الشرطية عبارة يمكن كتابتها على صورة إذا كان p فإن q.',
+    );
+  });
+
+  it('closes again on a second press', () => {
+    renderList();
+    const [first] = rows();
+    act(() => toggle(first!).click());
+    act(() => toggle(first!).click());
+    expect(details(first!)).toBeNull();
+  });
+
+  it('says so when a part has no stored text', () => {
+    renderList();
+    const second = rows()[1]!;
+    act(() => toggle(second).click());
+    expect(details(second)!.querySelector('[data-testid="lesson-part-no-text"]')!.textContent).toBe(
+      'No text was stored for this part.',
+    );
+  });
+
+  it('keeps "Generate slide" a separate action from opening the part', () => {
+    const onGenerate = vi.fn();
+    render(
+      createElement(LessonPartsList, {
+        mode: 'units',
+        data: { ...DATA, units: [unit('cu_9', 1, { text: 'نص' })] },
+        loadFailed: false,
+        busy: false,
+        onGenerate,
+      }),
+    );
+    const [row] = rows();
+    act(() =>
+      row!.querySelector<HTMLButtonElement>('[data-testid="lesson-part-generate"]')!.click(),
+    );
+    expect(onGenerate).toHaveBeenCalledWith('cu_9');
+    expect(details(row!)).toBeNull();
+  });
+});

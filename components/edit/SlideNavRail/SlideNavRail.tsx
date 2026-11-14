@@ -656,6 +656,10 @@ export function SlideNavRail() {
                   busy={localGenerationRunning || insertionBusy}
                   onOpen={() => void refreshInsertion()}
                   onGenerate={(unitId) => openInsertion({ unitIds: [unitId] })}
+                  slideNumber={(sceneId) => {
+                    const index = scenes.findIndex((scene) => scene.id === sceneId);
+                    return index >= 0 ? index + 1 : null;
+                  }}
                 />
               ) : null}
               <Reorder.Group

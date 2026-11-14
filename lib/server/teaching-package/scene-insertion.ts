@@ -1472,10 +1472,16 @@ export async function readContentUnitsForGrant(
     context.gaps,
   );
   const flow = context.flow ?? [];
+  // Owner, 14 Nov 2026: the teacher opens a part in «أجزاء الدرس» to read it in full, so
+  // each unit carries its retained text and subtype. Same editor-grant-only, no-store
+  // response; the teacher already reads this text in the admin's Content Units tab.
+  const rowsById = new Map(context.units.map((row) => [row.unitId, row]));
   return {
     lineageStatus: context.lineageStatus,
     units: coverage.map((unit) => ({
       ...unit,
+      subtype: rowsById.get(unit.id)?.subtype ?? null,
+      text: rowsById.get(unit.id)?.normalizedText ?? null,
       suggestedPosition:
         unit.instructional && !unit.covered
           ? suggestInsertionPosition(unit.id, coverage, document.scenes)

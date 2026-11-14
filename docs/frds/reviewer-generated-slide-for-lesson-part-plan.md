@@ -570,6 +570,8 @@ A unit is **covered** when a live **slide** cites it. Citations by other scene t
 ```
 Unit **text** is never sent to the browser.
 
+> **Amended 14 Nov 2026 (owner: «أيوه، ابعت النص»):** each unit now carries its retained `text` and `subtype`, so a teacher can open a part in «أجزاء الدرس» and read it in full. The response is otherwise the same: editor grants only, learner and preview refused, `no-store`. The teacher already reads this text in the admin's «وحدات المحتوى» tab. See `teaching-engine-teacher-ui-kafuo-rtl-plan-2026-11-14.md` §6.
+
 ---
 
 ## 9. Position, stage and flow checks
