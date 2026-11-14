@@ -60,13 +60,24 @@ export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
 /** The Teaching Model whose requests get the teacher-parity gates. */
 export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as const;
 
-/** The ONE g5.v8 switch: an explicit Teaching Model identity check. */
+/**
+ * g5.v9 (subject-teaching-skills-v1 plan, 14 Nov 2026) is g5.v8 plus a subject Teaching
+ * Skill in the objective position's Skill Policy. Its flow, book map and exercise
+ * policy are v8's, so it gets the same teacher-parity gates.
+ */
+const TEACHER_PARITY_VERSIONS: ReadonlySet<string> = new Set([
+  TEACHER_PARITY_TEACHING_MODEL.version,
+  'g5.v9',
+]);
+
+/** The ONE g5.v8/g5.v9 switch: an explicit Teaching Model identity check. */
 export function isTeacherParityModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
   return (
     model?.key === TEACHER_PARITY_TEACHING_MODEL.key &&
-    model?.version === TEACHER_PARITY_TEACHING_MODEL.version
+    typeof model?.version === 'string' &&
+    TEACHER_PARITY_VERSIONS.has(model.version)
   );
 }
 

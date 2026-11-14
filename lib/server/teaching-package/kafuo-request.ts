@@ -30,6 +30,7 @@ import {
 } from '@/lib/server/teaching-package/book-coverage';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
+import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
 import type { StageTtsRoute } from '@/lib/types/stage';
 import { KAFUO_EXERCISE_UNUSABLE_REASONS } from '@/lib/types/teaching-package';
 import type {
@@ -856,6 +857,10 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     ...(narration ? { narration } : {}),
     ...(bookStructure ? { bookStructure } : {}),
   };
+  // Subject Teaching Skills V1: a policy that names a subject Teaching Skill must name
+  // this lesson's own. A policy naming none, as on every g5.v1–g5.v8 request, passes
+  // untouched.
+  assertSubjectTeachingSkillPolicy(teachingModel.flow, subjectCodeOf(request));
   return {
     request,
     aggregate: { tenantId, learningItem: { type: item.type, id: item.id } },
