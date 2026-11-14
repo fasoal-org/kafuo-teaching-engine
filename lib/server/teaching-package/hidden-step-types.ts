@@ -227,16 +227,20 @@ function clockTimes(text: string): string[] {
   return text.match(CLOCK_TIME) ?? [];
 }
 
+/** A morning/evening marker after a time: «صباحًا», «مساءً», «ص», «م», am/pm (normalized). */
+const DAY_PERIOD = '\\s*(?:صباحا|مساءا|مساء|ص|م|am|pm|a\\.m\\.|p\\.m\\.)(?![\\p{L}])';
+
 /**
  * A time of day as book text writes one: `hh:mm` right after «الساعة» or right
- * before a morning/evening marker («صباحًا», «مساءً», «ص», «م», am/pm). A bare
- * `1:20` is a ratio or a scale, never a time.
+ * before a morning/evening marker. A bare `1:20` is a ratio or a scale, never a time.
  */
 const MARKED_CLOCK_TIME = new RegExp(
-  `(?:(?<=الساعه\\s*)${CLOCK_TIME.source}` +
-    `|${CLOCK_TIME.source}(?=\\s*(?:صباحا|مساءا|مساء|ص|م|am|pm|a\\.m\\.|p\\.m\\.)(?![\\p{L}])))`,
+  `(?:(?<=الساعه\\s*)${CLOCK_TIME.source}|${CLOCK_TIME.source}(?=${DAY_PERIOD}))`,
   'gu',
 );
+
+/** A time written with its morning/evening marker, so the side of noon is shown: «12:30 مساءً». */
+const PERIOD_CLOCK_TIME = new RegExp(`${CLOCK_TIME.source}(?=${DAY_PERIOD})`, 'u');
 
 /** The detectable hidden-step types of one item's (or unit's) text. */
 export function detectHiddenStepTypes(text: string): DetectedHiddenStepType[] {
@@ -398,15 +402,24 @@ function numberedNames(text: string, set: string): number {
   }).length;
 }
 
-/** A step in minutes: `45 دقيقة`, `+ 45 min`. */
-const MINUTE_STEP =
-  /(?:\d+\s*(?:دقيقه|دقائق|دقيقتين|دقيقتان|minutes?|mins?(?![\p{L}])))|(?:\+\s*\d+)/u;
+/** Minutes written as a number and the unit: `45 دقيقة`, `45 min`. */
+const MINUTES = /\d+\s*(?:دقيقه|دقائق|دقيقتين|دقيقتان|minutes?|mins?(?![\p{L}]))/u;
+/** A step in minutes: `45 دقيقة`, `+ 45 min`, `+ 45`. */
+const MINUTE_STEP = new RegExp(`${MINUTES.source}|\\+\\s*\\d+`, 'u');
 
 /**
  * Whether a solution's visible text writes the hidden step of `type`:
  * - `ordered_named_set`: at least two names of one cycle are written beside
  *   their number (the set numbered, «محرم = 1 … ذو الحجة = 12»);
- * - `clock_time`: at least two times and one step in minutes are written.
+ * - `clock_time`: at least two times and one step in minutes are written, or one
+ *   time with its morning/evening marker and the step written in minutes («تتكرر
+ *   زيادة 45 دقيقة؛ الموعد التالي 12:30 مساءً»).
+ *
+ * The second `clock_time` form is what the planner snippet asks for (work in minutes,
+ * write the crossing of noon). Owner, 14 Nov 2026: two local g5.v9 runs of one lesson
+ * (items 207 and 208, the «تأكد» bus times) paused for a person on a plan that wrote
+ * exactly that, and the slide written from it showed the full working. A sum's «+ 3»
+ * is not minutes, so the one-time form needs the unit written.
  * The item text is not needed, so a pinned checkpoint re-checks it alike.
  */
 export function showsWorkingStep(type: DetectedHiddenStepType, visibleText: string): boolean {
@@ -414,5 +427,6 @@ export function showsWorkingStep(type: DetectedHiddenStepType, visibleText: stri
   if (type === 'ordered_named_set') {
     return SET_MATCHERS.some(({ set }) => numberedNames(visible, set) >= 2);
   }
-  return clockTimes(visible).length >= 2 && MINUTE_STEP.test(visible);
+  if (clockTimes(visible).length >= 2 && MINUTE_STEP.test(visible)) return true;
+  return PERIOD_CLOCK_TIME.test(visible) && MINUTES.test(visible);
 }

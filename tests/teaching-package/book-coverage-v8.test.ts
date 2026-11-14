@@ -760,6 +760,30 @@ describe('hidden-step detector', () => {
     expect(showsWorkingStep('clock_time', '10:15 ثم 11:00: الفرق 45 دقيقة')).toBe(true);
     expect(showsWorkingStep('clock_time', 'التالي 12:30 مساءً')).toBe(false);
   });
+
+  it('clock_time: the answer with its period and the step in minutes is the working (14 Nov 2026)', () => {
+    // The plans of the two paused local g5.v9 runs (items 207 and 208), as stored.
+    expect(
+      showsWorkingStep(
+        'clock_time',
+        'السؤال ٢: تتكرر زيادة ٤٥ دقيقة بين المواعيد؛ الموعد التالي ١٢:٣٠ مساءً.',
+      ),
+    ).toBe(true);
+    expect(
+      showsWorkingStep(
+        'clock_time',
+        'السؤال ٢: تتكرر مواعيد الحافلات كل ٤٥ دقيقة؛ فالموعد التالي ١٢:٣٠ مساءً.',
+      ),
+    ).toBe(true);
+    expect(showsWorkingStep('clock_time', 'next bus: 12:30 pm, 45 minutes after the last')).toBe(
+      true,
+    );
+    // Minutes alone, or a time without its period, never show the side of noon.
+    expect(showsWorkingStep('clock_time', 'تتكرر زيادة ٤٥ دقيقة بين المواعيد')).toBe(false);
+    expect(showsWorkingStep('clock_time', 'الساعة ١٢:٣٠ بعد ٤٥ دقيقة')).toBe(false);
+    // A sum's «+ 3» is not a step in minutes.
+    expect(showsWorkingStep('clock_time', 'السؤال ١: ٤ + ٣ = ٧. التالي ١٢:٣٠ مساءً')).toBe(false);
+  });
 });
 
 describe('g5.v8 coverage gates', () => {
@@ -960,6 +984,21 @@ describe('g5.v8 coverage gates', () => {
       expect.stringMatching(/4040.*\(clock_time\)$/),
       expect.stringMatching(/4060.*\(ordered_named_set\)$/),
     ]);
+  });
+
+  it('passes a clock answer written with its period and the minute step (14 Nov 2026)', () => {
+    const plan = completePlan().map((outline) =>
+      outline.id === 'exercises'
+        ? {
+            ...outline,
+            keyPoints: [
+              'تتكرر زيادة ٤٥ دقيقة بين المواعيد؛ الموعد التالي ١٢:٣٠ مساءً.',
+              outline.keyPoints![1]!,
+            ],
+          }
+        : outline,
+    );
+    expect(findBookCoverageDiagnostics(plan, v8Book())).toEqual([]);
   });
 
   it('E-2: a merge keeps a working step written in a removed per-item title', () => {
