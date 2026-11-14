@@ -40,6 +40,7 @@ import {
   useStageEditingLocked,
 } from '@/lib/store/stage';
 import { GenerateSlideForPartDialog } from '@/components/edit/GenerateSlideForPartDialog';
+import { MovePartDialog } from '@/components/edit/MovePartDialog';
 import { LessonPartsPanel, type LessonPartsMode } from '@/components/edit/LessonPartsPanel';
 import {
   canInsertScene,
@@ -141,10 +142,15 @@ export function SlideNavRail() {
   const insertionRunning = runningInsertionStageId !== null && runningInsertionStageId === stageId;
   // True while an insertion holds the Stage-wide editing lock (plan §5.1).
   const editingLocked = useStageEditingLocked(stageId);
+  // Owner, 14 Nov 2026: a lesson part moving between slides (two regenerations),
+  // keyed by Stage like the insertion dialog.
+  const [movingState, setMoving] = useState<{ stageId: string; unitId: string } | null>(null);
+  const moving = movingState && movingState.stageId === stageId ? movingState : null;
+  const [moveRunning, setMoveRunning] = useState(false);
   // Same-tab mutual exclusion (plan §11.7): an insertion never starts while a
-  // slide or audio regeneration is open or in flight here, and neither starts
-  // while an insertion runs.
-  const localGenerationRunning = regenerating !== null || regeneratingAudio.size > 0;
+  // slide or audio regeneration (or a part move) is open or in flight here, and
+  // neither starts while an insertion runs.
+  const localGenerationRunning = regenerating !== null || regeneratingAudio.size > 0 || moveRunning;
   const insertionBusy = insertionRunning || editingLocked;
   /** Every rail mutation refuses while an insertion runs (no-op, no dirt). */
   const refuseWhileInserting = useCallback(() => {
@@ -656,6 +662,11 @@ export function SlideNavRail() {
                   busy={localGenerationRunning || insertionBusy}
                   onOpen={() => void refreshInsertion()}
                   onGenerate={(unitId) => openInsertion({ unitIds: [unitId] })}
+                  onMove={(unitId) => {
+                    if (!stageId || refuseWhileInserting()) return;
+                    setMoving({ stageId, unitId });
+                    void refreshInsertion();
+                  }}
                   slideNumber={(sceneId) => {
                     const index = scenes.findIndex((scene) => scene.id === sceneId);
                     return index >= 0 ? index + 1 : null;
@@ -819,6 +830,41 @@ export function SlideNavRail() {
           }}
         />
       ) : null}
+      {stageId && moving
+        ? (() => {
+            const unit = contentUnits?.data?.units.find((entry) => entry.id === moving.unitId);
+            if (!unit) return null;
+            return (
+              <MovePartDialog
+                key={`${stageId}:${moving.unitId}`}
+                open
+                onOpenChange={(open) => {
+                  const dialogStageId = stageId;
+                  if (!open)
+                    setMoving((current) => (current?.stageId === dialogStageId ? null : current));
+                }}
+                stageId={stageId}
+                unit={unit}
+                data={contentUnits?.data ?? null}
+                slides={scenes.map((scene) => ({
+                  id: scene.id,
+                  title: scene.title,
+                  type: scene.type,
+                  contentRole:
+                    scene.content.type === 'slide'
+                      ? ((scene.content as { contentRole?: string | null }).contentRole ?? null)
+                      : null,
+                }))}
+                busy={insertionBusy || regenerating !== null || regeneratingAudio.size > 0}
+                onRunningChange={(running) => {
+                  setMoveRunning(running);
+                  // Coverage changed after each settled run: re-read the parts.
+                  if (!running) void refreshInsertion();
+                }}
+              />
+            );
+          })()
+        : null}
     </aside>
   );
 }

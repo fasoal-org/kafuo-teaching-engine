@@ -778,3 +778,117 @@ describe('regenerateOneScene — pinned Quran verses', () => {
     for (const prompt of prompts) expect(prompt.system).not.toContain('Quran and hadith');
   });
 });
+
+describe('regenerateOneScene — a lesson part moved between slides (owner, 14 Nov 2026)', () => {
+  async function runMove(
+    sourceContentUnitIds: string[],
+    options: { narrationOnly?: boolean; pre?: AppScene } = {},
+  ) {
+    const pre = options.pre ?? preImage();
+    const stub = model(content([image('src-3', 'x')]));
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds,
+      ...(options.narrationOnly ? { narrationOnly: true } : {}),
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    return { result, prompts: stub.prompts };
+  }
+
+  it('the rewritten slide carries the new part list, and every other kept field stays', async () => {
+    const { result } = await runMove(['cu-1', 'cu-9']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.sourceContentUnitIds).toEqual(['cu-1', 'cu-9']);
+    expect(result.scene.id).toBe(preImage().id);
+    expect(result.scene.learningObjectives).toEqual(preImage().learningObjectives);
+  });
+
+  it('the narration model gets the move directive too, so the narration follows the move', async () => {
+    const { result, prompts } = await runMove(['cu-1', 'cu-9']);
+    expect(result.ok).toBe(true);
+    const narration = prompts.filter((prompt) => ACTIONS_PROMPT.test(prompt.system));
+    expect(narration.length).toBeGreaterThan(0);
+    expect(narration.some((prompt) => prompt.user.includes('INSTRUCTION-MARK'))).toBe(true);
+  });
+
+  it('is refused for a narration-only run before any model call', async () => {
+    const { result, prompts } = await runMove(['cu-1', 'cu-9'], { narrationOnly: true });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('SCENE_TYPE_NOT_REGENERABLE');
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('a re-planned slide is built fresh from its plan, never from the old slide, and keeps its place and classification', async () => {
+    const pre = preImage();
+    const stub = model(content([]));
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds: ['cu-9'],
+      // The planner's own place and classification must never reach the slide.
+      replannedOutline: {
+        id: 'planned-id',
+        type: 'slide',
+        order: 99,
+        title: 'خطة جديدة',
+        description: 'PLANNED-DESCRIPTION',
+        keyPoints: ['PLANNED-POINT'],
+        slideType: 'section',
+        contentRole: 'summary',
+        contentKind: 'procedure',
+        teachingStage: { key: 'close', flowIndex: 9 },
+        suggestedImageIds: [],
+        mediaGenerations: [{ type: 'image', prompt: 'p', elementId: 'gen_img_1' }],
+      } as never,
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const contentPrompt = stub.prompts.find((prompt) => prompt.stage === 'scene-content:slide');
+    expect(contentPrompt?.user).toContain('PLANNED-POINT');
+    expect(contentPrompt?.user).not.toContain('EDIT MODE');
+    // The old slide's key point, description and image never reach the model or the slide.
+    expect(contentPrompt?.user).not.toContain('Explain patterns');
+    expect(imageSrcs(result.scene)).toEqual([]);
+    const scene = result.scene;
+    expect(scene.id).toBe(pre.id);
+    // A move renames nothing: the slide keeps its own title, not the plan's.
+    expect(scene.title).toBe(pre.title);
+    expect(contentPrompt?.user).not.toContain('خطة جديدة');
+    expect(scene.order).toBe(pre.order);
+    expect(scene.outlineId).toBe('o1');
+    expect(scene.teachingStage).toBeUndefined();
+    expect(scene.sourceContentUnitIds).toEqual(['cu-9']);
+    expect(scene.learningObjectives).toEqual(pre.learningObjectives);
+    if (scene.content.type !== 'slide') throw new Error('slide');
+    expect(scene.content.contentRole).toBe('example');
+    expect(scene.content.canvas.type).toBe('content');
+  });
+
+  it('the invariant check expects the requested list, and only then', async () => {
+    const { regenerationInvariantViolations } =
+      await import('@/lib/server/teaching-package/regenerate-one-scene');
+    const pre = preImage();
+    const moved = { ...pre, sourceContentUnitIds: ['cu-1', 'cu-9'] } as AppScene;
+    expect(regenerationInvariantViolations(pre, moved)).toEqual(['sourceContentUnitIds']);
+    expect(regenerationInvariantViolations(pre, moved, ['cu-1', 'cu-9'])).toEqual([]);
+    expect(regenerationInvariantViolations(pre, pre, ['cu-1', 'cu-9'])).toEqual([
+      'sourceContentUnitIds',
+    ]);
+  });
+});

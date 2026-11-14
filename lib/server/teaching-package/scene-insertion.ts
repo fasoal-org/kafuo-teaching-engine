@@ -597,6 +597,24 @@ interface EligibleVisual {
 }
 
 /**
+ * Owner, 14 Nov 2026 (a lesson part moved between slides): the textbook visuals
+ * the re-planned slide may use — the same compliance-checked set an insertion
+ * offers for these parts — with their bytes for the planner when readable.
+ */
+export async function eligibleVisualsForUnits(
+  pool: ConnectableQueryable,
+  outline: AppDocumentOutline | null | undefined,
+  unitIds: readonly string[],
+): Promise<{
+  visuals: Array<{ entry: SourceVisualManifestEntry; image: PdfImage }>;
+  visionImages: Array<{ id: string; src: string; width?: number; height?: number }>;
+}> {
+  const deps: SceneInsertionDeps = { pool };
+  const visuals = await eligibleVisuals(outline, unitIds, deps);
+  return { visuals, visionImages: await plannerVisionImages(visuals, deps) };
+}
+
+/**
  * The eligible visuals' bytes for the planner (slide image plan D-4), read back
  * from the stage media directory and checked against the manifest checksum. A
  * visual that cannot be read is simply not attached.

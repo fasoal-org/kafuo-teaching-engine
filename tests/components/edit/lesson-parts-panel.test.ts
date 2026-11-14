@@ -265,6 +265,36 @@ describe('LessonPartsPanel — opening a part (owner, 14 Nov 2026)', () => {
     );
   });
 
+  it('an opened, taught part offers "Move to a slide…"; an untaught or reference part does not', () => {
+    const onMove = vi.fn();
+    render(
+      createElement(LessonPartsList, {
+        mode: 'units',
+        data: {
+          ...DATA,
+          units: [
+            unit('cu_a', 1, { covered: true, coveredBySlideIds: ['s1'] }),
+            unit('cu_b', 2),
+            unit('cu_c', 3, { instructional: false, role: 'REFERENCE', coveredBySlideIds: ['s1'] }),
+          ],
+        },
+        loadFailed: false,
+        busy: false,
+        onGenerate: vi.fn(),
+        onMove,
+      }),
+    );
+    const [taught, untaught, reference] = rows();
+    for (const row of [taught!, untaught!, reference!]) act(() => toggle(row).click());
+    const move = (row: HTMLElement) =>
+      row.querySelector<HTMLButtonElement>('[data-testid="lesson-part-move"]');
+    expect(move(untaught!)).toBeNull();
+    expect(move(reference!)).toBeNull();
+    expect(move(taught!)!.textContent).toBe('Move to a slide…');
+    act(() => move(taught!)!.click());
+    expect(onMove).toHaveBeenCalledWith('cu_a');
+  });
+
   it('keeps "Generate slide" a separate action from opening the part', () => {
     const onGenerate = vi.fn();
     render(

@@ -93,6 +93,20 @@ export interface RegenerateOneSceneInput {
    */
   narrationOnly?: boolean;
   /**
+   * Owner, 14 Nov 2026 (a lesson part moved between slides): the slide's new
+   * lesson-part list. The whole slide is rewritten, the candidate carries this
+   * list, and the invariant check expects it instead of the pre-image's. Absent
+   * → the list is kept exactly. A slide only; never with `narrationOnly`.
+   */
+  sourceContentUnitIds?: readonly string[];
+  /**
+   * With `sourceContentUnitIds`: the slide planned again from its new parts'
+   * text (`replan-moved-slide.ts`). The slide is then generated FRESH from this
+   * plan — no old canvas baseline, no old key points — keeping only its own place
+   * and classification. Absent → the edit-mode rewrite of the current slide.
+   */
+  replannedOutline?: SceneOutline;
+  /**
    * The package version's Teaching Model: a g5.v8 (teacher-parity) package
    * regenerates a solving slide under the visible-working rule, as its run did.
    */
@@ -187,8 +201,16 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-/** The fields a regeneration never changes (plan §7.3.2). */
-export function regenerationInvariantViolations(pre: AppScene, candidate: AppScene): string[] {
+/**
+ * The fields a regeneration never changes (plan §7.3.2). `sourceContentUnitIds`
+ * is the one exception, and only when a lesson part was moved (owner, 14 Nov
+ * 2026): then the candidate must carry exactly `expectedUnitIds`.
+ */
+export function regenerationInvariantViolations(
+  pre: AppScene,
+  candidate: AppScene,
+  expectedUnitIds?: readonly string[],
+): string[] {
   const violations: string[] = [];
   const check = (field: string, before: unknown, after: unknown) => {
     if (!deepEqual(before, after)) violations.push(field);
@@ -208,7 +230,11 @@ export function regenerationInvariantViolations(pre: AppScene, candidate: AppSce
   check('teachingStage', pre.teachingStage, candidate.teachingStage);
   check('teachingSkills', pre.teachingSkills, candidate.teachingSkills);
   check('learningObjectives', pre.learningObjectives, candidate.learningObjectives);
-  check('sourceContentUnitIds', pre.sourceContentUnitIds, candidate.sourceContentUnitIds);
+  check(
+    'sourceContentUnitIds',
+    expectedUnitIds ? [...expectedUnitIds] : pre.sourceContentUnitIds,
+    candidate.sourceContentUnitIds,
+  );
   return violations;
 }
 
@@ -233,6 +259,43 @@ function seededOutline(pre: AppScene, snapshot: AppDocumentOutline | undefined):
     ...(pre.teachingStage ? { teachingStage: pre.teachingStage } : {}),
     ...(pre.teachingSkills ? { teachingSkills: pre.teachingSkills } : {}),
     ...(pre.sourceContentUnitIds ? { sourceContentUnitIds: [...pre.sourceContentUnitIds] } : {}),
+  };
+}
+
+/**
+ * The re-plan's content (key points, description, visuals, assistance) with the
+ * slide's own title, place and classification (owner, 14 Nov 2026), so the
+ * regeneration invariants hold and a move renames nothing: title, outline id,
+ * type, order, slide type, content role and kind, teaching stage and Skills
+ * come from the seeded outline.
+ */
+function withSlideIdentity(
+  planned: SceneOutline,
+  seeded: SceneOutline,
+  unitIds: readonly string[] | undefined,
+): SceneOutline {
+  const {
+    mediaGenerations: _media,
+    slideType: _slideType,
+    contentRole: _contentRole,
+    contentKind: _contentKind,
+    teachingStage: _stage,
+    teachingSkills: _skills,
+    sourceContentUnitIds: _units,
+    ...content
+  } = planned as SceneOutline & { mediaGenerations?: unknown };
+  return {
+    ...content,
+    id: seeded.id,
+    type: seeded.type,
+    order: seeded.order,
+    title: seeded.title,
+    ...(seeded.slideType !== undefined ? { slideType: seeded.slideType } : {}),
+    ...(seeded.contentRole !== undefined ? { contentRole: seeded.contentRole } : {}),
+    ...(seeded.contentKind !== undefined ? { contentKind: seeded.contentKind } : {}),
+    ...(seeded.teachingStage !== undefined ? { teachingStage: seeded.teachingStage } : {}),
+    ...(seeded.teachingSkills !== undefined ? { teachingSkills: seeded.teachingSkills } : {}),
+    ...(unitIds ? { sourceContentUnitIds: [...unitIds] } : {}),
   };
 }
 
@@ -265,6 +328,15 @@ export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
   const pre = input.scene;
+  if (
+    input.sourceContentUnitIds &&
+    (input.narrationOnly || pre.type !== 'slide' || pre.content.type !== 'slide')
+  ) {
+    return failure(
+      'SCENE_TYPE_NOT_REGENERABLE',
+      'only a whole slide can take or give up a lesson part',
+    );
+  }
   if (input.narrationOnly && (pre.type !== 'slide' || pre.content.type !== 'slide')) {
     return failure(
       'SCENE_TYPE_NOT_REGENERABLE',
@@ -288,16 +360,24 @@ export async function regenerateOneScene(
   const now = input.now ?? Date.now;
 
   // 1. The outline, seeded from the persisted Scene and its stored plan. No AI
-  //    image generation: planned media generations are stripped.
-  const outline = seededOutline(pre, input.outlineSnapshot);
+  //    image generation: planned media generations are stripped. A moved lesson
+  //    part (owner, 14 Nov 2026) replaces the content fields with the re-plan.
+  const seeded = seededOutline(pre, input.outlineSnapshot);
+  const replanned = input.replannedOutline
+    ? withSlideIdentity(input.replannedOutline, seeded, input.sourceContentUnitIds)
+    : null;
+  const outline = replanned ?? seeded;
   const legacyInPlace =
     outline.slideType === undefined &&
     outline.contentRole === undefined &&
     outline.contentKind === undefined;
 
-  // 2. Book images (§7.4).
+  // 2. Book images (§7.4). A re-planned slide starts from an empty canvas: only the
+  //    visuals its new plan selects are offered, never the old slide's images.
   const lifted = liftSlideImages({
-    canvas: pre.content.canvas,
+    canvas: replanned
+      ? { elements: [], background: pre.content.canvas.background }
+      : pre.content.canvas,
     sourceVisuals: input.outlineSnapshot?.sourceVisuals,
     suggestedImageIds: outline.suggestedImageIds,
     // The app outline type predates the planner field; the stored plan carries it.
@@ -321,8 +401,9 @@ export async function regenerateOneScene(
       allowProceduralSkill: true,
       ...(assignedImages.length > 0 ? { assignedImages } : {}),
       ...(hasImageMapping ? { imageMapping } : {}),
-      editDirective: input.instruction,
-      baselineContent: baseline,
+      // A re-planned slide is generated fresh from its plan, as an inserted slide
+      // is; every other regeneration edits the current slide.
+      ...(replanned ? {} : { editDirective: input.instruction, baselineContent: baseline }),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
       ...sacredPromptOf(input),
@@ -353,7 +434,12 @@ export async function regenerateOneScene(
   const imageNotes = hasImageMapping
     ? buildNarrationImageNotes(outline, assignedImages, imageMapping)
     : undefined;
-  const generatedActions = await slideActions(input, outline, content, { imageNotes });
+  // A moved lesson part (owner, 14 Nov 2026): the narration follows the move too,
+  // so the narration model gets the same directive as the content model.
+  const generatedActions = await slideActions(input, outline, content, {
+    imageNotes,
+    ...(input.sourceContentUnitIds ? { directive: input.instruction } : {}),
+  });
   if (!generatedActions.ok) return generatedActions;
   const actions = generatedActions.actions;
 
@@ -393,9 +479,12 @@ export async function regenerateOneScene(
     ...(pre.teachingStage !== undefined ? { teachingStage: pre.teachingStage } : {}),
     ...(pre.teachingSkills !== undefined ? { teachingSkills: pre.teachingSkills } : {}),
     ...(pre.learningObjectives !== undefined ? { learningObjectives: pre.learningObjectives } : {}),
-    ...(pre.sourceContentUnitIds !== undefined
-      ? { sourceContentUnitIds: pre.sourceContentUnitIds }
-      : {}),
+    // A moved lesson part (owner, 14 Nov 2026) sets the new list; otherwise kept.
+    ...(input.sourceContentUnitIds
+      ? { sourceContentUnitIds: [...input.sourceContentUnitIds] }
+      : pre.sourceContentUnitIds !== undefined
+        ? { sourceContentUnitIds: pre.sourceContentUnitIds }
+        : {}),
   } as AppScene;
   if (input.governed) {
     // A governed regeneration is a fresh generation-origin baseline (W4.4).
@@ -415,7 +504,7 @@ function validatedSlideCandidate(
   const pre = input.scene;
   const sacredRefusal = sacredTextRefusal(input, candidate);
   if (sacredRefusal) return sacredRefusal;
-  const violations = regenerationInvariantViolations(pre, candidate);
+  const violations = regenerationInvariantViolations(pre, candidate, input.sourceContentUnitIds);
   if (violations.length > 0) {
     return failure(
       'SCENE_CONTENT_GENERATION_FAILED',

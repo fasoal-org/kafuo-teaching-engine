@@ -62,6 +62,13 @@ interface LessonPartsListProps {
   readonly onGenerate: (unitId: string) => void;
   /** The 1-based position of a live slide in the rail, for an opened part's slide list. */
   readonly slideNumber?: (sceneId: string) => number | null;
+  /** Owner, 14 Nov 2026: move a taught part to another slide (absent → no button). */
+  readonly onMove?: (unitId: string) => void;
+}
+
+/** A taught instructional part can move to another slide. */
+export function canMoveUnit(unit: ContentUnitSummary): boolean {
+  return unit.instructional && unit.coveredBySlideIds.length > 0;
 }
 
 /** The panel's body (also rendered directly by tests). */
@@ -72,6 +79,7 @@ export function LessonPartsList({
   busy,
   onGenerate,
   slideNumber,
+  onMove,
 }: LessonPartsListProps) {
   const { t } = useI18n();
   if (mode === 'no-parts' || (data !== null && hasNoLessonParts(data))) {
@@ -100,6 +108,7 @@ export function LessonPartsList({
             busy={busy}
             onGenerate={onGenerate}
             slideNumber={slideNumber}
+            onMove={onMove}
           />
         ))}
       </ol>
@@ -117,11 +126,13 @@ function LessonPartRow({
   busy,
   onGenerate,
   slideNumber,
+  onMove,
 }: {
   readonly unit: ContentUnitSummary;
   readonly busy: boolean;
   readonly onGenerate: (unitId: string) => void;
   readonly slideNumber?: (sceneId: string) => number | null;
+  readonly onMove?: (unitId: string) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -189,7 +200,15 @@ function LessonPartRow({
           </Button>
         ) : null}
       </div>
-      {open ? <LessonPartDetails id={detailsId} unit={unit} slideNumber={slideNumber} /> : null}
+      {open ? (
+        <LessonPartDetails
+          id={detailsId}
+          unit={unit}
+          slideNumber={slideNumber}
+          busy={busy}
+          onMove={onMove}
+        />
+      ) : null}
     </li>
   );
 }
@@ -199,10 +218,14 @@ function LessonPartDetails({
   id,
   unit,
   slideNumber,
+  busy,
+  onMove,
 }: {
   readonly id: string;
   readonly unit: ContentUnitSummary;
   readonly slideNumber?: (sceneId: string) => number | null;
+  readonly busy: boolean;
+  readonly onMove?: (unitId: string) => void;
 }) {
   const { t } = useI18n();
   const text = typeof unit.text === 'string' ? unit.text.trim() : '';
@@ -229,6 +252,20 @@ function LessonPartDetails({
           <span className="text-muted-foreground" data-testid="lesson-part-slides">
             {t('edit.slideInsertion.partSlides', { list: slides.join('، ') })}
           </span>
+        ) : null}
+        {onMove && canMoveUnit(unit) ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            title={busy ? t('edit.slideInsertion.busyHint') : undefined}
+            data-testid="lesson-part-move"
+            className="ms-auto h-7 border-primary/40 text-primary hover:bg-primary hover:text-primary-foreground"
+            onClick={() => onMove(unit.id)}
+          >
+            {t('edit.slideInsertion.move.action')}
+          </Button>
         ) : null}
       </div>
       {text ? (
@@ -320,7 +357,12 @@ interface LessonPartsPanelProps extends LessonPartsListProps {
   readonly onOpen?: () => void;
 }
 
-export function LessonPartsPanel({ onOpen, onGenerate, ...listProps }: LessonPartsPanelProps) {
+export function LessonPartsPanel({
+  onOpen,
+  onGenerate,
+  onMove,
+  ...listProps
+}: LessonPartsPanelProps) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
   const uncovered =
@@ -369,6 +411,15 @@ export function LessonPartsPanel({ onOpen, onGenerate, ...listProps }: LessonPar
                 setOpen(false);
                 onGenerate(unitId);
               }}
+              // The move dialog opens once this one closes: modals never nest.
+              {...(onMove
+                ? {
+                    onMove: (unitId: string) => {
+                      setOpen(false);
+                      onMove(unitId);
+                    },
+                  }
+                : {})}
             />
           </div>
         </DialogContent>
