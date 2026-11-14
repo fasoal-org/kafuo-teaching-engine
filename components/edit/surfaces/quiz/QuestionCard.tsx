@@ -91,11 +91,11 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
           : 'border-zinc-200/80 hover:border-zinc-300 hover:shadow-[0_8px_24px_-16px_rgba(24,24,27,0.25)] dark:border-zinc-800 dark:hover:border-zinc-700',
       )}
     >
-      {/* Left accent rail — colours the active question by its type. */}
+      {/* Start-edge accent rail — colours the active question by its type. */}
       <div
         aria-hidden
         className={cn(
-          'absolute inset-y-0 left-0 w-1 bg-gradient-to-b transition-opacity',
+          'absolute inset-y-0 start-0 w-1 bg-gradient-to-b transition-opacity',
           accent.rail,
           expanded ? 'opacity-100' : 'opacity-0',
         )}
@@ -104,9 +104,9 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
       {/* Header — caret + summary toggles expansion; grip drags; trash deletes. */}
       <div
         className={cn(
-          'flex items-center gap-2 py-2 pr-2.5 pl-3 transition-colors',
+          'flex items-center gap-2 py-2 pe-2.5 ps-3 transition-colors',
           expanded &&
-            'bg-gradient-to-r from-violet-50/60 to-transparent dark:from-violet-500/[0.06]',
+            'bg-gradient-to-r rtl:bg-gradient-to-l from-violet-50/60 to-transparent dark:from-violet-500/[0.06]',
         )}
       >
         <button
@@ -121,12 +121,13 @@ export function QuestionCard({ question: q, index, expanded, onToggle }: Props) 
           type="button"
           onPointerDown={stopDrag}
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2.5 text-start"
         >
           <ChevronRight
             className={cn(
+              // Collapsed, the caret points toward the reading direction (left in Arabic).
               'h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-200',
-              expanded && 'rotate-90 text-violet-500',
+              expanded ? 'rotate-90 text-violet-500' : 'rtl:rotate-180',
             )}
           />
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-100 font-mono text-xs font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">

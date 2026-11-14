@@ -50,7 +50,8 @@ export function CanvasPager({
         onClick={onPrev}
         tone={variant}
       >
-        <ChevronLeft className="size-4" />
+        {/* "Previous" points against the reading direction: right in Arabic. */}
+        <ChevronLeft className="size-4 rtl:rotate-180" />
       </PagerButton>
       <span
         className={cn(
@@ -68,7 +69,7 @@ export function CanvasPager({
         onClick={onNext}
         tone={variant}
       >
-        <ChevronRight className="size-4" />
+        <ChevronRight className="size-4 rtl:rotate-180" />
       </PagerButton>
     </>
   );

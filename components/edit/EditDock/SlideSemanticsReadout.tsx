@@ -32,7 +32,7 @@ export function SlideSemanticsReadout({ sceneId }: { sceneId: string }) {
   ];
 
   return (
-    <div className="pointer-events-none absolute bottom-full left-3 z-20 mb-1 flex flex-col items-start">
+    <div className="pointer-events-none absolute bottom-full start-3 z-20 mb-1 flex flex-col items-start">
       <button
         type="button"
         data-testid="slide-semantics-toggle"

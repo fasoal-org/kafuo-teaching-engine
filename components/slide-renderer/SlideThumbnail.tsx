@@ -244,7 +244,8 @@ export function SlideThumbnail({
   }
 
   return (
-    <div className={containerClass} style={containerStyle}>
+    // `dir="ltr"`: the thumbnail is the slide at absolute coordinates (RTL page safe).
+    <div dir="ltr" className={containerClass} style={containerStyle}>
       <SlideCanvas
         slide={resolved.slide}
         chrome={false}

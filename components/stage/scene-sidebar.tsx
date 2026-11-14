@@ -71,9 +71,11 @@ export function SceneSidebar({
       isDraggingRef.current = true;
       const startX = e.clientX;
       const startWidth = sidebarWidth;
+      // In an RTL page (Arabic) the sidebar sits on the right and grows to the left.
+      const sign = getComputedStyle(e.currentTarget).direction === 'rtl' ? -1 : 1;
 
       const handleMouseMove = (me: MouseEvent) => {
-        const delta = me.clientX - startX;
+        const delta = (me.clientX - startX) * sign;
         const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + delta));
         setSidebarWidth(newWidth);
       };
@@ -112,15 +114,15 @@ export function SceneSidebar({
         width: displayWidth,
         transition: isDraggingRef.current ? 'none' : 'width 0.3s ease',
       }}
-      className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-r border-gray-100 dark:border-gray-800 shadow-[2px_0_24px_rgba(0,0,0,0.02)] flex flex-col shrink-0 z-20 relative overflow-visible"
+      className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-e border-gray-100 dark:border-gray-800 shadow-[2px_0_24px_rgba(0,0,0,0.02)] rtl:shadow-[-2px_0_24px_rgba(0,0,0,0.02)] flex flex-col shrink-0 z-20 relative overflow-visible"
     >
       {/* Drag handle */}
       {!collapsed && (
         <div
           onMouseDown={handleDragStart}
-          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-50 group hover:bg-purple-400/30 dark:hover:bg-purple-600/30 active:bg-purple-500/40 dark:active:bg-purple-500/40 transition-colors"
+          className="absolute end-0 top-0 bottom-0 w-1.5 cursor-col-resize z-50 group hover:bg-purple-400/30 dark:hover:bg-purple-600/30 active:bg-purple-500/40 dark:active:bg-purple-500/40 transition-colors"
         >
-          <div className="absolute right-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-purple-400 dark:group-hover:bg-purple-500 transition-colors" />
+          <div className="absolute end-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-purple-400 dark:group-hover:bg-purple-500 transition-colors" />
         </div>
       )}
 
@@ -138,7 +140,7 @@ export function SceneSidebar({
             onClick={() => onCollapseChange(true)}
             className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
           >
-            <PanelLeftClose className="w-4 h-4" />
+            <PanelLeftClose className="w-4 h-4 rtl:rotate-180" />
           </button>
         </div>
 
@@ -261,7 +263,7 @@ export function SceneSidebar({
                             <div className="w-1 h-1 rounded-full bg-amber-300 dark:bg-amber-500/60" />
                             <div className="w-1 h-1 rounded-full bg-green-300 dark:bg-green-500/60" />
                           </div>
-                          <div className="h-1.5 flex-1 bg-emerald-200/40 dark:bg-emerald-700/30 rounded-full ml-0.5" />
+                          <div className="h-1.5 flex-1 bg-emerald-200/40 dark:bg-emerald-700/30 rounded-full ms-0.5" />
                         </div>
                         <div className="flex-1 flex gap-1">
                           <div className="w-1/4 space-y-1 pt-0.5">
@@ -416,7 +418,7 @@ export function SceneSidebar({
                                 handleRetryOutline(outline.id);
                               }}
                               disabled={isRetrying}
-                              className="p-1 -ml-1 rounded-md hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+                              className="p-1 -ms-1 rounded-md hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95 disabled:opacity-50 disabled:active:scale-100"
                               title={t('generation.retryScene')}
                             >
                               <RefreshCw

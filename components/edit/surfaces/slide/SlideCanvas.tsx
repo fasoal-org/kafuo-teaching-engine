@@ -42,7 +42,9 @@ export function SlideCanvas() {
   }, []);
 
   return (
-    <div className="relative h-full w-full" {...gestureProps}>
+    // `dir="ltr"`: elements and overlays sit at absolute coordinates, which an RTL page
+    // (Arabic UI) must not mirror. The slide's own text keeps the direction it sets.
+    <div dir="ltr" className="relative h-full w-full" {...gestureProps}>
       <SceneProvider controller={controller}>
         {useRendererEditor ? <RendererEditorCanvas /> : <Canvas />}
         <SpotlightOverlay domIdPrefix={EDITABLE_ELEMENT_ID_PREFIX} />

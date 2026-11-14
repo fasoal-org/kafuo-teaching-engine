@@ -25,18 +25,19 @@ export interface BrandConfig {
 }
 
 /**
- * The default brand: Teaching Engine, with no vendor overrides.
+ * The default brand: Teaching Engine, dressed in Kafuo's identity.
  *
- * No approved Teaching Engine logo exists yet. `public/logo-horizontal.png`
- * carries the upstream OpenMAIC wordmark, so it is no longer shown; until the
- * final assets land, every surface pairs the standalone mark (temporary, file
- * name kept for compatibility) with the product name set in app typography.
+ * Owner, 14 Nov 2026: the Kafuo hexagon mark (`public/kafuo-mark.png`, the same
+ * file the website and the mobile app ship) and Kafuo navy replace the interim
+ * OpenMAIC mark and purple. The product name stays Teaching Engine, set beside the
+ * mark in app typography (`logoHasWordmark: false`). `public/openmaic-mark.png`
+ * stays on disk for the PBL workspace assets that still reference it.
  */
 export const DEFAULT_BRAND: BrandConfig = {
   productName: 'Teaching Engine',
   shortName: 'Teaching Engine',
-  logoSrc: '/openmaic-mark.png',
+  logoSrc: '/kafuo-mark.png',
   logoHasWordmark: false,
-  markSrc: '/openmaic-mark.png',
-  themeColor: '#722ed1',
+  markSrc: '/kafuo-mark.png',
+  themeColor: '#001336',
 };

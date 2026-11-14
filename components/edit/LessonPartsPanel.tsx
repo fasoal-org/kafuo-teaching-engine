@@ -87,43 +87,94 @@ export function LessonPartsList({
   }
   const units = [...data.units].sort((a, b) => a.order - b.order);
   return (
-    <ol className="grid gap-1.5" data-testid="lesson-parts-list">
-      {units.map((unit) => {
-        const badge = unitBadge(unit);
-        return (
-          <li
-            key={unit.id}
-            data-testid="lesson-part"
-            data-unit-id={unit.id}
-            data-badge={badge}
-            className={cn(
-              'flex items-center gap-2 rounded-md border border-border px-2.5 py-2 text-sm',
-              badge === 'reference' && 'border-dashed text-muted-foreground opacity-70',
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">
-              {unit.title?.trim() || t('edit.slideInsertion.untitledPart', { order: unit.order })}
-            </span>
-            <UnitBadgeLabel unit={unit} badge={badge} />
-            {canGenerateForUnit(unit) ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                title={busy ? t('edit.slideInsertion.busyHint') : undefined}
-                data-testid="lesson-part-generate"
-                onClick={() => onGenerate(unit.id)}
+    <div className="grid gap-3">
+      <LessonPartsSummary units={units} />
+      <ol className="grid gap-2" data-testid="lesson-parts-list">
+        {units.map((unit) => {
+          const badge = unitBadge(unit);
+          return (
+            <li
+              key={unit.id}
+              data-testid="lesson-part"
+              data-unit-id={unit.id}
+              data-badge={badge}
+              className={cn(
+                // Owner, 14 Nov 2026: each part is a card -- its order and name at the
+                // start, the coverage badge and the action at the end.
+                'flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm shadow-xs transition-colors hover:border-violet-200',
+                'dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20',
+                badge === 'no-slide' && 'border-red-200/80 dark:border-red-500/30',
+                badge === 'reference' &&
+                  'border-dashed bg-transparent text-muted-foreground opacity-70',
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+                  badge === 'reference'
+                    ? 'bg-muted text-muted-foreground'
+                    : 'bg-brand-soft text-brand-soft-foreground',
+                )}
               >
-                {t('edit.slideInsertion.generateAction')}
-              </Button>
-            ) : null}
-          </li>
-        );
-      })}
-    </ol>
+                {unit.order}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {unit.title?.trim() || t('edit.slideInsertion.untitledPart', { order: unit.order })}
+              </span>
+              <UnitBadgeLabel unit={unit} badge={badge} />
+              {canGenerateForUnit(unit) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  title={busy ? t('edit.slideInsertion.busyHint') : undefined}
+                  data-testid="lesson-part-generate"
+                  className="shrink-0 border-primary/40 text-primary hover:bg-primary hover:text-primary-foreground"
+                  onClick={() => onGenerate(unit.id)}
+                >
+                  {t('edit.slideInsertion.generateAction')}
+                </Button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
+
+/** One line of counts above the list: covered, without a slide, reference. */
+function LessonPartsSummary({ units }: { readonly units: readonly ContentUnitSummary[] }) {
+  const { t } = useI18n();
+  const counts = { covered: 0, missing: 0, reference: 0 };
+  for (const unit of units) {
+    const badge = unitBadge(unit);
+    if (badge === 'covered') counts.covered += 1;
+    else if (badge === 'reference') counts.reference += 1;
+    else if (canGenerateForUnit(unit)) counts.missing += 1;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="lesson-parts-summary">
+      <span className={cn(SUMMARY_CHIP, 'bg-brand-soft text-brand-soft-foreground')}>
+        {t('edit.slideInsertion.badgeCovered', { count: counts.covered })}
+      </span>
+      <span
+        className={cn(SUMMARY_CHIP, 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300')}
+      >
+        {t('edit.slideInsertion.panelEntryCount', { count: counts.missing })}
+      </span>
+      {counts.reference > 0 ? (
+        <span className={cn(SUMMARY_CHIP, 'bg-muted text-muted-foreground')}>
+          {t('edit.slideInsertion.badgeReference')} · {counts.reference}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+const SUMMARY_CHIP = 'rounded-full px-3 py-1 text-xs font-medium tabular-nums';
 
 function UnitBadgeLabel({
   unit,
@@ -136,16 +187,28 @@ function UnitBadgeLabel({
   switch (badge) {
     case 'covered':
       return (
-        <Badge variant="secondary">
+        <Badge className="shrink-0 border-transparent bg-brand-soft text-brand-soft-foreground">
           {t('edit.slideInsertion.badgeCovered', { count: unit.coveredBySlideIds.length })}
         </Badge>
       );
     case 'quiz-only':
-      return <Badge variant="outline">{t('edit.slideInsertion.badgeQuizOnly')}</Badge>;
+      return (
+        <Badge variant="outline" className="shrink-0">
+          {t('edit.slideInsertion.badgeQuizOnly')}
+        </Badge>
+      );
     case 'no-slide':
-      return <Badge variant="destructive">{t('edit.slideInsertion.badgeNoSlide')}</Badge>;
+      return (
+        <Badge className="shrink-0 border-transparent bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300">
+          {t('edit.slideInsertion.badgeNoSlide')}
+        </Badge>
+      );
     case 'reference':
-      return <Badge variant="ghost">{t('edit.slideInsertion.badgeReference')}</Badge>;
+      return (
+        <Badge variant="ghost" className="shrink-0">
+          {t('edit.slideInsertion.badgeReference')}
+        </Badge>
+      );
   }
 }
 
@@ -171,7 +234,7 @@ export function LessonPartsPanel({ onOpen, onGenerate, ...listProps }: LessonPar
           onOpen?.();
         }}
         className={cn(
-          'mb-2 flex w-full items-center gap-2 rounded-lg border border-dashed border-violet-200 px-2.5 py-1.5 text-left text-xs',
+          'mb-2 flex w-full items-center gap-2 rounded-lg border border-dashed border-violet-200 px-2.5 py-1.5 text-start text-xs',
           'text-violet-700 transition-colors hover:bg-violet-50',
           'dark:border-violet-400/30 dark:text-violet-300 dark:hover:bg-violet-500/10',
         )}
@@ -179,7 +242,7 @@ export function LessonPartsPanel({ onOpen, onGenerate, ...listProps }: LessonPar
         <ListTree className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">{t('edit.slideInsertion.panelEntry')}</span>
         {uncovered > 0 ? (
-          <span className="shrink-0 tabular-nums text-[11px] text-violet-500">
+          <span className="shrink-0 rounded-full bg-brand-accent px-1.5 text-[11px] font-semibold tabular-nums text-brand-accent-foreground">
             {t('edit.slideInsertion.panelEntryCount', { count: uncovered })}
           </span>
         ) : null}
@@ -188,19 +251,23 @@ export function LessonPartsPanel({ onOpen, onGenerate, ...listProps }: LessonPar
         <DialogContent
           dir={locale.startsWith('ar') ? 'rtl' : 'ltr'}
           data-testid="lesson-parts-panel"
-          className="max-h-[80vh] max-w-lg overflow-y-auto"
+          // Owner, 14 Nov 2026: wider, with the list scrolling under a fixed header.
+          className="flex max-h-[85vh] flex-col gap-4 sm:max-w-3xl"
         >
           <DialogHeader>
             <DialogTitle>{t('edit.slideInsertion.panelTitle')}</DialogTitle>
             <DialogDescription>{t('edit.slideInsertion.panelDescription')}</DialogDescription>
           </DialogHeader>
-          <LessonPartsList
-            {...listProps}
-            onGenerate={(unitId) => {
-              setOpen(false);
-              onGenerate(unitId);
-            }}
-          />
+          {/* Thin, theme-matched scrollbar (it sits on the left in Arabic). */}
+          <div className="-mx-6 min-h-0 flex-1 overflow-y-auto px-6 pb-1 [scrollbar-width:thin] dark:[color-scheme:dark]">
+            <LessonPartsList
+              {...listProps}
+              onGenerate={(unitId) => {
+                setOpen(false);
+                onGenerate(unitId);
+              }}
+            />
+          </div>
         </DialogContent>
       </Dialog>
     </>

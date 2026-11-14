@@ -337,7 +337,10 @@ export function SlideNavRail() {
   const handleResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragStateRef.current;
     if (!drag || e.pointerId !== drag.pointerId) return;
-    const delta = e.clientX - drag.startX;
+    // In an RTL page (Arabic) the rail sits on the right and grows to the left, so a
+    // leftward drag widens it.
+    const sign = getComputedStyle(e.currentTarget).direction === 'rtl' ? -1 : 1;
+    const delta = (e.clientX - drag.startX) * sign;
     const next = Math.min(RAIL_MAX_PX, Math.max(RAIL_MIN_PX, drag.startWidth + delta));
     drag.lastWidth = next;
     if (railRef.current) railRef.current.style.width = `${next}px`;
@@ -534,9 +537,9 @@ export function SlideNavRail() {
       // arrive too late.
       className={cn(
         'relative flex h-full shrink-0 flex-col overflow-hidden',
-        'border-r border-gray-100 dark:border-gray-800',
+        'border-e border-gray-100 dark:border-gray-800',
         'bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl',
-        'shadow-[2px_0_24px_rgba(0,0,0,0.02)]',
+        'shadow-[2px_0_24px_rgba(0,0,0,0.02)] rtl:shadow-[-2px_0_24px_rgba(0,0,0,0.02)]',
       )}
       style={{
         width: collapsed ? RAIL_HANDLE_PX : persistedWidth,
@@ -555,9 +558,9 @@ export function SlideNavRail() {
           onPointerMove={handleResizeMove}
           onPointerUp={handleResizeEnd}
           onPointerCancel={handleResizeEnd}
-          className="group absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
+          className="group absolute end-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-violet-400/30 dark:hover:bg-violet-500/30 active:bg-violet-500/50 transition-colors"
         >
-          <div className="absolute right-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-violet-400 dark:group-hover:bg-violet-500 transition-colors" />
+          <div className="absolute end-0.5 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-full bg-gray-300 dark:bg-gray-600 group-hover:bg-violet-400 dark:group-hover:bg-violet-500 transition-colors" />
         </div>
       )}
       {/* Collapse / expand control. Two forms of one toggle (stable testid):
@@ -582,7 +585,7 @@ export function SlideNavRail() {
             'transition-colors duration-150',
           )}
         >
-          <ChevronRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+          <ChevronRight className="h-3 w-3 rtl:rotate-180" strokeWidth={1.75} aria-hidden="true" />
         </button>
       ) : (
         <button
@@ -592,7 +595,7 @@ export function SlideNavRail() {
           title={t('edit.nav.collapse')}
           data-testid="slide-nav-rail-collapse"
           className={cn(
-            'absolute right-0 top-1/2 z-10 flex h-8 w-6 -translate-y-1/2 items-center justify-center rounded-l-md',
+            'absolute end-0 top-1/2 z-10 flex h-8 w-6 -translate-y-1/2 items-center justify-center rounded-s-md',
             'text-zinc-400/70 dark:text-zinc-500/70',
             'hover:bg-gray-100/80 hover:text-zinc-600 dark:hover:bg-gray-800/80 dark:hover:text-zinc-300',
             'focus-visible:outline-none focus-visible:bg-gray-100/80 focus-visible:text-zinc-600 focus-visible:ring-1 focus-visible:ring-violet-400/50 dark:focus-visible:bg-gray-800/80 dark:focus-visible:text-zinc-300',
@@ -600,7 +603,7 @@ export function SlideNavRail() {
             'transition-colors duration-150',
           )}
         >
-          <ChevronLeft className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+          <ChevronLeft className="h-3 w-3 rtl:rotate-180" strokeWidth={1.75} aria-hidden="true" />
         </button>
       )}
 

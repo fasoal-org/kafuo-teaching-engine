@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Locale, defaultLocale, supportedLocales } from '@/lib/i18n';
+import { type Locale, defaultLocale, localeDirection, supportedLocales } from '@/lib/i18n';
 import '@/lib/i18n/config';
 
 const LOCALE_STORAGE_KEY = 'locale';
@@ -44,6 +44,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       // localStorage unavailable, keep default
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Owner, 14 Nov 2026: the page follows the language's direction, so Arabic lays out
+  // right to left (portals and dialogs included, since they render under <body>). Set on
+  // the client after hydration, like the language itself; slide canvases opt back into
+  // `dir="ltr"` because their elements are placed by absolute coordinates.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.lang = locale;
+    root.dir = localeDirection(locale);
+  }, [locale]);
 
   const setLocale = (newLocale: Locale) => {
     i18n.changeLanguage(newLocale);

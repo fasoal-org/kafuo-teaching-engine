@@ -239,7 +239,7 @@ export function RegenerateSlideDialog({
         dir={dir}
         showCloseButton={!running}
         data-testid="regenerate-slide-dialog"
-        className="max-w-xl"
+        className="sm:max-w-2xl"
         onEscapeKeyDown={(event) => {
           if (running) event.preventDefault();
         }}

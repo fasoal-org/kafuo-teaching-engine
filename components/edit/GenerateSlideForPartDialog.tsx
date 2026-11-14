@@ -494,7 +494,7 @@ export function GenerateSlideForPartDialog({
         dir={dir}
         showCloseButton={!running}
         data-testid="generate-slide-for-part-dialog"
-        className="max-h-[90vh] max-w-xl overflow-y-auto"
+        className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
         onEscapeKeyDown={(event) => {
           if (running) event.preventDefault();
         }}

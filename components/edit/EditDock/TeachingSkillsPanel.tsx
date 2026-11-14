@@ -187,7 +187,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
     mutate({ assignments: [{ sceneId, teachingSkills }] }, 'skills');
 
   return (
-    <div className="pointer-events-none absolute bottom-full right-3 z-20 mb-1 flex flex-col items-end">
+    <div className="pointer-events-none absolute bottom-full end-3 z-20 mb-1 flex flex-col items-end">
       <button
         type="button"
         data-testid="teaching-skills-toggle"
@@ -285,7 +285,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
             <div className="flex items-start justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Supporting</dt>
-              <dd data-testid="teaching-skills-supporting" className="text-right">
+              <dd data-testid="teaching-skills-supporting" className="text-end">
                 {scene.supporting.length === 0 ? (
                   <span>—</span>
                 ) : (
@@ -296,7 +296,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
             <div className="flex items-center justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Policy</dt>
-              <dd data-testid="teaching-skills-policy" className="text-right">
+              <dd data-testid="teaching-skills-policy" className="text-end">
                 <span>
                   {scene.policy.relationship === 'within-policy'
                     ? 'within policy'
@@ -330,7 +330,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                 ride the failures channel below. */}
             <div className="flex items-center justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Actions</dt>
-              <dd data-testid="teaching-skills-actions" className="text-right">
+              <dd data-testid="teaching-skills-actions" className="text-end">
                 <span>{scene.actionCount ?? 0} in the timeline</span>
                 {(scene.actionFindings ?? []).length > 0 ? (
                   <div className="text-red-600 dark:text-red-400">

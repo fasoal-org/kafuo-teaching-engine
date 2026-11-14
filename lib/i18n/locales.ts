@@ -27,3 +27,15 @@ export const supportedLocales = [
   { code: 'vi-VN', label: 'Tiếng Việt', shortLabel: 'VI' },
   { code: 'de-DE', label: 'Deutsch', shortLabel: 'DE' },
 ] as const satisfies readonly LocaleEntry[];
+
+/** Languages written right to left (by primary subtag). */
+const RTL_LANGUAGES = new Set(['ar', 'fa', 'he', 'ur']);
+
+/**
+ * The page direction for a locale code: `rtl` for Arabic (and the other RTL scripts),
+ * `ltr` otherwise. Owner, 14 Nov 2026: the teacher UI follows Arabic right to left.
+ */
+export function localeDirection(locale: string | null | undefined): 'rtl' | 'ltr' {
+  const language = (locale ?? '').split('-')[0].toLowerCase();
+  return RTL_LANGUAGES.has(language) ? 'rtl' : 'ltr';
+}

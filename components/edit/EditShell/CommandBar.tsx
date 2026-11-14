@@ -49,7 +49,8 @@ export function CommandBar({ title, history, commands, trailing }: CommandBarPro
           aria-label={exitLabel}
           onClick={() => exitClassroom(router, searchParams)}
         >
-          <ArrowLeft className="h-4 w-4" />
+          {/* "Back" points against the reading direction: right in Arabic. */}
+          <ArrowLeft className="h-4 w-4 rtl:rotate-180" />
         </IconButton>
         {history && (
           <>
@@ -62,7 +63,7 @@ export function CommandBar({ title, history, commands, trailing }: CommandBarPro
           </>
         )}
         <span
-          className={cn('ml-2 truncate text-sm font-semibold text-zinc-700 dark:text-zinc-200')}
+          className={cn('ms-2 truncate text-sm font-semibold text-zinc-700 dark:text-zinc-200')}
           title={title}
         >
           {title}

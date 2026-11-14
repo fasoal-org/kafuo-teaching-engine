@@ -59,10 +59,11 @@ export function BrandLockup({
       data-testid={testId}
     >
       <img src={brand.markSrc} alt={alt} className={cn('shrink-0', markClassName)} />
+      {/* `text-primary`, not the fixed theme color: Kafuo navy reads on light surfaces
+          and the dark theme's primary (Kafuo yellow) on dark ones (owner, 14 Nov 2026). */}
       <span
         aria-hidden="true"
-        className={cn('whitespace-nowrap font-semibold tracking-tight', textClassName)}
-        style={{ color: brand.themeColor }}
+        className={cn('whitespace-nowrap font-semibold tracking-tight text-primary', textClassName)}
       >
         {name}
       </span>
