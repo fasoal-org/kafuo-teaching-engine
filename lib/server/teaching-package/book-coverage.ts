@@ -68,9 +68,13 @@ export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as 
 const TEACHER_PARITY_VERSIONS: ReadonlySet<string> = new Set([
   TEACHER_PARITY_TEACHING_MODEL.version,
   'g5.v9',
+  // g5.v10 (learner-first, plan `docs/frds/g5-v10-weak-student-fixes-plan-2026-11-15.md`)
+  // is built on g5.v9. The v8 gates its attempt step would fail get a v10 variant in
+  // the wave that adds that step (plan W1, "v8 gates on v10").
+  'g5.v10',
 ]);
 
-/** The ONE g5.v8/g5.v9 switch: an explicit Teaching Model identity check. */
+/** The ONE g5.v8/g5.v9/g5.v10 switch: an explicit Teaching Model identity check. */
 export function isTeacherParityModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
@@ -78,6 +82,23 @@ export function isTeacherParityModel(
     model?.key === TEACHER_PARITY_TEACHING_MODEL.key &&
     typeof model?.version === 'string' &&
     TEACHER_PARITY_VERSIONS.has(model.version)
+  );
+}
+
+/**
+ * g5.v10, the learner-first Teaching Model (owner decisions D-1..D-10, 15 Nov 2026):
+ * every weak-student fix of its plan ships behind THIS switch only, never on g5.v1–v9
+ * (D-9 B).
+ */
+export const LEARNER_FIRST_TEACHING_MODEL = { key: 'g5', version: 'g5.v10' } as const;
+
+/** The ONE g5.v10 switch: an explicit Teaching Model identity check. */
+export function isLearnerFirstModel(
+  model: { key?: string | null; version?: string | null } | null | undefined,
+): boolean {
+  return (
+    model?.key === LEARNER_FIRST_TEACHING_MODEL.key &&
+    model?.version === LEARNER_FIRST_TEACHING_MODEL.version
   );
 }
 
