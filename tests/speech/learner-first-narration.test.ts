@@ -273,6 +273,29 @@ describe('quality plan W3: single letter names, clock times, a conjecture called
     expect(codes(['التخمين غير صحيح؛ وجدنا مثالًا مضادًا.'], check)).toEqual([]);
   });
 
+  it('review fixes: the book tag, a duration, a proof line, the second name, «ثلاثمئة ألف»', () => {
+    // MED-5: «(س٣٥ في كتابك)» is a tag, not the Arabic symbol «س».
+    const exercise: NarrationCanvasElement[] = [
+      { id: 'e', type: 'text', text: 'تمرين ١ (س٣٥ في كتابك): x + 3 = 7' },
+    ];
+    expect(codes(['فيصبح سين يساوي أربعة.'], exercise)).toEqual(['SYMBOL_READING_ARABIC_NAME']);
+    // MED-6: a duration is not the canvas time 8:30.
+    const buses: NarrationCanvasElement[] = [{ id: 't', type: 'text', text: '8:30 ثم 9:05' }];
+    expect(codes(['استغرقت الرحلة خمسة وثلاثين دقيقة.'], buses)).toEqual([]);
+    expect(codes(['تبدأ بثمانية وثلاثين صباحًا.'], buses)).toEqual(['CLOCK_TIME_READ_AS_NUMBER']);
+    // LOW-MED-7: an algebra line on the slide makes the verdict a proof's; a question is not one.
+    const check: NarrationCanvasElement[] = [{ id: 'c', type: 'text', text: 'a + b = 0' }];
+    expect(
+      codes(['بطرح a من الطرفين نحصل على b يساوي سالب a.', 'إذن التخمين صحيح.'], check),
+    ).toEqual([]);
+    expect(codes(['لنتحقق إن كان التخمين صحيحًا.'], check)).toEqual([]);
+    // LOW: the second strong name counts too; «ثلاثمئة ألف» is three hundred thousand.
+    const xy: NarrationCanvasElement[] = [{ id: 'x', type: 'text', text: 'x' }];
+    expect(codes(['صاد تساوي سين.'], xy)).toEqual(['SYMBOL_READING_ARABIC_NAME']);
+    const amount: NarrationCanvasElement[] = [{ id: 'a', type: 'text', text: 'a = 300' }];
+    expect(codes(['المبلغ ثلاثمئة ألف ريال.'], amount)).toEqual([]);
+  });
+
   it('writes the corrections of the new issues', () => {
     const text = formatLearnerFirstNarrationCorrection(
       [

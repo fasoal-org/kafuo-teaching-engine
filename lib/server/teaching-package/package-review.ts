@@ -560,7 +560,10 @@ export async function runPackageReview(
     let fixes: StoredFix[] = claimed.fixes;
     if (deps.fixLoop && findings.length > 0) {
       // g5.v10 quality plan W2: the fix loop rolls back a fix that made a slide worse.
-      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId);
+      // A failed read keeps the v1 flow (review LOW: never a new failure point).
+      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId).catch(
+        () => null,
+      );
       const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
       const result = await deps.fixLoop({
         pool,

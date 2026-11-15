@@ -183,6 +183,13 @@ describe('engine-placed attempt quizzes', () => {
     });
     expect(labelled!.quizConfig?.questionCount).toBe(2);
     expect(labelled!.keyPoints).toEqual(['تمرين 1: أسعار']);
+    // Review LOW-MED-8: a multiple-choice check's options are not items.
+    const choices = new Map([['6234', '2) أي مما يلي عدد أولي؟\nA) 5 B) 8 C) 9 D) 12']]);
+    const [, single] = insertAttemptQuizzes(check, BOOK, {
+      unitTexts: choices,
+      facts: { '6234': { itemLabels: ['2'] } as never },
+    });
+    expect(single!.quizConfig?.questionCount).toBe(1);
   });
 
   it('quality plan W4: «المثال 3 11)» is question 11 (item 208 unit 6249)', () => {

@@ -81,7 +81,10 @@ const QUESTION_LINE = /^\s*(?:المثال\s*[0-9٠-٩]{1,2}\s+)?\(?\s*([0-9٠-�
 
 // Quality plan W4: a check's lettered sub-items printed bare under one number
 // («3) أسعار…» then «A) … B) … C) …», item 208 unit 6241: only 3B got a try).
-const BARE_SUB_ITEM = /(?:^|\s)\(?([A-H]|[أبجد])\)\s+\S/gmu;
+// Review LOW-MED-8: only at the start of a line, followed by at least two Arabic words,
+// so the options of a multiple-choice check («A) 5 B) 7») are never counted as items.
+const BARE_SUB_ITEM =
+  /^[^\S\n]*\(?([A-H]|[أبجد])\)[^\S\n]+[^\n]*?[؀-ۿ]{2,}[^\S\n]+[^\n]*?[؀-ۿ]{2,}/gmu;
 
 /** The bare lettered sub-items of a check unit's text, in book order, each once. */
 export function bareSubItems(text: string): string[] {

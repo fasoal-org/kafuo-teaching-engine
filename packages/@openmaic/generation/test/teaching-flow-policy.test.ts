@@ -465,13 +465,40 @@ describe('g5.v10 quality plan W4: learner-first visual rules', () => {
     const relaxed = analyzeOutlines([exercises], { teachingFlow: v5Flow, sourceImages, ...v10 });
     expect(relaxed.outlines[0]?.suggestedImageIds).toBeUndefined();
     expect(relaxed.outlines[0]?.visualPlan?.mode).toBe('native');
-    expect(codes(relaxed)).not.toContain('SOURCE_VISUAL_NOT_SELECTED');
+    // Review MED-2: the normalised exercise slide is not blocked at all.
+    expect(codes(relaxed)).toEqual([]);
     // A slide citing an exercise AND a teaching unit keeps the usual rule.
     const mixed = analyzeOutlines(
       [explanationSlide({ id: 'm', sourceContentUnitIds: ['6247', '6230'] })],
       { teachingFlow: v5Flow, sourceImages, ...v10 },
     );
     expect(codes(mixed)).toContain('SOURCE_VISUAL_NOT_SELECTED');
+  });
+
+  test("review HIGH-1: a part opener's dropped image never counts as shown elsewhere", () => {
+    const sourceImages = [{ id: 'src-2', src: '', pageNumber: 1, sourceContentUnitIds: ['6230'] }];
+    const opener = explanationSlide({
+      id: 'open',
+      slideType: 'transition',
+      contentRole: undefined,
+      sourceContentUnitIds: ['6230'],
+      visualPlan: { mode: 'image' },
+      suggestedImageIds: ['src-2'],
+    });
+    const teaching = explanationSlide({ id: 'teach', sourceContentUnitIds: ['6230'] });
+    const analysis = analyzeOutlines([opener, teaching], {
+      teachingFlow: v5Flow,
+      sourceImages,
+      ...v10,
+    });
+    // Normalisation and validation agree: the teaching slide must show src-2 itself.
+    expect(analysis.outlines[0]?.suggestedImageIds).toBeUndefined();
+    expect(analysis.outlines[1]?.visualPlan).toEqual(teaching.visualPlan);
+    const notSelected = blockingOutlineDiagnostics(analysis).filter(
+      (finding) => finding.code === 'SOURCE_VISUAL_NOT_SELECTED',
+    );
+    expect(notSelected.map((finding) => finding.outlineId)).toEqual(['teach']);
+    expect(notSelected[0]?.allowedValues).toEqual(['src-2']);
   });
 
   test('a structural slide needs no visual and its planned diagram is dropped (item 208 slide 24)', () => {

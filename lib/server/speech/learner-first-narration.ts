@@ -177,7 +177,7 @@ const WORD_END = '(?=$|[\\s،,.)»؟:؛!])';
 // A prefix the spoken word may carry: «و», «ب», «ف», «ل», with or without «ال» («للسين»).
 const WORD_START = '(?:^|[\\s،,(«:—-])(?:[وفبل]?(?:ال|لل)?)';
 /** x, y and s are read «سين» / «صاد» nowhere else in a lesson; one alone is the letter. */
-const LONE_STRONG = new RegExp(`${WORD_START}(سين|صاد)${WORD_END}`, 'u');
+const LONE_STRONG = new RegExp(`${WORD_START}(سين|صاد)${WORD_END}`, 'gu');
 /** Names that are also Arabic item letters (أ ب ج) or words; checked with the guards below. */
 const GUARDED_NAMES = ['ألف', 'باء', 'جيم', 'هاء', 'ميم', 'نون'] as const;
 const LONE_GUARDED = new RegExp(`${WORD_START}(${GUARDED_NAMES.join('|')})${WORD_END}`, 'gu');
@@ -193,7 +193,7 @@ const NUMBER_WORD =
  * ألف», «مية ألف». Three to ten take «آلاف», so «ثلاثة ألف» is 3a (item 195), never 3000.
  */
 const THOUSAND_BEFORE =
-  /^(?:العدد|عدد|الرقم|رقم|و?(?:عشر|عشرين|ثلاثين|أربعين|خمسين|ستين|سبعين|ثمانين|تسعين|مئة|مائة|مية|مئتين|مائتين|ميتين))$/u;
+  /^(?:العدد|عدد|الرقم|رقم|و?(?:عشر|عشرين|ثلاثين|أربعين|خمسين|ستين|سبعين|ثمانين|تسعين|\S*مئة|\S*مائة|\S*مية|مئتين|مائتين|ميتين))$/u;
 
 /** The Arabic item letters (أ ب ج د) the canvas labels items with: «أ)», «٢أ:», «(ب». */
 function canvasArabicItemLetters(elements: readonly NarrationCanvasElement[]): Set<string> {
@@ -226,8 +226,10 @@ function loneLetterName(
     const symbol = ARABIC_SYMBOL_OF[name];
     return symbol !== undefined && arabicSymbols.has(symbol);
   };
-  const strong = LONE_STRONG.exec(line)?.[1];
-  if (strong && forbidden.has(strong) && !allowed(strong)) return strong;
+  for (const match of line.matchAll(LONE_STRONG)) {
+    const strong = match[1]!;
+    if (forbidden.has(strong) && !allowed(strong)) return strong;
+  }
   for (const match of line.matchAll(LONE_GUARDED)) {
     const name = match[1]!;
     if (!forbidden.has(name) || allowed(name)) continue;
@@ -246,10 +248,49 @@ function loneLetterName(
   return null;
 }
 
-const HOUR_CARDINAL =
-  '(?:واحدة|وحدة|اثنين|ثنتين|ثلاث|ثلاثة|أربع|أربعة|خمس|خمسة|ست|ستة|سبع|سبعة|ثمان|ثمانية|تسع|تسعة|عشر|عشرة|إحدى عشرة|احدعش|اثنا عشر|اثنعش|اثني عشر)';
-const HOUR_ORDINAL =
-  '(?:الواحدة|الثانية|الثالثة|الرابعة|الخامسة|السادسة|السابعة|الثامنة|التاسعة|العاشرة|الحادية عشرة|الثانية عشرة)';
+/** The hour each spoken hour word names (review MED-6: matched against the canvas hour). */
+const HOUR_OF: Readonly<Record<string, number>> = {
+  واحدة: 1,
+  وحدة: 1,
+  الواحدة: 1,
+  اثنين: 2,
+  ثنتين: 2,
+  الثانية: 2,
+  ثلاث: 3,
+  ثلاثة: 3,
+  الثالثة: 3,
+  أربع: 4,
+  أربعة: 4,
+  الرابعة: 4,
+  خمس: 5,
+  خمسة: 5,
+  الخامسة: 5,
+  ست: 6,
+  ستة: 6,
+  السادسة: 6,
+  سبع: 7,
+  سبعة: 7,
+  السابعة: 7,
+  ثمان: 8,
+  ثمانية: 8,
+  الثامنة: 8,
+  تسع: 9,
+  تسعة: 9,
+  التاسعة: 9,
+  عشر: 10,
+  عشرة: 10,
+  العاشرة: 10,
+  'إحدى عشرة': 11,
+  احدعش: 11,
+  'الحادية عشرة': 11,
+  'اثنا عشر': 12,
+  'اثني عشر': 12,
+  اثنعش: 12,
+  'الثانية عشرة': 12,
+};
+const byLength = (words: string[]) => [...words].sort((a, b) => b.length - a.length).join('|');
+const HOUR_CARDINAL = `(${byLength(Object.keys(HOUR_OF).filter((word) => !word.startsWith('ال')))})`;
+const HOUR_ORDINAL = `(${byLength(Object.keys(HOUR_OF).filter((word) => word.startsWith('ال')))})`;
 const TENS: Readonly<Record<string, number>> = {
   عشرين: 20,
   العشرون: 20,
@@ -260,22 +301,29 @@ const TENS: Readonly<Record<string, number>> = {
   خمسين: 50,
   الخمسون: 50,
 };
-/** «ثمانية وثلاثين» (38) or «الثامنة والثلاثون» (the 38th) for a time ending :30. */
+/**
+ * «ثمانية وثلاثين» (38) or «الثامنة والثلاثون» (the 38th) for a canvas time 8:30.
+ * Groups: 1 cardinal hour, 2 its tens; 3 ordinal hour, 4 its tens.
+ */
 const TIME_AS_NUMBER = new RegExp(
   `(?:^|[\\s،,(«])[وبلف]?(?:${HOUR_CARDINAL}\\s+و(عشرين|ثلاثين|أربعين|خمسين)|${HOUR_ORDINAL}\\s+و(العشرون|الثلاثون|الأربعون|الخمسون))${WORD_END}`,
   'gu',
 );
 
-/** The minutes (10…59) of every clock time the canvas prints: «8:30», «١٠:٣٠», «10{:}30». */
-function canvasClockMinutes(elements: readonly NarrationCanvasElement[]): Set<number> {
-  const minutes = new Set<number>();
+/**
+ * Every clock time the canvas prints, as «hour:minutes» on a 12-hour dial: «8:30»,
+ * «١٠:٣٠», «10{:}30», «14:30» → «2:30».
+ */
+function canvasClockTimes(elements: readonly NarrationCanvasElement[]): Set<string> {
+  const times = new Set<string>();
   for (const element of elements) {
     const text = element.text.replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
     for (const match of text.matchAll(/(?<![\d.])([0-2]?\d)\s*(?:\{:\}|:)\s*([0-5]\d)(?!\d)/g)) {
-      minutes.add(Number(match[2]));
+      const hour = Number(match[1]) % 12 || 12;
+      times.add(`${hour}:${Number(match[2])}`);
     }
   }
-  return minutes;
+  return times;
 }
 
 /**
@@ -283,14 +331,24 @@ function canvasClockMinutes(elements: readonly NarrationCanvasElement[]): Set<nu
  * and not a line that shows it in general («بصورة عامة», «لأي عدد», a proof).
  */
 const CONJECTURE_PROVED = /التخمين\s+(?:صحيح|صحيحًا|صحيحا|صح)(?![\p{L}])/u;
+/** A question about the verdict, in the verdict's own line. */
 const NOT_A_VERDICT =
-  /(?<![\p{L}])(?:هل(?![\p{L}])|إذا كان|ما إذا|أم\s+خاطئ|أو\s+خاطئ|أم\s+لا|بصورة عامة|بشكل عام|لأي عدد|لكل عدد|لكل قيمة|لجميع|في كل الحالات|برهان|نبرهن|أثبتنا)/u;
+  /(?<![\p{L}])(?:هل(?![\p{L}])|إذا كان|إن كان|ما إذا|من أن|أم\s+خاطئ|أو\s+خاطئ|أم\s+لا)/u;
+/**
+ * A general argument anywhere on the slide, its voice or its canvas (review LOW-MED-7:
+ * an algebra line before «إذن التخمين صحيح» is a proof, not one checked case).
+ */
+const SHOWN_IN_GENERAL =
+  /(?<![\p{L}])(?:بصورة عامة|بشكل عام|لأي عدد|لكل عدد|لكل قيمة|لجميع|في كل الحالات|برهان|نبرهن|أثبتنا|جبريًا|جبريا|من الطرفين|للطرفين)/u;
 
-/** Arabic letters the canvas prints as symbols («س», «ص», «ن»): their names are right. */
+/**
+ * Arabic letters the canvas prints as symbols («س», «ص», «ن»): their names are right.
+ * A letter touching a digit is a book tag («(س٣٥ في كتابك)»), not a symbol (review MED-5).
+ */
 function canvasArabicSymbols(elements: readonly NarrationCanvasElement[]): Set<string> {
   const symbols = new Set<string>();
   for (const element of elements) {
-    for (const match of element.text.matchAll(/(?<![\p{L}])([سصنمه])(?![\p{L}])/gu)) {
+    for (const match of element.text.matchAll(/(?<![\p{L}\p{N}])([سصنمه])(?![\p{L}\p{N}])/gu)) {
       symbols.add(match[1]!);
     }
   }
@@ -397,18 +455,30 @@ export function validateLearnerFirstNarration(
   }
 
   // W3: a clock time the canvas prints, read as a number («ثمانية وثلاثين» for 8:30).
-  const minutes = canvasClockMinutes(elements);
-  if (minutes.size > 0) {
+  // Only the hour and minutes of a time the canvas prints count, so a duration
+  // («خمسة وثلاثين دقيقة») is never taken for a time (review MED-6).
+  const times = canvasClockTimes(elements);
+  if (times.size > 0) {
     const misread = lines
       .flatMap((line) => [...line.matchAll(TIME_AS_NUMBER)])
-      .find((match) => minutes.has(TENS[(match[1] ?? match[2])!] ?? -1));
+      .find((match) => {
+        const hour = HOUR_OF[(match[1] ?? match[3])!];
+        const tens = TENS[(match[2] ?? match[4])!];
+        return hour !== undefined && tens !== undefined && times.has(`${hour}:${tens}`);
+      });
     if (misread) {
       issues.push({ code: 'CLOCK_TIME_READ_AS_NUMBER', evidence: misread[0].trim() });
     }
   }
 
-  // W3: examples support a conjecture, they never prove it.
-  const proved = lines.find((line) => CONJECTURE_PROVED.test(line) && !NOT_A_VERDICT.test(line));
+  // W3: examples support a conjecture, they never prove it. A general argument
+  // anywhere on the slide (voice or canvas) makes the verdict a proof's.
+  const general =
+    lines.some((line) => SHOWN_IN_GENERAL.test(line)) ||
+    elements.some((element) => SHOWN_IN_GENERAL.test(element.text));
+  const proved = general
+    ? undefined
+    : lines.find((line) => CONJECTURE_PROVED.test(line) && !NOT_A_VERDICT.test(line));
   if (proved) issues.push({ code: 'CONJECTURE_CALLED_PROVED', evidence: proved.slice(0, 160) });
   return issues;
 }

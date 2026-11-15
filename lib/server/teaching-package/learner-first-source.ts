@@ -168,7 +168,10 @@ export function normalizeQuizPoints(scene: DigitScene): void {
   if (scene.type !== 'quiz') return;
   const content = scene.content as Record<string, unknown> | undefined;
   const questions = (content?.questions as Array<Record<string, unknown>> | undefined) ?? [];
-  for (const question of questions) question.points = question.type === 'text' ? 2 : 1;
+  // A stored short answer is `short_answer`; an outline's question type is `text`.
+  for (const question of questions) {
+    question.points = question.type === 'short_answer' || question.type === 'text' ? 2 : 1;
+  }
 }
 
 /**
@@ -185,9 +188,11 @@ export function packageDigitStyle(
     if (scene.type === 'slide') {
       const canvas = content?.canvas as { elements?: Array<Record<string, unknown>> } | undefined;
       for (const element of canvas?.elements ?? []) {
-        if (typeof element.content === 'string')
+        // Text only: LaTeX keeps Western digits on an Arabic-Indic lesson, so counting
+        // it would flip the style (review MED-4).
+        if (typeof element.content === 'string') {
           texts.push(element.content.replace(/<[^>]*>/g, ' '));
-        if (typeof element.latex === 'string') texts.push(element.latex);
+        }
       }
     } else if (scene.type === 'quiz') {
       for (const question of (content?.questions as Array<Record<string, unknown>>) ?? []) {

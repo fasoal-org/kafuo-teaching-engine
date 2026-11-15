@@ -1053,6 +1053,44 @@ describe('g5.v10 quality plan W2: a fix never leaves a slide worse', () => {
     ]);
   });
 
+  it('review MED-3: a resumed run whose fix was already restored goes straight to the retry', async () => {
+    const order: string[] = [];
+    const base = regenerateByKey(order, scenes);
+    // Key 1 replays: the evicted run restored the slide (live rev 3 ≠ its result rev 2).
+    const regenerate = vi.fn(
+      async (grant, sceneId: string, request: { idempotencyKey: string }) => {
+        const answer = await base(grant, sceneId, request);
+        if (request.idempotencyKey.endsWith('-w')) return answer;
+        return {
+          ...answer,
+          body: {
+            ...answer.body,
+            replayed: true,
+            current: { rev: 3, scene: scenes[1]! },
+          },
+        };
+      },
+    );
+    const restore = vi.fn();
+    const { run, callReviewer } = setup({
+      scenes,
+      findings: [lowS6()],
+      learnerFirst: true,
+      order,
+      regenerate,
+      regenerateAudio: audioOf(order),
+      restore,
+      rereview: () => [],
+    });
+    const result = await run();
+    expect(order).toEqual(['regenerate:s2', 'regenerate:s2:retry', 'rereview:s2', 'audio:s2']);
+    expect(callReviewer).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
+    expect(result.fixes).toEqual([
+      expect.objectContaining({ outcome: 'fixed', regenerationId: 'tpsr-s2-w' }),
+    ]);
+  });
+
   it('the same check at the same severity is still wrong, not worse: no restore', async () => {
     const order: string[] = [];
     const restore = vi.fn();

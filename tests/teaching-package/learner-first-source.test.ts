@@ -165,11 +165,12 @@ describe('one digit style per lesson (TD-4)', () => {
           { type: 'single', points: 12 },
           { type: 'multiple', points: 5 },
           { type: 'text', points: 10 },
+          { type: 'short_answer', points: 7 },
         ],
       },
     };
     normalizeQuizPoints(quiz);
-    expect(quiz.content.questions.map((question) => question.points)).toEqual([1, 1, 2]);
+    expect(quiz.content.questions.map((question) => question.points)).toEqual([1, 1, 2, 2]);
     const slide = { type: 'slide', content: { questions: [{ points: 9 }] } };
     normalizeQuizPoints(slide);
     expect(slide.content.questions[0]!.points).toBe(9);
@@ -185,5 +186,17 @@ describe('one digit style per lesson (TD-4)', () => {
     ];
     expect(packageDigitStyle(western, 'ar')).toBe('western');
     expect(packageDigitStyle([], 'ar')).toBe('arabic-indic');
+    // Review MED-4: LaTeX keeps Western digits on an Arabic-Indic lesson; it never votes.
+    const indic = [
+      {
+        type: 'slide',
+        content: {
+          canvas: {
+            elements: [{ content: '<p>الناتج ١٤</p>', latex: undefined }, { latex: '12x+30=54' }],
+          },
+        },
+      },
+    ];
+    expect(packageDigitStyle(indic, 'ar')).toBe('arabic-indic');
   });
 });

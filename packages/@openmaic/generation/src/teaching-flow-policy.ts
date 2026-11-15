@@ -333,21 +333,47 @@ export function normalizeSourceGroundedVisuals(
   const imageById = new Map(orderedImages.map((image) => [image.id, image] as const));
   const repairs: OutlineDiagnostic[] = [];
   const v10 = options.learnerFirstVisuals;
-  const selectedAnywhere = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
+  const linkedOf = (outline: SceneOutline) => {
+    const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
+    return orderedImages.filter((image) =>
+      (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
+    );
+  };
+  /**
+   * The images an outline keeps after the v10 strips below (a structural slide keeps
+   * none, an exercise-only slide none of its own units'). "Shown elsewhere" is read from
+   * these, so normalisation and validation agree (review HIGH-1).
+   */
+  const keptImages = (outline: SceneOutline): string[] => {
+    const suggested = (outline.suggestedImageIds ?? []).filter((id) => imageById.has(id));
+    if (!v10 || outline.type !== 'slide') return suggested;
+    if (isStructuralSlide(outline)) return [];
+    if (!citesOnlyExercises(outline, v10)) return suggested;
+    const linked = linkedOf(outline);
+    return suggested.filter((id) => !linked.some((image) => image.id === id));
+  };
+  const selectedAnywhere = new Set(outlines.flatMap(keptImages));
 
   const normalized = outlines.map((outline, index) => {
     const { policy, entry } = positionPolicy(outline, flow);
     if (outline.type !== 'slide' || policy?.visual !== 'source_grounded') return outline;
 
-    // W4 (g5.v10): a structural slide shows no visual; its plan's visual is dropped.
+    // W4 (g5.v10): a structural slide shows no visual; its plan's visual and any AI
+    // image request are dropped.
     if (v10 && isStructuralSlide(outline)) {
-      if (!outline.visualPlan && !outline.suggestedImageIds?.length) return outline;
+      const aiImages = (outline.mediaGenerations ?? []).some((request) => request.type === 'image');
+      if (!outline.visualPlan && !outline.suggestedImageIds?.length && !aiImages) return outline;
       const {
         visualPlan: _droppedPlan,
         suggestedImageIds: _droppedIds,
         imagePlans: _droppedImagePlans,
+        mediaGenerations: _droppedMedia,
         ...bare
       } = outline;
+      const otherMedia = (outline.mediaGenerations ?? []).filter(
+        (request) => request.type !== 'image',
+      );
+      if (otherMedia.length > 0) (bare as SceneOutline).mediaGenerations = otherMedia;
       repairs.push({
         code: SOURCE_VISUAL_NORMALIZED,
         disposition: 'repaired',
@@ -364,18 +390,13 @@ export function normalizeSourceGroundedVisuals(
       return bare as SceneOutline;
     }
 
-    const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
-    const linked = orderedImages.filter((image) =>
-      (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
-    );
+    const linked = linkedOf(outline);
     // W4 (g5.v10): an exercise slide shows no book image of its unit — the image
     // belongs to the whole exercise list, not to the exercises the lesson selected
     // (item 208 slide 26). A unit's image another slide already shows is not forced
     // here again.
     const exerciseOnly = v10 !== undefined && citesOnlyExercises(outline, v10);
-    const suggested = (outline.suggestedImageIds ?? []).filter(
-      (id) => imageById.has(id) && !(exerciseOnly && linked.some((image) => image.id === id)),
-    );
+    const suggested = keptImages(outline);
     const linkedChosenHere = linked.some((image) => suggested.includes(image.id));
     const relaxed =
       v10 !== undefined &&
@@ -566,7 +587,10 @@ export function teachingFlowDiagnostics(
           outline,
           label,
           { ...base, flowIndex: position.flowIndex, stage: entry.stage },
-          policy?.visual === 'source_grounded',
+          // W4 (g5.v10, review MED-2): a slide that only solves exercises shows its
+          // working, not a diagram, so its native visual needs no diagram note.
+          policy?.visual === 'source_grounded' &&
+            !(v10 && citesOnlyExercises(outline, v10) && !outline.visualPlan?.diagram),
         ),
       );
     }

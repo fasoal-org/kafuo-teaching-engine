@@ -354,6 +354,9 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       let regenerated: AppScene;
       let regenerationId: string | null = null;
+      // W2 resume (review MED-3): this slide's fix is a replay whose live slide is no
+      // longer its result — an evicted run already restored it (or retried it).
+      let replayedAway = false;
       const regenerateWith = (idempotencyKey: string, avoid: readonly ReviewerFinding[] = []) =>
         regenerate(
           grant,
@@ -400,6 +403,10 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         }
         regenerationId = response.body.regenerationId;
         regenerated = response.body.current?.scene ?? response.body.scene;
+        replayedAway =
+          response.body.replayed === true &&
+          response.body.current != null &&
+          response.body.current.rev !== response.body.resultSceneRev;
       } catch (error) {
         const code = error instanceof TeachingPackageError ? error.code : 'REGENERATION_FAILED';
         log.warn(
@@ -495,13 +502,16 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           await context.recordProgress(findings, fixes);
         };
 
-        const first = await rereviewOf(regenerated);
+        // A replay an earlier run already restored is never re-reviewed as the fix:
+        // it goes straight to the one retry (whose `-w` replay returns and checks any
+        // retry that run left unchecked).
+        const first = replayedAway ? null : await rereviewOf(regenerated);
         const firstWorse = first ? worseningFindings(first, sceneFindings, openOutside) : [];
         if (first && firstWorse.length === 0) {
           rereview = first;
           reviewed = true;
-        } else if (first && regenerationId) {
-          const original = await restoreOf(regenerationId);
+        } else if ((first && regenerationId) || replayedAway) {
+          const original = replayedAway ? regenerated : await restoreOf(regenerationId!);
           if (!original) {
             // The store refused the restore: the old flow (the new errors are recorded).
             rereview = first;
