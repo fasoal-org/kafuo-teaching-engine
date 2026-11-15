@@ -1021,6 +1021,56 @@ describe('regenerateOneScene — g5.v11 attempt', () => {
     for (const prompt of narration) expect(prompt.user).not.toContain('HIDDEN ANSWER KEY');
   });
 
+  it('regenerates a solution slide once with a correction when its final line disagrees', async () => {
+    const solutionOutline = snapshot({
+      contentRole: 'worked_example',
+      sourceContentUnitIds: ['6234'],
+      suggestedImageIds: undefined,
+      visualPlan: undefined,
+    });
+    const solutionPre = {
+      ...preImage([]),
+      content: { ...preImage([]).content, contentRole: 'worked_example' },
+      sourceContentUnitIds: ['6234'],
+    } as unknown as AppScene;
+    const line = (value: number) => ({
+      type: 'text',
+      content: `<p>الإجابة (1A): ${value}</p>`,
+      left: 60,
+      top: 200,
+      width: 400,
+      height: 60,
+    });
+    const prompts: Array<{ stage: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([line(user.includes('CORRECTION (checked final answers') ? 12 : 13)]);
+    };
+    const result = await regenerateOneScene({
+      scene: solutionPre,
+      scenes: [solutionPre],
+      stage,
+      outlineSnapshot: solutionOutline,
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'slide') throw new Error('slide');
+    const slides = prompts.filter((prompt) => prompt.stage === 'scene-content:slide');
+    expect(slides).toHaveLength(2);
+    expect(slides[1]!.user).toContain('CORRECTION (checked final answers');
+    // The lesson's digit style applies after the check («١٢» is 12).
+    expect(JSON.stringify(result.scene.content.canvas.elements)).toMatch(
+      /الإجابة \(1A\): (?:12|١٢)</u,
+    );
+  });
+
   it('is unchanged without the pinned guide (g5.v10): one content call', async () => {
     const prompts: string[] = [];
     const aiCallFor = (stageLabel: string) => async (system: string) => {

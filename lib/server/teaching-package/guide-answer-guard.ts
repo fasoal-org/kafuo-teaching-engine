@@ -426,10 +426,19 @@ export function createGuideAnswerGuard(options: {
         });
       }
     }
-    // The stems are read before the try: no approved value in any of them.
+    // The stems are read before the try: no approved value in any of them. A tied stem
+    // is read only for its own items (and those whose question cannot be told): another
+    // question's book data may hold an earlier item's answer as a given (Q12's data
+    // holding Q11's answer), and that is never a leak of Q11.
     questions.forEach((question, index) => {
       const stem = typeof question.question === 'string' ? decode(question.question) : '';
-      for (const finding of leaks(plan.items, stem, 'stem')) {
+      const items = tied
+        ? plan.items.filter((item) => {
+            const own = plan.questionOf?.[guideItemKey(item)];
+            return own === null || own === undefined || own === index;
+          })
+        : plan.items;
+      for (const finding of leaks(items, stem, 'stem')) {
         findings.push({ ...finding, questions: [index] });
       }
     });

@@ -183,6 +183,24 @@ describe('the attempt comparator (review finding 6)', () => {
     expect(instance.checkContent(attempt, content)).toEqual([]);
   });
 
+  it('never reads another question’s book data as a leak of an earlier item', () => {
+    const { instance, settled } = guard({
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX11, EX12],
+        questionOf: { '6249|11': 0, '6249|12': 1 },
+        questionCount: 2,
+      },
+    });
+    const content = quiz(
+      { question: 'أسعار: 2، 4، 8، 16. ما التالي؟', options: ['24', '32'], answer: 'B' },
+      // Q2's data holds 32 (Q1's answer) as a given.
+      { question: 'إنتاج: 32، 51.8، 61.7. ما المتوقع؟', options: ['71.9', '80'], answer: 'A' },
+    );
+    expect(instance.checkContent(attempt, content)).toEqual([]);
+    expect(settled).toEqual([]);
+  });
+
   it('reports a stem that states the answer', () => {
     const { instance } = guard({ 'ex-attempt': { role: 'attempt', items: [ITEM] } });
     const content = quiz({
