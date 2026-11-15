@@ -231,6 +231,12 @@ export {
 } from './slide-assistance.js';
 export type { SlideAssistanceOptions } from './slide-assistance.js';
 export { explanationLeakedOntoCanvas, findInternalLeaks } from './learner-facing.js';
+export {
+  LATIN_LETTER_READINGS,
+  canvasKeyPoints,
+  learnerFirstNarrationRules,
+  learnerFirstSlideRules,
+} from './learner-first.js';
 export { buildMediaRegistry, unauthorizedConcreteSource } from './media-registry.js';
 export {
   NATIVE_VISUAL_DIRECTIVE,

@@ -10,6 +10,11 @@ Planner's note: {{description}}
 ### What this slide is for
 
 {{roleGuidance}}
+{{/if}}{{#if hasLearnerFirstNarration}}
+
+### Narration rules for this lesson (follow every one)
+
+{{learnerFirstNarrationRules}}
 {{/if}}{{#if hasSourceContext}}
 
 ### Approved textbook source this slide teaches

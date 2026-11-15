@@ -89,6 +89,7 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   exerciseBlockRequirement,
+  isLearnerFirstModel,
   isSacredExerciseElement,
   isTeacherParityModel,
   plannerVisibleRequiredUnitIds,
@@ -96,6 +97,10 @@ import {
   teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
 import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import {
+  providerSafeImageDescription,
+  stripProviderImageDescriptions,
+} from '@/lib/server/teaching-package/learner-first-source';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
   detectSacredQuotes,
@@ -467,9 +472,17 @@ async function runKafuoAttempt(
     screenedVisuals = await screenSourceImages(source.normalizedImages);
   }
   const approvedVisualIds = new Set(screenedVisuals.approved.map((image) => image.id));
-  const approvedVisionImages = source.visionImages.filter((image) =>
-    approvedVisualIds.has(image.id),
-  );
+  // g5.v10 (learner-first plan, an explicit Teaching Model check): the source
+  // fixes of `learner-first-source.ts` — the parser's English figure
+  // descriptions never reach a prompt (D-6 A). Off for every earlier version.
+  const learnerFirst = isLearnerFirstModel(kafuo.teachingModel);
+  const approvedVisionImages = source.visionImages
+    .filter((image) => approvedVisualIds.has(image.id))
+    .map((image) =>
+      learnerFirst && image.description !== undefined
+        ? { ...image, description: providerSafeImageDescription(image.description, kafuo.language) }
+        : image,
+    );
   const withheldVisualsNote = withheldSourceVisualsNote(screenedVisuals.withheld);
 
   // The W6-derived governance mode, consumed as a VALUE (§B.13): the
@@ -628,13 +641,24 @@ async function runKafuoAttempt(
           .map((unit) => String(unit.contentUnitId))
       : [],
   );
+  /** A retained unit's prompt text: sacred exercise items out (g5.v8), figure descriptions out (g5.v10). */
+  const promptUnitText = (unit: { unitId: unknown; normalizedText: string }): string => {
+    const text = sacredExerciseUnitIds.has(String(unit.unitId))
+      ? withoutSacredItems(unit.normalizedText)
+      : unit.normalizedText;
+    return learnerFirst ? stripProviderImageDescriptions(text, kafuo.language) : text;
+  };
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
       : `${kafuo.requirement}${exerciseBlock}${withheldVisualsNote}`,
     pdfContent: {
       // g5.v7: markers carry each unit's book kind and part; unchanged otherwise.
-      text: annotateBookMarkers(source.text, kafuo.bookStructure),
+      // g5.v10 (D-6 A): the parser's figure descriptions are left out first.
+      text: annotateBookMarkers(
+        learnerFirst ? stripProviderImageDescriptions(source.text, kafuo.language) : source.text,
+        kafuo.bookStructure,
+      ),
       images: source.images,
       // Only screened-and-approved source visuals are ever offered.
       pdfImages: approvedVisionImages,
@@ -681,9 +705,8 @@ async function runKafuoAttempt(
             title: unit.title,
             // g5.v8 (4 Nov 2026): an exercise or check slide never sets or
             // solves a verse or hadith item, so its unit text drops them.
-            text: sacredExerciseUnitIds.has(String(unit.unitId))
-              ? withoutSacredItems(unit.normalizedText)
-              : unit.normalizedText,
+            // g5.v10: and never carries the parser's figure descriptions.
+            text: promptUnitText(unit),
           })),
         }
       : {}),
@@ -693,6 +716,9 @@ async function runKafuoAttempt(
     ...(teacherParity
       ? { visibleWorkingSteps: true, findDuplicateSourceVisuals: findSplitUnitDuplicateImages }
       : {}),
+    // g5.v10 (learner-first plan W2/W3): canvas and narration rules, the
+    // narration check and the digit style. Absent for every earlier version.
+    ...(learnerFirst ? { learnerFirst: true } : {}),
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's
     // single governed-mode predicate (plan §7.1.1). The outline contract
@@ -857,10 +883,9 @@ async function runKafuoAttempt(
                       subtype: unit.subtype ?? null,
                       title: unit.title ?? null,
                       // M-3 (4 Nov 2026 rule): the repair planner and the
-                      // fallback try-it never carry a verse or hadith item.
-                      text: sacredExerciseUnitIds.has(String(unit.unitId))
-                        ? withoutSacredItems(unit.normalizedText)
-                        : unit.normalizedText,
+                      // fallback try-it never carry a verse or hadith item
+                      // (nor, on g5.v10, a parser figure description).
+                      text: promptUnitText(unit),
                     })),
                     skillOptions: governedByTeachingSkills
                       ? (entry) => plannerSkillOptions(entry, kafuo.teachingFlow)

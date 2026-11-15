@@ -26,6 +26,11 @@ import {
 } from './slide-generation-inputs.js';
 import { buildSlideNarrationRoleContext, buildSlideRoleContext } from './slide-role-guidance.js';
 import { generateSlideAssistance, visibleCanvasText } from './slide-assistance.js';
+import {
+  canvasKeyPoints,
+  learnerFirstNarrationVars,
+  learnerFirstSlideVars,
+} from './learner-first.js';
 import { explanationLeakedOntoCanvas, findInternalLeaks } from './learner-facing.js';
 import {
   NATIVE_VISUAL_DIRECTIVE,
@@ -232,6 +237,12 @@ export interface SceneContentOptions {
    */
   visibleWorkingSteps?: boolean;
   /**
+   * Slide only: g5.v10, the learner-first Teaching Model (plan
+   * `g5-v10-weak-student-fixes-plan-2026-11-15.md`). The canvas gets the
+   * learner-first rules (`learnerFirstSlideRules`). Absent → unchanged.
+   */
+  learnerFirst?: boolean;
+  /**
    * Kafuo Q-4: the Quran and hadith policy, with the protected quotes of the
    * units this scene cites. Absent → every prompt is byte-identical.
    */
@@ -245,6 +256,13 @@ export interface SceneActionsOptions {
   agents?: AgentInfo[];
   userProfile?: string;
   languageDirective?: string;
+  /**
+   * Slide only: g5.v10, the learner-first Teaching Model. The narration gets
+   * the learner-first rules, reads the canvas text as its key points, sees
+   * every formula in full and explains images as mathematics. Absent →
+   * action prompts render byte-identically to today.
+   */
+  learnerFirst?: boolean;
   /**
    * ONE resolved Teaching Model Flow position (Module 3/4 W1, TAE-RQ-009) —
    * the WHEN this scene teaches, resolved by orchestration. The generator
@@ -642,6 +660,7 @@ export async function generateSceneContent(
           {
             ...sceneSourceVars(outline, options.sourceUnits, log),
             ...sceneSacredVars(outline, options.sacredText),
+            ...learnerFirstSlideVars(options.learnerFirst),
           },
           options.visibleWorkingSteps,
         );
@@ -2337,9 +2356,14 @@ export async function generateSceneActions(
 
   if (outline.type === 'slide' && 'elements' in content) {
     // Format element list for AI to select from
+    const learnerFirst = options.learnerFirst === true;
     const elementsText =
-      formatElementsForPrompt(content.elements, options.imageNotes, withholdsFinding(outline)) +
-      visualNarrationDirective(content.elements, outline, options.imageNotes);
+      formatElementsForPrompt(
+        content.elements,
+        options.imageNotes,
+        withholdsFinding(outline),
+        learnerFirst,
+      ) + visualNarrationDirective(content.elements, outline, options.imageNotes, learnerFirst);
 
     // Typed boundary: narration is built from the visible canvas and the
     // planner guidance only. Neither the hidden `assistancePlan` nor the
@@ -2347,11 +2371,16 @@ export async function generateSceneActions(
     // cannot draw on the solution path.
     const visible = toVisibleSlideInput(outline);
     const guidance = toPlannerGuidance(outline);
+    // g5.v10: the key points ARE the canvas, so the narration never follows an
+    // older plan the canvas no longer matches (the AI-review fix loop).
+    const canvasPoints = learnerFirst ? canvasKeyPoints(content.elements) : [];
+    const keyPoints = canvasPoints.length > 0 ? canvasPoints : visible.keyPoints;
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       ...spokenScriptVars(options, outline),
+      ...learnerFirstNarrationVars(learnerFirst),
       title: visible.title,
-      keyPoints: visible.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
+      keyPoints: keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: guidance.description,
       elements: elementsText,
       courseContext: buildCourseContext(ctx),
@@ -2667,6 +2696,7 @@ function visualNarrationDirective(
   elements: PPTElement[],
   outline: SceneOutline,
   imageNotes: Readonly<Record<string, NarrationImageNote>> | undefined,
+  learnerFirst = false,
 ): string {
   const notedImages = elements.filter((el) => {
     const src = (el as { src?: unknown }).src;
@@ -2674,7 +2704,17 @@ function visualNarrationDirective(
   });
   const lines: string[] = [];
   const ids = notedImages.map((el) => `"${el.id}"`).join(', ');
-  if (notedImages.length > 0 && withholdsFinding(outline)) {
+  // g5.v10 (D-2.3): an image is explained as the mathematics it carries, never
+  // as its colours, line styles or place on the page.
+  if (learnerFirst && notedImages.length > 0 && withholdsFinding(outline)) {
+    lines.push(
+      `Every textbook image above (${ids}) is part of the question: for EACH one, point the learner to it (spotlight its id) and say what it gives as data — what is counted, measured or compared, with its numbers. Never state the pattern, relationship, rule or result the learner is asked to find. Never describe colours, line styles or positions on the page.`,
+    );
+  } else if (learnerFirst && notedImages.length > 0) {
+    lines.push(
+      `Every textbook image above (${ids}) is part of what this slide teaches: for EACH one, point the learner to it (spotlight its id) and explain the mathematics it shows — what is counted, measured or compared, and how it gives the numbers on the slide — in the order the slide teaches them. Never describe colours, line styles or positions on the page.`,
+    );
+  } else if (notedImages.length > 0 && withholdsFinding(outline)) {
     lines.push(
       `Every textbook image above (${ids}) is part of the question: for EACH one, point the learner to it (spotlight its id) and say what it shows, as the data the learner works from. Never state the pattern, relationship, rule or result the learner is asked to find — not even as a hint about what to notice. Describe only what its note says the image shows.`,
     );
@@ -2700,6 +2740,7 @@ function formatElementsForPrompt(
   elements: PPTElement[],
   imageNotes?: Readonly<Record<string, NarrationImageNote>>,
   withholdFinding = false,
+  learnerFirst = false,
 ): string {
   let remaining = NARRATION_VISIBLE_TEXT_BUDGET;
   const excerpt = (text: string): string => {
@@ -2729,7 +2770,9 @@ function formatElementsForPrompt(
       } else if (el.type === 'shape' && 'shapeName' in el) {
         summary = `Shape: ${el.shapeName || 'unknown'}`;
       } else if (el.type === 'latex' && 'latex' in el) {
-        summary = `Formula: ${((el.latex as string) || '').substring(0, 30)}`;
+        // g5.v10 (D-2.1): the narration sees the whole formula, so a solved
+        // item written in LaTeX is never silently skipped.
+        summary = `Formula: ${((el.latex as string) || '').substring(0, learnerFirst ? 400 : 30)}`;
       } else {
         summary = `${el.type} element`;
       }

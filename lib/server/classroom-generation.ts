@@ -24,6 +24,7 @@ import {
   buildVisionUserContent,
   interactiveWidgetTypeOf,
   isProhibitedWidgetOutline,
+  visibleCanvasText,
   type AICallFn,
   type AgentInfo,
   type OutlineAnswerReport,
@@ -106,6 +107,16 @@ import {
   type NarrationSignpostingIssue,
 } from '@/lib/server/speech/narration-signposting';
 import {
+  formatLearnerFirstNarrationCorrection,
+  validateLearnerFirstNarration,
+  type LearnerFirstNarrationIssue,
+  type NarrationCanvasElement,
+} from '@/lib/server/speech/learner-first-narration';
+import {
+  detectLessonDigitStyle,
+  normalizeSceneDigits,
+} from '@/lib/server/teaching-package/learner-first-source';
+import {
   executeTeachingCall,
   TeachingModelUnavailableError,
   type TeachingCallContext,
@@ -156,6 +167,43 @@ export function sceneContentConcurrency(raw = process.env.TE_SCENE_CONTENT_CONCU
  */
 export const SPEECH_REGISTER_MAX_ATTEMPTS = 3;
 
+/** g5.v10: the learner-first narration check of one slide (plan W2). */
+export interface LearnerFirstNarrationCheck<T> {
+  check: (actions: T[]) => LearnerFirstNarrationIssue[];
+  correction: (issues: readonly LearnerFirstNarrationIssue[]) => string;
+  onUnresolved?: (issues: readonly LearnerFirstNarrationIssue[]) => void;
+}
+
+/**
+ * g5.v10: the learner-first check of a slide against its own canvas, or
+ * `undefined` for any other scene or Teaching Model (the loop is then unchanged).
+ */
+export function learnerFirstNarrationCheck<T extends { type: string; text?: unknown }>(
+  enabled: boolean | undefined,
+  content: unknown,
+  onUnresolved?: (issues: readonly LearnerFirstNarrationIssue[]) => void,
+): LearnerFirstNarrationCheck<T> | undefined {
+  if (!enabled || !content || typeof content !== 'object' || !('elements' in content)) {
+    return undefined;
+  }
+  const elements = ((content as { elements?: unknown }).elements ?? []) as Array<{
+    id?: unknown;
+    type?: unknown;
+  }>;
+  const canvas: NarrationCanvasElement[] = elements.map((element) => ({
+    id: String(element.id ?? ''),
+    type: String(element.type ?? ''),
+    text: visibleCanvasText([element as never])
+      .replace(/\s+/g, ' ')
+      .trim(),
+  }));
+  return {
+    check: (actions) => validateLearnerFirstNarration(actions as never, canvas),
+    correction: (issues) => formatLearnerFirstNarrationCorrection(issues, canvas),
+    ...(onUnresolved ? { onUnresolved } : {}),
+  };
+}
+
 function spokenTexts(actions: ReadonlyArray<{ type: string; text?: unknown }>): string[] {
   return actions.flatMap((action) =>
     action.type === 'speech' && typeof action.text === 'string' ? [action.text] : [],
@@ -184,23 +232,33 @@ export async function generateRegisterCompliantActions<T extends { type: string;
    * returned after this is called; absent → the typed error is thrown as before.
    */
   onNoncompliant?: (error: TeachingPackageError) => void,
+  /**
+   * g5.v10 (learner-first plan W2): the slide's own canvas checks
+   * (`validateLearnerFirstNarration`), re-rolled in the same loop. Issues left
+   * after the last attempt never fail the scene: they are handed to
+   * `onUnresolved` (the scene is marked for the reviewer). Absent → unchanged.
+   */
+  learnerFirst?: LearnerFirstNarrationCheck<T>,
 ): Promise<T[]> {
-  if (!policy) return generate();
+  if (!policy && !learnerFirst) return generate();
   let correctiveContext: string | undefined;
   let issues: SpeechRegisterIssue[] = [];
   let structure: NarrationSignpostingIssue[] = [];
+  let firstIssues: LearnerFirstNarrationIssue[] = [];
   let last: T[] = [];
   for (let attempt = 1; attempt <= SPEECH_REGISTER_MAX_ATTEMPTS; attempt += 1) {
     const actions = await generate(correctiveContext);
     last = actions;
     const texts = spokenTexts(actions);
-    issues = validateSpeechRegister(texts, policy);
-    structure = signposting ? validateNarrationSignposting(texts, signposting) : [];
-    if (issues.length === 0 && structure.length === 0) return actions;
+    issues = policy ? validateSpeechRegister(texts, policy) : [];
+    structure = policy && signposting ? validateNarrationSignposting(texts, signposting) : [];
+    firstIssues = learnerFirst ? learnerFirst.check(actions) : [];
+    if (issues.length === 0 && structure.length === 0 && firstIssues.length === 0) return actions;
     log.warn(
-      `Scene "${scene.title}" narration breaks the ${policy.register} narration policy (${[
+      `Scene "${scene.title}" narration breaks the ${policy?.register ?? 'learner-first'} narration policy (${[
         ...issues,
         ...structure,
+        ...firstIssues,
       ]
         .map((issue) => issue.code)
         .join(', ')}); attempt ${attempt}/${SPEECH_REGISTER_MAX_ATTEMPTS}`,
@@ -209,9 +267,16 @@ export async function generateRegisterCompliantActions<T extends { type: string;
       ...(structure.length > 0 && signposting
         ? [formatNarrationSignpostingCorrection(structure, signposting)]
         : []),
-      ...(issues.length > 0 ? [formatSpeechRegisterCorrection(issues, policy)] : []),
+      ...(issues.length > 0 && policy ? [formatSpeechRegisterCorrection(issues, policy)] : []),
+      ...(firstIssues.length > 0 && learnerFirst ? [learnerFirst.correction(firstIssues)] : []),
     ].join('\n\n');
   }
+  if (!policy || (issues.length === 0 && structure.length === 0)) {
+    // Only learner-first issues are left: keep the last answer, mark the scene.
+    if (firstIssues.length > 0) learnerFirst?.onUnresolved?.(firstIssues);
+    return last;
+  }
+  if (firstIssues.length > 0) learnerFirst?.onUnresolved?.(firstIssues);
   const error = new TeachingPackageError(
     'SPEECH_REGISTER_NONCOMPLIANT',
     `scene ${JSON.stringify(scene.title)} narration still breaks the ${policy.register} narration policy after ${SPEECH_REGISTER_MAX_ATTEMPTS} attempts (${[
@@ -517,6 +582,14 @@ export interface GenerateClassroomInput {
    * Teaching Model; absent → every prompt is byte-identical.
    */
   visibleWorkingSteps?: boolean;
+  /**
+   * g5.v10, the learner-first Teaching Model (plan
+   * `g5-v10-weak-student-fixes-plan-2026-11-15.md`): slide canvases and
+   * narration get the learner-first rules, the narration is checked against
+   * its canvas, and the digits are normalised to the lesson's style. Set by the
+   * caller from the Teaching Model; absent → every prompt is byte-identical.
+   */
+  learnerFirst?: boolean;
   /**
    * Quran and hadith (Kafuo plan Q-4 to Q-15): the protected quotes of the
    * approved source. Present → every learner-text prompt carries the fixed
@@ -2259,6 +2332,7 @@ export async function generateClassroom(
                   ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                   ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                   ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
+                  ...(input.learnerFirst ? { learnerFirst: true } : {}),
                   ...(outlineAssignedImages && outlineAssignedImages.length > 0
                     ? {
                         assignedImages: outlineAssignedImages,
@@ -2508,6 +2582,7 @@ export async function generateClassroom(
                       ...(resolvedSkills ? { resolvedSkills } : {}),
                       ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                       ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
+                      ...(input.learnerFirst ? { learnerFirst: true } : {}),
                       ...(safeOutline.type === 'slide' && hasSourceVisuals
                         ? {
                             imageNotes: buildNarrationImageNotes(
@@ -2554,6 +2629,19 @@ export async function generateClassroom(
               input.governed
                 ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
                 : undefined,
+              // g5.v10: the narration is checked against this slide's own canvas;
+              // what is still wrong after the last attempt marks the scene.
+              learnerFirstNarrationCheck(
+                input.learnerFirst && safeOutline.type === 'slide',
+                content,
+                (issues) =>
+                  sceneIssues.push(
+                    ...issues.map((issue) => ({
+                      code: issue.code,
+                      message: `learner-first narration check: ${issue.evidence}`,
+                    })),
+                  ),
+              ),
             );
         if (actionsFellBack) {
           sceneIssues.push({
@@ -2741,6 +2829,7 @@ export async function generateClassroom(
           editDirective: NATIVE_VISUAL_DIRECTIVE,
           baselineContent: { elements: canvas.elements as never, background: canvas.background },
           ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
+          ...(input.learnerFirst ? { learnerFirst: true } : {}),
           ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
           ...(input.governed ? { onVisualIssue: (issue) => void nativeIssues.push(issue) } : {}),
         });
@@ -2781,6 +2870,7 @@ export async function generateClassroom(
             ...(correctiveContext ? { correctiveContext } : {}),
             ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
             ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
+            ...(input.learnerFirst ? { learnerFirst: true } : {}),
           }),
         registerPolicy,
         { title: scene.title, outlineId: planned.id },
@@ -2788,6 +2878,14 @@ export async function generateClassroom(
         input.governed
           ? (error) => void nativeRegisterIssues.push({ code: error.code, message: error.message })
           : undefined,
+        learnerFirstNarrationCheck(input.learnerFirst, regenerated, (issues) =>
+          nativeRegisterIssues.push(
+            ...issues.map((issue) => ({
+              code: issue.code,
+              message: `learner-first narration check: ${issue.evidence}`,
+            })),
+          ),
+        ),
       );
       assertRouteAvailable();
       sceneRefusalScope = null;
@@ -2817,6 +2915,13 @@ export async function generateClassroom(
       if (repaired > 0) {
         log.warn(`Removed invalid Actions from ${repaired} scene(s); marked them for review`);
       }
+    }
+
+    // g5.v10 (TD-4, owner D-2.8): one digit style per lesson, the book's — the
+    // freshly generated slides and quizzes are normalised in place.
+    if (input.learnerFirst) {
+      const style = detectLessonDigitStyle((input.sourceUnits ?? []).map((unit) => unit.text));
+      for (const scene of freshScenes) normalizeSceneDigits(scene as never, style);
     }
 
     // Q-7 / Q-11 (owner decision): narration and characters never speak a Quran
