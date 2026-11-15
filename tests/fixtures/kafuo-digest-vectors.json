@@ -492,6 +492,122 @@
         "actorRef": "42"
       },
       "digest": "6e3eecaca83d8e5857622b69a0d3286e72931ea39e4dbf54ae7f4432be5ce1ce"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-v11",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "208",
+          "title": "التفكير الاستقرائي والتخمين",
+          "unit": {
+            "id": "12",
+            "title": "Unit 1"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Math 10"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Make conjectures from patterns."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v11",
+          "flow": [
+            {
+              "stage": "lesson_opener",
+              "instructions": "Open the lesson."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "teacherGuide": {
+          "guideId": "tg-1",
+          "items": [
+            {
+              "contentUnitId": "6247",
+              "label": "1",
+              "status": "approved",
+              "answer": {
+                "type": "number",
+                "value": 11.25,
+                "unit": "ريال"
+              }
+            },
+            {
+              "contentUnitId": "6249",
+              "label": "11",
+              "status": "approved",
+              "answer": {
+                "type": "number",
+                "value": 72,
+                "approximate": true
+              }
+            },
+            {
+              "contentUnitId": "6234",
+              "label": "1A",
+              "status": "settled",
+              "answer": {
+                "type": "choice",
+                "value": "ج"
+              }
+            },
+            {
+              "contentUnitId": "6234",
+              "label": "1B",
+              "status": "approved",
+              "answer": {
+                "type": "bool",
+                "value": false
+              }
+            },
+            {
+              "contentUnitId": "6241",
+              "label": "3",
+              "status": "approved",
+              "answer": {
+                "type": "text",
+                "value": "شوال"
+              }
+            },
+            {
+              "contentUnitId": "6249",
+              "label": "11b",
+              "status": "doubtful"
+            },
+            {
+              "contentUnitId": "6250",
+              "label": "12",
+              "status": "settled"
+            }
+          ]
+        },
+        "actorRef": "42"
+      },
+      "digest": "2b0cca86085e3a6c1016208637ffe6890036822b95a11e369619543e6a4574ee"
     }
   ]
 }

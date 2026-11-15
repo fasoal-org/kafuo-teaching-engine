@@ -26,6 +26,7 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
   bookStructureRequirement,
+  isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -33,8 +34,17 @@ import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-packag
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
 import type { StageTtsRoute } from '@/lib/types/stage';
-import { KAFUO_EXERCISE_UNUSABLE_REASONS } from '@/lib/types/teaching-package';
+import {
+  KAFUO_EXERCISE_UNUSABLE_REASONS,
+  KAFUO_TEACHER_GUIDE_ANSWER_TYPES,
+  KAFUO_TEACHER_GUIDE_STATUSES,
+} from '@/lib/types/teaching-package';
 import type {
+  KafuoTeacherGuide,
+  KafuoTeacherGuideAnswer,
+  KafuoTeacherGuideAnswerType,
+  KafuoTeacherGuideItem,
+  KafuoTeacherGuideStatus,
   GenerationExecutionInput,
   KafuoContentResource,
   KafuoGenerationRequest,
@@ -840,6 +850,9 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
 
   const narration = parseNarration(body.narration, item.language);
   const bookStructure = parseBookStructure(body.bookStructure);
+  // g5.v11: validated whenever sent (a malformed block fails closed) and covered by
+  // the digest; only a g5.v11 attempt keeps or uses it (`buildKafuoStartRequest`).
+  const teacherGuide = parseTeacherGuide(body.teacherGuide);
 
   const request: KafuoGenerationRequest = {
     requestId,
@@ -857,6 +870,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
     ...(narration ? { narration } : {}),
     ...(bookStructure ? { bookStructure } : {}),
+    ...(teacherGuide ? { teacherGuide } : {}),
   };
   // Subject Teaching Skills V1: a policy that names a subject Teaching Skill must name
   // this lesson's own. A policy naming none, as on every g5.v1–g5.v8 request, passes
@@ -926,7 +940,155 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
   if (request.bookStructure !== undefined) {
     payload.bookStructure = request.bookStructure;
   }
+  // g5.v11: the guide answers decide what the writers are told, so they are covered
+  // (mirrored by the Backend's `semantic_payload`); absent stays absent.
+  if (request.teacherGuide !== undefined) {
+    payload.teacherGuide = request.teacherGuide;
+  }
   return payload;
+}
+
+/** Bounds of the g5.v11 `teacherGuide` block (records only, a few KB per lesson). */
+const TEACHER_GUIDE_MAX_ITEMS = 2_000;
+const TEACHER_GUIDE_ID_MAX = 200;
+const TEACHER_GUIDE_LABEL_MAX = 64;
+const TEACHER_GUIDE_TEXT_MAX = 200;
+const TEACHER_GUIDE_UNIT_MAX = 40;
+/** A book option letter: A–D, or أ/ا/ب/ج/د. */
+const TEACHER_GUIDE_CHOICE = /^(?:[A-Da-d]|[أابجد])$/u;
+/** The statuses whose items may carry an answer; only these are ever given to a writer. */
+const TEACHER_GUIDE_KEYED_STATUSES: ReadonlySet<string> = new Set(['approved', 'settled']);
+
+/**
+ * The optional g5.v11 `teacherGuide` block (plan §7). Parsed strictly and rebuilt
+ * key by key, so the digest covers exactly the shape the Backend hashes: optional
+ * keys are present only when sent. An answer is required on an `approved` item,
+ * allowed on a `settled` one, and refused on any other status: a doubtful, changed,
+ * reference or missing answer must never reach the Teaching Engine.
+ */
+function parseTeacherGuide(raw: unknown): KafuoTeacherGuide | undefined {
+  if (raw === undefined) return undefined;
+  const invalid = (detail: string) =>
+    new TeachingPackageError('INVALID_REQUEST', `teacherGuide ${detail}`);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('must be an object');
+  const record = raw as Record<string, unknown>;
+  const guideId = record.guideId;
+  if (
+    typeof guideId !== 'string' ||
+    guideId.trim() === '' ||
+    guideId.length > TEACHER_GUIDE_ID_MAX
+  ) {
+    throw invalid('requires guideId');
+  }
+  if (!Array.isArray(record.items)) throw invalid('requires an items array');
+  if (record.items.length > TEACHER_GUIDE_MAX_ITEMS) {
+    throw invalid(`items must hold at most ${TEACHER_GUIDE_MAX_ITEMS} entries`);
+  }
+  const seen = new Set<string>();
+  const items = record.items.map((entry, index): KafuoTeacherGuideItem => {
+    const path = `items[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw invalid(`${path} must be an object`);
+    }
+    const item = entry as Record<string, unknown>;
+    if (typeof item.contentUnitId !== 'string' || item.contentUnitId.trim() === '') {
+      throw invalid(`${path}.contentUnitId is required`);
+    }
+    if (
+      typeof item.label !== 'string' ||
+      item.label.trim() === '' ||
+      item.label.length > TEACHER_GUIDE_LABEL_MAX
+    ) {
+      throw invalid(`${path}.label is required`);
+    }
+    if (
+      typeof item.status !== 'string' ||
+      !(KAFUO_TEACHER_GUIDE_STATUSES as readonly string[]).includes(item.status)
+    ) {
+      throw invalid(`${path}.status must be one of ${KAFUO_TEACHER_GUIDE_STATUSES.join(', ')}`);
+    }
+    const status = item.status as KafuoTeacherGuideStatus;
+    const key = `${item.contentUnitId}\u0000${item.label}`;
+    if (seen.has(key))
+      throw invalid(`${path} repeats contentUnitId ${item.contentUnitId} label ${item.label}`);
+    seen.add(key);
+    if (item.answer !== undefined && !TEACHER_GUIDE_KEYED_STATUSES.has(status)) {
+      throw invalid(`${path}.answer is allowed only on an approved or settled item`);
+    }
+    if (item.answer === undefined && status === 'approved') {
+      throw invalid(`${path}.answer is required on an approved item`);
+    }
+    return {
+      contentUnitId: item.contentUnitId,
+      label: item.label,
+      status,
+      ...(item.answer !== undefined
+        ? { answer: parseTeacherGuideAnswer(item.answer, `${path}.answer`, invalid) }
+        : {}),
+    };
+  });
+  return { guideId, items };
+}
+
+function parseTeacherGuideAnswer(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideAnswer {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw invalid(`${path} must be an object`);
+  const answer = raw as Record<string, unknown>;
+  const type = answer.type;
+  if (
+    typeof type !== 'string' ||
+    !(KAFUO_TEACHER_GUIDE_ANSWER_TYPES as readonly string[]).includes(type)
+  ) {
+    throw invalid(`${path}.type must be one of ${KAFUO_TEACHER_GUIDE_ANSWER_TYPES.join(', ')}`);
+  }
+  if (
+    answer.unit !== undefined &&
+    (typeof answer.unit !== 'string' ||
+      answer.unit.trim() === '' ||
+      answer.unit.length > TEACHER_GUIDE_UNIT_MAX)
+  ) {
+    throw invalid(`${path}.unit must be a short non-empty string when present`);
+  }
+  const unit = answer.unit !== undefined ? { unit: answer.unit as string } : {};
+  if (answer.approximate !== undefined && (type !== 'number' || answer.approximate !== true)) {
+    throw invalid(`${path}.approximate is allowed only as true on a number answer`);
+  }
+  const value = answer.value;
+  switch (type as KafuoTeacherGuideAnswerType) {
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw invalid(`${path}.value must be a finite number`);
+      }
+      return {
+        type: 'number',
+        value,
+        ...unit,
+        ...(answer.approximate === true ? { approximate: true as const } : {}),
+      };
+    case 'choice':
+      if (typeof value !== 'string' || !TEACHER_GUIDE_CHOICE.test(value)) {
+        throw invalid(`${path}.value must be one option letter (A–D or أ/ب/ج/د)`);
+      }
+      return { type: 'choice', value, ...unit };
+    case 'bool':
+      if (typeof value !== 'boolean') throw invalid(`${path}.value must be a boolean`);
+      return { type: 'bool', value, ...unit };
+    case 'text':
+      if (
+        typeof value !== 'string' ||
+        value.trim() === '' ||
+        value.length > TEACHER_GUIDE_TEXT_MAX
+      ) {
+        throw invalid(
+          `${path}.value must be a non-empty string of at most ${TEACHER_GUIDE_TEXT_MAX} characters`,
+        );
+      }
+      return { type: 'text', value, ...unit };
+  }
 }
 
 /**
@@ -1157,6 +1319,8 @@ export interface KafuoGenerationContext {
   ttsRoute?: StageTtsRoute | null;
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
+  /** g5.v11 only: the guide items (absent on every other Teaching Model, even when sent). */
+  teacherGuide?: KafuoTeacherGuide;
 }
 
 /** Assemble the StartGenerationAttemptRequest for a parsed Kafuo request. */
@@ -1174,6 +1338,12 @@ export function buildKafuoStartRequest(
   const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
+  // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B: their
+  // snapshots and runs stay byte-identical); the digest still covers it.
+  const teacherGuide =
+    request.teacherGuide && isGuideAnswerModel(request.teachingModel)
+      ? request.teacherGuide
+      : undefined;
   const execution: GenerationExecutionInput = {
     requirement,
     ...request.generation,
@@ -1198,6 +1368,7 @@ export function buildKafuoStartRequest(
       skillPolicyDigest: computeSkillPolicyDigest(request.teachingModel.flow),
       teachingFlow: request.teachingModel.flow,
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
+      ...(teacherGuide ? { teacherGuide } : {}),
       contentResource: contentResourceSnapshotFacts(request.contentResource),
       ...(request.normalizedContentResource
         ? {
@@ -1228,6 +1399,7 @@ export function buildKafuoStartRequest(
       subjectOffering: request.learningItem.subjectOffering ?? null,
       ...(ttsRoute ? { ttsRoute } : {}),
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
+      ...(teacherGuide ? { teacherGuide } : {}),
     },
   };
 }

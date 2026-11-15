@@ -275,6 +275,50 @@ export interface KafuoBookStructure {
   exercisePolicy?: KafuoExercisePolicy;
 }
 
+/**
+ * g5.v11 (teacher-guide answer referee plan §4/§7): the status of one guide item matched
+ * to OUR question. `approved` = same givens and an independent check agrees; `settled` =
+ * a person settled a doubtful item; the others are never given to the model.
+ */
+export const KAFUO_TEACHER_GUIDE_STATUSES = [
+  'approved',
+  'settled',
+  'doubtful',
+  'changed',
+  'reference',
+  'missing',
+] as const;
+export type KafuoTeacherGuideStatus = (typeof KAFUO_TEACHER_GUIDE_STATUSES)[number];
+
+/** The kinds of a normalized guide answer (`answer.type`). */
+export const KAFUO_TEACHER_GUIDE_ANSWER_TYPES = ['number', 'choice', 'bool', 'text'] as const;
+export type KafuoTeacherGuideAnswerType = (typeof KAFUO_TEACHER_GUIDE_ANSWER_TYPES)[number];
+
+/**
+ * A guide answer, normalized by the backend (`answer_value`). `choice` is the book's
+ * option letter (A–D or أ/ب/ج/د); `approximate` marks a «تقريبًا» answer (5% tolerance).
+ */
+export type KafuoTeacherGuideAnswer =
+  | { type: 'number'; value: number; unit?: string; approximate?: true }
+  | { type: 'choice'; value: string; unit?: string }
+  | { type: 'bool'; value: boolean; unit?: string }
+  | { type: 'text'; value: string; unit?: string };
+
+/** One guide item, keyed by OUR content unit and OUR item label («1A», «11», «11b»). */
+export interface KafuoTeacherGuideItem {
+  contentUnitId: string;
+  label: string;
+  status: KafuoTeacherGuideStatus;
+  /** Required on `approved`; allowed on `settled`; never on any other status. */
+  answer?: KafuoTeacherGuideAnswer;
+}
+
+/** g5.v11 only: the `teacherGuide` block of a generation request (records only, no page text). */
+export interface KafuoTeacherGuide {
+  guideId: string;
+  items: KafuoTeacherGuideItem[];
+}
+
 /** Kafuo Learning Objective reference retained on a scene (app-layer field). */
 export interface SceneLearningObjectiveRef {
   objectiveRef: string;
@@ -359,6 +403,11 @@ export interface GenerationInputSnapshot {
   teachingFlow?: TeachingFlowEntry[];
   /** g5.v7: the book map, pinned so an outline edit re-checks book coverage. */
   bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v11 only: the approved teacher-guide answers, pinned so a correction re-check,
+   * a resume and the AI reviewer read the same records. Absent on every other model.
+   */
+  teacherGuide?: KafuoTeacherGuide;
   /**
    * Stable resource identity/integrity lineage. NEVER carries `url` — the
    * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).
@@ -788,6 +837,11 @@ export interface KafuoGenerationRequest {
    * earlier version's planning and digest are unchanged.
    */
   bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v11 (teacher-guide answer referee plan §7): the guide items matched to this
+   * lesson's questions. Covered by the digest when sent; used on g5.v11 only.
+   */
+  teacherGuide?: KafuoTeacherGuide;
 }
 
 /** `narration.ttsRoute` as Kafuo sends it; the model and language come from the TE catalogue. */

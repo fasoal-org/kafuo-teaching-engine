@@ -54,6 +54,7 @@ import type {
   GenerationExecutionInput,
   GenerationInputSnapshot,
   KafuoBookStructure,
+  KafuoTeacherGuide,
   LearningItemRef,
   LearningObjectiveRef,
   TeachingFlowEntry,
@@ -104,6 +105,8 @@ export interface StartGenerationAttemptRequest {
   teachingFlow?: TeachingFlowEntry[];
   /** g5.v7: the book map, pinned on the input snapshot for correction re-checks. */
   bookStructure?: KafuoBookStructure;
+  /** g5.v11 only: the guide items, pinned for correction re-checks and the reviewer. */
+  teacherGuide?: KafuoTeacherGuide;
   /**
    * Secret-free resource identity/integrity facts. Presence marks the request
    * as Kafuo-shaped; the transient signed URL never reaches this type.
@@ -163,6 +166,7 @@ export function toGenerationInputSnapshot(
     ...(request.tenantId ? { tenantId: request.tenantId } : {}),
     ...(request.teachingFlow ? { teachingFlow: request.teachingFlow } : {}),
     ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
+    ...(request.teacherGuide ? { teacherGuide: request.teacherGuide } : {}),
     ...(request.contentResource ? { contentResource: request.contentResource } : {}),
     ...(request.normalizedContentResource
       ? { normalizedContentResource: request.normalizedContentResource }
