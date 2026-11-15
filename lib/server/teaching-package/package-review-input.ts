@@ -7,6 +7,9 @@
  * stripped, LaTeX kept) and the narration. Quiz Scenes add their questions,
  * options, marked answers and explanations, so the reviewer can re-solve them
  * (checks Q1, Q2, Q5). No picture, no layout, no URL, no student data.
+ * g5.v10's `package-review-v2` also reads a text description of the pictures,
+ * charts and drawings (`visuals`: the book image id, chart values, segment
+ * lengths), never the picture itself.
  */
 import { createHash } from 'node:crypto';
 
@@ -46,6 +49,12 @@ export interface ReviewSlide {
   narration: string;
   /** Quiz Scenes only. */
   questions?: ReviewQuizQuestion[];
+  /**
+   * g5.v10 quality plan W1 (15 Nov 2026): one line per picture, chart and group of
+   * drawn lines or text-free shapes the visible text leaves out. Absent when the
+   * slide has none. Rendered for `package-review-v2` only; v1 never shows it.
+   */
+  visuals?: string[];
   /** A bank quiz cannot be regenerated (`BANK_QUIZ_NOT_REGENERABLE`). */
   bankQuiz: boolean;
 }
@@ -110,17 +119,78 @@ function elementText(element: CanvasElement): string | null {
   return null;
 }
 
+function chartVisual(element: CanvasElement): string {
+  const data = (element.data ?? {}) as {
+    labels?: unknown[];
+    series?: unknown[][];
+    legends?: unknown[];
+  };
+  const labels = (data.labels ?? []).map(String);
+  const series = (data.series ?? []).map((values, index) => {
+    const legend = typeof data.legends?.[index] === 'string' ? `${data.legends[index]}: ` : '';
+    const pairs = (values ?? []).map((value, at) =>
+      labels[at] !== undefined ? `${labels[at]} → ${String(value)}` : String(value),
+    );
+    return `${legend}${pairs.join('، ')}`;
+  });
+  const kind = typeof element.chartType === 'string' ? element.chartType : 'chart';
+  return `[رسم بياني (${kind}): ${series.join(' | ') || 'بلا قيم'}]`;
+}
+
+function lineLength(element: CanvasElement): number {
+  const start = Array.isArray(element.start) ? (element.start as number[]) : [0, 0];
+  const end = Array.isArray(element.end) ? (element.end as number[]) : [0, 0];
+  return Math.round(Math.hypot((end[0] ?? 0) - (start[0] ?? 0), (end[1] ?? 0) - (start[1] ?? 0)));
+}
+
+/**
+ * W1: what the text leaves out, so the reviewer never reports a shown picture, chart
+ * or drawing as missing. A picture is named by its book image id (the reviewer cannot
+ * see it); a chart gives its values; drawn segments give their lengths, so a drawing
+ * that contradicts its givens (equal segments drawn unequal) is visible.
+ */
+export function slideVisuals(elements: readonly CanvasElement[]): string[] {
+  const visuals: string[] = [];
+  const segments: number[] = [];
+  let arrows = 0;
+  let plainShapes = 0;
+  for (const element of elements) {
+    if (element.type === 'image') {
+      const src = typeof element.src === 'string' ? element.src : '';
+      const id = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i.exec(src)?.[1];
+      visuals.push(id ? `[صورة من الكتاب معروضة: ${id}]` : '[صورة معروضة]');
+    } else if (element.type === 'chart') {
+      visuals.push(chartVisual(element));
+    } else if (element.type === 'line') {
+      const points = Array.isArray(element.points) ? (element.points as unknown[]) : [];
+      if (points.includes('arrow')) arrows += 1;
+      else segments.push(lineLength(element));
+    } else if (element.type === 'shape' && !elementText(element)) {
+      plainShapes += 1;
+    }
+  }
+  if (segments.length > 0) {
+    visuals.push(`[قطع مستقيمة مرسومة، أطوالها بالبكسل: ${segments.join('، ')}]`);
+  }
+  if (arrows > 0) visuals.push(`[أسهم مرسومة: ${arrows}]`);
+  if (plainShapes > 0)
+    visuals.push(`[أشكال مرسومة بلا نص (نقاط، مستطيلات، دوائر): ${plainShapes}]`);
+  return visuals;
+}
+
 /** One Scene as the reviewer reads it. */
 export function sceneToReviewSlide(scene: AppScene): ReviewSlide {
   const content = (scene as { content?: Record<string, unknown> }).content;
   const visible: string[] = [];
   let questions: ReviewQuizQuestion[] | undefined;
+  let visuals: string[] = [];
   if (content?.type === 'slide') {
     const canvas = content.canvas as { elements?: CanvasElement[] } | undefined;
     for (const element of canvas?.elements ?? []) {
       const text = elementText(element);
       if (text) visible.push(text);
     }
+    visuals = slideVisuals(canvas?.elements ?? []);
   } else if (content?.type === 'quiz') {
     questions = ((content.questions as Array<Record<string, unknown>> | undefined) ?? []).map(
       (question) => ({
@@ -153,6 +223,7 @@ export function sceneToReviewSlide(scene: AppScene): ReviewSlide {
     visibleText: clip(visible.join('\n'), REVIEW_SLIDE_TEXT_MAX_CHARS),
     narration: clip(narration, REVIEW_SLIDE_TEXT_MAX_CHARS),
     ...(questions ? { questions } : {}),
+    ...(visuals.length > 0 ? { visuals } : {}),
     bankQuiz: isBankQuizScene(scene as never),
   };
 }

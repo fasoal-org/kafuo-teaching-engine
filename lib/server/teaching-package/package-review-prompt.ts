@@ -141,12 +141,15 @@ const V1_S5_LINE =
   '- S5: Every lesson part of the book is present, in book order. Report a part that is missing or out of order.';
 const V1_Q1_LINE =
   '- Q1 (quiz slides): solve the question yourself. The marked answer is right, and no other option is also right.';
+const V1_FIX_NOTE_LINE =
+  '- fix_note: one instruction in Arabic that a slide writer can follow to fix exactly this error (for S2, include the correct working and the correct result). It must not ask to add, remove or move slides.';
 
 /** The v1 rubric with the weak-student checks (owner decisions D-2, D-3, D-5, 15 Nov 2026). */
 function learnerFirstInstructions(): string {
   if (
     !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_S5_LINE) ||
-    !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_Q1_LINE)
+    !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_Q1_LINE) ||
+    !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_FIX_NOTE_LINE)
   ) {
     throw new Error('package-review-v1 no longer holds the lines package-review-v2 extends');
   }
@@ -155,9 +158,20 @@ function learnerFirstInstructions(): string {
     [
       "- S5: Every lesson part of the book is present, in book order. Report a part that is missing or out of order. The lesson deliberately teaches only a selection of the book's exercises (about six, easiest first) and leaves out the opening boxes «فيما سبق», «والآن» and «المفردات»: never report those as missing.",
       '- S6: The narration agrees with what the slide shows and explains EVERY item the slide shows (أ، ب، ج …). Report a narration that skips an item, or that says something the screen contradicts (a different direction, name, shape or number).',
-      '- S7: The slide serves a weak student: a claim is stated before it is tested or a counterexample is given; Latin letters are read by their English names in Arabic script and the same symbol is read the same way; an image is explained as mathematics, never by its colours or position on the page; a check or exercise is attempted by the learner before its solution is shown.',
+      '- S7: The slide serves a weak student: a claim is stated before it is tested or a counterexample is given; Latin letters are read by their English names in Arabic script and the same symbol is read the same way; an image is explained as mathematics, never by its colours or position on the page; a check or exercise is attempted by the learner before its solution is shown; a drawing respects its givens (segments or angles given as equal are drawn equal).',
+      // g5.v10 quality plan W1 (15 Nov 2026): item 208's review called one checked case a proof.
+      '- (S2 also covers a conjecture called true, «التخمين صحيح», because one example satisfies it: examples support a conjecture, they never prove it.)',
     ].join('\n'),
-  ).replace(V1_Q1_LINE, `${V1_Q1_LINE}\n- (S6 and S7 apply to slides only.)`);
+  )
+    .replace(V1_Q1_LINE, `${V1_Q1_LINE}\n- (S6 and S7 apply to slides only.)`)
+    .replace(
+      V1_FIX_NOTE_LINE,
+      [
+        // W1: item 208's fix notes dropped the month wrap (f6) and prescribed average change (f15).
+        '- fix_note: one instruction in Arabic that a slide writer can follow to fix exactly this error (for S2, include the correct working and the correct result, keeping EVERY step of it, such as the wrap round a cycle or each subtraction). Use only the methods the book or this lesson teaches; never an average change or any other method the lesson did not teach. Write its numbers in the digits the slide already uses. It must not ask to add, remove or move slides.',
+        '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.',
+      ].join('\n'),
+    );
 }
 
 /** The JSON schema of a `package-review-v2` answer: v1's, with the v2 codes. */
@@ -211,7 +225,7 @@ export function renderBookBlock(
   return lines.join('\n');
 }
 
-function renderSlide(slide: ReviewSlide): string {
+function renderSlide(slide: ReviewSlide, learnerFirst: boolean): string {
   const lines = [
     `<<SLIDE id=${slide.id} | order=${slide.order} | type=${slide.sceneType}${
       slide.contentRole ? ` | contentRole=${slide.contentRole}` : ''
@@ -219,6 +233,8 @@ function renderSlide(slide: ReviewSlide): string {
     `TITLE: ${slide.title}`,
   ];
   if (slide.visibleText) lines.push('VISIBLE TEXT:', slide.visibleText);
+  // g5.v10 quality plan W1: the pictures, charts and drawings, described (v2 only).
+  if (learnerFirst && slide.visuals?.length) lines.push('PICTURES AND DRAWINGS:', ...slide.visuals);
   for (const [index, question] of (slide.questions ?? []).entries()) {
     lines.push(`QUESTION ${index + 1}: ${question.question}`);
     for (const option of question.options) lines.push(`  (${option.value}) ${option.label}`);
@@ -237,11 +253,13 @@ function renderSlide(slide: ReviewSlide): string {
 export function renderSlidesBlock(
   slides: readonly ReviewSlide[],
   focusIds?: ReadonlySet<string>,
+  options: { learnerFirst?: boolean } = {},
 ): string {
   const head = focusIds
     ? `RE-REVIEW. Check ONLY these slides: ${[...focusIds].join(', ')}. The other slides are neighbours for context; report nothing about them, and do not use S5.`
     : 'LESSON SLIDES, in order. Check every slide.';
-  return [head, ...slides.map(renderSlide)].join('\n\n');
+  const learnerFirst = options.learnerFirst === true;
+  return [head, ...slides.map((slide) => renderSlide(slide, learnerFirst))].join('\n\n');
 }
 
 function text(value: unknown, field: string, max: number): string {

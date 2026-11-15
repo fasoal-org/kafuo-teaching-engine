@@ -208,7 +208,7 @@ export async function callPackageReviewer(
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
     system: learnerFirst ? PACKAGE_REVIEW_SYSTEM_V2 : PACKAGE_REVIEW_SYSTEM,
     stablePrompt: renderBookBlock(units, { truncated: request.bookTruncated === true }),
-    prompt: renderSlidesBlock(slides, focusIds),
+    prompt: renderSlidesBlock(slides, focusIds, learnerFirst ? { learnerFirst } : {}),
     output: {
       kind: 'json',
       validate: (text) =>
