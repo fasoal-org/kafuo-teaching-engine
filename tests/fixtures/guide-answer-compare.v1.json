@@ -1,0 +1,136 @@
+{
+  "contract": "kafuo.guide-answer-compare.v1",
+  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization, a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values; text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words.",
+  "compare": [
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "11.25 ريال",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "١١٫٢٥ ريالًا",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "١١،٢٥",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "11,25 ريالات",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "11.25 دولار",
+      "match": false
+    },
+    {
+      "answer": { "type": "number", "value": 71.9 },
+      "written": "الإنتاج المتوقع في عام 1440 هو 71.9",
+      "match": true
+    },
+    { "answer": { "type": "number", "value": 71.9 }, "written": "51.8", "match": false },
+    { "answer": { "type": "number", "value": 71.9 }, "written": "72.5", "match": true },
+    { "answer": { "type": "number", "value": 71.9 }, "written": "73", "match": false },
+    {
+      "answer": { "type": "number", "value": 72, "approximate": true },
+      "written": "تقريبًا 75",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 72, "approximate": true },
+      "written": "76",
+      "match": false
+    },
+    {
+      "answer": { "type": "number", "value": 72, "unit": "تقريبًا" },
+      "written": "70",
+      "match": true
+    },
+    { "answer": { "type": "number", "value": 1000 }, "written": "1,000", "match": true },
+    { "answer": { "type": "number", "value": 1000 }, "written": "١٬٠٠٠", "match": true },
+    { "answer": { "type": "number", "value": -3 }, "written": "−3", "match": true },
+    { "answer": { "type": "number", "value": -3 }, "written": "سالب ٣", "match": true },
+    { "answer": { "type": "number", "value": 0.75 }, "written": "3/4", "match": true },
+    { "answer": { "type": "number", "value": 0 }, "written": "0", "match": true },
+    { "answer": { "type": "number", "value": 0 }, "written": "0.001", "match": false },
+    { "answer": { "type": "number", "value": 25, "unit": "%" }, "written": "٢٥٪", "match": true },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "سم" },
+      "written": "12 cm",
+      "match": true
+    },
+    { "answer": { "type": "number", "value": 12 }, "written": "لا يوجد عدد", "match": false },
+    { "answer": { "type": "choice", "value": "C" }, "written": "ج", "match": true },
+    { "answer": { "type": "choice", "value": "ج" }, "written": "(C)", "match": true },
+    { "answer": { "type": "choice", "value": "أ" }, "written": "الخيار A", "match": true },
+    { "answer": { "type": "choice", "value": "B" }, "written": "د", "match": false },
+    { "answer": { "type": "bool", "value": false }, "written": "خاطئة", "match": true },
+    { "answer": { "type": "bool", "value": false }, "written": "التخمين غير صحيح", "match": true },
+    { "answer": { "type": "bool", "value": false }, "written": "صحيحة", "match": false },
+    { "answer": { "type": "bool", "value": true }, "written": "صواب", "match": true },
+    { "answer": { "type": "bool", "value": true }, "written": "خطأ", "match": false },
+    { "answer": { "type": "text", "value": "شوال" }, "written": "شَوّال", "match": true },
+    { "answer": { "type": "text", "value": "شوال" }, "written": "شهر شوال", "match": true },
+    { "answer": { "type": "text", "value": "ذو القعدة" }, "written": "ذو القعده", "match": true },
+    {
+      "answer": { "type": "text", "value": "إلى الأعلى" },
+      "written": "الى  الاعلى.",
+      "match": true
+    },
+    { "answer": { "type": "text", "value": "شوال" }, "written": "رمضان", "match": false }
+  ],
+  "leak": [
+    {
+      "answer": { "type": "number", "value": 71.9 },
+      "text": "نتوقع أن يكون الإنتاج 71.9",
+      "book": "إنتاج مصنع: 41.6، 51.8، 61.7",
+      "leak": true
+    },
+    {
+      "answer": { "type": "number", "value": 12 },
+      "text": "إذا كان طول الضلع 12 سم فما المحيط؟",
+      "book": "طول الضلع 12 سم",
+      "leak": false
+    },
+    {
+      "answer": { "type": "number", "value": 48 },
+      "text": "إذا كان طول الضلع 12 سم فما المحيط؟",
+      "book": "طول الضلع 12 سم",
+      "leak": false
+    },
+    {
+      "answer": { "type": "number", "value": 48 },
+      "text": "المحيط = ٤٨ سم",
+      "book": "طول الضلع 12 سم",
+      "leak": true
+    },
+    {
+      "answer": { "type": "text", "value": "شوال" },
+      "text": "الأشهر: محرم، صفر، ... رمضان، شوال، ذو القعدة",
+      "book": "ما الشهر بعد 10 أشهر من ذي الحجة؟",
+      "leak": false
+    },
+    {
+      "answer": { "type": "text", "value": "شوال" },
+      "text": "الجواب: شوال",
+      "book": "ما الشهر بعد 10 أشهر من ذي الحجة؟",
+      "leak": true
+    },
+    {
+      "answer": { "type": "choice", "value": "C" },
+      "text": "الإجابة: ج",
+      "book": "",
+      "leak": false
+    },
+    {
+      "answer": { "type": "bool", "value": false },
+      "text": "التخمين خاطئ",
+      "book": "",
+      "leak": false
+    }
+  ]
+}

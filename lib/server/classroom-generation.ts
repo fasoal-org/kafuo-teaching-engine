@@ -79,6 +79,7 @@ import {
   placeholderSlideContent,
 } from '@/lib/server/teaching-package/placeholder-slide';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
+import type { GuideAnswerGuard } from '@/lib/server/teaching-package/guide-answer-guard';
 import {
   bankQuizActions,
   bankQuizContent,
@@ -610,6 +611,14 @@ export interface GenerateClassroomInput {
    * image once per lesson), with the book's exercise units. Absent → unchanged.
    */
   learnerFirstVisuals?: { exerciseUnitIds: readonly string[] };
+  /**
+   * g5.v11 (teacher-guide answer referee plan §8.3–8.5): the code check of the approved
+   * answers. A solution slide or attempt whose answer disagrees, or a try-it slide or
+   * attempt that states it before the try, is regenerated ONCE with a correction; what
+   * is still wrong is settled (an attempt question removed, or the item's outlines
+   * dropped from the lesson). Absent → every scene is generated exactly as before.
+   */
+  guideAnswerGuard?: GuideAnswerGuard;
   /**
    * Quran and hadith (Kafuo plan Q-4 to Q-15): the protected quotes of the
    * approved source. Present → every learner-text prompt carries the fixed
@@ -2338,7 +2347,9 @@ export async function generateClassroom(
         // 3 Oct 2026: a governed slide problem is recorded on the scene and the
         // package keeps going — the reviewer regenerates the slide afterwards.
         const sceneIssues: SceneGenerationIssue[] = [];
-        const generateContent = async (correctiveNote?: string) => {
+        // `quizDirective` (g5.v11 only): a quiz reads its correction as the regeneration
+        // requirements (`editDirective`), since `correctiveNote` is a slide option.
+        const generateContent = async (correctiveNote?: string, quizDirective?: string) => {
           if (!contentCall) return null;
           try {
             return await withGenerationRetry(
@@ -2382,6 +2393,7 @@ export async function generateClassroom(
                       }
                     : {}),
                   ...(correctiveNote ? { correctiveNote } : {}),
+                  ...(quizDirective ? { editDirective: quizDirective } : {}),
                   ...(input.governed
                     ? { onVisualIssue: (issue) => void sceneIssues.push(issue) }
                     : {}),
@@ -2436,11 +2448,63 @@ export async function generateClassroom(
           content = await generateContent(INVALID_SCENE_OUTPUT_CORRECTION);
           assertRouteAvailable();
         }
-        return { bankQuiz, content, contentFailure, sceneIssues, contentRefusals };
+        // g5.v11 (teacher-guide plan §8.3–8.5): the approved answers are checked by
+        // code. A finding regenerates THIS scene once, with a correction naming only the
+        // correct final answers; what is still wrong is settled — an attempt question
+        // removed, or the item's outlines dropped — never shown to a learner.
+        let guideDrop: string[] | undefined;
+        const guard = input.guideAnswerGuard;
+        if (content && guard?.planOf(safeOutline.id)) {
+          const findings = guard.checkContent(safeOutline, content);
+          if (findings.length > 0) {
+            log.warn(
+              `Scene ${index + 1}/${outlines.length} disagrees with its checked answers (${[
+                ...new Set(findings.map((finding) => finding.code)),
+              ].join(', ')}); regenerating once: ${safeOutline.title}`,
+            );
+            const note = guard.correction(safeOutline, findings);
+            const retry =
+              safeOutline.type === 'quiz'
+                ? await generateContent(undefined, note)
+                : await generateContent(note);
+            assertRouteAvailable();
+            const left = retry ? guard.checkContent(safeOutline, retry) : findings;
+            if (retry && left.length === 0) {
+              content = retry;
+            } else {
+              const settled = guard.settle(safeOutline, retry ?? content, left);
+              if ('drop' in settled) guideDrop = settled.drop;
+              else content = settled.content as typeof content;
+            }
+          }
+          if (content && !guideDrop) content = guard.cleanWording(safeOutline, content);
+        }
+        return {
+          bankQuiz,
+          content,
+          contentFailure,
+          sceneIssues,
+          contentRefusals,
+          ...(guideDrop ? { guideDrop } : {}),
+        };
       };
       return contentRefusalScopes.run(
         { scope: governedScope ? { refusals: contentRefusals } : null },
         run,
+      );
+    };
+
+    // g5.v11: the outlines whose checked answers still failed after their one
+    // regeneration leave the lesson (with their group), and their Scenes with them.
+    const droppedGuideOutlines = new Set<string>();
+    const dropGuideOutlines = (ids: readonly string[]) => {
+      for (const id of ids) droppedGuideOutlines.add(id);
+      const before = store.getState().scenes;
+      const kept = before.filter((scene) => !droppedGuideOutlines.has(scene.outlineId ?? ''));
+      generatedScenes -= before.length - kept.length;
+      store.setState({ scenes: kept });
+      log.warn(
+        `Removed ${ids.length} outline(s) whose checked answers still failed after one regeneration: ${ids.join(', ')}`,
       );
     };
 
@@ -2449,8 +2513,10 @@ export async function generateClassroom(
     const sceneContents = lazyBoundedMap(
       outlines,
       sceneContentConcurrency(),
-      async (_outline, index) => {
+      async (outline, index) => {
         const ready = prepared[index];
+        // g5.v11: an outline already dropped with its group is never paid for.
+        if (droppedGuideOutlines.has(outline.id)) return null;
         return ready ? produceSceneContent(index, ready.safeOutline) : null;
       },
       // Once the run is stopping for ANY reason (the loop threw, a Scene's content
@@ -2470,6 +2536,7 @@ export async function generateClassroom(
     let firstRefusal: TeachingModelUnavailableError | undefined;
     try {
       for (const [index, outline] of outlines.entries()) {
+        if (droppedGuideOutlines.has(outline.id)) continue;
         const retained = retainedByOutline.get(outline.id);
         if (retained) {
           store.setState({ scenes: [...store.getState().scenes, retained] });
@@ -2516,6 +2583,10 @@ export async function generateClassroom(
         const produced = await sceneContents[index];
         assertRouteAvailable();
         if (!produced) continue; // only when a route failure stopped the pool (thrown above)
+        if (produced.guideDrop) {
+          dropGuideOutlines(produced.guideDrop);
+          continue;
+        }
         const { bankQuiz, contentFailure, sceneIssues } = produced;
         let content = produced.content;
         sceneRefusals.push(...produced.contentRefusals);
@@ -2582,91 +2653,131 @@ export async function generateClassroom(
           previousSpeeches,
         };
         let actionsFellBack = false;
+        // g5.v11 (teacher-guide plan §8.5): a narration that states a checked answer
+        // before the try is asked once more with this note. Unset on every other run.
+        let guideNarrationNote: string | undefined;
+        const sceneIssuesBeforeActions = sceneIssues.length;
         // W6: the bank placeholder's narration is model-free and deterministic —
         // a successful Scene, never a fallback and never marked for review.
-        const actions = !actionsAiCall
-          ? bankQuizActions(input.language, input.subjectCode)
-          : await generateRegisterCompliantActions(
-              async (correctiveContext) => {
-                let attemptProducedFallback = false;
-                const generated = await withGenerationRetry(
-                  () => {
-                    attemptProducedFallback = false;
-                    return generateSceneActions(safeOutline, content, actionsAiCall, {
-                      ctx: sceneCtx,
-                      agents,
-                      languageDirective,
-                      ...(registerPolicy ? { spokenLanguagePolicy: registerPolicy.directive } : {}),
-                      ...(spokenScript ? { spokenScript } : {}),
-                      ...(correctiveContext ? { correctiveContext } : {}),
-                      // W1: the ONE resolved Flow position — the generator never sees the
-                      // array and never performs the lookup itself.
-                      ...(flowContext ? { flowContext } : {}),
-                      ...(resolvedSkills ? { resolvedSkills } : {}),
-                      ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
-                      ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
-                      ...(input.learnerFirst ? { learnerFirst: true } : {}),
-                      ...(safeOutline.type === 'slide' && hasSourceVisuals
-                        ? {
-                            imageNotes: buildNarrationImageNotes(
-                              safeOutline,
-                              sourceImages,
-                              sourceServingMapping,
-                            ),
-                          }
-                        : {}),
+        const produceActions = async () =>
+          !actionsAiCall
+            ? bankQuizActions(input.language, input.subjectCode)
+            : await generateRegisterCompliantActions(
+                async (correctiveContext) => {
+                  let attemptProducedFallback = false;
+                  const generated = await withGenerationRetry(
+                    () => {
+                      attemptProducedFallback = false;
+                      return generateSceneActions(safeOutline, content, actionsAiCall, {
+                        ctx: sceneCtx,
+                        agents,
+                        languageDirective,
+                        ...(registerPolicy
+                          ? { spokenLanguagePolicy: registerPolicy.directive }
+                          : {}),
+                        ...(spokenScript ? { spokenScript } : {}),
+                        ...(guideNarrationNote || correctiveContext
+                          ? {
+                              correctiveContext: [guideNarrationNote, correctiveContext]
+                                .filter(Boolean)
+                                .join('\n\n'),
+                            }
+                          : {}),
+                        // W1: the ONE resolved Flow position — the generator never sees the
+                        // array and never performs the lookup itself.
+                        ...(flowContext ? { flowContext } : {}),
+                        ...(resolvedSkills ? { resolvedSkills } : {}),
+                        ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                        ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
+                        ...(input.learnerFirst ? { learnerFirst: true } : {}),
+                        ...(safeOutline.type === 'slide' && hasSourceVisuals
+                          ? {
+                              imageNotes: buildNarrationImageNotes(
+                                safeOutline,
+                                sourceImages,
+                                sourceServingMapping,
+                              ),
+                            }
+                          : {}),
+                        ...(input.governed
+                          ? {
+                              onFallback: (info: SceneActionsFallback) => {
+                                attemptProducedFallback = true;
+                                log.warn(
+                                  `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
+                                );
+                              },
+                            }
+                          : {}),
+                      });
+                    },
+                    {
+                      label: `scene ${index + 1}/${outlines.length} actions`,
+                      ...(input.governed ? { maxRetries: 0 } : {}),
                       ...(input.governed
                         ? {
-                            onFallback: (info: SceneActionsFallback) => {
-                              attemptProducedFallback = true;
-                              log.warn(
-                                `Scene "${safeOutline.title}" actions fell back (${info.code}) on a governed run`,
-                              );
-                            },
+                            shouldRetryResult: () =>
+                              attemptProducedFallback && routeFailure === null,
                           }
                         : {}),
-                    });
-                  },
-                  {
-                    label: `scene ${index + 1}/${outlines.length} actions`,
-                    ...(input.governed ? { maxRetries: 0 } : {}),
-                    ...(input.governed
-                      ? {
-                          shouldRetryResult: () => attemptProducedFallback && routeFailure === null,
-                        }
-                      : {}),
-                    onRetry: (event) => reportSceneRetry('actions', event),
-                  },
-                );
-                // The Action generator falls back to a model-free sequence on a call
-                // failure; on a routed run a failed ROUTE must fail the run instead.
-                assertRouteAvailable();
-                // 3 Oct 2026: a governed fallback no longer fails the package — the
-                // model-free sequence is kept and the scene is marked for the reviewer.
-                actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
-                return generated;
-              },
-              registerPolicy,
-              { title: safeOutline.title, outlineId: safeOutline.id },
-              { outline: safeOutline, ctx: sceneCtx },
-              input.governed
-                ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
-                : undefined,
-              // g5.v10: the narration is checked against this slide's own canvas;
-              // what is still wrong after the last attempt marks the scene.
-              learnerFirstNarrationCheck(
-                input.learnerFirst && safeOutline.type === 'slide',
-                content,
-                (issues) =>
-                  sceneIssues.push(
-                    ...issues.map((issue) => ({
-                      code: issue.code,
-                      message: `learner-first narration check: ${issue.evidence}`,
-                    })),
-                  ),
-                safeOutline.contentRole,
-              ),
+                      onRetry: (event) => reportSceneRetry('actions', event),
+                    },
+                  );
+                  // The Action generator falls back to a model-free sequence on a call
+                  // failure; on a routed run a failed ROUTE must fail the run instead.
+                  assertRouteAvailable();
+                  // 3 Oct 2026: a governed fallback no longer fails the package — the
+                  // model-free sequence is kept and the scene is marked for the reviewer.
+                  actionsFellBack = Boolean(input.governed) && attemptProducedFallback;
+                  return generated;
+                },
+                registerPolicy,
+                { title: safeOutline.title, outlineId: safeOutline.id },
+                { outline: safeOutline, ctx: sceneCtx },
+                input.governed
+                  ? (error) => void sceneIssues.push({ code: error.code, message: error.message })
+                  : undefined,
+                // g5.v10: the narration is checked against this slide's own canvas;
+                // what is still wrong after the last attempt marks the scene.
+                learnerFirstNarrationCheck(
+                  input.learnerFirst && safeOutline.type === 'slide',
+                  content,
+                  (issues) =>
+                    sceneIssues.push(
+                      ...issues.map((issue) => ({
+                        code: issue.code,
+                        message: `learner-first narration check: ${issue.evidence}`,
+                      })),
+                    ),
+                  safeOutline.contentRole,
+                ),
+              );
+        let actions = await produceActions();
+        // g5.v11 (plan §8.5): a try-it slide's or an attempt's narration never states a
+        // checked answer. One more narration with a correction; still stating it → the
+        // item leaves the lesson (the attempt alone, or a check's whole group).
+        const guideGuard = input.guideAnswerGuard;
+        if (actionsAiCall && guideGuard?.planOf(safeOutline.id)) {
+          const leaks = guideGuard.checkNarration(safeOutline, actions);
+          if (leaks.length > 0) {
+            log.warn(
+              `Scene "${safeOutline.title}" narration states a checked answer before the try; asking once more`,
             );
+            guideNarrationNote = guideGuard.correction(safeOutline, leaks);
+            // The first narration's open issues are not the kept narration's.
+            sceneIssues.length = sceneIssuesBeforeActions;
+            actions = await produceActions();
+            const left = guideGuard.checkNarration(safeOutline, actions);
+            if (left.length > 0) {
+              const settled = guideGuard.settle(safeOutline, null, left);
+              if ('drop' in settled) {
+                sceneRefusalScope = null;
+                dropGuideOutlines(settled.drop);
+                continue;
+              }
+            }
+          }
+        }
         if (actionsFellBack) {
           sceneIssues.push({
             code: 'GOVERNED_ACTION_GENERATION_FAILED',
@@ -2751,6 +2862,12 @@ export async function generateClassroom(
     // (e.g. a rejected request for every call): fail the run as before.
     const freshCount = outlines.length - retainedSceneIds.size;
     if (input.governed && firstRefusal && refusedScenes >= freshCount) throw firstRefusal;
+
+    // g5.v11: a dropped outline leaves the persisted plan too, so no outline is left
+    // without its Scene and no media is made for it. Never set on any other run.
+    if (droppedGuideOutlines.size > 0) {
+      outlines = outlines.filter((outline) => !droppedGuideOutlines.has(outline.id));
+    }
 
     const scenes = store.getState().scenes;
     // On a `scenes` resume only the newly generated Scenes need source-visual

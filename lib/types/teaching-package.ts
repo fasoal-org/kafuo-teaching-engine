@@ -409,6 +409,19 @@ export interface GenerationInputSnapshot {
    */
   teacherGuide?: KafuoTeacherGuide;
   /**
+   * g5.v11: the items whose checked answer still failed after their one regeneration in
+   * the bound run — an attempt question removed, or the item's outlines dropped. Labels
+   * and codes only, never an answer value.
+   */
+  guideAnswerSettlements?: Array<{
+    outlineId: string;
+    action: 'questions_removed' | 'dropped';
+    dropped: string[];
+    removedQuestions: number[];
+    findings: Array<{ code: string; contentUnitId: string; label: string; where: string }>;
+    generationRun: number;
+  }>;
+  /**
    * Stable resource identity/integrity lineage. NEVER carries `url` — the
    * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).
    */
