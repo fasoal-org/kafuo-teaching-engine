@@ -91,6 +91,10 @@ describe('engine-placed attempt quizzes', () => {
       quizConfig: { questionCount: 3, difficulty: 'easy', questionTypes: ['single'] },
     });
     expect(attempt.description).toContain('never graded for marks');
+    // Item 208 (16 Nov 2026): the try keyed 51.8 by averaging; the lesson adds the last difference.
+    expect(attempt.description).toContain(
+      "The key and the explanation use the lesson's own method: for a value expected next from data, add the last difference to the last value; never an average change.",
+    );
     expect(result[4]!.quizConfig?.questionCount).toBe(2);
     expect(isAttemptOutline(attempt)).toBe(true);
     expect(isAttemptOutline(result[1]!)).toBe(false);

@@ -44,7 +44,11 @@ const ATTEMPT_DESCRIPTION =
   'conjecture do the data support?"; a counterexample item becomes "which value (or figure) is a ' +
   'counterexample?"; a data item becomes "what is expected next?". An item on a fixed named cycle ' +
   '(the Hijri months, the days of the week) lists the whole cycle with its numbers in the question, ' +
-  'as given data. Never reveal or hint the answer ' +
+  'as given data. ' +
+  // Teacher-guide plan follow-up (16 Nov 2026): item 208's try keyed 51.8 by averaging.
+  "The key and the explanation use the lesson's own method: for a value expected next from data, " +
+  'add the last difference to the last value; never an average change. ' +
+  'Never reveal or hint the answer ' +
   'in the question, and never mention scores, points or grades.';
 
 type Book = Pick<KafuoBookStructure, 'units'> | undefined;
