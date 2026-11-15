@@ -43,8 +43,12 @@ import {
 } from '@/lib/server/teaching-package/package-review-store';
 import type { AppScene } from '@/lib/types/stage';
 
-/** The same rule as every package command key (`[A-Za-z0-9_-]`, 8–128). */
-const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,128}$/;
+/**
+ * Kafuo forwards the Admin's `Idempotency-Key` as it is
+ * (`learning_item_tp_command:<id>:regeneration:stamp:<ms>:<rand>`, with colons). It
+ * only feeds the hash of the re-queued review's id, so any visible ASCII is accepted.
+ */
+const IDEMPOTENCY_KEY = /^[\x21-\x7E]{1,256}$/;
 
 export interface RefixSeed {
   /** Every finding of the review; open ones carry their teacher-only reason or `null`. */
@@ -144,7 +148,7 @@ export async function queueFlaggedSlideRefix(
   if (!IDEMPOTENCY_KEY.test(input.idempotencyKey)) {
     throw new TeachingPackageError(
       'INVALID_REQUEST',
-      'idempotencyKey must be 8-128 characters of A-Z, a-z, 0-9, _ or -',
+      'idempotencyKey must be 1-256 visible ASCII characters',
     );
   }
   const now = deps.now ?? Date.now;

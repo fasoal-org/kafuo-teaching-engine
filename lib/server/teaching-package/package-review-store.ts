@@ -427,6 +427,8 @@ export async function readStageReviewForUpdate(
  *   regeneration and change nothing. The row stays one per attempt.
  * - `reviewed_at` is kept, so `runPackageReview` never pays for the
  *   whole-package review again and goes straight to the fix loop.
+ * - `created_at` is now: Kafuo counts its stuck-review guard from it
+ *   (`queued_at`), so an old time would release Submit/Approve at once.
  * - Spend restarts (the ledger is summed by review id at the end).
  *
  * Guarded on a terminal status; `null` when the row moved meanwhile.
@@ -440,7 +442,7 @@ export async function requeueReviewForRefix(
         SET id = $2, status = 'queued', findings = $3::jsonb, fixes = '[]'::jsonb,
             error_code = NULL, input_tokens = NULL, output_tokens = NULL, cost_usd = NULL,
             run_attempts = 0, lease_owner = NULL, lease_until = NULL,
-            started_at = NULL, completed_at = NULL, updated_at = $4
+            started_at = NULL, completed_at = NULL, created_at = $4, updated_at = $4
       WHERE id = $1 AND status = ANY($5::text[])
       RETURNING *`,
     [

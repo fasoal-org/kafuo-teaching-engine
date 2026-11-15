@@ -3577,10 +3577,18 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       return { attemptId, done: done!, versionId: row.version_id };
     }
 
-    async function refix(versionId: string, idempotencyKey = 'regen-key-0001') {
+    /** The Admin's real key shape (colons included), forwarded as it is by Kafuo. */
+    const adminKey = (n: number) => `learning_item_tp_command:208:regeneration:stamp:${n}:k3j9x2`;
+    const REQUEUED_AT = 1_894_715_466_674;
+
+    async function refix(versionId: string, idempotencyKey = adminKey(1)) {
       const { queueFlaggedSlideRefix } =
         await import('@/lib/server/teaching-package/package-review-refix');
-      return queueFlaggedSlideRefix(txPool(), { tenantId: 'tenant-k', versionId, idempotencyKey });
+      return queueFlaggedSlideRefix(
+        txPool(),
+        { tenantId: 'tenant-k', versionId, idempotencyKey },
+        { now: () => REQUEUED_AT },
+      );
     }
 
     it('re-queues the finished review under a new id, resetting only what a regeneration may fix', async () => {
@@ -3603,6 +3611,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         reviewedAt: done.reviewedAt,
         summary: done.summary,
         completedAt: null,
+        // Kafuo's stuck-review guard counts from this (`queued_at`): it must be the re-queue.
+        createdAt: REQUEUED_AT,
       });
       expect(queued.review.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
         ['f1', 'open', null],
@@ -3655,12 +3665,15 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
 
     it('a retry with the same key returns the review it queued; another press while it runs is refused', async () => {
       const { versionId } = await reviewed([S2_ON_F1]);
-      const queued = await refix(versionId, 'regen-key-0001');
-      const again = await refix(versionId, 'regen-key-0001');
+      const queued = await refix(versionId, adminKey(1));
+      const again = await refix(versionId, adminKey(1));
       expect(again).toMatchObject({ replayed: true, previousReviewId: null });
       expect(again.review.id).toBe(queued.review.id);
-      await expect(refix(versionId, 'regen-key-0002')).rejects.toMatchObject({
+      await expect(refix(versionId, adminKey(2))).rejects.toMatchObject({
         code: 'PACKAGE_REVIEW_IN_PROGRESS',
+      });
+      await expect(refix(versionId, 'has space')).rejects.toMatchObject({
+        code: 'INVALID_REQUEST',
       });
     });
 
@@ -3702,7 +3715,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           }),
           { params: Promise.resolve({ id: versionId }) },
         );
-      const accepted = await post('route-key-0001');
+      const accepted = await post(adminKey(1));
       expect(accepted.status).toBe(202);
       expect(await accepted.json()).toMatchObject({
         review: { status: 'queued', versionId },
@@ -3710,7 +3723,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         sceneIds: ['scene-f1'],
         replayed: false,
       });
-      const refused = await post('route-key-0002');
+      const refused = await post(adminKey(2));
       expect(refused.status).toBe(409);
       expect(await refused.json()).toMatchObject({ error: { code: 'PACKAGE_REVIEW_IN_PROGRESS' } });
     });
