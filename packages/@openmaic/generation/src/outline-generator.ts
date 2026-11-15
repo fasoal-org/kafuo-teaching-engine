@@ -362,8 +362,8 @@ export interface OutlineAnalysisContext {
   keyedQuizzesOnly?: boolean;
   /**
    * g5.v10 (quality plan W4): the learner-first visual rules — no visual on a
-   * structural slide, no forced book image on an exercise slide, a unit's book
-   * image once per lesson. Absent → the rules are unchanged.
+   * part opener or contents slide, no forced book image on an exercise slide, a
+   * unit's book image once per lesson. Absent → the rules are unchanged.
    */
   learnerFirstVisuals?: LearnerFirstVisualOptions;
 }

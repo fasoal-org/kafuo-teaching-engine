@@ -94,7 +94,7 @@ export function learnerFirstNarrationRules(contentRole?: string | null): string 
  */
 export function learnerFirstSlideRules(): string {
   return [
-    "1. Show every item this slide sets or solves; label items with the slide's own labels (أ، ب، ج or ١، ٢، ٣). For a textbook exercise, number it locally («تمرين ١») and put the book's number only as a small grey tag in brackets, for example «(س٣٥ في كتابك)» — never as the item's label.",
+    "1. Show every item this slide sets or solves; label items with the slide's own labels (أ، ب، ج or ١، ٢، ٣). For a textbook exercise, use the exact exercise label its key points give («تمرين ٤»): the exercises are numbered once across the whole lesson, so never restart at «تمرين ١» on a new slide. Put the book's number only as a small grey tag in brackets, for example «(س٣٥ في كتابك)» — never as the item's label.",
     '2. When the slide tests a claim or gives a counterexample, write the claim itself first, in full, on the canvas, labelled «التخمين:».',
     "3. The first time a term the lesson teaches appears, show a definition box: the term and the book's own definition sentence, verbatim. A term the lesson uses but the book never defines gets a one-line plain meaning.",
     '4. Use only the methods the textbook source uses. Never add a method of your own (for example an "average rate of change") to reach a result. To estimate a next value from data, add the last difference again (the latest rise) and show that working on the slide.',
@@ -125,8 +125,9 @@ export function learnerFirstNarrationVars(
 }
 
 /**
- * Quality plan W4: the canvas rules of a learner-first STRUCTURAL slide (a part opener,
- * contents, end). It teaches nothing, so it gets no definition box and no diagram.
+ * Quality plan W4: the canvas rules of a learner-first frame slide (a part opener
+ * (transition) or a contents slide, `isLearnerFirstFrameSlide`). It teaches nothing, so it
+ * gets no definition box and no diagram. An `end` summary slide gets the usual rules.
  */
 export function learnerFirstStructuralSlideRules(): string {
   return [

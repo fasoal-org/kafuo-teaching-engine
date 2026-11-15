@@ -246,7 +246,8 @@ const STRUCTURAL_SLIDE_TYPES: readonly string[] = ['contents', 'transition', 'en
 /**
  * g5.v10 (quality plan W4, 15 Nov 2026): the visual rules of a learner-first run.
  * Present only on g5.v10; every other run keeps the rules below unchanged.
- * - A structural slide (contents, transition, end) needs no visual at all.
+ * - A part opener or contents slide needs no visual at all (the summary `end` slide
+ *   keeps the usual rules).
  * - A slide that cites only exercise units is never forced to show a book image
  *   (item 208 slide 26 showed the circle patterns of items the lesson skips).
  * - A unit's book image is required once per lesson, not on every slide citing it
@@ -257,8 +258,20 @@ export interface LearnerFirstVisualOptions {
   exerciseUnitIds: readonly string[];
 }
 
-export function isStructuralSlide(outline: Pick<SceneOutline, 'type' | 'slideType'>): boolean {
-  return outline.type === 'slide' && STRUCTURAL_SLIDE_TYPES.includes(String(outline.slideType));
+/**
+ * The slides the learner-first rules treat as teaching nothing: a part opener
+ * (transition) and a contents slide. An `end` slide is the lesson's summary
+ * (contentRole summary), so it keeps its content, source text and visual rules
+ * (item 208's summary showed only its title, 15 Nov 2026).
+ */
+const LEARNER_FIRST_FRAME_SLIDE_TYPES: readonly string[] = ['contents', 'transition'];
+
+export function isLearnerFirstFrameSlide(
+  outline: Pick<SceneOutline, 'type' | 'slideType'>,
+): boolean {
+  return (
+    outline.type === 'slide' && LEARNER_FIRST_FRAME_SLIDE_TYPES.includes(String(outline.slideType))
+  );
 }
 
 /** A v10 slide that cites only exercise units: it never has to show a book image. */
@@ -340,14 +353,14 @@ export function normalizeSourceGroundedVisuals(
     );
   };
   /**
-   * The images an outline keeps after the v10 strips below (a structural slide keeps
-   * none, an exercise-only slide none of its own units'). "Shown elsewhere" is read from
+   * The images an outline keeps after the v10 strips below (a part opener or contents
+   * slide keeps none, an exercise-only slide none of its own units'). "Shown elsewhere" is read from
    * these, so normalisation and validation agree (review HIGH-1).
    */
   const keptImages = (outline: SceneOutline): string[] => {
     const suggested = (outline.suggestedImageIds ?? []).filter((id) => imageById.has(id));
     if (!v10 || outline.type !== 'slide') return suggested;
-    if (isStructuralSlide(outline)) return [];
+    if (isLearnerFirstFrameSlide(outline)) return [];
     if (!citesOnlyExercises(outline, v10)) return suggested;
     const linked = linkedOf(outline);
     return suggested.filter((id) => !linked.some((image) => image.id === id));
@@ -358,9 +371,9 @@ export function normalizeSourceGroundedVisuals(
     const { policy, entry } = positionPolicy(outline, flow);
     if (outline.type !== 'slide' || policy?.visual !== 'source_grounded') return outline;
 
-    // W4 (g5.v10): a structural slide shows no visual; its plan's visual and any AI
-    // image request are dropped.
-    if (v10 && isStructuralSlide(outline)) {
+    // W4 (g5.v10): a part opener or contents slide shows no visual; its plan's visual and
+    // any AI image request are dropped (an `end` summary slide keeps its visual).
+    if (v10 && isLearnerFirstFrameSlide(outline)) {
       const aiImages = (outline.mediaGenerations ?? []).some((request) => request.type === 'image');
       if (!outline.visualPlan && !outline.suggestedImageIds?.length && !aiImages) return outline;
       const {
@@ -648,8 +661,8 @@ export function teachingFlowDiagnostics(
         message: `${label} covers ${entry.stage} with contentRole ${JSON.stringify(outline.contentRole)}, which this position does not allow; choose one of: ${policy.contentRoles.join(', ')}`,
       });
     }
-    // W4 (g5.v10): a structural slide teaches nothing and needs no visual.
-    if (v10 && isStructuralSlide(outline)) continue;
+    // W4 (g5.v10): a part opener or contents slide teaches nothing and needs no visual.
+    if (v10 && isLearnerFirstFrameSlide(outline)) continue;
     if (policy.visual) {
       const mode = outline.visualPlan?.mode;
       if (mode !== 'image' && mode !== 'native') {

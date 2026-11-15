@@ -11,6 +11,7 @@ import {
   buildOutlinePrompt,
   describeScenePolicy,
   generateSceneOutlinesFromRequirements,
+  isLearnerFirstFrameSlide,
   parseTeachingScenePolicy,
   scenePolicyFor,
   type SceneOutline,
@@ -473,6 +474,20 @@ describe('g5.v10 quality plan W4: learner-first visual rules', () => {
       { teachingFlow: v5Flow, sourceImages, ...v10 },
     );
     expect(codes(mixed)).toContain('SOURCE_VISUAL_NOT_SELECTED');
+  });
+
+  test('follow-up: the summary (end) slide keeps its visual and its checks (item 208 slide 29)', () => {
+    const summary = explanationSlide({
+      id: 'sum',
+      slideType: 'end',
+      contentRole: 'summary',
+      sourceContentUnitIds: ['6225'],
+    });
+    const analysis = analyzeOutlines([summary], { teachingFlow: v5Flow, sourceImages: [], ...v10 });
+    expect(analysis.outlines[0]?.visualPlan).toEqual(summary.visualPlan);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'end' })).toBe(false);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'transition' })).toBe(true);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'contents' })).toBe(true);
   });
 
   test("review HIGH-1: a part opener's dropped image never counts as shown elsewhere", () => {

@@ -137,6 +137,9 @@ describe('g5.v10 learner-first prompts', () => {
     expect(slide).toContain('names every answer its item accepts');
     expect(slide).toContain('quotes a whole sentence of the book');
     expect(slide).toContain('a check item («تحقق من فهمك») keeps its own label');
+    // Follow-up (item 208 slide 28 labelled Q11 «تمرين 1»): no local numbering.
+    expect(slide).toContain('never restart at «تمرين ١» on a new slide');
+    expect(slide).not.toContain('number it locally');
   });
 
   it('makes a try-it slide read its items and never solve them (review HIGH-2)', () => {

@@ -95,30 +95,158 @@ export function bareSubItems(text: string): string[] {
   return letters;
 }
 
-function questionNumberOf(line: string): number | null {
-  const match = QUESTION_LINE.exec(line);
-  if (!match) return null;
-  const digits = match[1]!.replace(/[٠-٩]/g, (d) => String(ARABIC_INDIC.indexOf(d)));
-  return Number(digits);
+function numberOf(digits: string): number {
+  return Number(digits.replace(/[٠-٩]/g, (d) => String(ARABIC_INDIC.indexOf(d))));
 }
 
-/** The book's own question lines of the exercise units a slide solves (no answers). */
+function questionNumberOf(line: string): number | null {
+  const match = QUESTION_LINE.exec(line);
+  return match ? numberOf(match[1]!) : null;
+}
+
+/** At most this many characters in one exercise statement (cut with «…»). */
+const STATEMENT_MAX_CHARS = 700;
+
+function capStatement(statement: string): string {
+  if (statement.length <= STATEMENT_MAX_CHARS) return statement;
+  return `${statement.slice(0, STATEMENT_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+// Review of f5df1233 (15 Nov 2026), the grouping of an exercise unit's lines:
+// - The margin header before a question, beside QUESTION_LINE's «المثال N»: «المثالان 1، 2»,
+//   «الأمثلة 1–3» (the backend's `_EXERCISE_HEADER_RE` forms). A header-only line
+//   («المثال 3», unit 6253) is dropped.
+const MARGIN_PREFIX =
+  /^(?:المثالان|المثال|الأمثلة)\s*[0-9٠-٩]{1,2}(?:\s*(?:[,،\-–—]|و|إلى)\s*[0-9٠-٩]{1,2})*(?:\s+|$)/u;
+// - A figure-only question: its number alone, with a bracket («(3», «3)», «(٣)»; unit 6247).
+//   It is a boundary; with no text after it, it gives no statement.
+const BARE_NUMBER_LINE = /^(?:\(\s*([0-9٠-٩]{1,3})\s*\)?|([0-9٠-٩]{1,3})\s*\))$/u;
+// - A lettered part of a question («a)», «(a», «(b)», «أ)»; units 6249, 6253): never a task.
+const SUB_ITEM_LINE = /^(?:\(\s*([a-hA-H]|[أبجد])\s*\)?|([a-hA-H]|[أبجد])\s*\))(?=\s|$)/u;
+// - A task line the next questions share (units 6253, 6258): it never joins the question above.
+const TASK_LINE = /[::]\s*$|مما يأتي|فيما يأتي|الآتي/u;
+// - A cumulative-review item with its own task (unit 6258 Q52, Q53): it takes no shared
+//   task and ends the current one.
+const OWN_TASK_TAG = /\(\s*مهارة\s+سابقة\s*\)/u;
+
+/** A lone section title («تأكد», «مهارات التفكير العليا», «✓ تحقق من فهمك»). */
+function isTitleLine(line: string): boolean {
+  return (
+    line.split(/\s+/u).length <= 4 && !/[0-9٠-٩A-Za-z]/u.test(line) && !/[::.؟?!]$/u.test(line)
+  );
+}
+
+function subItemLetter(line: string): string | null {
+  const match = SUB_ITEM_LINE.exec(line);
+  return match ? (match[1] ?? match[2]!).toLowerCase() : null;
+}
+
+interface QuestionGroup {
+  number: number;
+  /** The shared task this question takes ('' when none). */
+  task: string;
+  lines: string[];
+  /** False for a bare «(3» until a line joins it. */
+  hasText: boolean;
+}
+
+/**
+ * One group per numbered question, in book order. The lines before the first question,
+ * after a section title, or from a task line up to the next question are the shared task
+ * of the questions that follow (a section title ends it).
+ */
+function questionGroups(text: string): QuestionGroup[] {
+  const groups: QuestionGroup[] = [];
+  let task: string[] = [];
+  let readingTask = true;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '') continue;
+    const body = line.replace(MARGIN_PREFIX, '');
+    const number = questionNumberOf(line) ?? questionNumberOf(body);
+    const bare = number === null ? BARE_NUMBER_LINE.exec(body) : null;
+    if (number !== null || bare) {
+      const own = number !== null && OWN_TASK_TAG.test(line);
+      if (own) task = [];
+      groups.push({
+        number: number ?? numberOf(bare![1] ?? bare![2]!),
+        task: task.join(' '),
+        lines: [line],
+        hasText: number !== null,
+      });
+      readingTask = false;
+      continue;
+    }
+    if (body === '') continue;
+    const current = groups[groups.length - 1];
+    const joinCurrent = () => {
+      if (!current) return;
+      current.lines.push(line);
+      current.hasText = true;
+    };
+    if (SUB_ITEM_LINE.test(line)) joinCurrent();
+    else if (TASK_LINE.test(line)) {
+      if (!readingTask) task = [];
+      task.push(line);
+      readingTask = true;
+    } else if (isTitleLine(line)) {
+      task = [];
+      readingTask = true;
+    } else if (readingTask) task.push(line);
+    else joinCurrent();
+  }
+  return groups;
+}
+
+/**
+ * A group's own lines. `withoutSacredItems` drops each LINE that holds a verse or hadith,
+ * so a question whose numbered line held one leaves its «a) b)» parts under the question
+ * above. Those parts never join it:
+ * - when the next question skips a number the unit never shows (a removed question), the
+ *   lines after the numbered line cannot be told apart, so only that line stays;
+ * - a part letter seen twice starts a removed question's parts: the group ends before it.
+ */
+function ownLines(
+  group: QuestionGroup,
+  next: QuestionGroup | undefined,
+  present: ReadonlySet<number>,
+): string[] {
+  for (let n = group.number + 1; next && n < next.number; n += 1) {
+    if (!present.has(n)) return group.lines.slice(0, 1);
+  }
+  const seen = new Set<string>();
+  for (let index = 1; index < group.lines.length; index += 1) {
+    const letter = subItemLetter(group.lines[index]!);
+    if (letter === null) continue;
+    if (seen.has(letter)) return group.lines.slice(0, index);
+    seen.add(letter);
+  }
+  return group.lines;
+}
+
+/**
+ * The book's own question text of the exercise units a slide solves (no answers): one
+ * statement per numbered question, holding its continuation lines up to the next one,
+ * after its shared task («<task> — <statement>»).
+ */
 function exerciseStatements(
   cited: readonly string[],
   context: AttemptQuizContext,
   questions: Record<string, number[]> | undefined,
 ): string[] {
-  const lines: string[] = [];
+  const statements: string[] = [];
   for (const id of cited) {
     const allowed = questions?.[id];
-    for (const line of (context.unitTexts?.get(id) ?? '').split('\n')) {
-      const number = questionNumberOf(line);
-      if (number === null) continue;
-      if (allowed && !allowed.includes(number)) continue;
-      lines.push(line.trim());
-    }
+    // Quality plan follow-up (item 208 Q11, 15 Nov 2026): table rows and «a) b)» lines stay.
+    const groups = questionGroups(context.unitTexts?.get(id) ?? '');
+    const present = new Set(groups.map((group) => group.number));
+    groups.forEach((group, index) => {
+      if (!group.hasText || (allowed && !allowed.includes(group.number))) return;
+      const statement = ownLines(group, groups[index + 1], present).join(' ');
+      statements.push(capStatement(group.task ? `${group.task} — ${statement}` : statement));
+    });
   }
-  return lines;
+  return statements;
 }
 
 function questionCount(itemCount: number): number {

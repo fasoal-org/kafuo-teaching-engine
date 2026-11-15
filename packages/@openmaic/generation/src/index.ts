@@ -127,7 +127,7 @@ export {
   narrowDiagnosticsToPositionPolicy,
   normalizeSourceGroundedVisuals,
   dropStructuralSlideRoles,
-  isStructuralSlide,
+  isLearnerFirstFrameSlide,
   type LearnerFirstVisualOptions,
   STRUCTURAL_CONTENT_ROLE_DROPPED,
   parseTeachingScenePolicy,

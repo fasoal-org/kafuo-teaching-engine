@@ -104,6 +104,9 @@ describe('g5.v10 learner-first switch', () => {
     expect(v10).toContain('- CYCLES: an item on a fixed named cycle');
     expect(v10).toContain("- PICTURES: a unit's book picture is shown once");
     expect(v8).not.toContain('- CYCLES');
+    // Follow-up (item 208 slide 28): the planner uses the engine labels, never local ones.
+    expect(v10).toContain('EXERCISE LABELS of the block (numbered once across the lesson');
+    expect(v10).not.toContain('numbers its items locally');
   });
 
   it('quality plan W4: the learner-first visual rules carry the exercise units only', () => {

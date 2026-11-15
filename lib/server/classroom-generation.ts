@@ -606,7 +606,7 @@ export interface GenerateClassroomInput {
   learnerFirst?: boolean;
   /**
    * g5.v10 quality plan W4: the learner-first visual rules of the outline checks
-   * (no visual on a structural slide, no book image on an exercise slide, a unit's
+   * (no visual on a part opener or contents slide, no book image on an exercise slide, a unit's
    * image once per lesson), with the book's exercise units. Absent → unchanged.
    */
   learnerFirstVisuals?: { exerciseUnitIds: readonly string[] };
