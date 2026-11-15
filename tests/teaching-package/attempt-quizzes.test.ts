@@ -65,8 +65,10 @@ const OUTLINES = [
 describe('engine-placed attempt quizzes', () => {
   it('puts an attempt after each try-it slide and before each exercise slide', () => {
     const result = insertAttemptQuizzes(OUTLINES, BOOK, {
-      '6234': { itemLabels: ['1A', '1B', '1C'], hiddenSteps: [] },
-      '6247': { itemLabels: [], hiddenSteps: [], questionNumbers: [1, 2] },
+      facts: {
+        '6234': { itemLabels: ['1A', '1B', '1C'], hiddenSteps: [] },
+        '6247': { itemLabels: [], hiddenSteps: [], questionNumbers: [1, 2] },
+      },
     });
     expect(result.map((outline) => outline.id)).toEqual([
       'ex1',
@@ -93,6 +95,51 @@ describe('engine-placed attempt quizzes', () => {
     expect(isAttemptOutline(result[1]!)).toBe(false);
     // Never a bank placeholder: it sits at the objective position, not the check one.
     expect(isBankCheckQuizOutline(attempt)).toBe(false);
+  });
+
+  it("carries the slide's Teaching Skills so a governed Submit reads it like its slide (review HIGH-1)", () => {
+    const skills = { classification: 'instructional', primary: { skillId: 'math', version: 'v1' } };
+    const withSkills = OUTLINES.map((outline) =>
+      outline.id === 'try1' ? ({ ...outline, teachingSkills: skills } as SceneOutline) : outline,
+    );
+    const attempt = insertAttemptQuizzes(withSkills, BOOK).find((o) => o.id === 'try1-attempt')!;
+    expect(attempt.teachingSkills).toEqual(skills);
+  });
+
+  it("asks an exercise attempt from the book's question lines, never the solving slide's working (review LOW-10)", () => {
+    const solving = [
+      slide(
+        'exer1',
+        'worked_example',
+        ['6247'],
+        ['التكلفة: 4.50، 6.75، 9.00 → نضيف 2.25؛ الحد التالي 11.25'],
+      ),
+    ];
+    const unitTexts = new Map([
+      [
+        '6247',
+        [
+          'تأكد',
+          'المثال 1 اكتب تخمينًا يصف النمط في كل متتابعة مما يأتي:',
+          '(1 التكلفة: 4.50 ريالات، 6.75 ريالات، 9.00 ريالات،',
+          '(2 مواعيد انطلاق الحافلات: 10:15 صباحًا، 11:00 صباحًا، 11:45 صباحًا،',
+          '(5 3, 3, 6, 9, 15,',
+        ].join('\n'),
+      ],
+    ]);
+    const [attempt] = insertAttemptQuizzes(solving, BOOK, {
+      unitTexts,
+      exerciseSlideQuestions: [{ '6247': [1, 2] }],
+    });
+    expect(attempt!.keyPoints).toEqual([
+      '(1 التكلفة: 4.50 ريالات، 6.75 ريالات، 9.00 ريالات،',
+      '(2 مواعيد انطلاق الحافلات: 10:15 صباحًا، 11:00 صباحًا، 11:45 صباحًا،',
+    ]);
+    expect(attempt!.keyPoints.join(' ')).not.toContain('11.25');
+    expect(attempt!.quizConfig?.questionCount).toBe(2);
+    // Without the book text: the slide title only, never its working.
+    const [bare] = insertAttemptQuizzes(solving, BOOK);
+    expect(bare!.keyPoints).toEqual(['exer1']);
   });
 
   it('is idempotent: a resumed outline that holds its attempts is returned as is', () => {

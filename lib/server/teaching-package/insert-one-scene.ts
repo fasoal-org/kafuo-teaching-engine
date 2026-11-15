@@ -266,7 +266,12 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       { title: outline.title, outlineId: outline.id },
       { outline, ctx: sceneCtx },
       undefined,
-      learnerFirstNarrationCheck(isLearnerFirstModel(input.teachingModel), content),
+      learnerFirstNarrationCheck(
+        isLearnerFirstModel(input.teachingModel),
+        content,
+        undefined,
+        outline.contentRole,
+      ),
     );
   } catch (error) {
     assertRoute();

@@ -182,6 +182,8 @@ export function learnerFirstNarrationCheck<T extends { type: string; text?: unkn
   enabled: boolean | undefined,
   content: unknown,
   onUnresolved?: (issues: readonly LearnerFirstNarrationIssue[]) => void,
+  /** The slide's contentRole: a learner task (a try-it) is read, never solved. */
+  contentRole?: string | null,
 ): LearnerFirstNarrationCheck<T> | undefined {
   if (!enabled || !content || typeof content !== 'object' || !('elements' in content)) {
     return undefined;
@@ -199,7 +201,7 @@ export function learnerFirstNarrationCheck<T extends { type: string; text?: unkn
   }));
   return {
     check: (actions) => validateLearnerFirstNarration(actions as never, canvas),
-    correction: (issues) => formatLearnerFirstNarrationCorrection(issues, canvas),
+    correction: (issues) => formatLearnerFirstNarrationCorrection(issues, canvas, contentRole),
     ...(onUnresolved ? { onUnresolved } : {}),
   };
 }
@@ -246,6 +248,9 @@ export async function generateRegisterCompliantActions<T extends { type: string;
   let structure: NarrationSignpostingIssue[] = [];
   let firstIssues: LearnerFirstNarrationIssue[] = [];
   let last: T[] = [];
+  // g5.v10: the last answer that met the register policy (only learner-first issues
+  // left), so a learner-first re-roll can never turn a compliant narration into a failure.
+  let registerClean: { actions: T[]; issues: LearnerFirstNarrationIssue[] } | null = null;
   for (let attempt = 1; attempt <= SPEECH_REGISTER_MAX_ATTEMPTS; attempt += 1) {
     const actions = await generate(correctiveContext);
     last = actions;
@@ -254,6 +259,9 @@ export async function generateRegisterCompliantActions<T extends { type: string;
     structure = policy && signposting ? validateNarrationSignposting(texts, signposting) : [];
     firstIssues = learnerFirst ? learnerFirst.check(actions) : [];
     if (issues.length === 0 && structure.length === 0 && firstIssues.length === 0) return actions;
+    if (issues.length === 0 && structure.length === 0) {
+      registerClean = { actions, issues: firstIssues };
+    }
     log.warn(
       `Scene "${scene.title}" narration breaks the ${policy?.register ?? 'learner-first'} narration policy (${[
         ...issues,
@@ -275,6 +283,11 @@ export async function generateRegisterCompliantActions<T extends { type: string;
     // Only learner-first issues are left: keep the last answer, mark the scene.
     if (firstIssues.length > 0) learnerFirst?.onUnresolved?.(firstIssues);
     return last;
+  }
+  if (registerClean) {
+    // An earlier answer met the register policy: return it, marked, rather than fail.
+    learnerFirst?.onUnresolved?.(registerClean.issues);
+    return registerClean.actions;
   }
   if (firstIssues.length > 0) learnerFirst?.onUnresolved?.(firstIssues);
   const error = new TeachingPackageError(
@@ -2641,6 +2654,7 @@ export async function generateClassroom(
                       message: `learner-first narration check: ${issue.evidence}`,
                     })),
                   ),
+                safeOutline.contentRole,
               ),
             );
         if (actionsFellBack) {
@@ -2878,13 +2892,17 @@ export async function generateClassroom(
         input.governed
           ? (error) => void nativeRegisterIssues.push({ code: error.code, message: error.message })
           : undefined,
-        learnerFirstNarrationCheck(input.learnerFirst, regenerated, (issues) =>
-          nativeRegisterIssues.push(
-            ...issues.map((issue) => ({
-              code: issue.code,
-              message: `learner-first narration check: ${issue.evidence}`,
-            })),
-          ),
+        learnerFirstNarrationCheck(
+          input.learnerFirst,
+          regenerated,
+          (issues) =>
+            nativeRegisterIssues.push(
+              ...issues.map((issue) => ({
+                code: issue.code,
+                message: `learner-first narration check: ${issue.evidence}`,
+              })),
+            ),
+          nativeOutline.contentRole,
         ),
       );
       assertRouteAvailable();
@@ -2920,7 +2938,10 @@ export async function generateClassroom(
     // g5.v10 (TD-4, owner D-2.8): one digit style per lesson, the book's — the
     // freshly generated slides and quizzes are normalised in place.
     if (input.learnerFirst) {
-      const style = detectLessonDigitStyle((input.sourceUnits ?? []).map((unit) => unit.text));
+      const style = detectLessonDigitStyle(
+        (input.sourceUnits ?? []).map((unit) => unit.text),
+        input.language,
+      );
       for (const scene of freshScenes) normalizeSceneDigits(scene as never, style);
     }
 

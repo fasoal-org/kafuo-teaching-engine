@@ -119,6 +119,15 @@ describe('g5.v10 learner-first prompts', () => {
     expect(slide).toContain('states what is expected next');
   });
 
+  it('makes a try-it slide read its items and never solve them (review HIGH-2)', () => {
+    const task = learnerFirstNarrationRules('check_understanding');
+    expect(task).toContain('Read EVERY item the slide shows aloud');
+    expect(task).toContain('never solve an item');
+    expect(task).not.toContain('to its final answer');
+    expect(learnerFirstNarrationRules('worked_example')).toContain('to its final answer');
+    expect(learnerFirstNarrationRules('practice')).toContain('never solve an item');
+  });
+
   it('reads Latin letters by their English names (D-3 A)', () => {
     expect(LATIN_LETTER_READINGS.A).toBe('إيه');
     expect(LATIN_LETTER_READINGS.J).toBe('جيه');

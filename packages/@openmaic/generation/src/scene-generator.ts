@@ -2382,7 +2382,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
       ...spokenLanguagePolicyVars(options.spokenLanguagePolicy),
       ...spokenScriptVars(options, outline),
-      ...learnerFirstNarrationVars(learnerFirst),
+      ...learnerFirstNarrationVars(learnerFirst, outline.contentRole),
       title: visible.title,
       keyPoints: keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: guidance.description,

@@ -47,6 +47,13 @@ export const LATIN_LETTER_READINGS: Readonly<Record<string, string>> = Object.fr
   Z: 'زد',
 });
 
+/** Roles whose slide sets the learner a task: read every item, never solve it. */
+export const LEARNER_TASK_ROLES: ReadonlySet<string> = new Set([
+  'check_understanding',
+  'practice',
+  'activity',
+]);
+
 export type LearnerFirstNarrationIssueCode =
   | 'NARRATION_ITEM_MISSING'
   | 'IMAGE_APPEARANCE_NARRATION'
@@ -71,9 +78,10 @@ interface NarrationAction {
 }
 
 // An item label at the start of an element's text: «٢أ», «تحقق ١ب», «أ)», «ب —»,
-// «السؤال ٧», «تمرين ٣». Plain numbered steps («١. …») are steps of ONE item, not items.
+// «السؤال ٧», «تمرين ٣», and the book's own «(1A)», «1A», «(١أ)». Plain numbered steps
+// («١. …») are steps of ONE item, not items.
 const ITEM_LABEL =
-  /^\s*(?:(?:تحقق|حل)\s*)?(?:[0-9٠-٩]{1,2}\s*[أبجد](?=[\s)\-—|:.،]|$)|[أبجد]\s*[)\-—|:]|(?:السؤال|سؤال|تمرين)\s*[0-9٠-٩]+)/u;
+  /^\s*\(?\s*(?:(?:تحقق|حل)\s*)?(?:[0-9٠-٩]{1,2}\s*[أبجدA-Da-d](?=[\s)\-—|:.،]|$)|[أبجد]\s*[)\-—|:]|(?:السؤال|سؤال|تمرين)\s*[0-9٠-٩]+)/u;
 
 /** The ids of the canvas elements that each start one labelled item. */
 export function itemElementIds(elements: readonly NarrationCanvasElement[]): string[] {
@@ -86,8 +94,38 @@ export function itemElementIds(elements: readonly NarrationCanvasElement[]): str
 }
 
 const IMAGE_CUE = /(الصورة|الصور|الشكل|الأشكال|الرسم|الرسوم|المخطط|الرسمة)/u;
-const APPEARANCE =
-  /(أزرق|زرقاء|زرق|أخضر|خضراء|خضر|أحمر|حمراء|حمر|أصفر|صفراء|بنفسجي|برتقالي|رمادي|متقطع|متقطعة|منقط|منقطة|الزاوية السفلية|الزاوية العلوية|الركن السفلي|الركن العلوي)/u;
+const APPEARANCE_WORDS = [
+  'أزرق',
+  'زرقاء',
+  'زرق',
+  'أخضر',
+  'خضراء',
+  'خضر',
+  'أحمر',
+  'حمراء',
+  'حمر',
+  'أصفر',
+  'صفراء',
+  'بنفسجي',
+  'برتقالي',
+  'رمادي',
+  'متقطع',
+  'متقطعة',
+  'منقط',
+  'منقطة',
+  'الزاوية السفلية',
+  'الزاوية العلوية',
+  'الركن السفلي',
+  'الركن العلوي',
+];
+
+/**
+ * The appearance words a line uses that the canvas itself does not print. A colour or
+ * line style that is the slide's own data («الكرات الحمراء», «دالة متقطعة») is allowed.
+ */
+function appearanceWords(line: string, canvasText: string): string[] {
+  return APPEARANCE_WORDS.filter((word) => line.includes(word) && !canvasText.includes(word));
+}
 
 /** D-3: the Arabic letter name a Latin letter must never be read with. */
 const ARABIC_NAME_OF: Readonly<Record<string, readonly string[]>> = Object.freeze({
@@ -111,19 +149,34 @@ const ARABIC_NAME_OF: Readonly<Record<string, readonly string[]>> = Object.freez
 });
 const LETTER_NAMES = [...new Set(Object.values(ARABIC_NAME_OF).flat())];
 const NAME = `(?:${LETTER_NAMES.join('|')})`;
-// Two or more letter names in a row («ألف باء هاء»), or one after a math cue
-// («المتغير نون», «سالب نون», «النقطة كاف»). A year read as «ألف وأربعمئة» never matches.
+// Two or more letter names in a row («ألف باء هاء»), or one after a symbol cue
+// («المتغير نون», «النقطة كاف»). A year read as «ألف وأربعمئة» never matches; «ألف» after a
+// number cue («سالب ألف», «العدد ألف») is the number one thousand, not the letter.
 const NAME_RUN = new RegExp(`(?:^|[\\s،,(«])(${NAME}(?:\\s+${NAME})+)(?=$|[\\s،,.)»؟])`, 'u');
-const CUED_NAME = new RegExp(
-  `(?:المتغير|المتغيّر|النقطة|القطعة|الزاوية|المستقيم|سالب|العدد)\\s+(${NAME})(?=$|[\\s،,.)»؟])`,
+const SYMBOL_CUED_NAME = new RegExp(
+  `(?:المتغير|المتغيّر|النقطة|القطعة|الزاوية|المستقيم)\\s+(${NAME})(?=$|[\\s،,.)»؟])`,
+  'u',
+);
+const NAME_WITHOUT_THOUSAND = `(?:${LETTER_NAMES.filter((name) => name !== 'ألف').join('|')})`;
+const NUMBER_CUED_NAME = new RegExp(
+  `(?:سالب|العدد)\\s+(${NAME_WITHOUT_THOUSAND})(?=$|[\\s،,.)»؟])`,
   'u',
 );
 
-/** The Latin letters a canvas shows (point names, variables), upper-cased. */
+// Units and LaTeX/HTML leftovers that are not point names or variables.
+const NOT_A_SYMBOL =
+  /\\[A-Za-z]+|&[A-Za-z]+;|\b(?:cm|mm|km|kg|mg|ml|m²|m³|cm²|cm³|km²|sec|min|hr|pH)\b/g;
+
+/**
+ * The Latin letters a canvas shows as symbols, upper-cased: capital point or segment
+ * names (A, AB, ABC) and single-letter variables (n, x). Words, units, LaTeX commands
+ * and HTML entities are not symbols.
+ */
 export function canvasLatinLetters(elements: readonly NarrationCanvasElement[]): Set<string> {
   const letters = new Set<string>();
   for (const element of elements) {
-    for (const match of element.text.matchAll(/(?<![A-Za-z])([A-Za-z]{1,3})(?![A-Za-z])/g)) {
+    const text = element.text.replace(NOT_A_SYMBOL, ' ');
+    for (const match of text.matchAll(/(?<![A-Za-z])([A-Z]{1,3}|[a-z])(?![A-Za-z])/g)) {
       for (const char of match[1]!) letters.add(char.toUpperCase());
     }
   }
@@ -165,7 +218,10 @@ export function validateLearnerFirstNarration(
   }
 
   if (elements.some((element) => element.type === 'image')) {
-    const described = lines.find((line) => IMAGE_CUE.test(line) && APPEARANCE.test(line));
+    const canvasText = elements.map((element) => element.text).join('\n');
+    const described = lines.find(
+      (line) => IMAGE_CUE.test(line) && appearanceWords(line, canvasText).length > 0,
+    );
     if (described) {
       issues.push({ code: 'IMAGE_APPEARANCE_NARRATION', evidence: described.slice(0, 160) });
     }
@@ -177,7 +233,10 @@ export function validateLearnerFirstNarration(
       [...letters].flatMap((letter) => [...(ARABIC_NAME_OF[letter] ?? [])]),
     );
     for (const line of lines) {
-      const run = NAME_RUN.exec(line)?.[1] ?? CUED_NAME.exec(line)?.[1];
+      const run =
+        NAME_RUN.exec(line)?.[1] ??
+        SYMBOL_CUED_NAME.exec(line)?.[1] ??
+        NUMBER_CUED_NAME.exec(line)?.[1];
       if (run && run.split(/\s+/).some((name) => forbidden.has(name))) {
         issues.push({ code: 'SYMBOL_READING_ARABIC_NAME', evidence: run });
         break;
@@ -191,15 +250,20 @@ export function validateLearnerFirstNarration(
 export function formatLearnerFirstNarrationCorrection(
   issues: readonly LearnerFirstNarrationIssue[],
   elements: readonly NarrationCanvasElement[],
+  /** The slide's contentRole: a learner task (a try-it) is read, never solved. */
+  contentRole?: string | null,
 ): string {
   const letters = [...canvasLatinLetters(elements)]
     .filter((letter) => LATIN_LETTER_READINGS[letter])
     .map((letter) => `${letter} «${LATIN_LETTER_READINGS[letter]}»`)
     .join('، ');
+  const learnerTask = LEARNER_TASK_ROLES.has(String(contentRole ?? ''));
   const lines = issues.map((issue) => {
     switch (issue.code) {
       case 'NARRATION_ITEM_MISSING':
-        return `- NARRATION_ITEM_MISSING: your narration skipped items the slide shows (${issue.evidence}). Spotlight EACH item element and explain it fully, in order.`;
+        return learnerTask
+          ? `- NARRATION_ITEM_MISSING: your narration skipped items the slide shows (${issue.evidence}). Spotlight EACH item element and read it aloud, in order. This slide is the learner's task: never solve an item or hint its answer.`
+          : `- NARRATION_ITEM_MISSING: your narration skipped items the slide shows (${issue.evidence}). Spotlight EACH item element and explain it fully, in order.`;
       case 'IMAGE_APPEARANCE_NARRATION':
         return `- IMAGE_APPEARANCE_NARRATION: you described how a picture looks («${issue.evidence}»). Explain what the picture shows mathematically (what is counted or compared, and its numbers); never colours, line styles or positions.`;
       case 'SYMBOL_READING_ARABIC_NAME':

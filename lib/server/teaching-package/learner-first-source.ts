@@ -15,13 +15,22 @@
 const LATIN_LETTER = /[A-Za-z]/g;
 const ARABIC_LETTER = /[\u0600-\u06FF]/g;
 
+// The parser's figure descriptions name what a picture shows ("A sequence of three
+// blue triangles… labeled 1… arranged from left to right"). Lesson English — a
+// quotation, a vocabulary line, a code sample — does not use this vocabulary.
+const FIGURE_WORDS =
+  /\b(?:image|images|figure|figures|diagram|diagrams|illustration|picture|photo|photograph|drawing|shows|showing|depicts|depicting|arranged|labeled|labelled|outlined|shaded|dotted|dashed|arrow|arrows|triangle|triangles|circle|circles|rectangle|square|grid|graph|chart|axis|line|lines|shape|shapes|blue|green|red|yellow|black|white|gray|grey|left|right|top|bottom|center|centre)\b/gi;
+
 /**
- * A line that is a parser's English figure description inside an Arabic lesson:
- * long Latin prose (≥ 6 words, ≥ 30 letters, ≥ 85 % Latin letters), with no formula
- * (`=`, `\`), no [[marker]] and no table pipes.
+ * A line that is a parser's English figure description inside an Arabic lesson: long
+ * Latin prose (≥ 6 words, ≥ 30 letters, ≥ 85 % Latin letters) that speaks of a picture
+ * (at least three figure words), with no formula (`=`, `\`), no [[marker]], no table
+ * pipes and nothing code-like (brackets, quotes, semicolons, tags).
  */
 export function isProviderImageDescription(line: string): boolean {
   if (/[=\\|]|\[\[/.test(line)) return false;
+  if (/[{}<>;"`]|\w\(|\)\./.test(line)) return false;
+  if ((line.match(FIGURE_WORDS)?.length ?? 0) < 3) return false;
   const latin = line.match(LATIN_LETTER)?.length ?? 0;
   const arabic = line.match(ARABIC_LETTER)?.length ?? 0;
   const letters = latin + arabic;
@@ -74,9 +83,14 @@ const PERSIAN = '۰۱۲۳۴۵۶۷۸۹';
 
 /**
  * The dominant digit style of the lesson's source text: Western when at least 60 % of
- * its digits are Western; otherwise (mixed, Arabic-Indic, or none) Arabic-Indic.
+ * its digits are Western, Arabic-Indic when they are mostly Arabic-Indic. A source with
+ * no digits follows the lesson language: Arabic-Indic for an Arabic lesson, Western for
+ * any other.
  */
-export function detectLessonDigitStyle(texts: readonly string[]): LessonDigitStyle {
+export function detectLessonDigitStyle(
+  texts: readonly string[],
+  language?: string | null,
+): LessonDigitStyle {
   let western = 0;
   let indic = 0;
   for (const text of texts) {
@@ -84,8 +98,18 @@ export function detectLessonDigitStyle(texts: readonly string[]): LessonDigitSty
     indic += text.match(/[٠-٩۰-۹]/g)?.length ?? 0;
   }
   const total = western + indic;
-  return total > 0 && western / total >= 0.6 ? 'western' : 'arabic-indic';
+  if (total === 0) {
+    const arabic = String(language ?? 'ar')
+      .toLowerCase()
+      .startsWith('ar');
+    return arabic ? 'arabic-indic' : 'western';
+  }
+  return western / total >= 0.6 ? 'western' : 'arabic-indic';
 }
+
+// A digit glued to a Latin letter is part of a symbol (1A, H2O, x2, A1): never converted.
+const NOT_BESIDE_LATIN = '(?<![A-Za-z])';
+const AND_NOT_BEFORE_LATIN = '(?![A-Za-z])';
 
 function toWestern(text: string): string {
   return text
@@ -97,8 +121,10 @@ function toWestern(text: string): string {
 function toArabicIndic(text: string): string {
   return text
     .replace(/[۰-۹]/g, (d) => ARABIC_INDIC[PERSIAN.indexOf(d)]!)
-    .replace(/(?<=[0-9٠-٩])\.(?=[0-9٠-٩])/g, '٫')
-    .replace(/[0-9]/g, (d) => ARABIC_INDIC[Number(d)]!);
+    .replace(
+      new RegExp(`${NOT_BESIDE_LATIN}[0-9]+(?:\\.[0-9]+)?${AND_NOT_BEFORE_LATIN}`, 'g'),
+      (number) => number.replace('.', '٫').replace(/[0-9]/g, (d) => ARABIC_INDIC[Number(d)]!),
+    );
 }
 
 /** Plain text in the lesson's digit style. */

@@ -45,6 +45,16 @@ describe('provider figure descriptions (D-6 A)', () => {
     }
   });
 
+  it('keeps code samples and English quotations in an Arabic lesson (review MED-6)', () => {
+    for (const line of [
+      'print("The total is", total) and then return the value to the caller safely',
+      'SELECT name, grade FROM students WHERE grade > 90 ORDER BY name ASC;',
+      'To be or not to be, that is the question whether tis nobler in the mind to suffer',
+    ]) {
+      expect(isProviderImageDescription(line)).toBe(false);
+    }
+  });
+
   it('never strips an English lesson, and drops a description offered as an image description', () => {
     expect(stripProviderImageDescriptions(UNIT_6234, 'en-US')).toBe(UNIT_6234);
     const description = UNIT_6234.split('\n')[4]!;
@@ -58,6 +68,15 @@ describe('one digit style per lesson (TD-4)', () => {
     expect(detectLessonDigitStyle(['8:30 صباحًا، 9:10 صباحًا', 'التكلفة 4.50'])).toBe('western');
     expect(detectLessonDigitStyle(['٤، ١٠، ١٨', 'والحد 54'])).toBe('arabic-indic');
     expect(detectLessonDigitStyle([])).toBe('arabic-indic');
+    // No digits in the source: the lesson language decides (review LOW-8).
+    expect(detectLessonDigitStyle(['بلا أرقام'], 'ar-SA')).toBe('arabic-indic');
+    expect(detectLessonDigitStyle(['no digits'], 'en-US')).toBe('western');
+  });
+
+  it('never converts a digit glued to a Latin letter (1A, H2O, x2) (review LOW-8)', () => {
+    expect(normalizeDigits('البند 1A والماء H2O و x2 والعدد 15', 'arabic-indic')).toBe(
+      'البند 1A والماء H2O و x2 والعدد ١٥',
+    );
   });
 
   it('converts digits and the decimal separator both ways', () => {

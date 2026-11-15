@@ -6,11 +6,14 @@
  * After the outline is final (gates and repairs done), a keyed single-choice practice
  * quiz is inserted:
  * - right after each try-it slide (contentRole check_understanding) that cites a book
- *   «تحقق من فهمك» (element=try_it) unit, on the items that slide states;
+ *   «تحقق من فهمك» (element=try_it) unit, on the items that slide states (no answers);
  * - right before each exercise slide (a solving slide that cites an element=exercise
- *   unit), on that slide's exercises.
+ *   unit), on that slide's own exercises, read from the book's question text — never
+ *   from the solving slide's key points, which hold the working and the answers.
  *
- * The quiz sits at the same flow position as its slide (inside the objective). Its
+ * The quiz sits at the same flow position as its slide (inside the objective) and
+ * carries the slide's Teaching Skills selection, so a governed package's Submit gate
+ * (classification, required Skills, alignment baseline) reads it like its slide. Its
  * outline id is the slide's id plus {@link ATTEMPT_OUTLINE_SUFFIX}, so the insertion is
  * idempotent: a resumed run whose outline already holds an attempt adds nothing. The
  * coverage gates count teaching SLIDES only (`teaches()`), so an attempt never changes a
@@ -44,6 +47,18 @@ const ATTEMPT_DESCRIPTION =
 
 type Book = Pick<KafuoBookStructure, 'units'> | undefined;
 
+export interface AttemptQuizContext {
+  /** The pinned facts of the book's check and exercise units. */
+  facts?: Record<string, BookUnitFacts> | null;
+  /** The book text of each unit (verses and hadith already removed), by unit id. */
+  unitTexts?: ReadonlyMap<string, string>;
+  /**
+   * The engine's exercises block (`selectExercises`): per exercise slide, in order,
+   * the numbered questions of each multi-question unit that slide solves.
+   */
+  exerciseSlideQuestions?: ReadonlyArray<Record<string, number[]>>;
+}
+
 function unitsOf(book: Book, element: string): Set<string> {
   return new Set(
     (book?.units ?? [])
@@ -56,39 +71,98 @@ function citesAny(outline: SceneOutline, ids: ReadonlySet<string>): string[] {
   return (outline.sourceContentUnitIds ?? []).map(String).filter((id) => ids.has(id));
 }
 
-function questionCount(
-  outline: SceneOutline,
+const ARABIC_INDIC = '٠١٢٣٤٥٦٧٨٩';
+// A numbered book question at the start of a line: «(1 التكلفة …», «1) …», «(١٢) …».
+const QUESTION_LINE = /^\s*\(?\s*([0-9٠-٩]{1,3})\s*[).\-]?\s+\S/u;
+
+function questionNumberOf(line: string): number | null {
+  const match = QUESTION_LINE.exec(line);
+  if (!match) return null;
+  const digits = match[1]!.replace(/[٠-٩]/g, (d) => String(ARABIC_INDIC.indexOf(d)));
+  return Number(digits);
+}
+
+/** The book's own question lines of the exercise units a slide solves (no answers). */
+function exerciseStatements(
   cited: readonly string[],
-  facts: Record<string, BookUnitFacts> | null | undefined,
-): number {
-  const fromFacts = cited.reduce((total, id) => {
-    const unit = facts?.[id];
-    return total + (unit?.itemLabels.length || unit?.questionNumbers?.length || 0);
-  }, 0);
-  const count = fromFacts > 0 ? fromFacts : Math.max(outline.keyPoints.length, 1);
-  return Math.min(Math.max(count, 1), ATTEMPT_MAX_QUESTIONS);
+  context: AttemptQuizContext,
+  questions: Record<string, number[]> | undefined,
+): string[] {
+  const lines: string[] = [];
+  for (const id of cited) {
+    const allowed = questions?.[id];
+    for (const line of (context.unitTexts?.get(id) ?? '').split('\n')) {
+      const number = questionNumberOf(line);
+      if (number === null) continue;
+      if (allowed && !allowed.includes(number)) continue;
+      lines.push(line.trim());
+    }
+  }
+  return lines;
+}
+
+function questionCount(itemCount: number): number {
+  return Math.min(Math.max(itemCount, 1), ATTEMPT_MAX_QUESTIONS);
 }
 
 function attemptFor(
   slide: SceneOutline,
   cited: readonly string[],
-  facts: Record<string, BookUnitFacts> | null | undefined,
+  items: readonly string[],
+  count: number,
 ): SceneOutline {
   return {
     id: `${slide.id}${ATTEMPT_OUTLINE_SUFFIX}`,
     type: 'quiz',
     title: ATTEMPT_TITLE,
     description: ATTEMPT_DESCRIPTION,
-    keyPoints: [...slide.keyPoints],
+    keyPoints: [...items],
     order: slide.order,
     ...(slide.teachingStage ? { teachingStage: slide.teachingStage } : {}),
+    // The slide's own selection: same position, same objective, same Skills.
+    ...(slide.teachingSkills ? { teachingSkills: slide.teachingSkills } : {}),
     sourceContentUnitIds: [...cited],
     quizConfig: {
-      questionCount: questionCount(slide, cited, facts),
+      questionCount: questionCount(count),
       difficulty: 'easy',
       questionTypes: ['single'],
     },
   } as SceneOutline;
+}
+
+function checkAttempt(
+  slide: SceneOutline,
+  cited: readonly string[],
+  context: AttemptQuizContext,
+): SceneOutline {
+  const fromFacts = cited.reduce(
+    (total, id) => total + (context.facts?.[id]?.itemLabels.length ?? 0),
+    0,
+  );
+  // The try-it slide states the items without answers, so its key points are safe.
+  return attemptFor(
+    slide,
+    cited,
+    slide.keyPoints,
+    fromFacts > 0 ? fromFacts : slide.keyPoints.length,
+  );
+}
+
+function exerciseAttempt(
+  slide: SceneOutline,
+  cited: readonly string[],
+  context: AttemptQuizContext,
+  questions: Record<string, number[]> | undefined,
+): SceneOutline {
+  const statements = exerciseStatements(cited, context, questions);
+  if (statements.length > 0) return attemptFor(slide, cited, statements, statements.length);
+  // No book text: the planner's titles only — never the solving slide's working.
+  const fromFacts = cited.reduce(
+    (total, id) =>
+      total + (questions?.[id]?.length ?? context.facts?.[id]?.questionNumbers?.length ?? 1),
+    0,
+  );
+  return attemptFor(slide, cited, [slide.title], fromFacts);
 }
 
 /**
@@ -98,7 +172,7 @@ function attemptFor(
 export function insertAttemptQuizzes(
   outlines: SceneOutline[],
   book: Book,
-  facts?: Record<string, BookUnitFacts> | null,
+  context: AttemptQuizContext = {},
 ): SceneOutline[] {
   const tryIts = unitsOf(book, 'try_it');
   const exercises = unitsOf(book, 'exercise');
@@ -106,19 +180,24 @@ export function insertAttemptQuizzes(
   const present = new Set(outlines.map((outline) => outline.id));
   const result: SceneOutline[] = [];
   let inserted = false;
+  let exerciseSlide = 0;
   for (const outline of outlines) {
     const isSlide = outline.type === 'slide';
     const exerciseUnits =
       isSlide && outline.contentRole === 'worked_example' ? citesAny(outline, exercises) : [];
-    if (exerciseUnits.length > 0 && !present.has(`${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`)) {
-      result.push(attemptFor(outline, exerciseUnits, facts));
-      inserted = true;
+    if (exerciseUnits.length > 0) {
+      const questions = context.exerciseSlideQuestions?.[exerciseSlide];
+      exerciseSlide += 1;
+      if (!present.has(`${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`)) {
+        result.push(exerciseAttempt(outline, exerciseUnits, context, questions));
+        inserted = true;
+      }
     }
     result.push(outline);
     const checkUnits =
       isSlide && outline.contentRole === 'check_understanding' ? citesAny(outline, tryIts) : [];
     if (checkUnits.length > 0 && !present.has(`${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`)) {
-      result.push(attemptFor(outline, checkUnits, facts));
+      result.push(checkAttempt(outline, checkUnits, context));
       inserted = true;
     }
   }

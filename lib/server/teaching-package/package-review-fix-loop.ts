@@ -447,9 +447,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // L-2: an original finding stays wrong only when the re-review reports its
       // check again; a re-review with only different findings closes it.
       const reportedChecks = new Set(rereview.map((finding) => finding.check));
+      // g5.v10 (learner-first plan W4): a fix that leaves the narration disagreeing
+      // with the new canvas (a new S6, package-review-v2 only) did not fix the slide —
+      // item 208's «اليمين»/«اليسار» fix was closed as fixed. Never reached on v1.
+      const fixBrokeNarration = reportedChecks.has('S6');
       let stillWrong = false;
       for (const finding of sceneFindings) {
-        if (reportedChecks.has(finding.check)) {
+        if (reportedChecks.has(finding.check) || fixBrokeNarration) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (audioCode !== null) {

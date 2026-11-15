@@ -623,7 +623,7 @@ async function slideActions(
       { title: pre.title, outlineId: outline.id },
       { outline, ctx: sceneCtx },
       undefined,
-      learnerFirstNarrationCheck(options.learnerFirst, content),
+      learnerFirstNarrationCheck(options.learnerFirst, content, undefined, outline.contentRole),
     );
   } catch (error) {
     assertRoute();

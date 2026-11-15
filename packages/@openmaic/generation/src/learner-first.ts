@@ -54,9 +54,27 @@ function letterTable(): string {
  * D-2 + D-3 + D-4: the narration rules of a learner-first slide. One block, appended to
  * the slide-actions prompt under its own heading.
  */
-export function learnerFirstNarrationRules(): string {
+/**
+ * Roles whose slide sets a task the learner does first: the narration reads every item
+ * and never solves it (the role's own rule, "MUST NOT reveal", stands).
+ */
+export const LEARNER_TASK_ROLES: ReadonlySet<string> = new Set([
+  'check_understanding',
+  'practice',
+  'activity',
+]);
+
+/** Whether a slide of this role sets the learner a task (it is read, never solved). */
+export function isLearnerTaskRole(contentRole: string | null | undefined): boolean {
+  return LEARNER_TASK_ROLES.has(String(contentRole ?? ''));
+}
+
+export function learnerFirstNarrationRules(contentRole?: string | null): string {
+  const items = isLearnerTaskRole(contentRole)
+    ? '1. Read EVERY item the slide shows aloud, in the order shown (أ، ب، ج، … or ١، ٢، ٣ …), spotlighting its element id first. This slide sets the learner a task: never solve an item, never give or hint its answer and never say what to notice — the learner tries first.'
+    : '1. Explain EVERY item the slide shows, in the order shown (أ، ب، ج، … or ١، ٢، ٣ …). For each item, first spotlight its element id, then explain it fully to its final answer. Never stop after the first item; a solution slide with three items has three explanations.';
   return [
-    '1. Explain EVERY item the slide shows, in the order shown (أ، ب، ج، … or ١، ٢، ٣ …). For each item, first spotlight its element id, then explain it fully to its final answer. Never stop after the first item; a solution slide with three items has three explanations.',
+    items,
     '2. The ELEMENTS list is the authority: say only what is on the canvas, with the same names, directions, numbers and shapes. If the key points disagree with an element, follow the element. Never say "right" where the slide says "left", never call a shape by another name.',
     `3. Read symbols one way for the whole lesson, matching the screen. A Latin letter takes its English name in Arabic script (${letterTable()}); an Arabic letter takes its Arabic name (أ «ألف»، ب «باء»). Put a short noun before a letter whenever it could be misheard: «المتغير إن», «العدد إن», «النقطة إيه», «القطعة إيه بي», «الزاوية إيه بي سي». Never read a Latin letter with an Arabic letter name (never «ألف» for A, «جيم» for J or C, «نون» for n, «سين» for x).`,
     '4. An image or diagram is explained as mathematics: what is counted, measured or compared, and how it gives the numbers on the slide (for example «في الشكل الأول ٤ قطع، وفي الثاني ١٠»). Never describe colours, line styles or positions on the page (no «أزرق», «متقطع», «في الزاوية السفلية»).',
@@ -83,9 +101,13 @@ export function learnerFirstSlideRules(): string {
 /** The prompt variables of a learner-first slide-actions call (empty otherwise). */
 export function learnerFirstNarrationVars(
   learnerFirst: boolean | undefined,
+  contentRole?: string | null,
 ): Record<string, unknown> {
   return learnerFirst
-    ? { hasLearnerFirstNarration: true, learnerFirstNarrationRules: learnerFirstNarrationRules() }
+    ? {
+        hasLearnerFirstNarration: true,
+        learnerFirstNarrationRules: learnerFirstNarrationRules(contentRole),
+      }
     : {};
 }
 

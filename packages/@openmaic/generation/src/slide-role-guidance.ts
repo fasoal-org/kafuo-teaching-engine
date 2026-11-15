@@ -116,13 +116,12 @@ const LEARNER_FIRST_ESTIMATE_STEP =
 
 /** g5.v10: the hidden-step catalogue without the invented average-change method. */
 export function learnerFirstHiddenStepCatalogue(): string {
+  // Never throws in a run: a changed snippet only loses the rewrite, and the tests that
+  // pin AVERAGE_CHANGE_STEP fail instead (the same behaviour as the planner's catalogue).
   const catalogue = hiddenStepCatalogue();
-  if (!catalogue.includes(AVERAGE_CHANGE_STEP)) {
-    throw new Error(
-      'hidden-step-types.md no longer holds the estimate_from_data row g5.v10 rewrites',
-    );
-  }
-  return catalogue.replace(AVERAGE_CHANGE_STEP, LEARNER_FIRST_ESTIMATE_STEP);
+  return catalogue.includes(AVERAGE_CHANGE_STEP)
+    ? catalogue.replace(AVERAGE_CHANGE_STEP, LEARNER_FIRST_ESTIMATE_STEP)
+    : catalogue;
 }
 
 /** g5.v8 (lesson 316): a solution never refuses an item the try-it set. */

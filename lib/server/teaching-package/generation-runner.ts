@@ -102,6 +102,7 @@ import {
   stripProviderImageDescriptions,
 } from '@/lib/server/teaching-package/learner-first-source';
 import { insertAttemptQuizzes } from '@/lib/server/teaching-package/attempt-quizzes';
+import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
   detectSacredQuotes,
@@ -858,9 +859,24 @@ async function runKafuoAttempt(
                   // g5.v10 (learner-first plan W1, D-11): the learner's attempt
                   // before every solution, placed by the engine after the gates.
                   // Idempotent, so a resumed outline gets nothing twice.
-                  return learnerFirst
-                    ? insertAttemptQuizzes(final, kafuo.bookStructure, bookFacts)
-                    : final;
+                  if (!learnerFirst) return final;
+                  return insertAttemptQuizzes(final, kafuo.bookStructure, {
+                    facts: bookFacts,
+                    // An exercise attempt asks the book's own question lines (no answers).
+                    unitTexts: new Map(
+                      retainableContentUnits({
+                        contentUnits: normalizedSource.manifest.contentUnits,
+                      }).map((unit) => [String(unit.unitId), promptUnitText(unit)] as const),
+                    ),
+                    ...(coverageBook?.teacherParity
+                      ? {
+                          exerciseSlideQuestions: selectExercises(
+                            coverageBook,
+                            coverageBook.unitFacts,
+                          )?.slideQuestions,
+                        }
+                      : {}),
+                  });
                 },
               }
             : {}),

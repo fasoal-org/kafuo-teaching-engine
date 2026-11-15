@@ -18,6 +18,7 @@ import {
   generateRegisterCompliantActions,
   learnerFirstNarrationCheck,
 } from '@/lib/server/classroom-generation';
+import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 
 const SOLUTION: NarrationCanvasElement[] = [
   { id: 't', type: 'text', text: 'حل تحقق ٢أ: مجموع عددين زوجيين' },
@@ -104,6 +105,52 @@ describe('learner-first narration checks', () => {
     ).toEqual([]);
   });
 
+  it("finds the book's own labels «(1A)», «1B» and «(١أ)» (review MED-4)", () => {
+    expect(
+      itemElementIds([
+        { id: '1', type: 'text', text: '(1A) متتابعة أشهر: صفر، رجب' },
+        { id: '2', type: 'text', text: '1B 10, 4, -2, -8' },
+        { id: '3', type: 'text', text: '(١أ) متتابعة' },
+        { id: '4', type: 'text', text: '10 cm طول الضلع' },
+      ]),
+    ).toEqual(['1', '2', '3']);
+  });
+
+  it('ignores LaTeX commands, entities and units as symbols, and «العدد ألف» (review MED-5)', () => {
+    expect(
+      canvasLatinLetters([{ id: 'q', type: 'text', text: '\\sin x \\le 1 &lt; طول ١٠ cm' }]),
+    ).toEqual(new Set(['X']));
+    const canvas: NarrationCanvasElement[] = [{ id: 'q', type: 'text', text: 'النقطة A' }];
+    expect(validateLearnerFirstNarration([speech('العدد ألف أكبر من تسعمئة.')], canvas)).toEqual(
+      [],
+    );
+    expect(
+      validateLearnerFirstNarration([speech('النقطة ألف على المستقيم.')], canvas).map(
+        (i) => i.code,
+      ),
+    ).toEqual(['SYMBOL_READING_ARABIC_NAME']);
+  });
+
+  it('allows a colour the slide itself prints as data (review MED-5)', () => {
+    const canvas: NarrationCanvasElement[] = [
+      { id: 'img', type: 'image', text: '' },
+      { id: 't', type: 'text', text: 'في الكيس ٣ كرات حمراء و٢ زرقاء' },
+    ];
+    expect(
+      validateLearnerFirstNarration([speech('في الصورة ثلاث كرات حمراء وكرتان زرقاء.')], canvas),
+    ).toEqual([]);
+  });
+
+  it('asks a try-it slide to read its items, never to solve them (review HIGH-2)', () => {
+    const issue = [{ code: 'NARRATION_ITEM_MISSING' as const, evidence: 'b, c' }];
+    expect(formatLearnerFirstNarrationCorrection(issue, SOLUTION, 'check_understanding')).toContain(
+      'never solve an item',
+    );
+    expect(formatLearnerFirstNarrationCorrection(issue, SOLUTION, 'worked_example')).toContain(
+      'explain it fully',
+    );
+  });
+
   it('writes one correction line per issue, with the letter readings', () => {
     const text = formatLearnerFirstNarrationCorrection(
       [{ code: 'SYMBOL_READING_ARABIC_NAME', evidence: 'ألف باء' }],
@@ -154,6 +201,28 @@ describe('the narration re-roll loop with the learner-first check', () => {
       learnerFirstNarrationCheck(true, slide, onUnresolved),
     );
     expect(actions).toHaveLength(2);
+    expect(onUnresolved).toHaveBeenCalledWith([
+      expect.objectContaining({ code: 'NARRATION_ITEM_MISSING' }),
+    ]);
+  });
+
+  it('returns the earlier register-clean answer instead of failing (review MED-3)', async () => {
+    const policy = resolveSpeechRegisterPolicy({ language: 'ar', subjectCode: 'MATH' })!;
+    const onUnresolved = vi.fn();
+    const clean = [spot('b'), speech('طيب نشوف البند هذا.')];
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce(clean)
+      .mockResolvedValue([spot('b'), spot('c'), speech('ABCDEFGH IJKLMNOP QRSTUV WXYZABCD')]);
+    const actions = await generateRegisterCompliantActions(
+      generate,
+      policy,
+      scene,
+      undefined,
+      undefined,
+      learnerFirstNarrationCheck(true, slide, onUnresolved),
+    );
+    expect(actions).toBe(clean);
     expect(onUnresolved).toHaveBeenCalledWith([
       expect.objectContaining({ code: 'NARRATION_ITEM_MISSING' }),
     ]);
