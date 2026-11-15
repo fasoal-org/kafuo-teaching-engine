@@ -899,11 +899,13 @@ function exerciseMarker(unit: KafuoBookStructureUnit): string {
  */
 export function bookStructureRequirement(
   book: KafuoBookStructure | undefined,
-  options: { teacherParity?: boolean } = {},
+  options: { teacherParity?: boolean; learnerFirst?: boolean } = {},
 ): string {
   if (!book) return '';
   const rules = book.rules.map((rule) => `${rule.kind}=${rule.element}`).join(', ');
-  if (options.teacherParity) return teacherParityRequirement(book, rules);
+  if (options.teacherParity) {
+    return teacherParityRequirement(book, rules, options.learnerFirst === true);
+  }
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v7). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -936,9 +938,49 @@ function checkListLine(book: KafuoBookStructure): string[] {
   ];
 }
 
+/** The catalogue row g5.v10 rewrites (owner D-2.5, D-2.7); pinned by a test. */
+export const AVERAGE_CHANGE_STEP =
+  'Show the average change as a calculation, then the estimate, then whether it can be relied on';
+const LEARNER_FIRST_ESTIMATE_STEP =
+  'State what is expected next, reasoned with the method the book itself uses (never an average-change calculation the book does not use), then why the data support it, then whether it can be relied on';
+
+/** g5.v10: the hidden-step catalogue without the invented average-change method. */
+export function learnerFirstPlannerCatalogue(): string {
+  const catalogue = hiddenStepCatalogue();
+  return catalogue.includes(AVERAGE_CHANGE_STEP)
+    ? catalogue.replace(AVERAGE_CHANGE_STEP, LEARNER_FIRST_ESTIMATE_STEP)
+    : catalogue;
+}
+
+/**
+ * g5.v10 (learner-first plan W3, owner decisions D-1, D-2, D-4, D-5, D-8 of 15 Nov
+ * 2026): the lines the planner gets on top of — or instead of — g5.v8's.
+ */
+function learnerFirstLines(book: KafuoBookStructure): string[] {
+  const reading = book.units.some((unit) => /MATH_READING|VOCABULARY_LINK/.test(unit.kind));
+  return [
+    'LEARNER-FIRST (g5.v10), for a weak student:',
+    "- DEFINITIONS: the first slide that uses a term this lesson teaches shows a definition box with the term and the book's own definition sentence, verbatim (cite that concept unit). Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.",
+    ...(reading
+      ? [
+          '- Teach each kind=MATH_READING («قراءة الرياضيات») and kind=VOCABULARY_LINK («ربط المفردات») unit where the book prints it, on the slide that first uses its notation or term (cite it there).',
+        ]
+      : []),
+    '- CLAIMS: a slide that tests a conjecture or gives a counterexample states the conjecture itself first, verbatim from the book, in its key points.',
+    '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use.',
+    "- ATTEMPT: never plan a quiz for a check or an exercise; the engine adds the learner's attempt itself, right after each try-it slide and before each exercise slide.",
+    '- Say the caution that examples do not prove a conjecture at most once per lesson part.',
+  ];
+}
+
 /** The g5.v8 planner guidance: recall, one solution per check, visible working, exercises. */
-function teacherParityRequirement(book: KafuoBookStructure, rules: string): string {
+function teacherParityRequirement(
+  book: KafuoBookStructure,
+  rules: string,
+  learnerFirst = false,
+): string {
   const policy = book.exercisePolicy;
+  if (learnerFirst) return learnerFirstRequirement(book, rules);
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v8). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -979,6 +1021,55 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
             'which is only the instruction line of the exercises paired with the same example.',
           ]
         : []),
+    'Transition slides never count as teaching a unit.',
+  ].join('\n');
+}
+
+/**
+ * g5.v10 planner guidance: g5.v8's structure (one try-it slide and one solution slide
+ * per check, visible working, the engine's exercises block), with no recall slide (the
+ * opening boxes are excluded, as on g5.v9), every item stated verbatim and explained,
+ * the learner's attempt added by the engine, and the learner-first rules.
+ */
+function learnerFirstRequirement(book: KafuoBookStructure, rules: string): string {
+  const policy = book.exercisePolicy;
+  return [
+    '',
+    'BOOK-STRUCTURED LESSON (g5.v10). Each [[CONTENT_UNIT]] marker shows the kind the book',
+    `printed it as and its lesson part. The lesson template maps kinds to elements: ${rules}.`,
+    'Plan in the book order: every required unit gets its own instructional slide that cites it.',
+    'CHECKS: every try_it unit gets ONE try-it slide (contentRole check_understanding) that states',
+    "every one of the check's items (1A, 1B, …) verbatim, without answers and without solving.",
+    "The engine adds the learner's attempt right after it. Then ONE solution slide (contentRole",
+    "worked_example) PER CHECK that cites the check's unit and solves and explains EVERY item, in",
+    "the book order, each to a final answer from the given data. Never split a check's solution",
+    'across slides: each check has exactly one solution slide.',
+    "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
+    'the example, not the check that follows it.',
+    ...checkListLine(book),
+    'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
+    learnerFirstPlannerCatalogue(),
+    ...(policy && !book.units.some(isUsableExercise)
+      ? [
+          'EXERCISES: no exercise unit of this lesson holds a usable item, so the lesson has no',
+          'exercises block: plan no «تمارين» slide and cite no element=exercise unit.',
+        ]
+      : policy
+        ? [
+            'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
+            'just before the closing summary slide, comes the exercises block: one transition slide',
+            '«تمارين» (when the book prints a study tip for these exercises, the transition slide',
+            'states it), then the exercise slides (contentRole worked_example). The engine fixes',
+            'which exercise units the block solves and on which slide (EXERCISES BLOCK below), easiest',
+            "first, and adds the learner's attempt before each exercise slide. Each exercise slide",
+            "numbers its items locally («تمرين ١», «تمرين ٢», …) with the book's number only as a",
+            'small grey tag such as «(س٣٥ في كتابك)», states each item and solves it with compact',
+            'visible working. Never cite a unit marked exerciseUsable=false, except a',
+            'reason=instructions_only unit, which is only the instruction line of the exercises',
+            'paired with the same example.',
+          ]
+        : []),
+    ...learnerFirstLines(book),
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }

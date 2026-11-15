@@ -199,6 +199,7 @@ export {
   buildSlideNarrationRoleContext,
   buildSlideRoleContext,
   hiddenStepCatalogue,
+  learnerFirstHiddenStepCatalogue,
 } from './slide-role-guidance.js';
 export type {
   SlideRoleContext,

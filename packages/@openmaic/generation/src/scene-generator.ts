@@ -1307,7 +1307,11 @@ async function generateSlideContent(
     ...buildSceneSkillContext(guidance, resolvedSkills),
     // The classification reaches the model only as resolved guidance prose in
     // the non-display planning channel — never as `key: value` data.
-    ...buildSlideRoleContext(guidance, visibleWorkingSteps ? { visibleWorkingSteps } : {}),
+    ...buildSlideRoleContext(guidance, {
+      ...(visibleWorkingSteps ? { visibleWorkingSteps } : {}),
+      // g5.v10: the learner-first slide vars travel in the same bag.
+      ...(sourceVars.hasLearnerFirstSlide === true ? { learnerFirst: true } : {}),
+    }),
     ...sourceVars,
   });
 
@@ -2389,7 +2393,7 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(guidance, options.resolvedSkills),
-      ...buildSlideNarrationRoleContext(guidance),
+      ...buildSlideNarrationRoleContext(guidance, learnerFirst ? { learnerFirst } : {}),
       ...sceneSourceVars(outline, options.sourceUnits, log),
       ...sceneSacredVars(outline, options.sacredText),
     });

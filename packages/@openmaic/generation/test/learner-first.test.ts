@@ -9,6 +9,39 @@ import {
   learnerFirstSlideRules,
 } from '@openmaic/generation';
 import { buildPrompt, PROMPT_IDS } from '../src/prompts/index.js';
+import {
+  AVERAGE_CHANGE_STEP,
+  buildSlideNarrationRoleContext,
+  buildSlideRoleContext,
+  hiddenStepCatalogue,
+  learnerFirstHiddenStepCatalogue,
+} from '../src/slide-role-guidance.js';
+
+describe('g5.v10 learner-first role guidance (W3)', () => {
+  const solution = { contentRole: 'worked_example' } as never;
+
+  it('drops the invented average-change method from the canvas guidance only on g5.v10', () => {
+    const v8 = buildSlideRoleContext(solution, { visibleWorkingSteps: true }).roleGuidance ?? '';
+    const v10 =
+      buildSlideRoleContext(solution, { visibleWorkingSteps: true, learnerFirst: true })
+        .roleGuidance ?? '';
+    expect(v8).toContain('an average change');
+    expect(v8).toContain(AVERAGE_CHANGE_STEP);
+    expect(v10).not.toContain('an average change');
+    expect(v10).not.toContain(AVERAGE_CHANGE_STEP);
+    expect(v10).toContain('Use only the methods the textbook source uses.');
+    expect(hiddenStepCatalogue()).toContain(AVERAGE_CHANGE_STEP);
+    expect(learnerFirstHiddenStepCatalogue()).not.toContain(AVERAGE_CHANGE_STEP);
+  });
+
+  it("makes a solution slide's narration work every item only on g5.v10", () => {
+    const v8 = buildSlideNarrationRoleContext(solution).roleGuidance ?? '';
+    const v10 = buildSlideNarrationRoleContext(solution, { learnerFirst: true }).roleGuidance ?? '';
+    expect(v8).toContain('Work the problem step by step');
+    expect(v10).toContain('Work EVERY item this slide shows');
+    expect(v10).not.toContain('Work the problem step by step');
+  });
+});
 import { slideOutline } from './scene-fixtures.js';
 
 /**

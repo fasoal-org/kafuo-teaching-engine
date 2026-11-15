@@ -26,6 +26,7 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
   bookStructureRequirement,
+  isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
@@ -1167,6 +1168,8 @@ export function buildKafuoStartRequest(
   // g5.v8 (an explicit Teaching Model check) adds the teacher-parity rules instead.
   const book = bookStructureRequirement(request.bookStructure, {
     teacherParity: isTeacherParityModel(request.teachingModel),
+    // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
+    learnerFirst: isLearnerFirstModel(request.teachingModel),
   });
   const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
