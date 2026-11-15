@@ -101,6 +101,7 @@ import {
   providerSafeImageDescription,
   stripProviderImageDescriptions,
 } from '@/lib/server/teaching-package/learner-first-source';
+import { insertAttemptQuizzes } from '@/lib/server/teaching-package/attempt-quizzes';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
   detectSacredQuotes,
@@ -849,11 +850,18 @@ async function runKafuoAttempt(
           // before any Scene is generated (staging lesson 426, 4 Nov 2026).
           ...(normalizedSource
             ? {
-                finalizeOutlines: (outlines: SceneOutline[]) =>
-                  stripContentUnitIdLabels(
+                finalizeOutlines: (outlines: SceneOutline[]) => {
+                  const final = stripContentUnitIdLabels(
                     outlines,
                     normalizedSource.manifest.contentUnits.map((unit) => unit.id),
-                  ),
+                  );
+                  // g5.v10 (learner-first plan W1, D-11): the learner's attempt
+                  // before every solution, placed by the engine after the gates.
+                  // Idempotent, so a resumed outline gets nothing twice.
+                  return learnerFirst
+                    ? insertAttemptQuizzes(final, kafuo.bookStructure, bookFacts)
+                    : final;
+                },
               }
             : {}),
           collectOutlineIssues: (outlines: SceneOutline[]) => {

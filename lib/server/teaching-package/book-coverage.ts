@@ -957,7 +957,9 @@ export function learnerFirstPlannerCatalogue(): string {
  * 2026): the lines the planner gets on top of — or instead of — g5.v8's.
  */
 function learnerFirstLines(book: KafuoBookStructure): string[] {
-  const reading = book.units.some((unit) => /MATH_READING|VOCABULARY_LINK/.test(unit.kind));
+  const reading = book.units.some((unit) =>
+    /MATH_READING|VOCABULARY_LINK/.test(String(unit.kind ?? '')),
+  );
   return [
     'LEARNER-FIRST (g5.v10), for a weak student:',
     "- DEFINITIONS: the first slide that uses a term this lesson teaches shows a definition box with the term and the book's own definition sentence, verbatim (cite that concept unit). Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.",
