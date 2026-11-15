@@ -1,6 +1,6 @@
 {
   "contract": "kafuo.subject-teaching-skills.v1",
-  "teachingModel": { "key": "g5", "versions": ["g5.v10", "g5.v9"] },
+  "teachingModel": { "key": "g5", "versions": ["g5.v11", "g5.v10", "g5.v9"] },
   "stage": "outcome_visual_explanations",
   "requirement": { "scope": "every_instructional_scene", "role": "primary" },
   "skills": {

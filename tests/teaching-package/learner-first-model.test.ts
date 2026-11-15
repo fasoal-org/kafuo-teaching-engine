@@ -9,11 +9,14 @@ import { describe, expect, it } from 'vitest';
 import {
   AVERAGE_CHANGE_STEP,
   bookStructureRequirement,
+  GUIDE_ANSWER_TEACHING_MODEL,
+  isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
   LEARNER_FIRST_TEACHING_MODEL,
   learnerFirstPlannerCatalogue,
   learnerFirstVisualsOf,
+  teacherParityBook,
 } from '@/lib/server/teaching-package/book-coverage';
 import type { KafuoBookStructure } from '@/lib/types/teaching-package';
 
@@ -134,5 +137,33 @@ describe('g5.v10 learner-first switch', () => {
     expect(isTeacherParityModel({ key: 'g5', version: 'g5.v9' })).toBe(true);
     expect(isTeacherParityModel({ key: 'g5', version: 'g5.v8' })).toBe(true);
     expect(isTeacherParityModel({ key: 'g5', version: 'g5.v7' })).toBe(false);
+  });
+});
+
+// g5.v11 (teacher-guide answer referee plan §2.8, 16 Nov 2026): v10 plus the guide answers.
+describe('g5.v11 registration', () => {
+  it('keeps every v10 learner-first behaviour and every v8 gate on g5.v11', () => {
+    expect(isLearnerFirstModel({ key: 'g5', version: 'g5.v11' })).toBe(true);
+    expect(isTeacherParityModel({ key: 'g5', version: 'g5.v11' })).toBe(true);
+    expect(isLearnerFirstModel({ key: 'other', version: 'g5.v11' })).toBe(false);
+  });
+
+  it('has its own switch, on for g5.v11 only', () => {
+    expect(GUIDE_ANSWER_TEACHING_MODEL).toEqual({ key: 'g5', version: 'g5.v11' });
+    expect(isGuideAnswerModel({ key: 'g5', version: 'g5.v11' })).toBe(true);
+    for (const version of ['g5.v8', 'g5.v9', 'g5.v10', 'g5.v110', 'g5.v1 1', 'g5.v12']) {
+      expect(isGuideAnswerModel({ key: 'g5', version })).toBe(false);
+    }
+    expect(isGuideAnswerModel({ key: 'other', version: 'g5.v11' })).toBe(false);
+    expect(isGuideAnswerModel(null)).toBe(false);
+    expect(isGuideAnswerModel(undefined)).toBe(false);
+    expect(isLearnerFirstModel({ key: 'g5', version: 'g5.v12' })).toBe(false);
+  });
+
+  it('marks a g5.v11 coverage book learner-first and teacher-parity, like g5.v10', () => {
+    const v10 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v10' });
+    const v11 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v11' });
+    expect(v11).toEqual(v10);
+    expect(v11).toMatchObject({ teacherParity: true, learnerFirst: true });
   });
 });

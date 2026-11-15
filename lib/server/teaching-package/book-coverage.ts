@@ -72,9 +72,13 @@ const TEACHER_PARITY_VERSIONS: ReadonlySet<string> = new Set([
   // is built on g5.v9. The v8 gates its attempt step would fail get a v10 variant in
   // the wave that adds that step (plan W1, "v8 gates on v10").
   'g5.v10',
+  // g5.v11 (teacher-guide answer referee, plan
+  // `docs/frds/teacher-guide-answer-referee-plan-2026-11-16.md`) is g5.v10 plus the
+  // approved guide answers, so it keeps every v8/v9/v10 gate.
+  'g5.v11',
 ]);
 
-/** The ONE g5.v8/g5.v9/g5.v10 switch: an explicit Teaching Model identity check. */
+/** The ONE g5.v8/g5.v9/g5.v10/g5.v11 switch: an explicit Teaching Model identity check. */
 export function isTeacherParityModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
@@ -92,13 +96,37 @@ export function isTeacherParityModel(
  */
 export const LEARNER_FIRST_TEACHING_MODEL = { key: 'g5', version: 'g5.v10' } as const;
 
-/** The ONE g5.v10 switch: an explicit Teaching Model identity check. */
+/**
+ * g5.v11 (teacher-guide answer referee plan §2.8, owner 16 Nov 2026): g5.v10 plus the
+ * approved teacher-guide answers. Its own behaviour ships behind {@link isGuideAnswerModel}
+ * only; every learner-first behaviour of g5.v10 applies to it unchanged.
+ */
+export const GUIDE_ANSWER_TEACHING_MODEL = { key: 'g5', version: 'g5.v11' } as const;
+
+/** The Teaching Model versions that get every g5.v10 learner-first behaviour. */
+const LEARNER_FIRST_VERSIONS: ReadonlySet<string> = new Set([
+  LEARNER_FIRST_TEACHING_MODEL.version,
+  GUIDE_ANSWER_TEACHING_MODEL.version,
+]);
+
+/** The ONE g5.v10/g5.v11 learner-first switch: an explicit Teaching Model identity check. */
 export function isLearnerFirstModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
   return (
     model?.key === LEARNER_FIRST_TEACHING_MODEL.key &&
-    model?.version === LEARNER_FIRST_TEACHING_MODEL.version
+    typeof model?.version === 'string' &&
+    LEARNER_FIRST_VERSIONS.has(model.version)
+  );
+}
+
+/** The ONE g5.v11 switch (the approved teacher-guide answers): an explicit identity check. */
+export function isGuideAnswerModel(
+  model: { key?: string | null; version?: string | null } | null | undefined,
+): boolean {
+  return (
+    model?.key === GUIDE_ANSWER_TEACHING_MODEL.key &&
+    model?.version === GUIDE_ANSWER_TEACHING_MODEL.version
   );
 }
 
