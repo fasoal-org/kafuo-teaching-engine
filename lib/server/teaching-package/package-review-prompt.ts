@@ -168,8 +168,42 @@ function learnerFirstInstructions(): string {
       V1_FIX_NOTE_LINE,
       [
         // W1: item 208's fix notes dropped the month wrap (f6) and prescribed average change (f15).
-        '- fix_note: one instruction in Arabic that a slide writer can follow to fix exactly this error (for S2, include the correct working and the correct result, keeping EVERY step of it, such as the wrap round a cycle or each subtraction). Use only the methods the book or this lesson teaches; never an average change or any other method the lesson did not teach. Write its numbers in the digits the slide already uses. It must not ask to add, remove or move slides.',
+        V2_FIX_NOTE_LINE,
         '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.',
+      ].join('\n'),
+    );
+}
+
+const V2_FIX_NOTE_LINE =
+  '- fix_note: one instruction in Arabic that a slide writer can follow to fix exactly this error (for S2, include the correct working and the correct result, keeping EVERY step of it, such as the wrap round a cycle or each subtraction). Use only the methods the book or this lesson teaches; never an average change or any other method the lesson did not teach. Write its numbers in the digits the slide already uses. It must not ask to add, remove or move slides.';
+const V1_S2_LINE =
+  '- S2: Every calculation and worked example is right. Re-solve each one yourself, step by step, before you judge it.';
+
+/**
+ * g5.v11 (teacher-guide answer referee plan §8.6, owner 16 Nov 2026): the v2 rubric, with
+ * S2 and Q1 changed from "re-solve" to "compare with the guide answer; flag only" for an
+ * item whose slide carries a «إجابة دليل المعلم» line, and fix notes that state only the
+ * correct final answer, never a method. Every other item keeps the v2 checks.
+ */
+function guideAnswerInstructions(): string {
+  const v2 = learnerFirstInstructions();
+  if (!v2.includes(V1_S2_LINE) || !v2.includes(V1_Q1_LINE) || !v2.includes(V2_FIX_NOTE_LINE)) {
+    throw new Error('package-review-v2 no longer holds the lines the g5.v11 rubric changes');
+  }
+  return v2
+    .replace(
+      V1_S2_LINE,
+      "- S2: Every calculation and worked example is right. For an item whose slide gives a «إجابة دليل المعلم» line, do not re-solve it: compare the final answer the slide reaches with that guide answer and report only a disagreement; also report a working that does not use the lesson's own method, or that is bent to reach the answer. Every other item: re-solve it yourself, step by step, before you judge it.",
+    )
+    .replace(
+      V1_Q1_LINE,
+      '- Q1 (quiz slides): for a question on an item with a «إجابة دليل المعلم» line, do not re-solve it: compare the marked answer with that guide answer and report only a disagreement, or another option that is also right. Every other question: solve it yourself; the marked answer is right, and no other option is also right.',
+    )
+    .replace(
+      V2_FIX_NOTE_LINE,
+      [
+        '- fix_note: one instruction in Arabic that a slide writer can follow to fix exactly this error. For S2 or Q1 on an item with a «إجابة دليل المعلم» line, state ONLY the correct final answer of that item; never prescribe a method or a working. For any other S2, include the correct working and the correct result, keeping EVERY step of it, such as the wrap round a cycle or each subtraction. Use only the methods the book or this lesson teaches; never an average change or any other method the lesson did not teach. Write its numbers in the digits the slide already uses. Never mention the teacher guide («دليل المعلم») in a fix_note. It must not ask to add, remove or move slides.',
+        '- «إجابة دليل المعلم (<item>): <answer>» lines are the checked official answers of the items a slide solves or asks, for you only: a learner never sees them. Never report a slide for not showing that line, and ignore a line whose item is not on that slide.',
       ].join('\n'),
     );
 }
@@ -183,6 +217,9 @@ export const PACKAGE_REVIEW_SCHEMA_V2: Record<string, unknown> = JSON.parse(
 ) as Record<string, unknown>;
 
 export const PACKAGE_REVIEW_SYSTEM_V2 = `${learnerFirstInstructions()}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA_V2)}`;
+
+/** g5.v11: the v2 schema and codes, with the guide-answer rubric (`guideAnswerInstructions`). */
+export const PACKAGE_REVIEW_SYSTEM_V11 = `${guideAnswerInstructions()}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA_V2)}`;
 
 /**
  * The JSON text of an answer: a model in text mode may still wrap it in a
@@ -241,6 +278,8 @@ function renderSlide(slide: ReviewSlide, learnerFirst: boolean): string {
     lines.push(`  MARKED ANSWER: ${question.answer.join(', ') || 'none'}`);
     if (question.explanation) lines.push(`  EXPLANATION: ${question.explanation}`);
   }
+  // g5.v11 (teacher-guide plan §8.6): set only on a g5.v11 package's solving slides.
+  if (slide.guideAnswers?.length) lines.push(...slide.guideAnswers);
   if (slide.narration) lines.push('NARRATION:', slide.narration);
   lines.push('<<END SLIDE>>');
   return lines.join('\n');

@@ -33,7 +33,10 @@ import {
 } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { readAttemptById, readVersionById } from '@/lib/persistence/teaching-package';
-import { isLearnerFirstModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  isGuideAnswerModel,
+  isLearnerFirstModel,
+} from '@/lib/server/teaching-package/book-coverage';
 import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
 import { TeachingCallAbortedError } from '@/lib/server/teaching-model/execute';
 import {
@@ -46,6 +49,7 @@ import {
   loadReviewBookUnits,
   reviewedSceneDigest,
   reviewSlidesOf,
+  withGuideAnswers,
   type ReviewBookUnit,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -58,6 +62,7 @@ import {
   PACKAGE_REVIEW_SCHEMA_V2,
   PACKAGE_REVIEW_SYSTEM,
   PACKAGE_REVIEW_SYSTEM_V2,
+  PACKAGE_REVIEW_SYSTEM_V11,
   parseReviewerAnswer,
   renderBookBlock,
   renderSlidesBlock,
@@ -196,6 +201,12 @@ export async function callPackageReviewer(
   // package-review-v2 (the weak-student checks S6/S7); every other package keeps v1.
   const attempt = review.attemptId ? await readAttemptById(request.pool, review.attemptId) : null;
   const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
+  // g5.v11 (teacher-guide plan §8.6): its solving slides carry their approved guide
+  // answers, and the rubric compares with them instead of re-solving (flag only).
+  const guideAnswers = isGuideAnswerModel(attempt?.teachingModel);
+  const reviewed = guideAnswers
+    ? withGuideAnswers(slides, attempt?.inputSnapshot.teacherGuide)
+    : slides;
   const call = await runReviewerCall({
     pool: request.pool,
     tenantId: review.tenantId,
@@ -211,9 +222,13 @@ export async function callPackageReviewer(
       reviewId: review.id,
     },
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
-    system: learnerFirst ? PACKAGE_REVIEW_SYSTEM_V2 : PACKAGE_REVIEW_SYSTEM,
+    system: guideAnswers
+      ? PACKAGE_REVIEW_SYSTEM_V11
+      : learnerFirst
+        ? PACKAGE_REVIEW_SYSTEM_V2
+        : PACKAGE_REVIEW_SYSTEM,
     stablePrompt: renderBookBlock(units, { truncated: request.bookTruncated === true }),
-    prompt: renderSlidesBlock(slides, focusIds, learnerFirst ? { learnerFirst } : {}),
+    prompt: renderSlidesBlock(reviewed, focusIds, learnerFirst ? { learnerFirst } : {}),
     output: {
       kind: 'json',
       validate: (text) =>

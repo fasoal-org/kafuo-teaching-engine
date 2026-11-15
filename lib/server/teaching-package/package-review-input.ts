@@ -17,7 +17,9 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { readContentUnitsForAttempt } from '@/lib/persistence/teaching-package';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
+import { formatGuideAnswer, isKeyedGuideItem } from '@/lib/server/teaching-package/guide-answers';
 import type { AppScene } from '@/lib/types/stage';
+import type { KafuoTeacherGuide } from '@/lib/types/teaching-package';
 
 /** Bounds that keep one review inside one call (plan §7: ~8k book, ~30k slide text). */
 export const REVIEW_UNIT_TEXT_MAX_CHARS = 12_000;
@@ -55,8 +57,43 @@ export interface ReviewSlide {
    * slide has none. Rendered for `package-review-v2` only; v1 never shows it.
    */
   visuals?: string[];
+  /**
+   * g5.v11 (teacher-guide answer referee plan §8.6): one «إجابة دليل المعلم (<item>): …»
+   * line per approved item of the units a solution slide or a quiz cites. Absent on
+   * every other package, and on a slide that solves no keyed item.
+   */
+  guideAnswers?: string[];
   /** A bank quiz cannot be regenerated (`BANK_QUIZ_NOT_REGENERABLE`). */
   bankQuiz: boolean;
+}
+
+/** The reviewer's prefix of a guide answer line. */
+export const REVIEW_GUIDE_ANSWER_PREFIX = 'إجابة دليل المعلم';
+
+/**
+ * g5.v11: each solution slide (contentRole worked_example) and quiz gets the approved or
+ * settled guide answers of the units it cites. A try-it slide never does (it shows no
+ * answer, so there is nothing to compare). Items the guide did not approve add nothing.
+ */
+export function withGuideAnswers(
+  slides: readonly ReviewSlide[],
+  guide: KafuoTeacherGuide | undefined,
+): ReviewSlide[] {
+  const keyed = (guide?.items ?? []).filter(isKeyedGuideItem);
+  if (keyed.length === 0) return [...slides];
+  return slides.map((slide) => {
+    const solves =
+      slide.sceneType === 'quiz' ||
+      (slide.sceneType === 'slide' && slide.contentRole === 'worked_example');
+    if (!solves) return slide;
+    const lines = keyed
+      .filter((item) => slide.citedUnitIds.includes(item.contentUnitId))
+      .map(
+        (item) =>
+          `${REVIEW_GUIDE_ANSWER_PREFIX} (${item.label}): ${formatGuideAnswer(item.answer)}`,
+      );
+    return lines.length > 0 ? { ...slide, guideAnswers: lines } : slide;
+  });
 }
 
 export interface PackageReviewInput {
