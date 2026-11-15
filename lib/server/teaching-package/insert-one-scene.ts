@@ -34,7 +34,10 @@ import { validateAppScene } from '@/lib/document-store/validators';
 import { omitUndefinedObjectMembers } from '@/lib/persistence/plain-json';
 import { actionContext, filterKnownActions } from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
-import { generateRegisterCompliantActions } from '@/lib/server/classroom-generation';
+import {
+  generateRegisterCompliantActions,
+  learnerFirstNarrationCheck,
+} from '@/lib/server/classroom-generation';
 import {
   resolveSpokenScriptOptions,
   type SpeechRegisterPolicy,
@@ -50,7 +53,10 @@ import {
   narrationAudioGap,
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
-import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  isLearnerFirstModel,
+  isTeacherParityModel,
+} from '@/lib/server/teaching-package/book-coverage';
 import {
   pinnedQuotesIn,
   sacredPolicyModeFor,
@@ -170,6 +176,8 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       ...(assignedImages.length > 0 ? { assignedImages, imageMapping } : {}),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
+      // g5.v10 (learner-first plan W4): the same canvas rules as the run.
+      ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
       ...sacredPrompt,
       onFailure: (event) => {
         contentFailure = event;
@@ -237,6 +245,7 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
             ...(assignedImages.length > 0
               ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
               : {}),
+            ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
             ...sacredPrompt,
             onFallback: (info) => {
               fellBack = info;
@@ -256,6 +265,8 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       input.registerPolicy,
       { title: outline.title, outlineId: outline.id },
       { outline, ctx: sceneCtx },
+      undefined,
+      learnerFirstNarrationCheck(isLearnerFirstModel(input.teachingModel), content),
     );
   } catch (error) {
     assertRoute();

@@ -60,8 +60,21 @@ const log = createLogger('PackageReviewFixLoop');
 /** The system actor every reviewer regeneration is recorded under (plan §4.4). */
 export const PACKAGE_REVIEWER_ACTOR = 'system:package-reviewer';
 
-/** The checks a regeneration may fix (plan §4.3); S5 is the teacher's. */
-const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set(['S1', 'S2', 'S3', 'S4', 'Q1', 'Q2', 'Q5']);
+/**
+ * The checks a regeneration may fix (plan §4.3); S5 is the teacher's. g5.v10's S6
+ * (screen and narration disagree, an item left unexplained) is fixed by regenerating
+ * the slide; its S7 (a weak-student design call) is the teacher's, like S5.
+ */
+const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
+  'S1',
+  'S2',
+  'S3',
+  'S4',
+  'S6',
+  'Q1',
+  'Q2',
+  'Q5',
+]);
 
 /** Findings no regeneration can fix (plan §4.3): they go straight to the teacher. */
 export function teacherOnlyReason(

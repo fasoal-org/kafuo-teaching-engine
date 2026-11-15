@@ -18,14 +18,35 @@ import type {
 
 export const PACKAGE_REVIEW_PROMPT_VERSION = 'package-review-v1';
 
+/**
+ * g5.v10 (learner-first plan W5, owner D-2.9): the rubric version of a g5.v10 package's
+ * review. Every other package keeps `package-review-v1`, byte for byte (D-9 B).
+ */
+export const PACKAGE_REVIEW_PROMPT_VERSION_V2 = 'package-review-v2';
+
 export const SLIDE_CHECKS = ['S1', 'S2', 'S3', 'S4', 'S5'] as const;
+/**
+ * g5.v10 only: the weak-student checks no book comparison can see. S6 (screen and
+ * narration agree, every item shown is explained) is auto-fixable; S7 (attempt before
+ * solution, claim before counterexample, one reading per symbol, no image-appearance
+ * narration) is the teacher's.
+ */
+export const LEARNER_FIRST_SLIDE_CHECKS = ['S6', 'S7'] as const;
 /** The question checks a package quiz Scene is reviewed with (plan §4.3). */
 export const PACKAGE_QUIZ_CHECKS = ['Q1', 'Q2', 'Q5'] as const;
 export type PackageReviewCheck =
   | (typeof SLIDE_CHECKS)[number]
+  | (typeof LEARNER_FIRST_SLIDE_CHECKS)[number]
   | (typeof PACKAGE_QUIZ_CHECKS)[number];
+/** The `package-review-v1` codes (every package but g5.v10). */
 export const PACKAGE_REVIEW_CHECKS: readonly PackageReviewCheck[] = [
   ...SLIDE_CHECKS,
+  ...PACKAGE_QUIZ_CHECKS,
+];
+/** The `package-review-v2` codes (g5.v10). */
+export const PACKAGE_REVIEW_CHECKS_V2: readonly PackageReviewCheck[] = [
+  ...SLIDE_CHECKS,
+  ...LEARNER_FIRST_SLIDE_CHECKS,
   ...PACKAGE_QUIZ_CHECKS,
 ];
 export type FindingSeverity = 'high' | 'medium' | 'low';
@@ -113,6 +134,41 @@ export function schemaInstruction(schema: Record<string, unknown>): string {
 }
 
 export const PACKAGE_REVIEW_SYSTEM = `${PACKAGE_REVIEW_INSTRUCTIONS}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA)}`;
+
+// ── g5.v10: package-review-v2 (learner-first plan W5) ─────────────────────────────────
+
+const V1_S5_LINE =
+  '- S5: Every lesson part of the book is present, in book order. Report a part that is missing or out of order.';
+const V1_Q1_LINE =
+  '- Q1 (quiz slides): solve the question yourself. The marked answer is right, and no other option is also right.';
+
+/** The v1 rubric with the weak-student checks (owner decisions D-2, D-3, D-5, 15 Nov 2026). */
+function learnerFirstInstructions(): string {
+  if (
+    !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_S5_LINE) ||
+    !PACKAGE_REVIEW_INSTRUCTIONS.includes(V1_Q1_LINE)
+  ) {
+    throw new Error('package-review-v1 no longer holds the lines package-review-v2 extends');
+  }
+  return PACKAGE_REVIEW_INSTRUCTIONS.replace(
+    V1_S5_LINE,
+    [
+      "- S5: Every lesson part of the book is present, in book order. Report a part that is missing or out of order. The lesson deliberately teaches only a selection of the book's exercises (about six, easiest first) and leaves out the opening boxes «فيما سبق», «والآن» and «المفردات»: never report those as missing.",
+      '- S6: The narration agrees with what the slide shows and explains EVERY item the slide shows (أ، ب، ج …). Report a narration that skips an item, or that says something the screen contradicts (a different direction, name, shape or number).',
+      '- S7: The slide serves a weak student: a claim is stated before it is tested or a counterexample is given; Latin letters are read by their English names in Arabic script and the same symbol is read the same way; an image is explained as mathematics, never by its colours or position on the page; a check or exercise is attempted by the learner before its solution is shown.',
+    ].join('\n'),
+  ).replace(V1_Q1_LINE, `${V1_Q1_LINE}\n- (S6 and S7 apply to slides only.)`);
+}
+
+/** The JSON schema of a `package-review-v2` answer: v1's, with the v2 codes. */
+export const PACKAGE_REVIEW_SCHEMA_V2: Record<string, unknown> = JSON.parse(
+  JSON.stringify(PACKAGE_REVIEW_SCHEMA).replace(
+    JSON.stringify([...PACKAGE_REVIEW_CHECKS]),
+    JSON.stringify([...PACKAGE_REVIEW_CHECKS_V2]),
+  ),
+) as Record<string, unknown>;
+
+export const PACKAGE_REVIEW_SYSTEM_V2 = `${learnerFirstInstructions()}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA_V2)}`;
 
 /**
  * The JSON text of an answer: a model in text mode may still wrap it in a
@@ -204,6 +260,8 @@ export function parseReviewerAnswer(
     slideIds: ReadonlySet<string>;
     quizIds: ReadonlySet<string>;
     focusIds?: ReadonlySet<string>;
+    /** g5.v10: `package-review-v2` codes (S6, S7) are accepted. */
+    learnerFirst?: boolean;
   },
 ): ReviewerAnswer {
   const value = JSON.parse(unwrapJsonAnswer(raw)) as Record<string, unknown>;
@@ -218,7 +276,8 @@ export function parseReviewerAnswer(
     const f = entry as Record<string, unknown> | null;
     if (!f || typeof f !== 'object') throw new Error('a finding must be an object');
     const check = f.check as PackageReviewCheck;
-    if (!PACKAGE_REVIEW_CHECKS.includes(check)) throw new Error(`unknown check ${String(f.check)}`);
+    const known = scope.learnerFirst ? PACKAGE_REVIEW_CHECKS_V2 : PACKAGE_REVIEW_CHECKS;
+    if (!known.includes(check)) throw new Error(`unknown check ${String(f.check)}`);
     const severity = f.severity as FindingSeverity;
     if (severity !== 'high' && severity !== 'medium' && severity !== 'low') {
       throw new Error(`unknown severity ${String(f.severity)}`);

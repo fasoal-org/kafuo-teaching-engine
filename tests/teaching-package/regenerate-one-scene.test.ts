@@ -252,6 +252,18 @@ describe('regenerateOneScene — AT-G', () => {
     expect(await contentPromptOf()).not.toContain(RULE);
   });
 
+  it('a g5.v10 package sends every edit instruction to the narration too (learner-first W4)', async () => {
+    const narrationOf = async (teachingModel: { key: string; version: string }) => {
+      const { prompts } = await run(content([image('src-3', 'x')]), { teachingModel });
+      const found = prompts.find((prompt) => ACTIONS_PROMPT.test(prompt.system))!;
+      return found.user;
+    };
+    // An AI-review fix changed «اليمين» to «اليسار» on the canvas only (item 208 slide
+    // 21): on g5.v10 the narration model gets the same instruction as the canvas.
+    expect(await narrationOf({ key: 'g5', version: 'g5.v10' })).toContain('INSTRUCTION-MARK');
+    expect(await narrationOf({ key: 'g5', version: 'g5.v8' })).not.toContain('INSTRUCTION-MARK');
+  });
+
   it('an unparsable content answer fails with SCENE_CONTENT_GENERATION_FAILED and no Action call', async () => {
     const { result, prompts } = await run('not json');
     expect(result).toMatchObject({ ok: false, code: 'SCENE_CONTENT_GENERATION_FAILED' });

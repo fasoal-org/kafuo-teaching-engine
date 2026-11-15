@@ -39,7 +39,10 @@ import {
   withCarriedAssistance,
 } from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
-import { generateRegisterCompliantActions } from '@/lib/server/classroom-generation';
+import {
+  generateRegisterCompliantActions,
+  learnerFirstNarrationCheck,
+} from '@/lib/server/classroom-generation';
 import {
   resolveSpokenScriptOptions,
   type SpeechRegisterPolicy,
@@ -58,7 +61,10 @@ import {
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
-import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  isLearnerFirstModel,
+  isTeacherParityModel,
+} from '@/lib/server/teaching-package/book-coverage';
 import {
   pinnedQuotesIn,
   readSacredQuotePins,
@@ -406,6 +412,8 @@ export async function regenerateOneScene(
       ...(replanned ? {} : { editDirective: input.instruction, baselineContent: baseline }),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
+      // g5.v10 (learner-first plan W4): the same canvas rules as the run.
+      ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
       ...sacredPromptOf(input),
       onFailure: (event) => {
         contentFailure = event;
@@ -436,9 +444,16 @@ export async function regenerateOneScene(
     : undefined;
   // A moved lesson part (owner, 14 Nov 2026): the narration follows the move too,
   // so the narration model gets the same directive as the content model.
+  // g5.v10 (learner-first plan W4): EVERY edit's instruction reaches the narration
+  // too (an AI-review fix changed «اليمين» to «اليسار» on the canvas only, item 208
+  // slide 21), and the narration is checked against the new canvas.
+  const learnerFirst = isLearnerFirstModel(input.teachingModel);
+  const narrationDirective =
+    input.sourceContentUnitIds || (learnerFirst && !replanned) ? input.instruction : undefined;
   const generatedActions = await slideActions(input, outline, content, {
     imageNotes,
-    ...(input.sourceContentUnitIds ? { directive: input.instruction } : {}),
+    ...(narrationDirective ? { directive: narrationDirective } : {}),
+    ...(learnerFirst ? { learnerFirst: true } : {}),
   });
   if (!generatedActions.ok) return generatedActions;
   const actions = generatedActions.actions;
@@ -546,7 +561,12 @@ async function slideActions(
   input: RegenerateOneSceneInput,
   outline: SceneOutline,
   content: GeneratedSlideContent,
-  options: { imageNotes?: Record<string, NarrationImageNote>; directive?: string },
+  options: {
+    imageNotes?: Record<string, NarrationImageNote>;
+    directive?: string;
+    /** g5.v10: learner-first narration rules and the canvas check. */
+    learnerFirst?: boolean;
+  },
 ): Promise<SlideActionsResult> {
   const pre = input.scene;
   const assertRoute = input.assertRouteAvailable ?? (() => {});
@@ -582,6 +602,7 @@ async function slideActions(
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
             ...(imageNotes ? { imageNotes } : {}),
+            ...(options.learnerFirst ? { learnerFirst: true } : {}),
             ...sacredPromptOf(input),
             onFallback: (info) => {
               fellBack = info;
@@ -601,6 +622,8 @@ async function slideActions(
       input.registerPolicy,
       { title: pre.title, outlineId: outline.id },
       { outline, ctx: sceneCtx },
+      undefined,
+      learnerFirstNarrationCheck(options.learnerFirst, content),
     );
   } catch (error) {
     assertRoute();
@@ -665,6 +688,7 @@ async function regenerateSlideNarration(
     {
       ...(Object.keys(notes).length > 0 ? { imageNotes: notes } : {}),
       directive: `Rewrite only this slide's narration. The slide's canvas is final: describe and point at only the elements listed above, never an image or element that is not listed. The reviewer's requirements:\n${input.instruction}`,
+      ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
     },
   );
   if (!generated.ok) return generated;

@@ -32,7 +32,8 @@ import {
   type TransactionSource,
 } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
-import { readVersionById } from '@/lib/persistence/teaching-package';
+import { readAttemptById, readVersionById } from '@/lib/persistence/teaching-package';
+import { isLearnerFirstModel } from '@/lib/server/teaching-package/book-coverage';
 import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
 import { TeachingCallAbortedError } from '@/lib/server/teaching-model/execute';
 import {
@@ -54,7 +55,9 @@ import {
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
   PACKAGE_REVIEW_SCHEMA,
+  PACKAGE_REVIEW_SCHEMA_V2,
   PACKAGE_REVIEW_SYSTEM,
+  PACKAGE_REVIEW_SYSTEM_V2,
   parseReviewerAnswer,
   renderBookBlock,
   renderSlidesBlock,
@@ -184,6 +187,10 @@ export async function callPackageReviewer(
   const quizIds = new Set(
     slides.filter((slide) => slide.sceneType === 'quiz').map((slide) => slide.id),
   );
+  // g5.v10 (learner-first plan W5): its packages are reviewed with
+  // package-review-v2 (the weak-student checks S6/S7); every other package keeps v1.
+  const attempt = review.attemptId ? await readAttemptById(request.pool, review.attemptId) : null;
+  const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
   const call = await runReviewerCall({
     pool: request.pool,
     tenantId: review.tenantId,
@@ -199,13 +206,19 @@ export async function callPackageReviewer(
       reviewId: review.id,
     },
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
-    system: PACKAGE_REVIEW_SYSTEM,
+    system: learnerFirst ? PACKAGE_REVIEW_SYSTEM_V2 : PACKAGE_REVIEW_SYSTEM,
     stablePrompt: renderBookBlock(units, { truncated: request.bookTruncated === true }),
     prompt: renderSlidesBlock(slides, focusIds),
     output: {
       kind: 'json',
-      validate: (text) => parseReviewerAnswer(text, { slideIds, quizIds, focusIds }),
-      jsonSchema: PACKAGE_REVIEW_SCHEMA,
+      validate: (text) =>
+        parseReviewerAnswer(text, {
+          slideIds,
+          quizIds,
+          ...(focusIds ? { focusIds } : {}),
+          ...(learnerFirst ? { learnerFirst } : {}),
+        }),
+      jsonSchema: learnerFirst ? PACKAGE_REVIEW_SCHEMA_V2 : PACKAGE_REVIEW_SCHEMA,
     },
     ...(request.signal ? { signal: request.signal } : {}),
   });
