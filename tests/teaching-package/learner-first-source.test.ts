@@ -9,7 +9,9 @@ import {
   isProviderImageDescription,
   normalizeDigits,
   normalizeDigitsInHtml,
+  normalizeQuizPoints,
   normalizeSceneDigits,
+  packageDigitStyle,
   providerSafeImageDescription,
   stripProviderImageDescriptions,
 } from '@/lib/server/teaching-package/learner-first-source';
@@ -128,5 +130,60 @@ describe('one digit style per lesson (TD-4)', () => {
       analysis: 'الفرق ٣',
       options: [{ label: '١٣' }],
     });
+  });
+
+  it('quality plan W5: table cells and chart labels too (item 208 slide 14 «١٤١٩ | ٢٠»)', () => {
+    const scene = {
+      type: 'slide',
+      content: {
+        canvas: {
+          elements: [
+            { type: 'table', data: [[{ text: '١٤١٩' }, { text: '٢٠' }], [{ text: 'السنة' }]] },
+            {
+              type: 'chart',
+              data: { labels: ['٢٠١٧', '٢٠١٨'], legends: ['القطع'], series: [[5, 7.2]] },
+            },
+          ],
+        },
+      },
+    };
+    normalizeSceneDigits(scene, 'western');
+    const [table, chart] = scene.content.canvas.elements as Array<Record<string, unknown>>;
+    expect(table!.data).toEqual([[{ text: '1419' }, { text: '20' }], [{ text: 'السنة' }]]);
+    expect(chart!.data).toEqual({
+      labels: ['2017', '2018'],
+      legends: ['القطع'],
+      series: [[5, 7.2]],
+    });
+  });
+
+  it('quality plan W5: one point per choice question, two per short answer', () => {
+    const quiz = {
+      type: 'quiz',
+      content: {
+        questions: [
+          { type: 'single', points: 12 },
+          { type: 'multiple', points: 5 },
+          { type: 'text', points: 10 },
+        ],
+      },
+    };
+    normalizeQuizPoints(quiz);
+    expect(quiz.content.questions.map((question) => question.points)).toEqual([1, 1, 2]);
+    const slide = { type: 'slide', content: { questions: [{ points: 9 }] } };
+    normalizeQuizPoints(slide);
+    expect(slide.content.questions[0]!.points).toBe(9);
+  });
+
+  it("quality plan W5: a regeneration takes the package's own digit style from its scenes", () => {
+    const western = [
+      {
+        type: 'slide',
+        content: { canvas: { elements: [{ content: '<p>1419هـ: 20 ريالًا</p>' }] } },
+      },
+      { type: 'quiz', content: { questions: [{ question: 'ما سعر 1449؟' }] } },
+    ];
+    expect(packageDigitStyle(western, 'ar')).toBe('western');
+    expect(packageDigitStyle([], 'ar')).toBe('arabic-indic');
   });
 });

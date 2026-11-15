@@ -159,6 +159,45 @@ interface DigitScene {
   content?: unknown;
 }
 
+/**
+ * Quality plan W5 (g5.v10): one point per single- or multiple-choice question and two
+ * per short answer, in place. The quiz prompt lets the model weigh questions by
+ * difficulty, so item 208's Terra quizzes ran 1 to 12 points (Luna's were uniform).
+ */
+export function normalizeQuizPoints(scene: DigitScene): void {
+  if (scene.type !== 'quiz') return;
+  const content = scene.content as Record<string, unknown> | undefined;
+  const questions = (content?.questions as Array<Record<string, unknown>> | undefined) ?? [];
+  for (const question of questions) question.points = question.type === 'text' ? 2 : 1;
+}
+
+/**
+ * W5: the digit style a package already uses, from its scenes' learner-visible text
+ * (a regeneration has no book text; the run normalised every fresh scene to it).
+ */
+export function packageDigitStyle(
+  scenes: ReadonlyArray<DigitScene>,
+  language?: string | null,
+): LessonDigitStyle {
+  const texts: string[] = [];
+  for (const scene of scenes) {
+    const content = scene.content as Record<string, unknown> | undefined;
+    if (scene.type === 'slide') {
+      const canvas = content?.canvas as { elements?: Array<Record<string, unknown>> } | undefined;
+      for (const element of canvas?.elements ?? []) {
+        if (typeof element.content === 'string')
+          texts.push(element.content.replace(/<[^>]*>/g, ' '));
+        if (typeof element.latex === 'string') texts.push(element.latex);
+      }
+    } else if (scene.type === 'quiz') {
+      for (const question of (content?.questions as Array<Record<string, unknown>>) ?? []) {
+        if (typeof question.question === 'string') texts.push(question.question);
+      }
+    }
+  }
+  return detectLessonDigitStyle(texts, language);
+}
+
 /** Normalise one generated scene's learner-visible text in place (slide or quiz). */
 export function normalizeSceneDigits(scene: DigitScene, style: LessonDigitStyle): void {
   const content = scene.content as Record<string, unknown> | undefined;
@@ -174,6 +213,26 @@ export function normalizeSceneDigits(scene: DigitScene, style: LessonDigitStyle)
         const text = element.text as { content?: unknown } | undefined;
         if (text && typeof text.content === 'string') {
           text.content = normalizeDigitsInHtml(text.content, style);
+        }
+      } else if (element.type === 'table' && Array.isArray(element.data)) {
+        // Quality plan W5: item 208 slide 14's table read «١٤١٩ | ٢٠» beside «1419هـ».
+        for (const row of element.data as unknown[]) {
+          if (!Array.isArray(row)) continue;
+          for (const cell of row as Array<Record<string, unknown> | null>) {
+            if (cell && typeof cell === 'object' && typeof cell.text === 'string') {
+              cell.text = normalizeDigitsInHtml(cell.text, style);
+            }
+          }
+        }
+      } else if (element.type === 'chart' && element.data && typeof element.data === 'object') {
+        // W5: chart labels and legends are learner-visible text; the values stay numbers.
+        const data = element.data as { labels?: unknown[]; legends?: unknown[] };
+        for (const key of ['labels', 'legends'] as const) {
+          if (Array.isArray(data[key])) {
+            data[key] = data[key].map((label) =>
+              typeof label === 'string' ? normalizeDigits(label, style) : label,
+            );
+          }
         }
       }
     }

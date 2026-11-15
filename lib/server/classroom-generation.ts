@@ -114,6 +114,7 @@ import {
 } from '@/lib/server/speech/learner-first-narration';
 import {
   detectLessonDigitStyle,
+  normalizeQuizPoints,
   normalizeSceneDigits,
 } from '@/lib/server/teaching-package/learner-first-source';
 import {
@@ -2951,7 +2952,11 @@ export async function generateClassroom(
         (input.sourceUnits ?? []).map((unit) => unit.text),
         input.language,
       );
-      for (const scene of freshScenes) normalizeSceneDigits(scene as never, style);
+      for (const scene of freshScenes) {
+        normalizeSceneDigits(scene as never, style);
+        // Quality plan W5: one point per choice question, two per short answer.
+        normalizeQuizPoints(scene as never);
+      }
     }
 
     // Q-7 / Q-11 (owner decision): narration and characters never speak a Quran

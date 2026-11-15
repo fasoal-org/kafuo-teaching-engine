@@ -66,6 +66,11 @@ import {
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
+  normalizeQuizPoints,
+  normalizeSceneDigits,
+  packageDigitStyle,
+} from '@/lib/server/teaching-package/learner-first-source';
+import {
   pinnedQuotesIn,
   readSacredQuotePins,
   sacredPolicyModeFor,
@@ -501,6 +506,7 @@ export async function regenerateOneScene(
         ? { sourceContentUnitIds: pre.sourceContentUnitIds }
         : {}),
   } as AppScene;
+  candidate = learnerFirstNormalized(input, candidate);
   if (input.governed) {
     // A governed regeneration is a fresh generation-origin baseline (W4.4).
     const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
@@ -509,6 +515,21 @@ export async function regenerateOneScene(
 
   // 6. Validation (repeated inside the store write).
   return validatedSlideCandidate(input, candidate);
+}
+
+/**
+ * Quality plan W5 (g5.v10): a regenerated slide or quiz gets the run's digit style and
+ * quiz points, which until now only fresh scenes got — item 208's review fixes came
+ * back in the reviewer's Arabic-Indic digits. A copy; the pre-image is never touched.
+ */
+function learnerFirstNormalized(input: RegenerateOneSceneInput, candidate: AppScene): AppScene {
+  if (!isLearnerFirstModel(input.teachingModel)) return candidate;
+  const others = input.scenes.filter((scene) => scene.id !== input.scene.id);
+  const style = packageDigitStyle(others as never, input.stage.language);
+  const copy = structuredClone(candidate);
+  normalizeSceneDigits(copy as never, style);
+  normalizeQuizPoints(copy as never);
+  return copy;
 }
 
 /** Step 6 of a slide regeneration: invariants, Actions, the write boundary. */
@@ -829,6 +850,7 @@ async function regenerateQuizScene(
       ? { sourceContentUnitIds: pre.sourceContentUnitIds }
       : {}),
   } as AppScene;
+  candidate = learnerFirstNormalized(input, candidate);
   if (input.governed) {
     const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
     if (stamped) candidate = { ...candidate, alignmentBaseline: stamped };

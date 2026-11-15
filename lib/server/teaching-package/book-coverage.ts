@@ -1143,7 +1143,44 @@ export function exerciseBlockRequirement(book: CoverageBookStructure | undefined
           'its next questions.',
         ]
       : []),
+    ...(book.learnerFirst ? learnerFirstExerciseLabels(selection) : []),
   ].join('\n');
+}
+
+const INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const indic = (value: number) =>
+  String(value).replace(/[0-9]/g, (digit) => INDIC_DIGITS[Number(digit)]!);
+
+/**
+ * Quality plan W5 (g5.v10): the engine numbers the exercises once, across the whole
+ * block, in the selection order — item 208 labelled three different items «تمرين 1».
+ * A unit with listed questions takes one label per question; any other unit, one label.
+ */
+function learnerFirstExerciseLabels(selection: NonNullable<ReturnType<typeof selectExercises>>) {
+  let next = 1;
+  const lines = selection.slides.map((ids, index) => {
+    const questions = selection.slideQuestions?.[index] ?? {};
+    const labels = ids.flatMap((id) => {
+      const numbers = questions[id];
+      if (!numbers?.length) return [`«تمرين ${indic(next++)}» = unit ${id}`];
+      return numbers.map(
+        (number) =>
+          `«تمرين ${indic(next++)}» = unit ${id} question ${number} «(س${indic(number)} في كتابك)»`,
+      );
+    });
+    const first = next - labels.length;
+    const title =
+      first === next - 1
+        ? `حل التمرين ${indic(first)}`
+        : `حل التمارين ${indic(first)}–${indic(next - 1)}`;
+    return `- exercise slide ${index + 1} (title «${title}»): ${labels.join('; ')};`;
+  });
+  return [
+    'EXERCISE LABELS (g5.v10, fixed by the engine): use exactly these labels, numbered once across',
+    'the whole block — never restart at «تمرين ١» on the next slide, and never call a check',
+    '(«تحقق من فهمك») item «تمرين»:',
+    ...lines,
+  ];
 }
 
 /** «1–4», or «1, 3, 5» when the numbers are not consecutive. */

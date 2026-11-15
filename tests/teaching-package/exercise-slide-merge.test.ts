@@ -12,6 +12,7 @@ import {
   bookStructureRequirement,
   type CoverageBookStructure,
   EXERCISE_CAP_EXCEEDED,
+  exerciseBlockRequirement,
   findBookCoverageDiagnostics,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
@@ -197,5 +198,21 @@ describe('g5.v10 exercise slides regrouped onto the engine selection', () => {
     expect(bookStructureRequirement(V10_BOOK, { teacherParity: true })).not.toContain(
       'never one slide per exercise',
     );
+  });
+
+  it('quality plan W5: the engine numbers the exercises once across the block (g5.v10 only)', () => {
+    const block = exerciseBlockRequirement(V10_BOOK);
+    expect(block).toContain('EXERCISE LABELS (g5.v10, fixed by the engine)');
+    expect(block).toContain('never restart at «تمرين ١» on the next slide');
+    // The labels run on: «تمرين ١» on slide 1 … the last label on the last slide.
+    const lines = block
+      .split('\n')
+      .filter((line) => line.startsWith('- exercise slide') && line.includes('«تمرين'));
+    expect(lines[0]).toContain('«تمرين ١»');
+    expect(lines.join('\n').match(/«تمرين ١»/g)).toHaveLength(1);
+    expect(lines.at(-1)).not.toContain('«تمرين ١»');
+    // g5.v8 / g5.v9 blocks carry no labels.
+    const { learnerFirst: _dropped, ...v9 } = V10_BOOK;
+    expect(exerciseBlockRequirement(v9)).not.toContain('EXERCISE LABELS');
   });
 });
