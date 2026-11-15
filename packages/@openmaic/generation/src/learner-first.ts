@@ -76,10 +76,15 @@ export function learnerFirstNarrationRules(contentRole?: string | null): string 
   return [
     items,
     '2. The ELEMENTS list is the authority: say only what is on the canvas, with the same names, directions, numbers and shapes. If the key points disagree with an element, follow the element. Never say "right" where the slide says "left", never call a shape by another name.',
-    `3. Read symbols one way for the whole lesson, matching the screen. A Latin letter takes its English name in Arabic script (${letterTable()}); an Arabic letter takes its Arabic name (أ «ألف»، ب «باء»). Put a short noun before a letter whenever it could be misheard: «المتغير إن», «العدد إن», «النقطة إيه», «القطعة إيه بي», «الزاوية إيه بي سي». Never read a Latin letter with an Arabic letter name (never «ألف» for A, «جيم» for J or C, «نون» for n, «سين» for x).`,
+    `3. Read symbols one way for the whole lesson, matching the screen. A Latin letter takes its English name in Arabic script (${letterTable()}); an Arabic letter takes its Arabic name (أ «ألف»، ب «باء»). Put a short noun before a letter whenever it could be misheard: «المتغير إن», «العدد إن», «النقطة إيه», «القطعة إيه بي», «الزاوية إيه بي سي». Never read a Latin letter with an Arabic letter name (never «ألف» for A or a, «جيم» for J or C, «نون» for n, «سين» for x, «صاد» for y).`,
     '4. An image or diagram is explained as mathematics: what is counted, measured or compared, and how it gives the numbers on the slide (for example «في الشكل الأول ٤ قطع، وفي الثاني ١٠»). Never describe colours, line styles or positions on the page (no «أزرق», «متقطع», «في الزاوية السفلية»).',
     '5. Before testing a claim or giving a counterexample, say the claim itself in full («التخمين: إذا كانت الزاويتان متتامتين فإن لهما ضلعًا مشتركًا»).',
     "6. Say the caution «الأمثلة لا تثبت التخمين» only where this slide is about it, at most once. Never read the book's question numbers or the grey book tag; call an item by the slide's own label.",
+    // Quality plan W3 (15 Nov 2026): item 208 read 8:30 as «ثمانية وثلاثين» and called a
+    // conjecture «صحيح» after one checked case; «صفر» unvowelled can be heard as zero.
+    '7. Read a clock time as an hour and its part, the way a teacher says it: 8:30 «الثامنة والنصف», 9:10 «التاسعة وعشر دقائق», 9:15 «التاسعة والربع», 9:50 «التاسعة وخمسون دقيقة». Never «ثمانية وثلاثين» and never «الثامنة والثلاثون». Use the period word the book uses («صباحًا» / «مساءً») and keep it the same on every slide.',
+    '8. Examples that satisfy a conjecture support it; they never prove it. Never say «التخمين صحيح» because one or a few cases work; say «المثال يؤيد التخمين». Call a conjecture true only when the slide proves it in general (for example by algebra).',
+    '9. Write the Hijri month «صَفَر» with its vowels every time, so it is never heard as the number «صِفر».',
   ].join('\n');
 }
 

@@ -112,6 +112,12 @@ describe('g5.v10 learner-first prompts', () => {
     expect(narration).toContain('«المتغير إن»');
     expect(narration).toContain('Never describe colours, line styles or positions');
     expect(narration).toContain('say the claim itself in full');
+    // Quality plan W3 (item 208, 15 Nov 2026).
+    expect(narration).toContain('8:30 «الثامنة والنصف»');
+    expect(narration).toContain('Never «ثمانية وثلاثين»');
+    expect(narration).toContain('Never say «التخمين صحيح» because one or a few cases work');
+    expect(narration).toContain('«صَفَر» with its vowels');
+    expect(narration).toContain('«صاد» for y');
     const slide = learnerFirstSlideRules();
     expect(slide).toContain('«(س٣٥ في كتابك)»');
     expect(slide).toContain('definition box');

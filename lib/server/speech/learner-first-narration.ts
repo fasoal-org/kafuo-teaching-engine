@@ -4,13 +4,16 @@
  * the narration re-roll loop on g5.v10 runs only; every earlier Teaching Model never
  * reaches this module (D-9 B).
  *
- * Three checks, each a weak-student failure seen on item 208 (15 Nov 2026):
+ * The checks, each a weak-student failure seen on items 208 and 195 (15 Nov 2026):
  * - NARRATION_ITEM_MISSING: the slide shows several labelled items (أ، ب، ج …) and the
  *   narration never points to one of them (slides 10 and 13 spoke item أ only).
  * - IMAGE_APPEARANCE_NARRATION: the narration describes a picture's colours, line
  *   styles or place on the page instead of its mathematics (slide 5).
  * - SYMBOL_READING_ARABIC_NAME: a Latin letter on the canvas is read with an Arabic
  *   letter name («ألف باء هاء» for A, B, E; «جيم» for J), against owner decision D-3.
+ *   Since the quality plan W3 also a single name: «سين» for x, «ثلاثة ألف» for 3a.
+ * - CLOCK_TIME_READ_AS_NUMBER (W3): a canvas time read as a number («ثمانية وثلاثين»).
+ * - CONJECTURE_CALLED_PROVED (W3): «التخمين صحيح» because examples satisfy it.
  */
 /**
  * D-3 A: a Latin letter is read by its English name, in Arabic script. The same table
@@ -57,7 +60,9 @@ export const LEARNER_TASK_ROLES: ReadonlySet<string> = new Set([
 export type LearnerFirstNarrationIssueCode =
   | 'NARRATION_ITEM_MISSING'
   | 'IMAGE_APPEARANCE_NARRATION'
-  | 'SYMBOL_READING_ARABIC_NAME';
+  | 'SYMBOL_READING_ARABIC_NAME'
+  | 'CLOCK_TIME_READ_AS_NUMBER'
+  | 'CONJECTURE_CALLED_PROVED';
 
 export interface LearnerFirstNarrationIssue {
   code: LearnerFirstNarrationIssueCode;
@@ -163,6 +168,142 @@ const NUMBER_CUED_NAME = new RegExp(
   'u',
 );
 
+// ── Quality plan W3 (15 Nov 2026) ─────────────────────────────────────────────────
+// A single letter name (item 195: «سين أصغر من…», «ثلاثة ألف زائد ثمانية»), a clock
+// time read as a number (item 208: 8:30 «ثمانية وثلاثين»), and one checked case called
+// a proof (item 208: «إذن التخمين صحيح»).
+
+const WORD_END = '(?=$|[\\s،,.)»؟:؛!])';
+// A prefix the spoken word may carry: «و», «ب», «ف», «ل», with or without «ال» («للسين»).
+const WORD_START = '(?:^|[\\s،,(«:—-])(?:[وفبل]?(?:ال|لل)?)';
+/** x, y and s are read «سين» / «صاد» nowhere else in a lesson; one alone is the letter. */
+const LONE_STRONG = new RegExp(`${WORD_START}(سين|صاد)${WORD_END}`, 'u');
+/** Names that are also Arabic item letters (أ ب ج) or words; checked with the guards below. */
+const GUARDED_NAMES = ['ألف', 'باء', 'جيم', 'هاء', 'ميم', 'نون'] as const;
+const LONE_GUARDED = new RegExp(`${WORD_START}(${GUARDED_NAMES.join('|')})${WORD_END}`, 'gu');
+/** «الفقرة ألف», «البند باء», «الحالتين باء وجيم»: an item cue names an Arabic item letter. */
+const ITEM_CUE =
+  /(?:الفقرة|فقرة|الجزء|جزء|الفرع|فرع|البند|بند|الحالة|حالة|الحالتين|الحالتان|السؤال|المطلوب)$/u;
+/** The Arabic item letter a guarded name reads. */
+const ARABIC_ITEM_OF: Readonly<Record<string, string>> = { ألف: 'أ', باء: 'ب', جيم: 'ج' };
+const NUMBER_WORD =
+  /^و?(?:واحد|اثن|ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر|مئة|مائة|مئت|ميت|مية|ألفين|آلاف)/u;
+/**
+ * The word before «ألف» that makes it the number: «العدد ألف», «أحد عشر ألف», «عشرين
+ * ألف», «مية ألف». Three to ten take «آلاف», so «ثلاثة ألف» is 3a (item 195), never 3000.
+ */
+const THOUSAND_BEFORE =
+  /^(?:العدد|عدد|الرقم|رقم|و?(?:عشر|عشرين|ثلاثين|أربعين|خمسين|ستين|سبعين|ثمانين|تسعين|مئة|مائة|مية|مئتين|مائتين|ميتين))$/u;
+
+/** The Arabic item letters (أ ب ج د) the canvas labels items with: «أ)», «٢أ:», «(ب». */
+function canvasArabicItemLetters(elements: readonly NarrationCanvasElement[]): Set<string> {
+  const letters = new Set<string>();
+  for (const element of elements) {
+    for (const match of element.text.matchAll(
+      /(?:^|[\s(])([أبجد])\s*[):.\-—|]|[0-9٠-٩]\s*([أبجد])(?![\p{L}])/gu,
+    )) {
+      letters.add((match[1] ?? match[2])!);
+    }
+  }
+  return letters;
+}
+
+/**
+ * The first single letter name the line reads a canvas Latin letter with, or null.
+ * «سين» / «صاد» always count when the canvas shows x / y / s. «ألف», «باء», «جيم» …
+ * do not count after an item cue, when the canvas labels items with that Arabic
+ * letter, or when «ألف» is the number thousand (before «و» and a number, or on a
+ * slide whose canvas prints a number of four digits).
+ */
+function loneLetterName(
+  line: string,
+  forbidden: ReadonlySet<string>,
+  arabicItems: ReadonlySet<string>,
+  arabicSymbols: ReadonlySet<string>,
+  canvasHasThousands: boolean,
+): string | null {
+  const allowed = (name: string) => {
+    const symbol = ARABIC_SYMBOL_OF[name];
+    return symbol !== undefined && arabicSymbols.has(symbol);
+  };
+  const strong = LONE_STRONG.exec(line)?.[1];
+  if (strong && forbidden.has(strong) && !allowed(strong)) return strong;
+  for (const match of line.matchAll(LONE_GUARDED)) {
+    const name = match[1]!;
+    if (!forbidden.has(name) || allowed(name)) continue;
+    const item = ARABIC_ITEM_OF[name];
+    if (item && arabicItems.has(item)) continue;
+    const before = line.slice(0, match.index).trimEnd();
+    const previous = before.split(/[\s،,(«:]+/u).pop() ?? '';
+    if (ITEM_CUE.test(previous)) continue;
+    if (name === 'ألف') {
+      if (canvasHasThousands || THOUSAND_BEFORE.test(previous)) continue;
+      const after = line.slice((match.index ?? 0) + match[0].length).trimStart();
+      if (NUMBER_WORD.test(after.split(/\s+/u)[0] ?? '')) continue;
+    }
+    return name;
+  }
+  return null;
+}
+
+const HOUR_CARDINAL =
+  '(?:واحدة|وحدة|اثنين|ثنتين|ثلاث|ثلاثة|أربع|أربعة|خمس|خمسة|ست|ستة|سبع|سبعة|ثمان|ثمانية|تسع|تسعة|عشر|عشرة|إحدى عشرة|احدعش|اثنا عشر|اثنعش|اثني عشر)';
+const HOUR_ORDINAL =
+  '(?:الواحدة|الثانية|الثالثة|الرابعة|الخامسة|السادسة|السابعة|الثامنة|التاسعة|العاشرة|الحادية عشرة|الثانية عشرة)';
+const TENS: Readonly<Record<string, number>> = {
+  عشرين: 20,
+  العشرون: 20,
+  ثلاثين: 30,
+  الثلاثون: 30,
+  أربعين: 40,
+  الأربعون: 40,
+  خمسين: 50,
+  الخمسون: 50,
+};
+/** «ثمانية وثلاثين» (38) or «الثامنة والثلاثون» (the 38th) for a time ending :30. */
+const TIME_AS_NUMBER = new RegExp(
+  `(?:^|[\\s،,(«])[وبلف]?(?:${HOUR_CARDINAL}\\s+و(عشرين|ثلاثين|أربعين|خمسين)|${HOUR_ORDINAL}\\s+و(العشرون|الثلاثون|الأربعون|الخمسون))${WORD_END}`,
+  'gu',
+);
+
+/** The minutes (10…59) of every clock time the canvas prints: «8:30», «١٠:٣٠», «10{:}30». */
+function canvasClockMinutes(elements: readonly NarrationCanvasElement[]): Set<number> {
+  const minutes = new Set<number>();
+  for (const element of elements) {
+    const text = element.text.replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+    for (const match of text.matchAll(/(?<![\d.])([0-2]?\d)\s*(?:\{:\}|:)\s*([0-5]\d)(?!\d)/g)) {
+      minutes.add(Number(match[2]));
+    }
+  }
+  return minutes;
+}
+
+/**
+ * «التخمين صحيح» as a verdict — not a question («هل التخمين صحيح؟», «صحيحًا أم خاطئًا»)
+ * and not a line that shows it in general («بصورة عامة», «لأي عدد», a proof).
+ */
+const CONJECTURE_PROVED = /التخمين\s+(?:صحيح|صحيحًا|صحيحا|صح)(?![\p{L}])/u;
+const NOT_A_VERDICT =
+  /(?<![\p{L}])(?:هل(?![\p{L}])|إذا كان|ما إذا|أم\s+خاطئ|أو\s+خاطئ|أم\s+لا|بصورة عامة|بشكل عام|لأي عدد|لكل عدد|لكل قيمة|لجميع|في كل الحالات|برهان|نبرهن|أثبتنا)/u;
+
+/** Arabic letters the canvas prints as symbols («س», «ص», «ن»): their names are right. */
+function canvasArabicSymbols(elements: readonly NarrationCanvasElement[]): Set<string> {
+  const symbols = new Set<string>();
+  for (const element of elements) {
+    for (const match of element.text.matchAll(/(?<![\p{L}])([سصنمه])(?![\p{L}])/gu)) {
+      symbols.add(match[1]!);
+    }
+  }
+  return symbols;
+}
+const ARABIC_SYMBOL_OF: Readonly<Record<string, string>> = {
+  سين: 'س',
+  صاد: 'ص',
+  نون: 'ن',
+  ميم: 'م',
+  هاء: 'ه',
+};
+
 // Units and LaTeX/HTML leftovers that are not point names or variables.
 const NOT_A_SYMBOL =
   /\\[A-Za-z]+|&[A-Za-z]+;|\b(?:cm|mm|km|kg|mg|ml|m²|m³|cm²|cm³|km²|sec|min|hr|pH)\b/g;
@@ -232,6 +373,11 @@ export function validateLearnerFirstNarration(
     const forbidden = new Set(
       [...letters].flatMap((letter) => [...(ARABIC_NAME_OF[letter] ?? [])]),
     );
+    const arabicItems = canvasArabicItemLetters(elements);
+    const arabicSymbols = canvasArabicSymbols(elements);
+    const canvasHasThousands = elements.some((element) =>
+      /[0-9٠-٩]{4,}|[0-9٠-٩]{1,3}[,٬][0-9٠-٩]{3}/u.test(element.text),
+    );
     for (const line of lines) {
       const run =
         NAME_RUN.exec(line)?.[1] ??
@@ -241,8 +387,29 @@ export function validateLearnerFirstNarration(
         issues.push({ code: 'SYMBOL_READING_ARABIC_NAME', evidence: run });
         break;
       }
+      // W3: one letter name alone («سين أصغر من سالب ثلاثة»).
+      const lone = loneLetterName(line, forbidden, arabicItems, arabicSymbols, canvasHasThousands);
+      if (lone) {
+        issues.push({ code: 'SYMBOL_READING_ARABIC_NAME', evidence: lone });
+        break;
+      }
     }
   }
+
+  // W3: a clock time the canvas prints, read as a number («ثمانية وثلاثين» for 8:30).
+  const minutes = canvasClockMinutes(elements);
+  if (minutes.size > 0) {
+    const misread = lines
+      .flatMap((line) => [...line.matchAll(TIME_AS_NUMBER)])
+      .find((match) => minutes.has(TENS[(match[1] ?? match[2])!] ?? -1));
+    if (misread) {
+      issues.push({ code: 'CLOCK_TIME_READ_AS_NUMBER', evidence: misread[0].trim() });
+    }
+  }
+
+  // W3: examples support a conjecture, they never prove it.
+  const proved = lines.find((line) => CONJECTURE_PROVED.test(line) && !NOT_A_VERDICT.test(line));
+  if (proved) issues.push({ code: 'CONJECTURE_CALLED_PROVED', evidence: proved.slice(0, 160) });
   return issues;
 }
 
@@ -267,7 +434,11 @@ export function formatLearnerFirstNarrationCorrection(
       case 'IMAGE_APPEARANCE_NARRATION':
         return `- IMAGE_APPEARANCE_NARRATION: you described how a picture looks («${issue.evidence}»). Explain what the picture shows mathematically (what is counted or compared, and its numbers); never colours, line styles or positions.`;
       case 'SYMBOL_READING_ARABIC_NAME':
-        return `- SYMBOL_READING_ARABIC_NAME: you read Latin letters with Arabic letter names («${issue.evidence}»). Read each Latin letter by its English name: ${letters}.`;
+        return `- SYMBOL_READING_ARABIC_NAME: you read Latin letters with Arabic letter names («${issue.evidence}»). Read each Latin letter by its English name: ${letters}. Never «سين» for x, «صاد» for y or «ألف» for a, not even once.`;
+      case 'CLOCK_TIME_READ_AS_NUMBER':
+        return `- CLOCK_TIME_READ_AS_NUMBER: you read a clock time as a number («${issue.evidence}»). Read it as an hour and its part: 8:30 «الثامنة والنصف», 9:10 «التاسعة وعشر دقائق», 9:50 «التاسعة وخمسون دقيقة».`;
+      case 'CONJECTURE_CALLED_PROVED':
+        return `- CONJECTURE_CALLED_PROVED: you called a conjecture true because examples satisfy it («${issue.evidence}»). Examples support a conjecture, they never prove it: say «المثال يؤيد التخمين».`;
     }
   });
   return `Your previous narration broke these lesson rules; fix every one:\n${lines.join('\n')}`;
