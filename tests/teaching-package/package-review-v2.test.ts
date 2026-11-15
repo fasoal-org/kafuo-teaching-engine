@@ -156,11 +156,12 @@ describe('package-review-v2 (g5.v10)', () => {
     expect(parsed.findings.map((finding) => finding.check)).toEqual(['S6']);
   });
 
-  it('auto-fixes S6 and leaves S7 to the teacher', () => {
+  it('auto-fixes S6 and, since quality plan W2 (zero manual corrections), S7 too', () => {
     const slides = [{ id: 's10', sceneType: 'slide' }] as never;
     const finding = (check: string) => ({ targetId: 's10', check }) as never;
     expect(teacherOnlyReason(finding('S6'), slides)).toBeNull();
-    expect(teacherOnlyReason(finding('S7'), slides)).toBe('REGENERATION_REFUSED');
+    expect(teacherOnlyReason(finding('S7'), slides)).toBeNull();
+    expect(teacherOnlyReason(finding('S5'), slides)).toBe('S5_TEACHER_ONLY');
     expect(teacherOnlyReason(finding('S1'), slides)).toBeNull();
   });
 });

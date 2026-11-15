@@ -128,6 +128,11 @@ export interface FixLoopContext {
   slides: readonly ReviewSlide[];
   scenes: readonly AppScene[];
   findings: StoredFinding[];
+  /**
+   * g5.v10 (quality plan W2): the package is learner-first, so a fix that made its
+   * slide worse is retried once and otherwise rolled back. Absent on every other package.
+   */
+  learnerFirst?: true;
   /** Keep the lease while fixing; false → stop (another worker took over). */
   heartbeat: () => Promise<boolean>;
   callReviewer: (request: ReviewCallRequest) => Promise<ReviewCallAnswer>;
@@ -554,6 +559,9 @@ export async function runPackageReview(
 
     let fixes: StoredFix[] = claimed.fixes;
     if (deps.fixLoop && findings.length > 0) {
+      // g5.v10 quality plan W2: the fix loop rolls back a fix that made a slide worse.
+      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId);
+      const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
       const result = await deps.fixLoop({
         pool,
         review,
@@ -561,6 +569,7 @@ export async function runPackageReview(
         slides,
         scenes,
         findings,
+        ...(learnerFirst ? { learnerFirst: true } : {}),
         heartbeat,
         callReviewer: async (request) => {
           const answered = await callReviewer(request);

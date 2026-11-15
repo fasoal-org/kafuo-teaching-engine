@@ -9,6 +9,7 @@ import {
   fixRetryIdempotencyKey,
   PACKAGE_REVIEWER_ACTOR,
   REVIEWER_REGENERATION_LEASE_MAX_SECONDS,
+  worseningFindings,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import { REVIEW_LEASE_MS, reviewStatusOf } from '@/lib/server/teaching-package/package-review';
 import {
@@ -100,9 +101,14 @@ function setup(options: {
   regenerateAudio?: ReturnType<typeof vi.fn>;
   versionStatus?: string;
   liveScenes?: Map<string, AppScene>;
-  rereview?: (focus: string) => Array<Record<string, unknown>>;
+  rereview?: (focus: string, focusText: string) => Array<Record<string, unknown>>;
+  /** g5.v10 (quality plan W2). */
+  learnerFirst?: boolean;
+  restore?: ReturnType<typeof vi.fn>;
+  /** The call log, shared with a test's own fakes. */
+  order?: string[];
 }) {
-  const order: string[] = [];
+  const order: string[] = options.order ?? [];
   const regenerated = new Map<string, AppScene>();
   const regenerate =
     options.regenerate ??
@@ -137,8 +143,12 @@ function setup(options: {
     }) => {
       const focus = [...(request.focusIds ?? [])][0]!;
       order.push(`rereview:${focus}`);
+      const focusText = request.slides.find((s) => s.id === focus)?.visibleText ?? '';
       return {
-        answer: { summary: 's', findings: (options.rereview?.(focus) ?? []) as never },
+        answer: {
+          summary: 's',
+          findings: (options.rereview?.(focus, focusText) ?? []) as never,
+        },
         call: {
           provider: 'anthropic' as const,
           modelString: 'anthropic:claude-opus-5-5',
@@ -151,6 +161,7 @@ function setup(options: {
   const loop = createPackageReviewFixLoop({
     regenerate: regenerate as never,
     regenerateAudio: regenerateAudio as never,
+    ...(options.restore ? { restore: options.restore as never } : {}),
     readVersion: (async () => ({
       id: 'tpv-1',
       tenantId: 't-1',
@@ -171,6 +182,7 @@ function setup(options: {
       slides: reviewSlidesOf(options.scenes),
       scenes: options.scenes,
       findings: options.findings,
+      ...(options.learnerFirst ? { learnerFirst: true as const } : {}),
       heartbeat: async () => true,
       callReviewer: callReviewer as never,
       recordProgress,
@@ -178,6 +190,40 @@ function setup(options: {
     });
   return { run, regenerate, regenerateAudio, callReviewer, recordProgress, order };
 }
+
+/**
+ * W2's regeneration fake: the first fix writes «مصحح», the retry (key `-w`) writes
+ * «مصحح ثان»; every call is logged with its key and instruction.
+ */
+function regenerateByKey(order: string[], scenes: AppScene[]) {
+  return vi.fn(async (_grant, sceneId: string, request: { idempotencyKey: string }) => {
+    const retry = request.idempotencyKey.endsWith('-w');
+    order.push(`regenerate:${sceneId}${retry ? ':retry' : ''}`);
+    const base = scenes.find((scene) => scene.id === sceneId)!;
+    const next = slide(sceneId, base.order, retry ? 'مصحح ثان' : 'مصحح');
+    return {
+      status: 200,
+      body: {
+        regenerationId: `tpsr-${sceneId}${retry ? '-w' : ''}`,
+        status: 'succeeded',
+        replayed: false,
+        sceneId,
+        scene: next,
+        resultSceneRev: 2,
+        current: { rev: 2, scene: next },
+      },
+    };
+  });
+}
+
+const worse = (focus: string, check = 'S6', severity = 'high') => ({
+  targetId: focus,
+  check,
+  severity,
+  bookEvidence: { quote: 'q', unitId: null },
+  whatIsWrong: 'الأوقات تُقرأ ثمانية وثلاثين',
+  fixNote: 'اقرأ الوقت الثامنة والنصف',
+});
 
 describe('package review fix loop (D-1)', () => {
   const scenes = [slide('s1', 1, 'أ'), slide('s2', 2, 'ب'), slide('s3', 3, 'ج')];
@@ -914,5 +960,147 @@ describe('package review fix loop (D-1)', () => {
     expect(fixInstruction([finding('f', 's', 'S1')]).length).toBeGreaterThanOrEqual(10);
     const key = fixIdempotencyKey('tpr-Ab_9', 'scene/with spaces');
     expect(key).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
+  });
+});
+
+describe('g5.v10 quality plan W2: a fix never leaves a slide worse', () => {
+  const scenes = [slide('s1', 1, 'أ'), slide('s2', 2, 'ب'), slide('s3', 3, 'ج')];
+  const lowS6 = (): StoredFinding => ({ ...finding('f1', 's2', 'S6'), severity: 'low' });
+  const audioOf = (order: string[]) =>
+    vi.fn(async (_grant, sceneId: string) => {
+      order.push(`audio:${sceneId}`);
+      return { sceneId, scene: slide(sceneId, 2, 'مع الصوت'), rev: 3, generated: 1, missing: 0 };
+    });
+
+  it('worse, then fixed on the one retry: restored first, the retry carries «لا تفعل», audio only for the kept slide', async () => {
+    const order: string[] = [];
+    const regenerate = regenerateByKey(order, scenes);
+    const restore = vi.fn(async (_pool, _grant, id: string) => {
+      order.push(`restore:${id}`);
+      return { scene: scenes[1]! };
+    });
+    const { run, callReviewer } = setup({
+      scenes,
+      findings: [lowS6()],
+      learnerFirst: true,
+      order,
+      regenerate,
+      regenerateAudio: audioOf(order),
+      restore,
+      // The first fix misreads the times (item 208's f1); the retry is clean.
+      rereview: (focus, text) => (text === 'مصحح' ? [worse(focus)] : []),
+    });
+    const result = await run();
+    expect(order).toEqual([
+      'regenerate:s2',
+      'rereview:s2',
+      'restore:tpsr-s2',
+      'regenerate:s2:retry',
+      'rereview:s2',
+      'audio:s2',
+    ]);
+    expect(callReviewer).toHaveBeenCalledTimes(2);
+    const retry = regenerate.mock.calls[1]![2] as { instruction: string; idempotencyKey: string };
+    expect(retry.idempotencyKey).toBe(`${fixIdempotencyKey('tpr-abc', 's2')}-w`);
+    expect(retry.instruction).toContain('(S6) صحح f1');
+    expect(retry.instruction).toContain('لا تفعل ذلك مرة أخرى');
+    expect(retry.instruction).toContain('الأوقات تُقرأ ثمانية وثلاثين');
+    expect(result.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+      ['f1', 'fixed', null],
+    ]);
+    expect(result.fixes).toEqual([
+      expect.objectContaining({ outcome: 'fixed', regenerationId: 'tpsr-s2-w', code: null }),
+    ]);
+  });
+
+  it('worse twice: the slide the review read is restored, no TTS is paid, the finding stays open', async () => {
+    const order: string[] = [];
+    const restore = vi.fn(async (_pool, _grant, id: string) => {
+      order.push(`restore:${id}`);
+      return { scene: scenes[1]! };
+    });
+    const regenerateAudio = audioOf(order);
+    const { run } = setup({
+      scenes,
+      findings: [{ ...finding('f1', 's2', 'S1'), severity: 'medium' }],
+      learnerFirst: true,
+      order,
+      regenerate: regenerateByKey(order, scenes),
+      regenerateAudio,
+      restore,
+      // Both attempts bring in a wrong method (item 208's f15).
+      rereview: (focus) => [worse(focus, 'S2')],
+    });
+    const result = await run();
+    expect(order).toEqual([
+      'regenerate:s2',
+      'rereview:s2',
+      'restore:tpsr-s2',
+      'regenerate:s2:retry',
+      'rereview:s2',
+      'restore:tpsr-s2-w',
+    ]);
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(result.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+      ['f1', 'open', 'STILL_WRONG'],
+    ]);
+    expect(result.fixes).toEqual([
+      expect.objectContaining({
+        outcome: 'still_wrong',
+        code: 'FIX_ROLLED_BACK',
+        regenerationId: 'tpsr-s2-w',
+      }),
+    ]);
+  });
+
+  it('the same check at the same severity is still wrong, not worse: no restore', async () => {
+    const order: string[] = [];
+    const restore = vi.fn();
+    const { run } = setup({
+      scenes,
+      findings: [finding('f1', 's2', 'S2')],
+      learnerFirst: true,
+      order,
+      regenerate: regenerateByKey(order, scenes),
+      regenerateAudio: audioOf(order),
+      restore,
+      rereview: (focus) => [worse(focus, 'S2')],
+    });
+    const result = await run();
+    expect(restore).not.toHaveBeenCalled();
+    expect(order).toEqual(['regenerate:s2', 'rereview:s2', 'audio:s2']);
+    expect(result.findings.map((f) => [f.id, f.teacherReason])).toEqual([
+      ['f1', 'STILL_WRONG'],
+      ['r-2-1', 'STILL_WRONG'],
+    ]);
+  });
+
+  it('v1 (not learner-first) keeps the old flow: no restore, audio before the one re-review', async () => {
+    const order: string[] = [];
+    const restore = vi.fn();
+    const { run } = setup({
+      scenes,
+      findings: [lowS6()],
+      order,
+      regenerate: regenerateByKey(order, scenes),
+      regenerateAudio: audioOf(order),
+      restore,
+      rereview: (focus) => [worse(focus)],
+    });
+    await run();
+    expect(restore).not.toHaveBeenCalled();
+    expect(order).toEqual(['regenerate:s2', 'audio:s2', 'rereview:s2']);
+  });
+
+  it('worseningFindings: a new High/S2/S6 or a higher severity of the fixed check; never an error already open', () => {
+    const fixed = [{ ...finding('f1', 's2', 'S6'), severity: 'low' as const }];
+    const none = new Set<string>();
+    const of = (check: string, severity: string) => worse('s2', check, severity) as never;
+    expect(worseningFindings([of('S6', 'high')], fixed, none)).toHaveLength(1);
+    expect(worseningFindings([of('S6', 'low')], fixed, none)).toHaveLength(0);
+    expect(worseningFindings([of('S2', 'low')], fixed, none)).toHaveLength(1);
+    expect(worseningFindings([of('S1', 'high')], fixed, none)).toHaveLength(1);
+    expect(worseningFindings([of('S1', 'medium')], fixed, none)).toHaveLength(0);
+    expect(worseningFindings([of('S2', 'high')], fixed, new Set(['S2']))).toHaveLength(0);
   });
 });

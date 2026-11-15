@@ -14,6 +14,11 @@
  * it stays open with the reason the teacher reads; a new, different error the
  * re-review found is added open (`NOT_ATTEMPTED`).
  *
+ * g5.v10 (quality plan W2): the re-review runs before the audio. A fix that made
+ * the slide worse (`worseningFindings`) is restored from its pre-image and runs
+ * once more with what it broke as «لا تفعل»; worse again → restored, and the
+ * finding stays open (`STILL_WRONG`, fix code `FIX_ROLLED_BACK`).
+ *
  * Teacher-only, never regenerated: S5 (a slide cannot be added or moved after
  * Scenes exist), a bank quiz, and a quiz check on a non-quiz Scene.
  *
@@ -45,6 +50,7 @@ import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import { regenerateSceneNarrationAudio } from '@/lib/server/teaching-package/scene-narration-audio';
 import {
   regenerateSlideScene,
+  restoreSlideScene,
   SCENE_REGENERATION_LIMITS,
   type RegenerationGrant,
 } from '@/lib/server/teaching-package/scene-regeneration';
@@ -63,7 +69,10 @@ export const PACKAGE_REVIEWER_ACTOR = 'system:package-reviewer';
 /**
  * The checks a regeneration may fix (plan §4.3); S5 is the teacher's. g5.v10's S6
  * (screen and narration disagree, an item left unexplained) is fixed by regenerating
- * the slide; its S7 (a weak-student design call) is the teacher's, like S5.
+ * the slide. Its S7 (a weak-student call: a letter read by its Arabic name, a claim
+ * tested before it is stated, a drawing against its givens) is fixed the same way
+ * since the quality plan W2 (owner: zero manual corrections, 15 Nov 2026). S6/S7
+ * exist only in package-review-v2, so v1 reviews are unchanged.
  */
 const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
   'S1',
@@ -71,10 +80,39 @@ const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
   'S3',
   'S4',
   'S6',
+  'S7',
   'Q1',
   'Q2',
   'Q5',
 ]);
+
+const SEVERITY_RANK: Readonly<Record<string, number>> = { low: 1, medium: 2, high: 3 };
+
+/**
+ * g5.v10 quality plan W2: the re-review findings that show a fix made its slide
+ * WORSE — a new High, S2 (wrong working) or S6 (screen and voice disagree) that
+ * the fix did not target, or a targeted check reported at a higher severity than
+ * the finding it fixed (item 208's f1: a Low S6 note gave a High S6 misread time).
+ * An error already open on the slide outside the fix is not "new".
+ */
+export function worseningFindings(
+  rereview: readonly ReviewerFinding[],
+  targeted: readonly StoredFinding[],
+  alreadyOpenChecks: ReadonlySet<string>,
+): ReviewerFinding[] {
+  const targetedRank = new Map<string, number>();
+  for (const finding of targeted) {
+    const rank = SEVERITY_RANK[finding.severity] ?? 0;
+    targetedRank.set(finding.check, Math.max(rank, targetedRank.get(finding.check) ?? 0));
+  }
+  return rereview.filter((finding) => {
+    if (alreadyOpenChecks.has(finding.check)) return false;
+    const rank = SEVERITY_RANK[finding.severity] ?? 0;
+    const before = targetedRank.get(finding.check);
+    if (before !== undefined) return rank > before;
+    return finding.severity === 'high' || finding.check === 'S2' || finding.check === 'S6';
+  });
+}
 
 /** Findings no regeneration can fix (plan §4.3): they go straight to the teacher. */
 export function teacherOnlyReason(
@@ -91,10 +129,20 @@ export function teacherOnlyReason(
   return null;
 }
 
-/** One instruction for one regeneration: every open note of the slide, within the limits. */
-export function fixInstruction(findings: readonly StoredFinding[]): string {
+/**
+ * One instruction for one regeneration: every open note of the slide, within the
+ * limits. W2's retry adds what the rolled-back attempt broke, as «لا تفعل».
+ */
+export function fixInstruction(
+  findings: readonly StoredFinding[],
+  avoid: readonly ReviewerFinding[] = [],
+): string {
   const lines = findings.map((finding) => `- (${finding.check}) ${finding.fixNote}`);
-  const text = `صحّح هذه الشريحة حسب ملاحظات مراجعة الكتاب، ولا تغيّر غير ذلك:\n${lines.join('\n')}`;
+  let text = `صحّح هذه الشريحة حسب ملاحظات مراجعة الكتاب، ولا تغيّر غير ذلك:\n${lines.join('\n')}`;
+  if (avoid.length > 0) {
+    const broke = avoid.map((finding) => `- ${finding.whatIsWrong}`);
+    text += `\nمحاولة سابقة لهذا التصحيح أفسدت الشريحة؛ لا تفعل ذلك مرة أخرى، واحتفظ بكل ما كان صحيحًا:\n${broke.join('\n')}`;
+  }
   const { max } = SCENE_REGENERATION_LIMITS.instruction;
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -130,6 +178,13 @@ export function fixRetryIdempotencyKey(reviewId: string, sceneId: string): strin
   const base = fixIdempotencyKey(reviewId, sceneId);
   const max = SCENE_REGENERATION_LIMITS.idempotencyKey.max;
   return `${base.length > max - 2 ? base.slice(0, max - 2) : base}-r`;
+}
+
+/** W2: the one derived key of the retry after a fix made the slide worse. */
+export function fixWorseRetryIdempotencyKey(reviewId: string, sceneId: string): string {
+  const base = fixIdempotencyKey(reviewId, sceneId);
+  const max = SCENE_REGENERATION_LIMITS.idempotencyKey.max;
+  return `${base.length > max - 2 ? base.slice(0, max - 2) : base}-w`;
 }
 
 /**
@@ -183,6 +238,12 @@ function sceneChanged(live: AppScene, reviewed: AppScene | undefined): boolean {
 
 export interface FixLoopDeps {
   regenerate?: typeof regenerateSlideScene;
+  /** W2: puts a regeneration's pre-image back (production: `restoreSlideScene`). */
+  restore?: (
+    pool: ConnectableQueryable,
+    grant: RegenerationGrant,
+    regenerationId: string,
+  ) => Promise<{ scene: AppScene }>;
   regenerateAudio?: typeof regenerateSceneNarrationAudio;
   readVersion?: typeof readVersionById;
   readScene?: (
@@ -194,6 +255,7 @@ export interface FixLoopDeps {
 
 export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
   const regenerate = deps.regenerate ?? regenerateSlideScene;
+  const restore = deps.restore ?? restoreSlideScene;
   const regenerateAudio = deps.regenerateAudio ?? regenerateSceneNarrationAudio;
   const readVersion = deps.readVersion ?? readVersionById;
   const readScene =
@@ -292,12 +354,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       let regenerated: AppScene;
       let regenerationId: string | null = null;
-      const regenerateWith = (idempotencyKey: string) =>
+      const regenerateWith = (idempotencyKey: string, avoid: readonly ReviewerFinding[] = []) =>
         regenerate(
           grant,
           slide.id,
           {
-            instruction: fixInstruction(sceneFindings),
+            instruction: fixInstruction(sceneFindings, avoid),
             reason: `مراجعة الذكاء الاصطناعي ${review.id}: ${[...new Set(sceneFindings.map((f) => f.check))].join(', ')}`,
             idempotencyKey,
           },
@@ -366,6 +428,125 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         continue;
       }
 
+      // g5.v10 quality plan W2: re-review BEFORE the narration audio, so a fix that
+      // made the slide worse is undone before any TTS is paid for it. Worse → the
+      // pre-image is restored and the fix runs once more with «لا تفعل»; worse again
+      // → restored for good. Item 208 kept f1 (times misread) and f15 (average change).
+      let rereview: ReviewerFinding[] | null = null;
+      let reviewed = false;
+      if (context.learnerFirst) {
+        const targetedIds = new Set(sceneFindings.map((finding) => finding.id));
+        const openOutside = new Set(
+          findings
+            .filter(
+              (finding) =>
+                finding.targetId === slide.id &&
+                finding.status === 'open' &&
+                !targetedIds.has(finding.id),
+            )
+            .map((finding) => finding.check),
+        );
+        const rereviewOf = async (scene: AppScene): Promise<ReviewerFinding[] | null> => {
+          const candidate = sceneToReviewSlide(scene);
+          const around = slides.map((other) =>
+            other.id === slide.id ? candidate : (currentSlides.get(other.id) ?? other),
+          );
+          try {
+            if (!(await context.heartbeat())) throw new Error('lease lost');
+            const { answer } = await context.callReviewer({
+              review,
+              units: context.units,
+              slides: neighbourhood(around, candidate),
+              focusIds: new Set([slide.id]),
+            });
+            return answer.findings.filter((finding) => finding.targetId === slide.id);
+          } catch (error) {
+            log.warn(
+              `review ${review.id}: re-review of ${slide.id} failed`,
+              JSON.stringify(describeErrorSafely(error)),
+            );
+            return null;
+          }
+        };
+        /** Puts the pre-image back; null when the store refused (the slide stays as it is). */
+        const restoreOf = async (id: string): Promise<AppScene | null> => {
+          try {
+            return (await restore(pool, grant, id)).scene;
+          } catch (error) {
+            log.warn(
+              `review ${review.id}: restoring ${slide.id} failed`,
+              JSON.stringify(describeErrorSafely(error)),
+            );
+            return null;
+          }
+        };
+        const rollBack = async (restored: AppScene, id: string | null) => {
+          scenesById.set(slide.id, restored);
+          currentSlides.set(slide.id, sceneToReviewSlide(restored));
+          for (const finding of sceneFindings) finding.teacherReason = 'STILL_WRONG';
+          fixes.push({
+            sceneId: slide.id,
+            findingIds: sceneFindings.map((f) => f.id),
+            outcome: 'still_wrong',
+            code: 'FIX_ROLLED_BACK',
+            regenerationId: id,
+          });
+          log.info(`review ${review.id}: ${slide.id} rolled back (the fix made it worse)`);
+          await context.recordProgress(findings, fixes);
+        };
+
+        const first = await rereviewOf(regenerated);
+        const firstWorse = first ? worseningFindings(first, sceneFindings, openOutside) : [];
+        if (first && firstWorse.length === 0) {
+          rereview = first;
+          reviewed = true;
+        } else if (first && regenerationId) {
+          const original = await restoreOf(regenerationId);
+          if (!original) {
+            // The store refused the restore: the old flow (the new errors are recorded).
+            rereview = first;
+            reviewed = true;
+          } else if (!(await context.heartbeat())) {
+            stopped = true;
+            scenesById.set(slide.id, original);
+            mark(slide.id, 'VERSION_CHANGED');
+            continue;
+          } else {
+            const retry = await settle(
+              regenerateWith(fixWorseRetryIdempotencyKey(review.id, slide.id), firstWorse),
+            );
+            const retried =
+              retry.ok && retry.value.status === 200
+                ? {
+                    scene: retry.value.body.current?.scene ?? retry.value.body.scene,
+                    id: retry.value.body.regenerationId,
+                  }
+                : null;
+            const second = retried ? await rereviewOf(retried.scene) : null;
+            const secondWorse = second ? worseningFindings(second, sceneFindings, openOutside) : [];
+            if (retried && second && secondWorse.length === 0) {
+              regenerated = retried.scene;
+              regenerationId = retried.id;
+              rereview = second;
+              reviewed = true;
+            } else {
+              // The retry failed, went unchecked or was worse again: the slide the
+              // review read stays live (its audio with it), and the finding stays open.
+              const restored = retried ? await restoreOf(retried.id) : original;
+              if (restored) {
+                await rollBack(restored, retried?.id ?? regenerationId);
+                continue;
+              }
+              // The retried slide could not be undone: keep it, with what was found.
+              regenerated = retried!.scene;
+              regenerationId = retried!.id;
+              rereview = second;
+              reviewed = second !== null;
+            }
+          }
+        }
+      }
+
       // LOW-4: the regeneration may have taken long; a run that lost its lease
       // never pays for the narration audio (TTS) — the run that took over does.
       let audioCode: string | null = null;
@@ -412,21 +593,23 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       const changed = sceneToReviewSlide(regenerated);
       currentSlides.set(slide.id, changed);
       const nowSlides = slides.map((candidate) => currentSlides.get(candidate.id) ?? candidate);
-      let rereview: ReviewerFinding[] | null = null;
-      try {
-        if (!(await context.heartbeat())) throw new Error('lease lost');
-        const { answer } = await context.callReviewer({
-          review,
-          units: context.units,
-          slides: neighbourhood(nowSlides, changed),
-          focusIds: new Set([slide.id]),
-        });
-        rereview = answer.findings.filter((finding) => finding.targetId === slide.id);
-      } catch (error) {
-        log.warn(
-          `review ${review.id}: re-review of ${slide.id} failed`,
-          JSON.stringify(describeErrorSafely(error)),
-        );
+      // W2: a v10 slide was already re-reviewed before its audio (the text is the same).
+      if (!reviewed) {
+        try {
+          if (!(await context.heartbeat())) throw new Error('lease lost');
+          const { answer } = await context.callReviewer({
+            review,
+            units: context.units,
+            slides: neighbourhood(nowSlides, changed),
+            focusIds: new Set([slide.id]),
+          });
+          rereview = answer.findings.filter((finding) => finding.targetId === slide.id);
+        } catch (error) {
+          log.warn(
+            `review ${review.id}: re-review of ${slide.id} failed`,
+            JSON.stringify(describeErrorSafely(error)),
+          );
+        }
       }
 
       if (rereview === null) {
