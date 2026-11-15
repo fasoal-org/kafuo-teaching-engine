@@ -340,12 +340,16 @@ describe('findings and status', () => {
     );
   });
 
-  it('flagged-slide regeneration: every open slide finding is tried again, teacher-only ones and fixed ones stay', () => {
+  it('flagged-slide regeneration: only stayed-wrong, never-attempted and stopped findings are tried again', () => {
     const seed = seedRefixFindings(
       [
         stored({ id: 'still', teacherReason: 'STILL_WRONG' }),
-        stored({ id: 'changed', teacherReason: 'VERSION_CHANGED' }),
-        stored({ id: 'audio', teacherReason: 'NARRATION_AUDIO_FAILED' }),
+        stored({ id: 'new', check: 'S2', teacherReason: 'NOT_ATTEMPTED' }),
+        stored({ id: 'changed', check: 'S3', teacherReason: 'VERSION_CHANGED' }),
+        // Content fixed, audio failed: the audio has its own remedy, no new paid slide.
+        stored({ id: 'audio', check: 'S4', teacherReason: 'NARRATION_AUDIO_FAILED' }),
+        stored({ id: 'unchecked', check: 'S4', teacherReason: 'REREVIEW_UNAVAILABLE' }),
+        stored({ id: 'refused', check: 'S4', teacherReason: 'REGENERATION_REFUSED' }),
         stored({ id: 'missing', targetId: '', check: 'S5', teacherReason: 'S5_TEACHER_ONLY' }),
         stored({ id: 'bank', targetId: 'bank', check: 'Q1', teacherReason: 'STILL_WRONG' }),
         stored({ id: 'done', status: 'fixed' }),
@@ -354,13 +358,54 @@ describe('findings and status', () => {
     );
     expect(seed.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
       ['still', 'open', null],
+      ['new', 'open', null],
       ['changed', 'open', null],
-      ['audio', 'open', null],
+      ['audio', 'open', 'NARRATION_AUDIO_FAILED'],
+      ['unchecked', 'open', 'REREVIEW_UNAVAILABLE'],
+      ['refused', 'open', 'REGENERATION_REFUSED'],
       ['missing', 'open', 'S5_TEACHER_ONLY'],
       ['bank', 'open', 'BANK_QUIZ_NOT_REGENERABLE'],
       ['done', 'fixed', null],
     ]);
     expect(seed.sceneIds).toEqual(['s1']);
+  });
+
+  it('flagged-slide regeneration: a slide a person edited since the review is left as they made it', () => {
+    const seed = seedRefixFindings(
+      [stored({ id: 'still', teacherReason: 'STILL_WRONG', sceneDigest: 'as-reviewed' })],
+      slides,
+      new Map([['s1', 'edited-by-teacher']]),
+    );
+    expect(seed.findings.map((f) => f.teacherReason)).toEqual(['VERSION_CHANGED']);
+    expect(seed.sceneIds).toEqual([]);
+    // Unchanged slide, or a review finished before digests existed: tried again.
+    const unchanged = seedRefixFindings(
+      [stored({ id: 'still', teacherReason: 'STILL_WRONG', sceneDigest: 'same' })],
+      slides,
+      new Map([['s1', 'same']]),
+    );
+    expect(unchanged.sceneIds).toEqual(['s1']);
+    const older = seedRefixFindings(
+      [stored({ id: 'still', teacherReason: 'STILL_WRONG' })],
+      slides,
+      new Map([['s1', 'whatever']]),
+    );
+    expect(older.sceneIds).toEqual(['s1']);
+  });
+
+  it('flagged-slide regeneration: one problem is one finding, however often it was re-reported', () => {
+    const seed = seedRefixFindings(
+      [
+        stored({ id: 'f1', check: 'S1', teacherReason: 'STILL_WRONG', fixNote: 'old' }),
+        stored({ id: 'r-1-1', check: 'S1', teacherReason: 'STILL_WRONG', fixNote: 'newest' }),
+        stored({ id: 'f2', check: 'S3', teacherReason: 'STILL_WRONG' }),
+      ],
+      slides,
+    );
+    expect(seed.findings.map((f) => [f.id, f.fixNote])).toEqual([
+      ['r-1-1', 'newest'],
+      ['f2', 'n'],
+    ]);
   });
 
   it('flagged-slide regeneration: nothing a regeneration may fix → no slides', () => {

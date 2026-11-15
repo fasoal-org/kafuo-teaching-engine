@@ -32,6 +32,7 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { loadLiveScenes } from '@/lib/server/teaching-package/package-review';
 import { teacherOnlyReason } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
+  reviewedSceneDigest,
   reviewSlidesOf,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -58,25 +59,64 @@ export interface RefixSeed {
 }
 
 /**
- * The review's findings as the next fix loop must see them. Every open
- * finding's reason is recomputed: a teacher-only one (S5, bank quiz, a check
- * no regeneration may fix) keeps it, and every other one (`STILL_WRONG`,
- * `NOT_ATTEMPTED`, `VERSION_CHANGED`, a failed audio or re-review) is reset to
- * `null`, which is what makes the loop regenerate that slide again. Fixed
- * findings stay fixed.
+ * The reasons a press of Regenerate tries again (plan §3): the slide stayed
+ * wrong, a new error was never attempted, or the run stopped. Every other
+ * reason stays as it is — a teacher-only one, a regeneration refused, a slide
+ * whose content was fixed but whose audio failed (it has its own "regenerate
+ * audio" remedy) or could not be re-checked: regenerating those again would
+ * pay for a new slide that is not needed.
+ */
+const RETRIED_REASONS: ReadonlySet<string> = new Set([
+  'STILL_WRONG',
+  'NOT_ATTEMPTED',
+  'VERSION_CHANGED',
+]);
+
+/**
+ * The review's findings as the next fix loop must see them:
+ *
+ * - an open finding with a retried reason (or none) is reset to `null`, which
+ *   is what makes the loop regenerate that slide again — unless it is
+ *   teacher-only (S5, bank quiz, a check no regeneration may fix), or a person
+ *   edited its slide since the review saw it (`liveDigests` differ from the
+ *   finding's `sceneDigest`): then it is `VERSION_CHANGED` and the slide is left
+ *   as the person made it;
+ * - of several open findings of one check on one slide (an earlier run adds
+ *   the re-reported check again), only the newest is kept, so a press never
+ *   piles up copies of one problem;
+ * - fixed findings stay fixed.
  */
 export function seedRefixFindings(
   findings: readonly StoredFinding[],
   slides: readonly ReviewSlide[],
+  liveDigests: ReadonlyMap<string, string> = new Map(),
 ): RefixSeed {
-  const seeded = findings.map((finding) =>
-    finding.status === 'open'
-      ? {
-          ...finding,
-          teacherReason: teacherOnlyReason({ ...finding, teacherReason: null }, slides),
-        }
-      : { ...finding },
-  );
+  const edited = (finding: StoredFinding) =>
+    finding.sceneDigest !== undefined &&
+    liveDigests.size > 0 &&
+    liveDigests.get(finding.targetId) !== finding.sceneDigest;
+  const reasoned = findings.map((finding): StoredFinding => {
+    if (finding.status !== 'open') return { ...finding };
+    if (finding.teacherReason !== null && !RETRIED_REASONS.has(finding.teacherReason)) {
+      return { ...finding };
+    }
+    const teacherOnly = teacherOnlyReason({ ...finding, teacherReason: null }, slides);
+    return {
+      ...finding,
+      teacherReason: teacherOnly ?? (edited(finding) ? 'VERSION_CHANGED' : null),
+    };
+  });
+  // Newest first: the last of one slide's check is the one kept.
+  const seen = new Set<string>();
+  const dropped = new Set<number>();
+  for (let index = reasoned.length - 1; index >= 0; index -= 1) {
+    const finding = reasoned[index]!;
+    if (finding.status !== 'open' || finding.teacherReason !== null) continue;
+    const key = `${finding.targetId}\u0000${finding.check}`;
+    if (seen.has(key)) dropped.add(index);
+    else seen.add(key);
+  }
+  const seeded = reasoned.filter((_, index) => !dropped.has(index));
   const sceneIds = slides
     .filter((slide) =>
       seeded.some(
@@ -88,6 +128,25 @@ export function seedRefixFindings(
     )
     .map((slide) => slide.id);
   return { findings: seeded, sceneIds };
+}
+
+/**
+ * A replay's slides: the ones the queued review was seeded to regenerate (open,
+ * no reason yet), in the stored order — so the Admin never says "0 slides".
+ */
+function queuedSceneIds(findings: readonly StoredFinding[]): string[] {
+  const ids: string[] = [];
+  for (const finding of findings) {
+    if (
+      finding.status === 'open' &&
+      finding.teacherReason === null &&
+      finding.targetId &&
+      !ids.includes(finding.targetId)
+    ) {
+      ids.push(finding.targetId);
+    }
+  }
+  return ids;
 }
 
 /** Deterministic per (tenant, version, request key): a retry names the same review. */
@@ -166,7 +225,12 @@ export async function queueFlaggedSlideRefix(
       stageId: version.currentStageId,
     });
     if (review && review.id === newReviewId) {
-      return { review, previousReviewId: null, sceneIds: [], replayed: true };
+      return {
+        review,
+        previousReviewId: null,
+        sceneIds: queuedSceneIds(review.findings),
+        replayed: true,
+      };
     }
     if (version.status !== 'draft') {
       throw new TeachingPackageError(
@@ -202,7 +266,11 @@ export async function queueFlaggedSlideRefix(
     if (!scenes) {
       throw new TeachingPackageError('STAGE_NOT_LIVE', 'the package stage is not live');
     }
-    const seed = seedRefixFindings(review.findings, reviewSlidesOf(scenes));
+    const seed = seedRefixFindings(
+      review.findings,
+      reviewSlidesOf(scenes),
+      new Map(scenes.map((scene) => [scene.id, reviewedSceneDigest(scene)])),
+    );
     if (seed.sceneIds.length === 0) {
       throw new TeachingPackageError(
         'NO_REGENERABLE_SLIDES',

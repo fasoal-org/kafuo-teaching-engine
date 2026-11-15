@@ -238,6 +238,28 @@ describe('package review fix loop (D-1)', () => {
     expect(result.fixes[0]).toMatchObject({ outcome: 'still_wrong' });
   });
 
+  it('a second run (flagged-slide regeneration) never reuses an id an earlier run added', async () => {
+    const { run } = setup({
+      scenes,
+      // The newest copy an earlier run added, reset to be tried again.
+      findings: [finding('r-1-1', 's1', 'S2')],
+      rereview: (focus) => [
+        {
+          targetId: focus,
+          check: 'S2',
+          severity: 'high',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'ما زال الناتج خطأ',
+          fixNote: 'n',
+        },
+      ],
+    });
+    const result = await run();
+    const ids = result.findings.map((f) => f.id);
+    expect(ids).toEqual(['r-1-1', 'r-1-1-2']);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('refused: a regeneration refused by an invariant or sacred-text protection goes to the teacher, the loop goes on', async () => {
     const regenerate = vi.fn(async (_grant, sceneId: string) => {
       if (sceneId === 's1') {

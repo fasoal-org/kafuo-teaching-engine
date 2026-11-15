@@ -43,6 +43,7 @@ import { currentWorkerId } from '@/lib/server/teaching-model/worker-id';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
   loadReviewBookUnits,
+  reviewedSceneDigest,
   reviewSlidesOf,
   type ReviewBookUnit,
   type ReviewSlide,
@@ -280,6 +281,18 @@ export function toStoredFindings(
       status: 'open',
       teacherReason: null,
     };
+  });
+}
+
+/** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
+export function withSceneDigests(
+  findings: readonly StoredFinding[],
+  scenes: readonly AppScene[],
+): StoredFinding[] {
+  const digests = new Map(scenes.map((scene) => [scene.id, reviewedSceneDigest(scene)]));
+  return findings.map((finding) => {
+    const digest = finding.targetId ? digests.get(finding.targetId) : undefined;
+    return digest ? { ...finding, sceneDigest: digest } : finding;
   });
 }
 
@@ -564,6 +577,13 @@ export async function runPackageReview(
           : finding,
       );
     }
+    // 15 Nov 2026: each finding keeps its slide as the review last saw it (after
+    // any fix), so a flagged-slide regeneration never overwrites a slide a person
+    // edited since. A failed read keeps the in-memory scenes (best effort).
+    const finalScenes =
+      (await (deps.loadScenes ?? loadLiveScenes)(pool, claimed.stageId).catch(() => null)) ??
+      scenes;
+    findings = withSceneDigests(findings, finalScenes);
     return await end({ status: reviewStatusOf(findings), findings, fixes });
   } catch (error) {
     // L-1: an evicted run's aborted call is not the review's failure; the

@@ -61,6 +61,11 @@ export interface StoredFinding {
   fixNote: string;
   status: 'open' | 'fixed';
   teacherReason: TeacherReason | null;
+  /**
+   * The target slide's `reviewedSceneDigest` when the review finished (15 Nov
+   * 2026); absent on reviews finished before, and on a finding with no slide.
+   */
+  sceneDigest?: string;
 }
 
 export interface StoredFix {

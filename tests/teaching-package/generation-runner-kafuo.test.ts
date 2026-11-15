@@ -3597,6 +3597,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         'NOT_ATTEMPTED',
         'S5_TEACHER_ONLY',
       ]);
+      // A finished review keeps each slide finding's slide as it saw it.
+      expect(done.findings[0]!.sceneDigest).toEqual(expect.any(String));
+      expect(done.findings[1]!.sceneDigest).toBeUndefined();
       const queued = await refix(versionId);
       expect(queued).toMatchObject({
         previousReviewId: done.id,
@@ -3675,6 +3678,17 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       await expect(refix(versionId, 'has space')).rejects.toMatchObject({
         code: 'INVALID_REQUEST',
       });
+    });
+
+    it('a slide the teacher edited after the review is never regenerated over their edit', async () => {
+      const { done, versionId } = await reviewed([S2_ON_F1]);
+      await pool.query(
+        `UPDATE document_scenes SET data = jsonb_set(data, '{title}', '"عدّله المعلم"')
+          WHERE id = 'scene-f1'`,
+      );
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+      const rows = await pool.query(`SELECT id, status FROM teaching_package_reviews`);
+      expect(rows.rows).toEqual([{ id: done.id, status: 'needs_teacher' }]);
     });
 
     it('only teacher-only issues left: NO_REGENERABLE_SLIDES, and the review is left as it was', async () => {

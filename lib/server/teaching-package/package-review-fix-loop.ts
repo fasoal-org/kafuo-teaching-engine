@@ -461,12 +461,22 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           )
           .map((finding) => finding.check),
       );
+      // 15 Nov 2026: an id never repeats in one review. A flagged-slide
+      // regeneration runs this loop again on findings an earlier run added
+      // (`r-<order>-<n>`), so the plain id could already be taken.
+      const usedIds = new Set(findings.map((finding) => finding.id));
+      const freshId = (base: string) => {
+        let id = base;
+        for (let n = 2; usedIds.has(id); n += 1) id = `${base}-${n}`;
+        usedIds.add(id);
+        return id;
+      };
       findings.push(
         ...rereview
           .filter((finding) => !alreadyOpen.has(finding.check))
           .map((finding, index) => {
             const added: StoredFinding = {
-              id: `r-${slide.order}-${index + 1}`,
+              id: freshId(`r-${slide.order}-${index + 1}`),
               targetId: slide.id,
               targetTitle: changed.title,
               targetOrder: changed.order,

@@ -8,6 +8,8 @@
  * options, marked answers and explanations, so the reviewer can re-solve them
  * (checks Q1, Q2, Q5). No picture, no layout, no URL, no student data.
  */
+import { createHash } from 'node:crypto';
+
 import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { readContentUnitsForAttempt } from '@/lib/persistence/teaching-package';
@@ -212,4 +214,18 @@ export function reviewSlidesOf(scenes: readonly AppScene[]): ReviewSlide[] {
   return [...scenes]
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map((scene) => sceneToReviewSlide(scene));
+}
+
+/**
+ * A slide's material as the review last saw it (title, content, actions — the
+ * same material the fix loop's "slide changed" guard compares). Stored on each
+ * finding when a review finishes, so the flagged-slide regeneration can leave
+ * out a slide a person edited since (15 Nov 2026). Content only: a scene
+ * revision counter also moves on a save that changed nothing.
+ */
+export function reviewedSceneDigest(scene: AppScene): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ title: scene.title, content: scene.content, actions: scene.actions }))
+    .digest('base64url')
+    .slice(0, 22);
 }
