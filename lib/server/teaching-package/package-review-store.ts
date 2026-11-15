@@ -397,6 +397,64 @@ export async function listReviewsForVersion(
   return result.rows.map(rowToReview);
 }
 
+/**
+ * Inside a transaction: the newest review of `stageId` (the version's current
+ * Stage), row-locked, or `null`. A review of an older Stage describes slides
+ * that no longer exist, so the flagged-slide regeneration never reads one.
+ */
+export async function readStageReviewForUpdate(
+  tx: Queryable,
+  input: { tenantId: string; versionId: string; stageId: string },
+): Promise<PackageReview | null> {
+  const result = await tx.query<Record<string, unknown>>(
+    `SELECT * FROM teaching_package_reviews
+      WHERE tenant_id = $1 AND version_id = $2 AND stage_id = $3
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [input.tenantId, input.versionId, input.stageId],
+  );
+  const row = result.rows[0];
+  return row ? rowToReview(row) : null;
+}
+
+/**
+ * Regenerate only the flagged slides (owner, 15 Nov 2026): a finished review
+ * goes back to `queued` under a NEW id, with the given findings and no fixes.
+ *
+ * - A new id, because the fix loop keys each slide regeneration on
+ *   `rv-<reviewId>-<sceneId>`: the old id would replay the earlier
+ *   regeneration and change nothing. The row stays one per attempt.
+ * - `reviewed_at` is kept, so `runPackageReview` never pays for the
+ *   whole-package review again and goes straight to the fix loop.
+ * - Spend restarts (the ledger is summed by review id at the end).
+ *
+ * Guarded on a terminal status; `null` when the row moved meanwhile.
+ */
+export async function requeueReviewForRefix(
+  tx: Queryable,
+  input: { reviewId: string; newReviewId: string; findings: StoredFinding[]; now: number },
+): Promise<PackageReview | null> {
+  const result = await tx.query<Record<string, unknown>>(
+    `UPDATE teaching_package_reviews
+        SET id = $2, status = 'queued', findings = $3::jsonb, fixes = '[]'::jsonb,
+            error_code = NULL, input_tokens = NULL, output_tokens = NULL, cost_usd = NULL,
+            run_attempts = 0, lease_owner = NULL, lease_until = NULL,
+            started_at = NULL, completed_at = NULL, updated_at = $4
+      WHERE id = $1 AND status = ANY($5::text[])
+      RETURNING *`,
+    [
+      input.reviewId,
+      input.newReviewId,
+      JSON.stringify(input.findings),
+      input.now,
+      [...TERMINAL_REVIEW_STATUSES],
+    ],
+  );
+  const row = result.rows[0];
+  return row ? rowToReview(row) : null;
+}
+
 /** Every review a sweep may start or resume now: queued, or running with a lapsed lease. */
 export async function listClaimableReviewIds(
   queryable: Queryable,

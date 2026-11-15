@@ -27,6 +27,10 @@ import {
   renderSlidesBlock,
 } from '@/lib/server/teaching-package/package-review-prompt';
 import type { StoredFinding } from '@/lib/server/teaching-package/package-review-store';
+import {
+  refixReviewId,
+  seedRefixFindings,
+} from '@/lib/server/teaching-package/package-review-refix';
 
 /**
  * The package reviewer's input, prompt and answer handling with a fake
@@ -334,6 +338,44 @@ describe('findings and status', () => {
     expect(reviewStatusOf([stored({ status: 'fixed' }), stored({ id: 'f2' })])).toBe(
       'needs_teacher',
     );
+  });
+
+  it('flagged-slide regeneration: every open slide finding is tried again, teacher-only ones and fixed ones stay', () => {
+    const seed = seedRefixFindings(
+      [
+        stored({ id: 'still', teacherReason: 'STILL_WRONG' }),
+        stored({ id: 'changed', teacherReason: 'VERSION_CHANGED' }),
+        stored({ id: 'audio', teacherReason: 'NARRATION_AUDIO_FAILED' }),
+        stored({ id: 'missing', targetId: '', check: 'S5', teacherReason: 'S5_TEACHER_ONLY' }),
+        stored({ id: 'bank', targetId: 'bank', check: 'Q1', teacherReason: 'STILL_WRONG' }),
+        stored({ id: 'done', status: 'fixed' }),
+      ],
+      slides,
+    );
+    expect(seed.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+      ['still', 'open', null],
+      ['changed', 'open', null],
+      ['audio', 'open', null],
+      ['missing', 'open', 'S5_TEACHER_ONLY'],
+      ['bank', 'open', 'BANK_QUIZ_NOT_REGENERABLE'],
+      ['done', 'fixed', null],
+    ]);
+    expect(seed.sceneIds).toEqual(['s1']);
+  });
+
+  it('flagged-slide regeneration: nothing a regeneration may fix → no slides', () => {
+    const seed = seedRefixFindings(
+      [stored({ id: 'missing', targetId: '', check: 'S5', teacherReason: 'S5_TEACHER_ONLY' })],
+      slides,
+    );
+    expect(seed.sceneIds).toEqual([]);
+  });
+
+  it('the re-queued review id is the same for one request key and different for the next press', () => {
+    const first = refixReviewId('7', 'tpv-1', 'key-00000001');
+    expect(refixReviewId('7', 'tpv-1', 'key-00000001')).toBe(first);
+    expect(refixReviewId('7', 'tpv-1', 'key-00000002')).not.toBe(first);
+    expect(first).toMatch(/^tpr-rf-[A-Za-z0-9_-]{16}$/);
   });
 });
 

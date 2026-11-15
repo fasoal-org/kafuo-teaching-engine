@@ -3534,4 +3534,185 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       ).toBe(true);
     });
   });
+
+  describe('Regenerate only the flagged slides (owner, 15 Nov 2026)', () => {
+    const OPUS = 'anthropic:claude-opus-5-5';
+    const S2_ON_F1 = {
+      targetId: 'scene-f1',
+      check: 'S2',
+      severity: 'high',
+      bookEvidence: { quote: 'q', unitId: null },
+      whatIsWrong: 'الناتج خطأ',
+      fixNote: 'صحح الناتج إلى ١٢',
+    };
+    const S5_MISSING = {
+      targetId: '',
+      check: 'S5',
+      severity: 'medium',
+      bookEvidence: { quote: 'تأكد', unitId: null },
+      whatIsWrong: 'جزء ناقص',
+      fixNote: 'أضف الجزء',
+    };
+
+    function answering(findings: Array<Record<string, unknown>>) {
+      return vi.fn(async () => ({
+        answer: { summary: 'ملخص', findings: findings as never },
+        call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+      }));
+    }
+
+    /** A Kafuo draft whose first review finished (no fix loop: every open finding waits). */
+    async function reviewed(findings: Array<Record<string, unknown>>) {
+      const attemptId = await startKafuo();
+      const rows = await pool.query(
+        `SELECT id, version_id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const row = rows.rows[0] as { id: string; version_id: string };
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(row.id, {
+        pool: txPool(),
+        callReviewer: answering(findings),
+      });
+      return { attemptId, done: done!, versionId: row.version_id };
+    }
+
+    async function refix(versionId: string, idempotencyKey = 'regen-key-0001') {
+      const { queueFlaggedSlideRefix } =
+        await import('@/lib/server/teaching-package/package-review-refix');
+      return queueFlaggedSlideRefix(txPool(), { tenantId: 'tenant-k', versionId, idempotencyKey });
+    }
+
+    it('re-queues the finished review under a new id, resetting only what a regeneration may fix', async () => {
+      const { attemptId, done, versionId } = await reviewed([S2_ON_F1, S5_MISSING]);
+      expect(done.findings.map((f) => f.teacherReason)).toEqual([
+        'NOT_ATTEMPTED',
+        'S5_TEACHER_ONLY',
+      ]);
+      const queued = await refix(versionId);
+      expect(queued).toMatchObject({
+        previousReviewId: done.id,
+        sceneIds: ['scene-f1'],
+        replayed: false,
+      });
+      expect(queued.review.id).not.toBe(done.id);
+      expect(queued.review).toMatchObject({
+        status: 'queued',
+        attemptId,
+        fixes: [],
+        reviewedAt: done.reviewedAt,
+        summary: done.summary,
+        completedAt: null,
+      });
+      expect(queued.review.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+        ['f1', 'open', null],
+        ['f2', 'open', 'S5_TEACHER_ONLY'],
+      ]);
+      // Still one review per attempt: the row was re-queued, not copied.
+      const rows = await pool.query(
+        `SELECT id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      expect(rows.rows).toEqual([{ id: queued.review.id }]);
+    });
+
+    it('never pays for a whole-package review again: the run goes straight to the fix loop under the new id', async () => {
+      const { versionId } = await reviewed([S2_ON_F1, S5_MISSING]);
+      const queued = await refix(versionId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const fixLoop = vi.fn(async (context: { findings: Array<Record<string, unknown>> }) => ({
+        findings: context.findings.map((f) =>
+          f.id === 'f1' ? { ...f, status: 'fixed', teacherReason: null } : f,
+        ) as never,
+        fixes: [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed' as const, code: null }],
+      }));
+      const finished = await runPackageReview(queued.review.id, {
+        pool: txPool(),
+        callReviewer,
+        fixLoop: fixLoop as never,
+      });
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      const [context] = fixLoop.mock.calls[0]! as unknown as [
+        { review: { id: string }; findings: Array<{ id: string; teacherReason: string | null }> },
+      ];
+      expect(context.review.id).toBe(queued.review.id);
+      expect(context.findings.find((f) => f.id === 'f1')!.teacherReason).toBeNull();
+      expect(finished).toMatchObject({ id: queued.review.id, status: 'needs_teacher' });
+      const completed = await pool.query(
+        `SELECT payload FROM teaching_package_webhook_deliveries
+          WHERE event_type = 'teaching_package.review_completed' ORDER BY sequence`,
+      );
+      const last = (completed.rows.at(-1) as { payload: { review: Record<string, unknown> } })
+        .payload.review;
+      expect(last).toMatchObject({
+        id: queued.review.id,
+        counts: { findings: 2, open: 1, fixed: 1 },
+        openChecks: ['S5'],
+      });
+    });
+
+    it('a retry with the same key returns the review it queued; another press while it runs is refused', async () => {
+      const { versionId } = await reviewed([S2_ON_F1]);
+      const queued = await refix(versionId, 'regen-key-0001');
+      const again = await refix(versionId, 'regen-key-0001');
+      expect(again).toMatchObject({ replayed: true, previousReviewId: null });
+      expect(again.review.id).toBe(queued.review.id);
+      await expect(refix(versionId, 'regen-key-0002')).rejects.toMatchObject({
+        code: 'PACKAGE_REVIEW_IN_PROGRESS',
+      });
+    });
+
+    it('only teacher-only issues left: NO_REGENERABLE_SLIDES, and the review is left as it was', async () => {
+      const { done, versionId } = await reviewed([S5_MISSING]);
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+      const rows = await pool.query(`SELECT id, status FROM teaching_package_reviews`);
+      expect(rows.rows).toEqual([{ id: done.id, status: 'needs_teacher' }]);
+    });
+
+    it('refuses before the first review finished, and on a version that is not a draft', async () => {
+      const attemptId = await startKafuo();
+      const rows = await pool.query(
+        `SELECT version_id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const versionId = (rows.rows[0] as { version_id: string }).version_id;
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_NOT_READY' });
+      await pool.query(`UPDATE teaching_package_versions SET status = 'in_review' WHERE id = $1`, [
+        versionId,
+      ]);
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+    });
+
+    it('the signed POST route: 202 with the queued review; a refusal keeps its code', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const { done, versionId } = await reviewed([S2_ON_F1]);
+      const { NextRequest } = await import('next/server');
+      const route = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const post = (idempotencyKey: string) =>
+        route.POST(
+          new NextRequest(`http://localhost/api/teaching-packages/${versionId}/reviews`, {
+            method: 'POST',
+            headers: {
+              authorization: 'Bearer review-route-key',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ tenantContext: { tenantId: 'tenant-k' }, idempotencyKey }),
+          }),
+          { params: Promise.resolve({ id: versionId }) },
+        );
+      const accepted = await post('route-key-0001');
+      expect(accepted.status).toBe(202);
+      expect(await accepted.json()).toMatchObject({
+        review: { status: 'queued', versionId },
+        previousReviewId: done.id,
+        sceneIds: ['scene-f1'],
+        replayed: false,
+      });
+      const refused = await post('route-key-0002');
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: { code: 'PACKAGE_REVIEW_IN_PROGRESS' } });
+    });
+  });
 });

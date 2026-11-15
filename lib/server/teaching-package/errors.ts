@@ -403,7 +403,14 @@ export type TeachingPackageErrorCode =
    * Kafuo Release 1 defers. Non-retryable: the remedy is the game-free Teaching
    * Model version (or abandoning an attempt started before the deferral).
    */
-  | 'GAME_GENERATION_DEFERRED';
+  | 'GAME_GENERATION_DEFERRED'
+  // --- Regenerate only the flagged slides (owner, 15 Nov 2026) ---
+  /** The version's current Stage has no finished AI review to take the open findings from. */
+  | 'PACKAGE_REVIEW_NOT_READY'
+  /** The version's AI review (or a flagged-slide regeneration) is still queued or running. */
+  | 'PACKAGE_REVIEW_IN_PROGRESS'
+  /** No open finding sits on a slide a regeneration may fix (only teacher-only issues remain). */
+  | 'NO_REGENERABLE_SLIDES';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_NOT_AWAITING: 409,
@@ -412,6 +419,9 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_SOURCE_DRIFT: 409,
   ADMIN_CORRECTION_ABANDONED: 409,
   GAME_GENERATION_DEFERRED: 422,
+  PACKAGE_REVIEW_NOT_READY: 409,
+  PACKAGE_REVIEW_IN_PROGRESS: 409,
+  NO_REGENERABLE_SLIDES: 409,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,

@@ -166,7 +166,7 @@ function documentStore(pool: ConnectableQueryable) {
   });
 }
 
-async function loadLiveScenes(
+export async function loadLiveScenes(
   pool: ConnectableQueryable,
   stageId: string,
 ): Promise<AppScene[] | null> {
