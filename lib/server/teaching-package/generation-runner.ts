@@ -89,6 +89,7 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   exerciseBlockRequirement,
+  isGuideAnswerModel,
   isLearnerFirstModel,
   isSacredExerciseElement,
   isTeacherParityModel,
@@ -103,6 +104,11 @@ import {
   stripProviderImageDescriptions,
 } from '@/lib/server/teaching-package/learner-first-source';
 import { insertAttemptQuizzes } from '@/lib/server/teaching-package/attempt-quizzes';
+import {
+  guideOutlinePlans,
+  injectGuideAnswers,
+  resolveTeacherGuide,
+} from '@/lib/server/teaching-package/guide-answers';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
@@ -525,7 +531,22 @@ async function runKafuoAttempt(
     requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds),
     kafuo.teachingModel,
     bookFacts,
+    // g5.v11 (teacher-guide plan §8.1): the guide marks steer the exercise selection.
+    kafuo.teacherGuide,
   );
+  // g5.v11 only (an explicit Teaching Model check): the approved guide answers, resolved
+  // against OUR book items. Null for every other model, and without a book map or guide.
+  const guideAnswers =
+    isGuideAnswerModel(kafuo.teachingModel) && kafuo.teacherGuide && kafuo.bookStructure
+      ? resolveTeacherGuide(kafuo.teacherGuide, kafuo.bookStructure, bookFacts)
+      : null;
+  if (guideAnswers && guideAnswers.unresolved.length > 0) {
+    log.warn(
+      `Teaching package attempt ${attemptId}: ${guideAnswers.unresolved.length} teacher-guide item(s) match no book item and get no answer: ${guideAnswers.unresolved
+        .map((item) => `${item.contentUnitId}/${item.label} (${item.reason})`)
+        .join('; ')}`,
+    );
+  }
   // Essential sections the plan left untaught. They do NOT pause the run: the
   // package finishes as a draft and Submit refuses it until each one has a
   // slide generated for it (`assertEssentialSectionsCovered`). Sticky across a
@@ -863,7 +884,10 @@ async function runKafuoAttempt(
                   // before every solution, placed by the engine after the gates.
                   // Idempotent, so a resumed outline gets nothing twice.
                   if (!learnerFirst) return final;
-                  return insertAttemptQuizzes(final, kafuo.bookStructure, {
+                  const slideQuestions = coverageBook?.teacherParity
+                    ? selectExercises(coverageBook, coverageBook.unitFacts)?.slideQuestions
+                    : undefined;
+                  const withAttempts = insertAttemptQuizzes(final, kafuo.bookStructure, {
                     facts: bookFacts,
                     // An exercise attempt asks the book's own question lines (no answers).
                     unitTexts: new Map(
@@ -872,14 +896,19 @@ async function runKafuoAttempt(
                       }).map((unit) => [String(unit.unitId), promptUnitText(unit)] as const),
                     ),
                     ...(coverageBook?.teacherParity
-                      ? {
-                          exerciseSlideQuestions: selectExercises(
-                            coverageBook,
-                            coverageBook.unitFacts,
-                          )?.slideQuestions,
-                        }
+                      ? { exerciseSlideQuestions: slideQuestions }
                       : {}),
                   });
+                  // g5.v11 (plan §8): the approved answers go to the solution slides and
+                  // the attempts' hidden keys, never to a try-it slide. Idempotent.
+                  if (!guideAnswers || !kafuo.bookStructure) return withAttempts;
+                  return injectGuideAnswers(
+                    withAttempts,
+                    guideOutlinePlans(withAttempts, kafuo.bookStructure, guideAnswers, {
+                      ...(slideQuestions ? { slideQuestions } : {}),
+                      facts: bookFacts,
+                    }),
+                  );
                 },
               }
             : {}),

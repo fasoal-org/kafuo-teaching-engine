@@ -43,6 +43,23 @@ interface ExerciseEntry {
   question?: number;
 }
 
+/**
+ * g5.v11 (teacher-guide answer referee plan §8.1): the guide's mark on an exercise
+ * question. `keyed` = an approved or settled answer is given; `held` = doubtful, changed,
+ * or a settled item without an answer (never a keyed practice try).
+ */
+export type ExerciseGuideMark = 'keyed' | 'held';
+/**
+ * Exercise unit id → question number (as a string; `*` for a unit solved whole) → mark.
+ * A question without a mark (reference, missing, no guide item) keeps today's ranking.
+ */
+export type ExerciseGuideStatuses = Readonly<
+  Record<string, Readonly<Record<string, ExerciseGuideMark>>>
+>;
+
+/** The whole-unit key of {@link ExerciseGuideStatuses}. */
+export const WHOLE_UNIT_GUIDE_KEY = '*';
+
 /** A usable exercise: an `exercise` unit not marked unusable; instructions_only units are excluded. */
 function usable(unit: KafuoBookStructureUnit): boolean {
   return unit.element === 'exercise' && unit.exerciseUsable !== false;
@@ -64,27 +81,53 @@ function usable(unit: KafuoBookStructureUnit): boolean {
  *   N; the selected units are split in book order into S balanced slides.
  */
 export function selectExercises(
-  book: Pick<KafuoBookStructure, 'units' | 'exercisePolicy'>,
+  book: Pick<KafuoBookStructure, 'units' | 'exercisePolicy'> & {
+    /** g5.v11 only (the coverage book's guide marks); absent → today's selection. */
+    exerciseGuide?: ExerciseGuideStatuses;
+  },
   unitFacts?: Record<string, BookUnitFacts> | null,
 ): ExerciseSelection | null {
   const policy = book.exercisePolicy;
   if (!policy) return null;
   const order = new Map<string, number>();
-  const candidates = book.units.filter((unit, index) => {
+  const usableUnits = book.units.filter((unit, index) => {
     // M-4 (4 Nov 2026 rule): a unit whose every item held a verse or hadith
     // has nothing left to solve, so it is never selected.
     if (!usable(unit) || unitFacts?.[unit.contentUnitId]?.noItemsLeft === true) return false;
     order.set(unit.contentUnitId, index);
     return true;
   });
-  if (candidates.length === 0) return null;
+  if (usableUnits.length === 0) return null;
 
   // A unit weighs its numbered questions (the backend counts `minExercises` the
   // same way): one holding 2+ questions is picked question by question, in its
   // own order; any other unit (lesson 306: one question per unit) is one pick.
-  const questionsOf = (unit: KafuoBookStructureUnit): number[] => {
+  const bookQuestionsOf = (unit: KafuoBookStructureUnit): number[] => {
     const numbers = unitFacts?.[unit.contentUnitId]?.questionNumbers ?? [];
     return numbers.length >= 2 ? numbers : [];
+  };
+
+  // g5.v11 (teacher-guide plan §8.1): a held (doubtful or changed) item never gets a
+  // keyed practice try, so it is never selected; a keyed item is preferred. A lesson
+  // whose every usable exercise is held keeps today's set rather than none, so the
+  // plan never pauses for a person (the held items then get no answer, as on g5.v10).
+  const guide = book.exerciseGuide;
+  const markOf = (unit: KafuoBookStructureUnit, key: string) => guide?.[unit.contentUnitId]?.[key];
+  const openQuestionsOf = (unit: KafuoBookStructureUnit) =>
+    bookQuestionsOf(unit).filter((number) => markOf(unit, String(number)) !== 'held');
+  const allHeld = (unit: KafuoBookStructureUnit) =>
+    bookQuestionsOf(unit).length === 0
+      ? markOf(unit, WHOLE_UNIT_GUIDE_KEY) === 'held'
+      : openQuestionsOf(unit).length === 0;
+  const kept = guide ? usableUnits.filter((unit) => !allHeld(unit)) : usableUnits;
+  const excludeHeld = guide !== undefined && kept.length > 0;
+  const candidates = excludeHeld ? kept : usableUnits;
+  const questionsOf = (unit: KafuoBookStructureUnit): number[] => {
+    if (!guide) return bookQuestionsOf(unit);
+    const numbers = excludeHeld ? openQuestionsOf(unit) : bookQuestionsOf(unit);
+    const keyed = (number: number) => markOf(unit, String(number)) === 'keyed';
+    // Keyed questions first, each tier in book order; the slide order stays book order.
+    return [...numbers.filter(keyed), ...numbers.filter((number) => !keyed(number))];
   };
   const total = candidates.reduce((sum, unit) => sum + Math.max(1, questionsOf(unit).length), 0);
   const count = Math.min(
@@ -113,7 +156,15 @@ export function selectExercises(
   const represented = new Set<string>();
   const picked: ExerciseEntry[] = [];
   const started = new Set<string>();
-  const rank = (unit: KafuoBookStructureUnit): [number, number, number] => [
+  // g5.v11: a unit whose next pick is keyed ranks first.
+  const nextKeyed = (unit: KafuoBookStructureUnit): number => {
+    const next = remaining.get(unit.contentUnitId)?.[0];
+    const key = next !== undefined ? String(next) : WHOLE_UNIT_GUIDE_KEY;
+    if (next === undefined && bookQuestionsOf(unit).length > 0) return 1;
+    return markOf(unit, key) === 'keyed' ? 0 : 1;
+  };
+  const rank = (unit: KafuoBookStructureUnit): number[] => [
+    ...(guide ? [nextKeyed(unit)] : []),
     unit.kind === GUIDED_PRACTICE_KIND ? 0 : 1,
     steps(unit).some((step) => !represented.has(step)) ? 0 : 1,
     order.get(unit.contentUnitId)!,
@@ -153,7 +204,12 @@ export function selectExercises(
   }
 
   const position = (entry: ExerciseEntry) => order.get(entry.unit.contentUnitId)!;
-  picked.sort((a, b) => position(a) - position(b));
+  picked.sort(
+    (a, b) =>
+      position(a) - position(b) ||
+      // g5.v11: keyed questions were picked first, so book order is restored here.
+      (guide ? (a.question ?? 0) - (b.question ?? 0) : 0),
+  );
   const unitIds = [...new Set(picked.map((entry) => entry.unit.contentUnitId))];
   const slideCount = Math.min(
     picked.length,

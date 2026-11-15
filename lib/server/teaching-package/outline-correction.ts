@@ -59,6 +59,7 @@ import type {
   GenerationCheckpointPhase,
   GenerationCheckpointSourceRefs,
   KafuoBookStructure,
+  KafuoTeacherGuide,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
 
@@ -277,11 +278,14 @@ export function correctionCoverageBook(
   sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'>,
   bookStructure: KafuoBookStructure | undefined,
   teachingModel: { key: string; version: string } | undefined,
+  /** g5.v11: the attempt's pinned guide items, so the re-check selects the run's set. */
+  teacherGuide?: KafuoTeacherGuide,
 ): CoverageBookStructure | undefined {
   return teacherParityBook(
     requireEssentialUntypedUnits(bookStructure, sourceRefs.essentialContentUnitIds),
     teachingModel,
     sourceRefs.bookUnitFacts,
+    teacherGuide,
   );
 }
 
@@ -292,8 +296,14 @@ export function diagnosisContextFromCheckpoint(
   governed: boolean,
   bookStructure?: KafuoBookStructure,
   teachingModel?: { key: string; version: string },
+  teacherGuide?: KafuoTeacherGuide,
 ): OutlineDiagnosisContext {
-  const coverageBook = correctionCoverageBook(checkpoint.sourceRefs, bookStructure, teachingModel);
+  const coverageBook = correctionCoverageBook(
+    checkpoint.sourceRefs,
+    bookStructure,
+    teachingModel,
+    teacherGuide,
+  );
   return {
     ...(coverageBook ? { bookStructure: coverageBook } : {}),
     flow,
@@ -1086,6 +1096,7 @@ export function buildCorrectionView(
               checkpoint.sourceRefs,
               attempt.inputSnapshot.bookStructure,
               attempt.teachingModel,
+              attempt.inputSnapshot.teacherGuide,
             ),
             flow,
           ).map((gap) => {

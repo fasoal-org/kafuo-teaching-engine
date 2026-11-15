@@ -255,6 +255,7 @@ export async function editGenerationCorrection(
       isGoverned(attempt),
       attempt.inputSnapshot.bookStructure,
       attempt.teachingModel,
+      attempt.inputSnapshot.teacherGuide,
     );
     const edited = applyCorrectionOperations(checkpoint.outlines, command.operations, {
       phase: checkpoint.phase,
@@ -386,6 +387,7 @@ export async function resumeGenerationAttempt(
         isGoverned(attempt),
         attempt.inputSnapshot.bookStructure,
         attempt.teachingModel,
+        attempt.inputSnapshot.teacherGuide,
       ),
     );
     // A missing image / diagram teaching note is the TE's to write, not the

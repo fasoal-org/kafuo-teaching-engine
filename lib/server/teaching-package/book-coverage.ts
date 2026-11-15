@@ -26,7 +26,11 @@ import {
   withoutSacredItems,
 } from '@/lib/server/teaching-package/sacred-text';
 
-import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
+import {
+  selectExercises,
+  type ExerciseGuideStatuses,
+} from '@/lib/server/teaching-package/exercise-selection';
+import { resolveTeacherGuide } from '@/lib/server/teaching-package/guide-answers';
 import {
   bookUnitFacts,
   exerciseQuestionNumbers,
@@ -35,7 +39,11 @@ import {
   type DetectedHiddenStepType,
 } from '@/lib/server/teaching-package/hidden-step-types';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { KafuoBookStructure, KafuoBookStructureUnit } from '@/lib/types/teaching-package';
+import type {
+  KafuoBookStructure,
+  KafuoBookStructureUnit,
+  KafuoTeacherGuide,
+} from '@/lib/types/teaching-package';
 
 export const BOOK_COVERAGE_INCOMPLETE = 'BOOK_COVERAGE_INCOMPLETE';
 /** g5.v8: more exercise units or exercise slides than `exercisePolicy` allows. */
@@ -161,6 +169,12 @@ export interface CoverageBookStructure extends KafuoBookStructure {
   learnerFirst?: true;
   /** g5.v8: per check / exercise unit, the facts its gates read (no text). */
   unitFacts?: Record<string, BookUnitFacts>;
+  /**
+   * g5.v11 only: the teacher-guide marks of the exercise questions, resolved from the
+   * attempt's pinned `teacherGuide` and these unit facts, so every `selectExercises`
+   * caller (planner text, gates, repair, attempts, correction) picks the same set.
+   */
+  exerciseGuide?: ExerciseGuideStatuses;
 }
 
 /** The units whose text the g5.v8 gates read: checks and exercises. */
@@ -268,6 +282,8 @@ export function teacherParityBook(
   book: KafuoBookStructure | undefined,
   teachingModel: { key?: string | null; version?: string | null } | null | undefined,
   unitFacts?: Record<string, BookUnitFacts> | null,
+  /** g5.v11 only: the attempt's guide items; ignored on every other Teaching Model. */
+  teacherGuide?: KafuoTeacherGuide | null,
 ): CoverageBookStructure | undefined {
   if (!book || !isTeacherParityModel(teachingModel)) return book;
   return {
@@ -275,6 +291,9 @@ export function teacherParityBook(
     teacherParity: true,
     ...(isLearnerFirstModel(teachingModel) ? { learnerFirst: true as const } : {}),
     ...(unitFacts ? { unitFacts } : {}),
+    ...(teacherGuide && isGuideAnswerModel(teachingModel)
+      ? { exerciseGuide: resolveTeacherGuide(teacherGuide, book, unitFacts).exerciseStatuses }
+      : {}),
   };
 }
 
