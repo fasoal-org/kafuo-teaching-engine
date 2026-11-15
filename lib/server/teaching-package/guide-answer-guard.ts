@@ -224,11 +224,13 @@ export function createGuideAnswerGuard(options: {
     return plan.items.flatMap((item): GuideAnswerFinding[] => {
       const key = labelKey(item.display);
       const labelled = finals.filter((line) => line.label !== null && labelKey(line.label) === key);
+      // An unlabelled «الإجابة: …» line is read only when it is the slide's ONLY one: a
+      // check slide also solves items without a key, so any other line may be theirs.
       const candidates =
         labelled.length > 0
           ? labelled
-          : plan.items.length === 1 && unlabelled.length > 0
-            ? [unlabelled[unlabelled.length - 1]!]
+          : plan.items.length === 1 && unlabelled.length === 1
+            ? unlabelled
             : [];
       if (candidates.length === 0) {
         return [{ code: 'GUIDE_ANSWER_MISSING', item, where: 'canvas', detail: 'no final line' }];

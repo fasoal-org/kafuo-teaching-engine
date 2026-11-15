@@ -232,9 +232,10 @@ export function compareGuideAnswer(
  * The leak guard's test: does `text` (a try-it slide, its narration, an attempt stem)
  * state the approved answer, where the item's own book question does not already hold
  * that value (a given that equals the answer is not a leak)? Only numbers and text
- * answers can leak; a text answer counts only on a line that announces an answer
- * («الإجابة», «الجواب», «الحل», «الناتج», «=»), since a cycle or a word list shown as
- * given data legitimately holds it. Choice letters and truth values are never checked.
+ * answers can leak; a number only at its exact value; a text answer only on a line that
+ * announces an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=», since a
+ * cycle or a word list shown as given data legitimately holds it. Choice letters and
+ * truth values are never checked.
  */
 export function leaksGuideAnswer(
   answer: KafuoTeacherGuideAnswer,
@@ -242,20 +243,31 @@ export function leaksGuideAnswer(
   bookText = '',
 ): boolean {
   if (answer.type === 'number') {
-    const relative = tolerance(answer);
-    const agrees = (token: GuideNumberToken) => numbersAgree(answer.value, token.value, relative);
+    // A slide is searched, not graded: only the exact value counts (the 1%/5% window would
+    // flag nearby givens and cost a regeneration, then a dropped check).
+    const agrees = (token: GuideNumberToken) => Math.abs(token.value - answer.value) < 1e-9;
     if (guideNumbers(bookText).some(agrees)) return false;
     return guideNumbers(text).some(agrees);
   }
   if (answer.type !== 'text') return false;
   const expected = normalizeGuideText(answer.value);
   if (containsWords(normalizeGuideText(bookText), expected)) return false;
+  // «= شوال» announces it; «شوال = 10» (a numbered cycle given as data, item 208) does not.
+  const afterEquals = (line: string) =>
+    line
+      .split('=')
+      .slice(1)
+      .some((part) => {
+        const value = part.trim();
+        return value === expected || value.startsWith(`${expected} `);
+      });
   return text
     .split('\n')
     .map(normalizeGuideText)
     .some(
       (line) =>
-        /(?:^| )(?:الاجابه|الجواب|الحل|الناتج)(?: |$)|=/u.test(line) &&
-        containsWords(line, expected),
+        (/(?:^| )(?:الاجابه|الجواب|الحل|الناتج)(?: |$)/u.test(line) &&
+          containsWords(line, expected)) ||
+        afterEquals(line),
     );
 }

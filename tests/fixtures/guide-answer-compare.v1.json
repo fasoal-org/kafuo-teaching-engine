@@ -1,6 +1,6 @@
 {
   "contract": "kafuo.guide-answer-compare.v1",
-  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization, a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values; text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words.",
+  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization, a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values; text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words. Leak: a number leaks only at its exact value and only when the item's book text does not hold it; a text answer leaks only on a line announcing an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=» («شوال = 10» in a numbered cycle is given data); choice and bool never leak.",
   "compare": [
     {
       "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
@@ -84,6 +84,24 @@
     { "answer": { "type": "text", "value": "شوال" }, "written": "رمضان", "match": false }
   ],
   "leak": [
+    {
+      "answer": { "type": "text", "value": "شوال" },
+      "text": "ما الشهر التالي؟ الأشهر الهجرية بالترتيب هي: محرم = 1، صفر = 2، رمضان = 9، شوال = 10، ذو القعدة = 11، ذو الحجة = 12.",
+      "book": "صفر، رجب، ذو الحجة، جمادى الأولى، ...",
+      "leak": false
+    },
+    {
+      "answer": { "type": "text", "value": "شوال" },
+      "text": "الحد التالي = شوال",
+      "book": "صفر، رجب، ذو الحجة، جمادى الأولى، ...",
+      "leak": true
+    },
+    {
+      "answer": { "type": "number", "value": 71.9 },
+      "text": "الإنتاج نحو 72",
+      "book": "",
+      "leak": false
+    },
     {
       "answer": { "type": "number", "value": 71.9 },
       "text": "نتوقع أن يكون الإنتاج 71.9",

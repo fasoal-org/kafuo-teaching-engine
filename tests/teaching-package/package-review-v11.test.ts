@@ -105,6 +105,10 @@ describe('package-review rubric on g5.v11', () => {
     expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
       'Never mention the teacher guide («دليل المعلم») in a fix_note.',
     );
+    // The fix loop's regenerations are not code-checked: a try is never told an answer.
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
+      "A fix_note for a check_understanding slide, or for a quiz's question text, never states any answer",
+    );
   });
 
   it('keeps every v2 check and leaves v1 and v2 without any guide wording', () => {

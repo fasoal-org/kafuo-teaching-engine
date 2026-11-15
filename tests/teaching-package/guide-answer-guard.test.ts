@@ -86,6 +86,12 @@ describe('the solution comparator', () => {
     expect(check('نضيف 3 فيكون الحد التالي 12')).toEqual(['GUIDE_ANSWER_MISSING']);
   });
 
+  it('never reads an unkeyed item’s unlabelled line as the keyed one', () => {
+    // 1A keyed, 1B doubtful: both items end unlabelled, so neither line can be told apart.
+    expect(check('الإجابة: 12', 'الإجابة: 7')).toEqual(['GUIDE_ANSWER_MISSING']);
+    expect(check('الإجابة (1A): 12', 'الإجابة (1B): 7')).toEqual([]);
+  });
+
   it('never reads back its own injected key point', () => {
     expect(check('الإجابة الصحيحة المعتمدة (1A): 12')).toEqual(['GUIDE_ANSWER_MISSING']);
   });
