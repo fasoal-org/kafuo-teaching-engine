@@ -30,10 +30,12 @@ import {
   RECALL_NOT_FIRST,
   recallPlacement,
   SOLUTION_SLIDES_DUPLICATED,
+  teaches,
   WORKING_STEP_MISSING,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
+import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types';
 import {
   planInsertedSlide,
@@ -362,6 +364,81 @@ export function mergeDuplicateSolutions(
   return { outlines: current, merged };
 }
 
+/** The most key points a merged exercise slide keeps. */
+const MERGED_EXERCISE_MAX_POINTS = 12;
+
+/**
+ * g5.v10 (learner-first, 15 Nov 2026), deterministic, no model call: the planner put one
+ * exercise per slide (item 195: five exercise slides for a block of two). The exercise
+ * slides are regrouped onto exactly the engine's selection slides (`selectExercises`),
+ * each keeping its exercises' key points in order, at the place of the first exercise
+ * slide. Anything that does not fit the selection (a unit outside it) leaves the plan as
+ * it was. Returns the new list and how many slides were removed.
+ */
+export function mergeExerciseSlides(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): { outlines: SceneOutline[]; merged: number } {
+  const unchanged = { outlines: [...outlines], merged: 0 };
+  const policy = book.exercisePolicy;
+  const selection = book.learnerFirst ? selectExercises(book, book.unitFacts) : null;
+  if (!policy || !selection) return unchanged;
+  const exerciseIds = new Set(
+    book.units
+      .filter((unit) => unit.element === 'exercise')
+      .map((unit) => String(unit.contentUnitId)),
+  );
+  const isExerciseSlide = (outline: SceneOutline) =>
+    teaches(outline) &&
+    (outline.sourceContentUnitIds ?? []).some((id) => exerciseIds.has(String(id)));
+  const indexes = outlines.flatMap((outline, index) => (isExerciseSlide(outline) ? [index] : []));
+  if (indexes.length <= policy.maxExerciseSlides) return unchanged;
+  const slideOf = new Map<string, number>();
+  for (const [slide, ids] of selection.slides.entries()) {
+    for (const id of ids) {
+      // A multi-question unit split over two selection slides has no single home.
+      if (slideOf.has(String(id))) return unchanged;
+      slideOf.set(String(id), slide);
+    }
+  }
+  const groups: SceneOutline[][] = selection.slides.map(() => []);
+  for (const index of indexes) {
+    const outline = outlines[index]!;
+    const units = (outline.sourceContentUnitIds ?? [])
+      .map(String)
+      .filter((id) => exerciseIds.has(id));
+    const slide = slideOf.get(units[0] ?? '');
+    if (slide === undefined || units.some((id) => slideOf.get(id) !== slide)) return unchanged;
+    groups[slide]!.push(outline);
+  }
+  if (groups.some((group) => group.length === 0)) return unchanged;
+  // The merged titles follow the lesson's digits (item 195 titles: «تمارين ١–٢»).
+  const arabicDigits = /[٠-٩]/.test(indexes.map((index) => outlines[index]!.title ?? '').join(''));
+  const numeral = (n: number) =>
+    arabicDigits ? String(n).replace(/\d/g, (d) => '٠١٢٣٤٥٦٧٨٩'[Number(d)]!) : String(n);
+  const merged = groups.map((group, slide) => {
+    const [first] = group;
+    const unique = [...new Set(group.flatMap((o) => (o.sourceContentUnitIds ?? []).map(String)))];
+    return {
+      ...first!,
+      title: `تمارين (${numeral(slide + 1)})`,
+      sourceContentUnitIds: unique,
+      keyPoints: spreadOverPoints(
+        group.flatMap((o) => [o.title, ...(o.keyPoints ?? [])].filter(Boolean)),
+        MERGED_EXERCISE_MAX_POINTS,
+      ),
+    } as SceneOutline;
+  });
+  const first = indexes[0]!;
+  const removed = new Set(indexes);
+  const result: SceneOutline[] = [];
+  outlines.forEach((outline, index) => {
+    if (index === first) result.push(...merged);
+    if (!removed.has(index)) result.push(outline);
+  });
+  return { outlines: result, merged: indexes.length - merged.length };
+}
+
 /**
  * g5.v8, deterministic: a recall slide planned after part 1's first teaching
  * slide moves right before it, taking that slide's teaching stage.
@@ -398,7 +475,11 @@ export async function repairBookCoverageGaps(
   if (
     context.book.teacherParity === true &&
     open.some(
-      (issue) => issue.code === SOLUTION_SLIDES_DUPLICATED || issue.code === RECALL_NOT_FIRST,
+      (issue) =>
+        issue.code === SOLUTION_SLIDES_DUPLICATED ||
+        issue.code === RECALL_NOT_FIRST ||
+        // g5.v10: an oversized exercises block is regrouped without a model call.
+        (context.book.learnerFirst === true && issue.code === EXERCISE_CAP_EXCEEDED),
     )
   ) {
     // E-3: a step is kept only when it adds no new finding code outside the
@@ -420,7 +501,16 @@ export async function repairBookCoverageGaps(
     const mergeKept = merged.merged > 0 && accept(merged.outlines);
     const moved = moveRecallFirst(outlines, context.book);
     const moveKept = moved.moved && accept(moved.outlines);
-    restructured = (mergeKept ? merged.merged : 0) + (moveKept ? 1 : 0);
+    // g5.v10 only (`book.learnerFirst`): one exercise per slide → the engine's groups.
+    const grouped = mergeExerciseSlides(outlines, context.book);
+    const groupKept = grouped.merged > 0 && accept(grouped.outlines);
+    if (grouped.merged > 0) {
+      log.info(
+        `book coverage repair: ${groupKept ? grouped.merged : 0} exercise slide(s) merged into the engine's exercises block${groupKept ? '' : ' (rolled back)'}`,
+      );
+    }
+    restructured =
+      (mergeKept ? merged.merged : 0) + (moveKept ? 1 : 0) + (groupKept ? grouped.merged : 0);
     if (merged.merged > 0 || moved.moved) {
       log.info(
         `book coverage repair: ${mergeKept ? merged.merged : 0} solution slide(s) merged${merged.merged > 0 && !mergeKept ? ' (rolled back)' : ''}, recall ${moveKept ? 'moved first' : moved.moved ? 'move rolled back' : 'unchanged'}, ${open.length} issue(s) open`,

@@ -111,6 +111,8 @@ export function isLearnerFirstModel(
 export interface CoverageBookStructure extends KafuoBookStructure {
   /** The attempt's Teaching Model is g5.v8. */
   teacherParity?: true;
+  /** g5.v10: the learner-first repairs apply (an oversized exercises block is merged). */
+  learnerFirst?: true;
   /** g5.v8: per check / exercise unit, the facts its gates read (no text). */
   unitFacts?: Record<string, BookUnitFacts>;
 }
@@ -222,7 +224,12 @@ export function teacherParityBook(
   unitFacts?: Record<string, BookUnitFacts> | null,
 ): CoverageBookStructure | undefined {
   if (!book || !isTeacherParityModel(teachingModel)) return book;
-  return { ...book, teacherParity: true, ...(unitFacts ? { unitFacts } : {}) };
+  return {
+    ...book,
+    teacherParity: true,
+    ...(isLearnerFirstModel(teachingModel) ? { learnerFirst: true as const } : {}),
+    ...(unitFacts ? { unitFacts } : {}),
+  };
 }
 
 const STRUCTURAL_SLIDE_TYPES: ReadonlySet<string> = new Set([
@@ -236,7 +243,8 @@ function cites(outline: SceneOutline, unitId: string): boolean {
   return (outline.sourceContentUnitIds ?? []).some((id) => String(id) === unitId);
 }
 
-function teaches(outline: SceneOutline): boolean {
+/** A teaching slide: a slide that is not a cover, contents, transition or end slide. */
+export function teaches(outline: SceneOutline): boolean {
   return outline.type === 'slide' && !STRUCTURAL_SLIDE_TYPES.has(String(outline.slideType ?? ''));
 }
 
@@ -1063,7 +1071,10 @@ function learnerFirstRequirement(book: KafuoBookStructure, rules: string): strin
             '«تمارين» (when the book prints a study tip for these exercises, the transition slide',
             'states it), then the exercise slides (contentRole worked_example). The engine fixes',
             'which exercise units the block solves and on which slide (EXERCISES BLOCK below), easiest',
-            "first, and adds the learner's attempt before each exercise slide. Each exercise slide",
+            "first, and adds the learner's attempt before each exercise slide. Plan EXACTLY the",
+            'exercise slides the EXERCISES BLOCK lists, each citing exactly its listed units: one',
+            'exercise slide carries several exercises (e.g. «تمرين ١» and «تمرين ٢» together);',
+            'never one slide per exercise. Each exercise slide',
             "numbers its items locally («تمرين ١», «تمرين ٢», …) with the book's number only as a",
             'small grey tag such as «(س٣٥ في كتابك)», states each item and solves it with compact',
             'visible working. Never cite a unit marked exerciseUsable=false, except a',
