@@ -102,6 +102,12 @@ export function learnerFirstSlideRules(): string {
     '6. Never draw an empty placeholder (an empty box, a shape labelled only «إجابة»): every shape carries real content.',
     // Quality plan W4 (item 208 slides 6–8): the learner had no month list to count with.
     '7. An item on a fixed named cycle (the Hijri months, the days of the week) shows the whole cycle, numbered in order, as the given data — on the try-it slide too. It is the data of the item, never a hint.',
+    // Quality plan W6 (item 208 on GPT-6.1 Terra, 15 Nov 2026): T-1, T-3, T-4, T-8, T-9, T-10.
+    '8. A drawing respects its givens: segments or angles the item gives as equal are drawn equal, and a drawing never shows what the givens deny. When a drawing cannot respect the givens, leave it out.',
+    '9. Use only words the lesson has already taught or the book prints for this item; a new term gets a one-line plain meaning on the slide where it first appears. Call a thing by the same book term on the try-it slide and on its solution slide.',
+    "10. A solution names every answer its item accepts («أي عدد سالب أو الصفر»), so the learner's own correct try is never contradicted.",
+    '11. A definition box quotes a whole sentence of the book, from its start, never half of one.',
+    '12. Only a textbook exercise («تمارين») is labelled «تمرين»; a check item («تحقق من فهمك») keeps its own label, for example «تحقق ٣».',
   ].join('\n');
 }
 

@@ -129,6 +129,14 @@ describe('g5.v10 learner-first prompts', () => {
     expect(slide).toContain('definition box');
     expect(slide).toContain('average rate of change');
     expect(slide).toContain('states what is expected next');
+    // Quality plans W4/W6 (item 208, 15 Nov 2026).
+    expect(slide).toContain('add the last difference again');
+    expect(slide).toContain('shows the whole cycle, numbered in order');
+    expect(slide).toContain('segments or angles the item gives as equal are drawn equal');
+    expect(slide).toContain('same book term on the try-it slide and on its solution slide');
+    expect(slide).toContain('names every answer its item accepts');
+    expect(slide).toContain('quotes a whole sentence of the book');
+    expect(slide).toContain('a check item («تحقق من فهمك») keeps its own label');
   });
 
   it('makes a try-it slide read its items and never solve them (review HIGH-2)', () => {
