@@ -91,10 +91,12 @@ describe('engine-placed attempt quizzes', () => {
       quizConfig: { questionCount: 3, difficulty: 'easy', questionTypes: ['single'] },
     });
     expect(attempt.description).toContain('never graded for marks');
-    // Item 208 (16 Nov 2026): the try keyed 51.8 by averaging; the lesson adds the last difference.
+    // Item 208 (16 Nov 2026): the try keyed 51.8 by averaging. D-18: the attempt names no
+    // method of its own ("add the last difference" keyed 24 for 2, 4, 8, 16).
     expect(attempt.description).toContain(
-      "The key and the explanation use the lesson's own method: for a value expected next from data, add the last difference to the last value; never an average change.",
+      "The key and the explanation use the lesson's own method; never an average change.",
     );
+    expect(attempt.description).not.toContain('last difference');
     expect(result[4]!.quizConfig?.questionCount).toBe(2);
     expect(isAttemptOutline(attempt)).toBe(true);
     expect(isAttemptOutline(result[1]!)).toBe(false);
@@ -375,5 +377,17 @@ describe('engine-placed attempt quizzes', () => {
     const many = [slide('t', 'check_understanding', ['6234'], ['1', '2', '3', '4', '5', '6'])];
     const [, attempt] = insertAttemptQuizzes(many, BOOK);
     expect(attempt!.quizConfig?.questionCount).toBe(4);
+  });
+
+  it('never inserts an attempt a resumed run already dropped (g5.v11 review finding 9)', () => {
+    const lesson = [slide('t', 'check_understanding', ['6234'])];
+    expect(insertAttemptQuizzes(lesson, BOOK).map((outline) => outline.id)).toEqual([
+      't',
+      `t${ATTEMPT_OUTLINE_SUFFIX}`,
+    ]);
+    const resumed = insertAttemptQuizzes(lesson, BOOK, {
+      skipAttemptIds: new Set([`t${ATTEMPT_OUTLINE_SUFFIX}`]),
+    });
+    expect(resumed).toBe(lesson);
   });
 });

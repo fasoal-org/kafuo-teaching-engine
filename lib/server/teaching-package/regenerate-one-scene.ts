@@ -60,7 +60,16 @@ import {
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
-import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
+import { bankQuizActions, isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
+import {
+  guideAnswerGuardFor,
+  type GuideAnswerContext,
+} from '@/lib/server/teaching-package/guide-answer-context';
+import {
+  guardedSceneContent,
+  type GuideAnswerGuard,
+} from '@/lib/server/teaching-package/guide-answer-guard';
+import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
 import {
   isLearnerFirstModel,
   isTeacherParityModel,
@@ -127,6 +136,14 @@ export interface RegenerateOneSceneInput {
    * (with a teacher-parity model) → a slide citing one shows no verse or hadith item.
    */
   sacredExerciseUnitIds?: readonly string[];
+  /**
+   * g5.v11 (review finding 2): the package's pinned guide, read from the producing
+   * attempt's `inputSnapshot.teacherGuide` (`guideAnswerContextOf`). Present → the
+   * regenerated slide or quiz is checked like the run's (one corrected regeneration,
+   * then D-19 without removal: the failing items lose their guide answer), and an
+   * attempt's narration never reads its hidden key. Absent → unchanged.
+   */
+  guideAnswers?: GuideAnswerContext;
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -335,6 +352,19 @@ function codeOf(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/**
+ * g5.v11 (review finding 2): the guard over the package's outline, its run's
+ * settlements restored — or null (no guide pinned, or this outline holds no keyed item).
+ */
+function guideGuardOf(input: RegenerateOneSceneInput, outlineId: string): GuideAnswerGuard | null {
+  if (!input.guideAnswers) return null;
+  const guard = guideAnswerGuardFor(
+    input.guideAnswers,
+    (input.outlineSnapshot?.outlines ?? []) as SceneOutline[],
+  );
+  return guard.planOf(outlineId) ? guard : null;
+}
+
 export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
@@ -404,8 +434,11 @@ export async function regenerateOneScene(
   const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
-  try {
-    content = await generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {
+  // g5.v11 (review finding 2): the regenerated slide is checked like the run's.
+  const guard = guideGuardOf(input, outline.id);
+  let settledOutline = outline;
+  const generateSlide = (fromOutline: SceneOutline, correctiveNote?: string) =>
+    generateContent(fromOutline, input.aiCallFor(sceneContentStage('slide')), {
       agents,
       languageDirective,
       ...(stage.textDirection ? { textDirection: stage.textDirection } : {}),
@@ -420,10 +453,29 @@ export async function regenerateOneScene(
       // g5.v10 (learner-first plan W4): the same canvas rules as the run.
       ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
       ...sacredPromptOf(input),
+      ...(correctiveNote ? { correctiveNote } : {}),
       onFailure: (event) => {
         contentFailure = event;
       },
     });
+  try {
+    content = await generateSlide(outline);
+    if (guard && content && 'elements' in content) {
+      assertRoute();
+      const checked = await guardedSceneContent(
+        guard,
+        outline,
+        content,
+        async (fromOutline, correction) => {
+          const next = await generateSlide(fromOutline, correction);
+          assertRoute();
+          return next && 'elements' in next ? next : null;
+        },
+        { removal: false },
+      );
+      content = checked.content;
+      settledOutline = checked.outline;
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -455,17 +507,18 @@ export async function regenerateOneScene(
   const learnerFirst = isLearnerFirstModel(input.teachingModel);
   const narrationDirective =
     input.sourceContentUnitIds || (learnerFirst && !replanned) ? input.instruction : undefined;
-  const generatedActions = await slideActions(input, outline, content, {
+  const generatedActions = await slideActions(input, settledOutline, content, {
     imageNotes,
     ...(narrationDirective ? { directive: narrationDirective } : {}),
     ...(learnerFirst ? { learnerFirst: true } : {}),
+    ...(guard ? { guard } : {}),
   });
   if (!generatedActions.ok) return generatedActions;
   const actions = generatedActions.actions;
 
   // 5. Assembly: same id, carried assistance, the pre-image's canvas frame.
   const built = buildCompleteScene(
-    outline,
+    settledOutline,
     withCarriedAssistance(content, pre as Scene),
     actions,
     pre.stageId,
@@ -587,6 +640,11 @@ async function slideActions(
     directive?: string;
     /** g5.v10: learner-first narration rules and the canvas check. */
     learnerFirst?: boolean;
+    /**
+     * g5.v11: a try-it slide's narration never states a checked answer — one more
+     * narration with a correction naming no value; still stating it, it is kept (D-19).
+     */
+    guard?: GuideAnswerGuard;
   },
 ): Promise<SlideActionsResult> {
   const pre = input.scene;
@@ -597,15 +655,14 @@ async function slideActions(
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
-  const { imageNotes, directive } = options;
-  let actions;
-  try {
+  const { imageNotes, directive, guard } = options;
+  const narrationOf = (narrationDirective: string | undefined) => {
     const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
     const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
+    return generateRegisterCompliantActions(
       async (registerCorrection) => {
         const correctiveContext =
-          [directive, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+          [narrationDirective, registerCorrection].filter(Boolean).join('\n\n') || undefined;
         let fellBack: SceneActionsFallback | undefined;
         const generated = await generateActions(
           outline,
@@ -646,6 +703,18 @@ async function slideActions(
       undefined,
       learnerFirstNarrationCheck(options.learnerFirst, content, undefined, outline.contentRole),
     );
+  };
+  let actions;
+  try {
+    actions = await narrationOf(directive);
+    const leaks = guard ? guard.checkNarration(outline, actions) : [];
+    if (guard && leaks.length > 0) {
+      actions = await narrationOf(
+        [directive, guard.correction(outline, leaks)].filter(Boolean).join('\n\n'),
+      );
+      const left = guard.checkNarration(outline, actions);
+      if (left.length > 0) guard.settleNarration(outline, left);
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -702,6 +771,7 @@ async function regenerateSlideNarration(
           Object.fromEntries(shown.map((entry) => [entry.id, entry.servingPath])),
         )
       : {};
+  const narrationGuard = guideGuardOf(input, outline.id);
   const generated = await slideActions(
     input,
     outline,
@@ -710,6 +780,8 @@ async function regenerateSlideNarration(
       ...(Object.keys(notes).length > 0 ? { imageNotes: notes } : {}),
       directive: `Rewrite only this slide's narration. The slide's canvas is final: describe and point at only the elements listed above, never an image or element that is not listed. The reviewer's requirements:\n${input.instruction}`,
       ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+      // g5.v11 (review finding 2): a try-it slide's narration is leak-checked here too.
+      ...(narrationGuard ? { guard: narrationGuard } : {}),
     },
   );
   if (!generated.ok) return generated;
@@ -754,17 +826,38 @@ async function regenerateQuizScene(
   const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(pre.content.questions)}`;
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
-  try {
-    content = await generateContent(outline, input.aiCallFor(sceneContentStage('quiz')), {
+  // g5.v11 (review finding 2): an attempt's regenerated key is checked like the run's.
+  const guard = guideGuardOf(input, outline.id);
+  let settledOutline = outline;
+  const generateQuiz = (fromOutline: SceneOutline, correction?: string) =>
+    generateContent(fromOutline, input.aiCallFor(sceneContentStage('quiz')), {
       agents,
       languageDirective,
-      editDirective,
+      editDirective: correction ? `${editDirective}\n\n${correction}` : editDirective,
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...sacredPromptOf(input),
       onFailure: (event) => {
         contentFailure = event;
       },
     });
+  try {
+    content = await generateQuiz(outline);
+    if (guard && content && 'questions' in content) {
+      assertRoute();
+      const checked = await guardedSceneContent(
+        guard,
+        outline,
+        content,
+        async (fromOutline, correction) => {
+          const next = await generateQuiz(fromOutline, correction);
+          assertRoute();
+          return next && 'questions' in next ? next : null;
+        },
+        { removal: false },
+      );
+      content = checked.content;
+      settledOutline = checked.outline;
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -783,48 +876,66 @@ async function regenerateQuizScene(
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
+  // Review finding 1: an attempt's narration writer never reads its hidden key (the
+  // SAME outline when it carries none, as on every other Teaching Model).
+  const narrationOutline = withoutHiddenAnswerKey(settledOutline);
+  const quizContent = content;
   let actions;
   try {
     const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
     const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
-      async (correctiveContext) => {
-        let fellBack: SceneActionsFallback | undefined;
-        const generated = await generateActions(
-          outline,
-          content,
-          input.aiCallFor('scene-actions'),
-          {
-            ctx: sceneCtx,
-            agents,
-            languageDirective,
-            ...(input.registerPolicy
-              ? { spokenLanguagePolicy: input.registerPolicy.directive }
-              : {}),
-            ...(spokenScript ? { spokenScript } : {}),
-            ...(correctiveContext ? { correctiveContext } : {}),
-            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
-            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
-            ...sacredPromptOf(input),
-            onFallback: (info) => {
-              fellBack = info;
+    const narrate = (guideNote?: string) =>
+      generateRegisterCompliantActions(
+        async (registerCorrection) => {
+          const correctiveContext =
+            [guideNote, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+          let fellBack: SceneActionsFallback | undefined;
+          const generated = await generateActions(
+            narrationOutline,
+            quizContent,
+            input.aiCallFor('scene-actions'),
+            {
+              ctx: sceneCtx,
+              agents,
+              languageDirective,
+              ...(input.registerPolicy
+                ? { spokenLanguagePolicy: input.registerPolicy.directive }
+                : {}),
+              ...(spokenScript ? { spokenScript } : {}),
+              ...(correctiveContext ? { correctiveContext } : {}),
+              ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
+              ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+              ...sacredPromptOf(input),
+              onFallback: (info) => {
+                fellBack = info;
+              },
             },
-          },
-        );
-        if (fellBack && input.refuseFallbackActions) {
-          assertRoute();
-          throw new TeachingPackageError(
-            fallbackCode,
-            'the narration could not be generated (the model answer was unusable); nothing was written',
-            { fallback: fellBack.code },
           );
-        }
-        return filterKnownActions(generated);
-      },
-      input.registerPolicy,
-      { title: pre.title, outlineId: outline.id },
-      { outline, ctx: sceneCtx },
-    );
+          if (fellBack && input.refuseFallbackActions) {
+            assertRoute();
+            throw new TeachingPackageError(
+              fallbackCode,
+              'the narration could not be generated (the model answer was unusable); nothing was written',
+              { fallback: fellBack.code },
+            );
+          }
+          return filterKnownActions(generated);
+        },
+        input.registerPolicy,
+        { title: pre.title, outlineId: outline.id },
+        { outline: narrationOutline, ctx: sceneCtx },
+      );
+    actions = await narrate();
+    // g5.v11: an attempt's narration never states a checked answer (D-19: one more
+    // narration with a correction naming no value, then the model-free one).
+    const leaks = guard ? guard.checkNarration(settledOutline, actions) : [];
+    if (guard && leaks.length > 0) {
+      actions = await narrate(guard.correction(settledOutline, leaks));
+      const left = guard.checkNarration(settledOutline, actions);
+      if (left.length > 0 && guard.settleNarration(settledOutline, left) === 'model_free') {
+        actions = bankQuizActions(input.stage.language, input.stage.subjectCode);
+      }
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -833,7 +944,7 @@ async function regenerateQuizScene(
   }
   assertRoute();
 
-  const built = buildCompleteScene(outline, content, actions, pre.stageId, {
+  const built = buildCompleteScene(settledOutline, content, actions, pre.stageId, {
     sceneId: pre.id,
   }) as AppScene | null;
   if (!built || built.content.type !== 'quiz') {

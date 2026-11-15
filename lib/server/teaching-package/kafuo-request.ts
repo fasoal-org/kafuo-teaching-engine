@@ -850,9 +850,12 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
 
   const narration = parseNarration(body.narration, item.language);
   const bookStructure = parseBookStructure(body.bookStructure);
-  // g5.v11: validated whenever sent (a malformed block fails closed) and covered by
-  // the digest; only a g5.v11 attempt keeps or uses it (`buildKafuoStartRequest`).
-  const teacherGuide = parseTeacherGuide(body.teacherGuide);
+  // g5.v11 only (D-20, 16 Nov 2026): parsed, digested and kept on a g5.v11 request
+  // alone. Every other Teaching Model ignores the block entirely, so a malformed one
+  // never fails a g5.v8–g5.v10 request and their digests stay byte-identical.
+  const teacherGuide = isGuideAnswerModel(teachingModel)
+    ? parseTeacherGuide(body.teacherGuide)
+    : undefined;
 
   const request: KafuoGenerationRequest = {
     requestId,
@@ -1045,16 +1048,20 @@ function parseTeacherGuideAnswer(
   ) {
     throw invalid(`${path}.type must be one of ${KAFUO_TEACHER_GUIDE_ANSWER_TYPES.join(', ')}`);
   }
+  // D-20: `unit: null` and `approximate: false` are the Backend's "absent" — read as
+  // absent (and digested as absent), never refused.
+  const unitRaw = answer.unit === null ? undefined : answer.unit;
   if (
-    answer.unit !== undefined &&
-    (typeof answer.unit !== 'string' ||
-      answer.unit.trim() === '' ||
-      answer.unit.length > TEACHER_GUIDE_UNIT_MAX)
+    unitRaw !== undefined &&
+    (typeof unitRaw !== 'string' ||
+      unitRaw.trim() === '' ||
+      unitRaw.length > TEACHER_GUIDE_UNIT_MAX)
   ) {
     throw invalid(`${path}.unit must be a short non-empty string when present`);
   }
-  const unit = answer.unit !== undefined ? { unit: answer.unit as string } : {};
-  if (answer.approximate !== undefined && (type !== 'number' || answer.approximate !== true)) {
+  const unit = unitRaw !== undefined ? { unit: unitRaw as string } : {};
+  const approximate = answer.approximate === false ? undefined : answer.approximate;
+  if (approximate !== undefined && (type !== 'number' || approximate !== true)) {
     throw invalid(`${path}.approximate is allowed only as true on a number answer`);
   }
   const value = answer.value;
@@ -1338,8 +1345,8 @@ export function buildKafuoStartRequest(
   const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
-  // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B: their
-  // snapshots and runs stay byte-identical); the digest still covers it.
+  // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B, D-20:
+  // their snapshots, runs and digests stay byte-identical).
   const teacherGuide =
     request.teacherGuide && isGuideAnswerModel(request.teachingModel)
       ? request.teacherGuide

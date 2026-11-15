@@ -5,10 +5,15 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ readAttemptById: vi.fn(), runReviewerCall: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  readAttemptById: vi.fn(),
+  readContentUnitsForAttempt: vi.fn(),
+  runReviewerCall: vi.fn(),
+}));
 vi.mock('@/lib/persistence/teaching-package', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/persistence/teaching-package')>()),
   readAttemptById: mocks.readAttemptById,
+  readContentUnitsForAttempt: mocks.readContentUnitsForAttempt,
 }));
 vi.mock('@/lib/server/teaching-model/reviewer-call', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/server/teaching-model/reviewer-call')>()),
@@ -27,7 +32,9 @@ import {
   PACKAGE_REVIEW_SYSTEM_V2,
   renderSlidesBlock,
 } from '@/lib/server/teaching-package/package-review-prompt';
-import type { KafuoTeacherGuide } from '@/lib/types/teaching-package';
+import { bookUnitFactsOf } from '@/lib/server/teaching-package/book-coverage';
+import { resolveTeacherGuide } from '@/lib/server/teaching-package/guide-answers';
+import type { KafuoBookStructure, KafuoTeacherGuide } from '@/lib/types/teaching-package';
 
 const GUIDE: KafuoTeacherGuide = {
   guideId: 'tg-1',
@@ -45,8 +52,45 @@ const GUIDE: KafuoTeacherGuide = {
       status: 'settled',
       answer: { type: 'number', value: 71.9, unit: 'ألف' },
     },
+    // Review finding 10: an item matching no question of OUR book gets no line.
+    {
+      contentUnitId: '6249',
+      label: '40',
+      status: 'approved',
+      answer: { type: 'number', value: 5 },
+    },
   ],
 };
+
+const BOOK: KafuoBookStructure = {
+  templateVersionId: '3',
+  rules: [],
+  units: [
+    {
+      contentUnitId: '6234',
+      kind: 'UNDERSTANDING_CHECK',
+      element: 'try_it',
+      required: true,
+      partIndex: 1,
+    },
+    { contentUnitId: '6249', kind: 'PRACTICE', element: 'exercise', required: false, partIndex: 2 },
+  ],
+};
+const UNITS = [
+  { unitId: '6234', normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) هل التخمين صحيح؟' },
+  {
+    unitId: '6249',
+    normalizedText: '11) إنتاج مصنع: 41.6، 51.8، 61.7. ما المتوقع؟\n12) ما الحد التالي في 1، 3، 5؟',
+  },
+];
+const RESOLVED = resolveTeacherGuide(
+  GUIDE,
+  BOOK,
+  bookUnitFactsOf(
+    BOOK,
+    UNITS.map((unit) => ({ id: unit.unitId, text: unit.normalizedText })),
+  ),
+);
 
 const slide = (id: string, overrides: Partial<ReviewSlide>): ReviewSlide => ({
   id,
@@ -68,13 +112,19 @@ describe('package-review input on g5.v11', () => {
     slide('quiz', { sceneType: 'quiz', contentRole: null, citedUnitIds: ['6249'] }),
     slide('other', { citedUnitIds: ['6230'] }),
   ];
-  const reviewed = withGuideAnswers(slides, GUIDE);
+  const reviewed = withGuideAnswers(slides, RESOLVED);
 
-  it('adds the approved and settled answers to the solving slides only', () => {
+  it('adds the resolved approved and settled answers to the solving slides only', () => {
     expect(reviewed[0]!.guideAnswers).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (1A): 12`]);
     expect(reviewed[1]!.guideAnswers).toBeUndefined();
-    expect(reviewed[2]!.guideAnswers).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (11): 71.9 ألف`]);
+    // Named as the writers were told («س11»); the unresolved «40» adds nothing.
+    expect(reviewed[2]!.guideAnswers).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`]);
     expect(reviewed[3]!.guideAnswers).toBeUndefined();
+  });
+
+  it('leaves out an exercise the run removed from the lesson', () => {
+    const withoutRemoved = withGuideAnswers(slides, RESOLVED, new Set(['6249|11']));
+    expect(withoutRemoved[2]!.guideAnswers).toBeUndefined();
   });
 
   it('renders the line only where it was added; a v2 slide renders as before', () => {
@@ -105,7 +155,7 @@ describe('package-review rubric on g5.v11', () => {
     expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
       'Never mention the teacher guide («دليل المعلم») in a fix_note.',
     );
-    // The fix loop's regenerations are not code-checked: a try is never told an answer.
+    // A try is never told an answer (the fix loop's regenerations are code-checked too).
     expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
       "A fix_note for a check_understanding slide, or for a quiz's question text, never states any answer",
     );
@@ -137,8 +187,9 @@ describe('callPackageReviewer picks the rubric and the input by the Teaching Mod
   async function call(version: string) {
     mocks.readAttemptById.mockResolvedValue({
       teachingModel: { key: 'g5', version },
-      inputSnapshot: { teacherGuide: GUIDE },
+      inputSnapshot: { teacherGuide: GUIDE, bookStructure: BOOK },
     });
+    mocks.readContentUnitsForAttempt.mockResolvedValue(UNITS);
     mocks.runReviewerCall.mockResolvedValue({
       parsed: { summary: 's', findings: [] },
       provider: 'anthropic',
@@ -163,8 +214,11 @@ describe('callPackageReviewer picks the rubric and the input by the Teaching Mod
   });
 
   it('g5.v10: the v2 rubric and no guide line, even when a snapshot holds a guide', async () => {
+    mocks.readContentUnitsForAttempt.mockClear();
     const request = await call('g5.v10');
     expect(request.system).toBe(PACKAGE_REVIEW_SYSTEM_V2);
     expect(request.prompt).not.toContain('دليل المعلم');
+    // g5.v10 reads nothing new.
+    expect(mocks.readContentUnitsForAttempt).not.toHaveBeenCalled();
   });
 });

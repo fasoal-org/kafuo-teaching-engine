@@ -199,8 +199,56 @@ describe('teacherGuide parsing', () => {
     expect(() => parse('g5.v11', teacherGuide)).toThrow(/teacherGuide/);
   });
 
-  it('validates the block on any Teaching Model (a malformed contract fails closed)', () => {
-    expect(() => parse('g5.v10', { guideId: 'g' })).toThrow(/teacherGuide/);
+  it('never reads the block on g5.v8–v10: a malformed one never fails their request (D-20)', () => {
+    for (const version of ['g5.v8', 'g5.v9', 'g5.v10']) {
+      const request = parse(version, { guideId: 'g' });
+      expect(request.teacherGuide).toBeUndefined();
+      expect(canonicalRequestDigest(request)).toBe(
+        canonicalRequestDigest(parseKafuoGenerationRequest(body(version)).request),
+      );
+    }
+  });
+
+  it('reads `unit: null` and `approximate: false` as absent (D-20)', () => {
+    const request = parse('g5.v11', {
+      guideId: 'tg-1',
+      items: [
+        {
+          contentUnitId: '1',
+          label: '2',
+          status: 'approved',
+          answer: { type: 'number', value: 3.1, unit: null, approximate: false },
+        },
+        {
+          contentUnitId: '1',
+          label: '3',
+          status: 'approved',
+          answer: { type: 'text', value: 'شوال', unit: null, approximate: false },
+        },
+      ],
+    });
+    expect(request.teacherGuide?.items.map((item) => item.answer)).toEqual([
+      { type: 'number', value: 3.1 },
+      { type: 'text', value: 'شوال' },
+    ]);
+    const plain = parse('g5.v11', {
+      guideId: 'tg-1',
+      items: [
+        {
+          contentUnitId: '1',
+          label: '2',
+          status: 'approved',
+          answer: { type: 'number', value: 3.1 },
+        },
+        {
+          contentUnitId: '1',
+          label: '3',
+          status: 'approved',
+          answer: { type: 'text', value: 'شوال' },
+        },
+      ],
+    });
+    expect(canonicalRequestDigest(request)).toBe(canonicalRequestDigest(plain));
   });
 });
 

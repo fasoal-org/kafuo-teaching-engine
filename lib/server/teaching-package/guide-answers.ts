@@ -12,11 +12,15 @@
  * - the solution slide (a worked_example citing the item's unit): its key points and a
  *   writer instruction; its narration follows the canvas;
  * - the practice attempt quiz: a hidden key in its description, never in its key points
- *   (the quiz stem is written from those);
+ *   (the quiz stem is written from those), and cut off before its narration writer
+ *   ({@link withoutHiddenAnswerKey});
  * - NEVER the try-it slide (check_understanding), its narration, or the attempt stem.
  */
 import {
   ATTEMPT_OUTLINE_SUFFIX,
+  bareSubItems,
+  exerciseAttemptQuestions,
+  exerciseQuestionText,
   isAttemptOutline,
 } from '@/lib/server/teaching-package/attempt-quizzes';
 import {
@@ -24,7 +28,11 @@ import {
   type ExerciseGuideMark,
   type ExerciseGuideStatuses,
 } from '@/lib/server/teaching-package/exercise-selection';
-import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
+import {
+  normalizeBookText,
+  trailingItemNumbers,
+  type BookUnitFacts,
+} from '@/lib/server/teaching-package/hidden-step-types';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   KafuoBookStructure,
@@ -222,6 +230,87 @@ export function resolveTeacherGuide(
   };
 }
 
+/** One item's key across the plans and the pinned settlements. */
+export function guideItemKey(item: Pick<ResolvedGuideItem, 'contentUnitId' | 'label'>): string {
+  return `${item.contentUnitId}|${item.label}`;
+}
+
+// ── An item's own question text (review finding 3) ───────────────────────────────────
+
+/** A check label touching a parenthesis: «1A)», «(2A», «4B)» (`checkItemLabels`). */
+const CHECK_LABEL =
+  /(?:\(\s*(\d{1,2})\s?([A-H]|[ابجد])(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(\d{1,2})\s?([A-H]|[ابجد])\s*\))/gu;
+/** A check item numbered at a line's start: «1.», «1-», «1)», «(1)», «.1 » (`checkItemLabels`). */
+const NUMBERED_CHECK =
+  /^[^\S\n]*(?:\.(\d{1,2})(?=\s)|\(\s*(\d{1,2})\s*\)|(\d{1,2})[^\S\n]*(?:[.\-–](?=\s)|\)))/gmu;
+/** A margin header and a question number at a line's start («المثال 3 11)», «(1 »). */
+const LINE_QUESTION_NUMBER =
+  /^[^\S\n]*(?:(?:المثالان|المثال|الامثله)[^\S\n]*\d{1,3}(?:[^\S\n]*(?:[,،\-–]|و|الي)[^\S\n]*\d{1,3})*[^\S\n]*)?\(?[^\S\n]*\d{1,3}[^\S\n]*[).\-–]?(?=[^\S\n]|$)/gmu;
+const BOOK_LETTER: Readonly<Record<string, string>> = { ا: 'A', ب: 'B', ج: 'C', د: 'D' };
+
+interface LabelMark {
+  key: string;
+  start: number;
+  end: number;
+}
+
+/** A check item's own text: from its label to the next item's label, the label out. */
+function checkItemText(text: string, number: number, letter: string | null): string | null {
+  const normalized = normalizeBookText(text, false);
+  let marks: LabelMark[] = [...normalized.matchAll(CHECK_LABEL)].map((match) => {
+    const raw = match[2] ?? match[4]!;
+    return {
+      key: `${Number(match[1] ?? match[3])}${BOOK_LETTER[raw] ?? raw}`,
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + match[0].length,
+    };
+  });
+  if (marks.length === 0) {
+    marks = [...normalized.matchAll(NUMBERED_CHECK)].map((match) => ({
+      key: String(Number(match[1] ?? match[2] ?? match[3])),
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + match[0].length,
+    }));
+  }
+  const wanted = [itemKey(number, letter), ...(letter === null ? [] : [String(number)])];
+  const at = marks.findIndex((mark) => mark.key === wanted[0]);
+  const found = at >= 0 ? at : marks.findIndex((mark) => wanted.includes(mark.key));
+  if (found < 0) return null;
+  const next = marks.find((mark, index) => index > found && mark.key !== marks[found]!.key);
+  return normalized.slice(marks[found]!.end, next ? next.start : undefined).trim();
+}
+
+/** A unit's text with every item label and question number taken out. */
+function withoutItemLabels(text: string): string {
+  const normalized = normalizeBookText(text, false).replace(CHECK_LABEL, ' ');
+  // The OCR form «value (N» prints values at a line's start: only its «(N» are numbers.
+  return trailingItemNumbers(normalized).length > 0
+    ? normalized.replace(/\((\d{1,3})(?=\s|\)|$)/gu, ' ')
+    : normalized.replace(LINE_QUESTION_NUMBER, ' ');
+}
+
+/**
+ * Review finding 3: the text of the item's OWN book question, for the leak guard's "a
+ * given is no leak" rule — never the whole unit, so another item's givens and the
+ * question numbers never hide a leak. An exercise question is read with the attempt's
+ * grouping (`exerciseQuestionText`); a check item from its label to the next one. Its
+ * number, margin header and label are removed. When the unit does not print the item,
+ * the unit's text with every label and question number removed.
+ */
+export function guideItemQuestionText(
+  text: string,
+  item: Pick<ResolvedGuideItem, 'element' | 'number' | 'letter'>,
+): string {
+  if (item.number !== null) {
+    const own =
+      item.element === 'exercise'
+        ? exerciseQuestionText(text, item.number, item.letter)
+        : checkItemText(text, item.number, item.letter);
+    if (own !== null) return own;
+  }
+  return withoutItemLabels(text);
+}
+
 // ── The writers' text ─────────────────────────────────────────────────────────────────
 
 /** A guide answer as the writers read it (Western digits; the lesson's digits come later). */
@@ -286,16 +375,25 @@ function attemptKey(items: readonly KeyedGuideItem[]): string {
 
 export type GuideOutlineRole = 'solution' | 'attempt' | 'try';
 
-/** What one outline does with the keyed items of its units. */
+/**
+ * What one outline does with the keyed items of its units. D-19 (16 Nov 2026): no slide
+ * ever leaves the lesson for a checked answer; only an attempt left with no question.
+ */
 export interface GuideOutlinePlan {
   role: GuideOutlineRole;
   items: KeyedGuideItem[];
   /**
-   * The outlines that leave the lesson together when this one still fails after its one
-   * regeneration: an exercise slide with its attempt; a check's try-it slide, attempt
-   * and solution slides. An attempt alone leaves by itself (its slide still solves).
+   * Solutions: how many book questions the slide solves, keyed or not. An exercise item
+   * leaves the slide only while another question stays on it.
    */
-  group: string[];
+  solves?: number;
+  /**
+   * Attempts (review finding 6): the 0-based question that asks each item
+   * ({@link guideItemKey}), or null when it cannot be told.
+   */
+  questionOf?: Readonly<Record<string, number | null>>;
+  /** Attempts: the question count the quiz was planned with. */
+  questionCount?: number;
 }
 
 function citedUnits(outline: SceneOutline, element: 'try_it' | 'exercise', book: BookUnits) {
@@ -315,39 +413,26 @@ export function guideOutlinePlans(
   options: {
     slideQuestions?: ReadonlyArray<Readonly<Record<string, number[]>>>;
     facts?: Readonly<Record<string, BookUnitFacts>> | null;
+    /**
+     * The book text of each unit, as `insertAttemptQuizzes` read it: an attempt's
+     * questions are then told apart (review finding 6). Absent → no question is told.
+     */
+    unitTexts?: ReadonlyMap<string, string>;
   } = {},
 ): Map<string, GuideOutlinePlan> {
   const elements: BookUnits = new Map(
     book.units.map((unit) => [unit.contentUnitId, unit.element] as const),
   );
-  const ids = new Set(outlines.map((outline) => outline.id));
   const keyedOf = (unitId: string) => guide.keyed.filter((item) => item.contentUnitId === unitId);
   const plans = new Map<string, GuideOutlinePlan>();
-
-  // A check's group: its try-it slides, their attempts and its solution slides.
-  const checkGroup = (unitIds: readonly string[]) => {
-    const group: string[] = [];
-    for (const outline of outlines) {
-      if (outline.type !== 'slide') continue;
-      if (
-        outline.contentRole !== 'check_understanding' &&
-        outline.contentRole !== 'worked_example'
-      ) {
-        continue;
-      }
-      if (!citedUnits(outline, 'try_it', elements).some((id) => unitIds.includes(id))) continue;
-      group.push(outline.id);
-      const attempt = `${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`;
-      if (ids.has(attempt)) group.push(attempt);
-    }
-    return group;
-  };
+  const checkLabels = (unitId: string) => options.facts?.[unitId]?.itemLabels ?? [];
 
   // The items each slide solves, and (exercise slides) in which order they are asked.
   const asked = new Map<
     string,
     Array<{ unitId: string; number: number | null; letter?: string }>
   >();
+  const slideQuestionsOf = new Map<string, Readonly<Record<string, number[]>> | undefined>();
   let exerciseSlide = 0;
   for (const outline of outlines) {
     if (outline.type !== 'slide') continue;
@@ -356,6 +441,7 @@ export function guideOutlinePlans(
     if (outline.contentRole === 'worked_example' && (exercises.length > 0 || checks.length > 0)) {
       const questions = exercises.length > 0 ? options.slideQuestions?.[exerciseSlide] : undefined;
       if (exercises.length > 0) exerciseSlide += 1;
+      slideQuestionsOf.set(outline.id, questions);
       const items = [
         ...checks.flatMap(keyedOf),
         ...exercises.flatMap((unitId) =>
@@ -365,78 +451,117 @@ export function guideOutlinePlans(
           }),
         ),
       ];
-      const order = exercises.flatMap((unitId) => {
-        const listed = questions?.[unitId];
-        const numbers = listed ?? options.facts?.[unitId]?.questionNumbers ?? [];
-        return numbers.length >= 2 || listed
-          ? [...numbers].sort((a, b) => a - b).map((number) => ({ unitId, number }))
-          : [{ unitId, number: null }];
-      });
+      const order = exercises.flatMap(
+        (unitId): Array<{ unitId: string; number: number | null }> => {
+          const listed = questions?.[unitId];
+          const numbers = listed ?? options.facts?.[unitId]?.questionNumbers ?? [];
+          return numbers.length >= 2 || listed
+            ? [...numbers].sort((a, b) => a - b).map((number) => ({ unitId, number }))
+            : [{ unitId, number: null }];
+        },
+      );
       asked.set(outline.id, order);
       if (items.length === 0) continue;
-      const attempt = `${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`;
-      plans.set(outline.id, {
-        role: 'solution',
-        items,
-        group:
-          exercises.length > 0
-            ? [
-                outline.id,
-                ...(ids.has(attempt) ? [attempt] : []),
-                ...(checks.length > 0 ? checkGroup(checks) : []),
-              ]
-            : checkGroup(checks),
-      });
+      const checkItems = checks.reduce(
+        (total, unitId) => total + Math.max(1, checkLabels(unitId).length),
+        0,
+      );
+      plans.set(outline.id, { role: 'solution', items, solves: order.length + checkItems });
       continue;
     }
     if (outline.contentRole === 'check_understanding' && checks.length > 0) {
       const items = checks.flatMap(keyedOf);
-      if (items.length > 0)
-        plans.set(outline.id, { role: 'try', items, group: checkGroup(checks) });
+      if (items.length > 0) plans.set(outline.id, { role: 'try', items });
     }
   }
 
-  // Attempts: the items their questions ask, within the quiz's question count.
+  // Attempts: the items their questions ask, within the quiz's question count, and the
+  // question that asks each one when it can be told (review finding 6).
   for (const outline of outlines) {
     if (!isAttemptOutline(outline)) continue;
     const baseId = outline.id.slice(0, -ATTEMPT_OUTLINE_SUFFIX.length);
     const base = outlines.find((candidate) => candidate.id === baseId);
     if (!base) continue;
     const count = outline.quizConfig?.questionCount ?? Number.POSITIVE_INFINITY;
-    let items: KeyedGuideItem[] = [];
+    const asks: Array<{ item: KeyedGuideItem; question: number | null }> = [];
     if (base.contentRole === 'check_understanding') {
-      // A check's items in book order: its labels, unit by unit.
-      const order = citedUnits(base, 'try_it', elements).flatMap((unitId) => {
-        const labels = options.facts?.[unitId]?.itemLabels ?? [];
+      // A check's items in book order: its labels, unit by unit. A question is told only
+      // when every cited unit labels its items and none prints bare «A) B)» lines (the
+      // attempt then counts those instead).
+      const cited = citedUnits(base, 'try_it', elements);
+      const told = cited.every((unitId) => {
+        const labels = checkLabels(unitId);
+        const text = options.unitTexts?.get(unitId);
+        return (
+          options.unitTexts !== undefined &&
+          labels.length > 0 &&
+          !(labels.length <= 1 && bareSubItems(text ?? '').length >= 2)
+        );
+      });
+      const order = cited.flatMap((unitId) => {
+        const labels = checkLabels(unitId);
         return labels.length > 0
           ? labels.map((label) => ({ unitId, label }))
           : [{ unitId, label: '' }];
       });
-      items = order
-        .slice(0, count)
-        .flatMap(({ unitId, label }) =>
-          keyedOf(unitId).filter(
-            (item) =>
-              label === '' ||
-              (item.number !== null &&
-                (itemKey(item.number, item.letter) === label || String(item.number) === label)),
-          ),
-        );
+      order.slice(0, count).forEach(({ unitId, label }, question) => {
+        for (const item of keyedOf(unitId)) {
+          const matches =
+            label === '' ||
+            (item.number !== null &&
+              (itemKey(item.number, item.letter) === label || String(item.number) === label));
+          if (matches) asks.push({ item, question: told ? question : null });
+        }
+      });
     } else {
-      const order = (asked.get(baseId) ?? []).slice(0, count);
-      items = (plans.get(baseId)?.items ?? []).filter((item) =>
-        order.some(
-          (entry) =>
-            entry.unitId === item.contentUnitId &&
-            (entry.number === null || entry.number === item.number),
-        ),
-      );
+      const solutionItems = plans.get(baseId)?.items ?? [];
+      const exercises = citedUnits(base, 'exercise', elements);
+      const statements = options.unitTexts
+        ? exerciseAttemptQuestions(
+            exercises,
+            { unitTexts: options.unitTexts, facts: options.facts ?? null },
+            slideQuestionsOf.get(baseId) as Record<string, number[]> | undefined,
+          ).slice(0, count)
+        : [];
+      if (statements.length > 0) {
+        for (const item of solutionItems) {
+          const questions = statements.flatMap((statement, index) =>
+            statement.unitId === item.contentUnitId &&
+            (item.number === null || statement.number === item.number)
+              ? [index]
+              : [],
+          );
+          if (questions.length > 0) {
+            asks.push({ item, question: questions.length === 1 ? questions[0]! : null });
+          }
+        }
+      } else {
+        const order = (asked.get(baseId) ?? []).slice(0, count);
+        for (const item of solutionItems) {
+          const listed = order.some(
+            (entry) =>
+              entry.unitId === item.contentUnitId &&
+              (entry.number === null || entry.number === item.number),
+          );
+          if (listed) asks.push({ item, question: null });
+        }
+      }
     }
-    const unique = [
-      ...new Map(items.map((item) => [`${item.contentUnitId}|${item.label}`, item])).values(),
-    ];
-    if (unique.length > 0)
-      plans.set(outline.id, { role: 'attempt', items: unique, group: [outline.id] });
+    const unique = new Map<string, { item: KeyedGuideItem; question: number | null }>();
+    for (const entry of asks) {
+      if (!unique.has(guideItemKey(entry.item))) unique.set(guideItemKey(entry.item), entry);
+    }
+    if (unique.size === 0) continue;
+    plans.set(outline.id, {
+      role: 'attempt',
+      items: [...unique.values()].map((entry) => entry.item),
+      questionOf: Object.fromEntries(
+        [...unique.entries()].map(([key, entry]) => [key, entry.question]),
+      ),
+      ...(outline.quizConfig?.questionCount !== undefined
+        ? { questionCount: outline.quizConfig.questionCount }
+        : {}),
+    });
   }
   return plans;
 }
@@ -455,7 +580,13 @@ export function injectGuideAnswers(
     const plan = plans.get(outline.id);
     if (!plan || plan.role === 'try') return outline;
     if (plan.role === 'solution') {
-      if (outline.description.includes(SOLUTION_NOTE_MARKER)) return outline;
+      // A slide already settled (D-19) keeps its rebuilt blocks.
+      if (
+        outline.description.includes(SOLUTION_NOTE_MARKER) ||
+        outline.description.includes(LEAVE_OUT_MARKER)
+      ) {
+        return outline;
+      }
       changed = true;
       const points = plan.items
         .map(solutionKeyPoint)
@@ -471,4 +602,69 @@ export function injectGuideAnswers(
     return { ...outline, description: `${outline.description}\n\n${attemptKey(plan.items)}` };
   });
   return changed ? result : outlines;
+}
+
+/**
+ * Review finding 1: the outline an attempt's NARRATION writer reads — its hidden key
+ * cut off, since the key may reach the quiz content writer only. The SAME object when
+ * the outline carries no key (every other outline, every other Teaching Model).
+ */
+export function withoutHiddenAnswerKey<T extends Pick<SceneOutline, 'description'>>(outline: T): T {
+  const at = outline.description.indexOf(`\n\n${ATTEMPT_KEY_MARKER}`);
+  if (at < 0) return outline;
+  return { ...outline, description: outline.description.slice(0, at) };
+}
+
+/** The marker of the "leave these questions out" instruction (D-19). */
+const LEAVE_OUT_MARKER = 'LEFT OUT QUESTIONS (g5.v11)';
+
+function leaveOutNote(items: readonly KeyedGuideItem[]): string {
+  return [
+    `${LEAVE_OUT_MARKER}: this slide no longer solves the questions below. Never show, solve`,
+    'or mention them, on the canvas or in the narration; solve every other question as planned.',
+    ...[...new Set(items.map((item) => item.display))].map((display) => `- ${display}`),
+  ].join('\n');
+}
+
+/** The description without the engine's g5.v11 blocks (always appended last). */
+function plannedDescription(description: string): string {
+  const cuts = [SOLUTION_NOTE_MARKER, ATTEMPT_KEY_MARKER, LEAVE_OUT_MARKER]
+    .map((marker) => description.indexOf(`\n\n${marker}`))
+    .filter((at) => at >= 0);
+  return cuts.length > 0 ? description.slice(0, Math.min(...cuts)) : description;
+}
+
+/**
+ * D-19 (16 Nov 2026): the outline rebuilt with only `keep` of its plan's items keyed;
+ * the others get no guide answer (the plain g5.v10 path). `leaveOut` (a solution's
+ * exercise items) are named as questions the slide no longer solves. A try-it outline is
+ * returned unchanged: it never had an answer.
+ */
+export function withGuideItems(
+  outline: SceneOutline,
+  plan: GuideOutlinePlan,
+  keep: readonly KeyedGuideItem[],
+  leaveOut: readonly KeyedGuideItem[] = [],
+): SceneOutline {
+  if (plan.role === 'try') return outline;
+  const injected = new Set(plan.items.map(solutionKeyPoint));
+  const base = {
+    ...outline,
+    keyPoints: outline.keyPoints.filter((point) => !injected.has(point)),
+    description: plannedDescription(outline.description),
+  };
+  if (plan.role === 'attempt') {
+    return keep.length > 0
+      ? { ...base, description: `${base.description}\n\n${attemptKey(keep)}` }
+      : base;
+  }
+  const blocks = [
+    ...(keep.length > 0 ? [solutionNote(keep)] : []),
+    ...(leaveOut.length > 0 ? [leaveOutNote(leaveOut)] : []),
+  ];
+  return {
+    ...base,
+    keyPoints: [...base.keyPoints, ...keep.map(solutionKeyPoint)],
+    description: [base.description, ...blocks].join('\n\n'),
+  };
 }

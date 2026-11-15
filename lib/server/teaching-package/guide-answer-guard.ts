@@ -1,28 +1,46 @@
 /**
  * g5.v11 (teacher-guide answer referee plan §8.3–8.5): the code safety net behind the
  * approved answers. Pure over the run's outline plans (`guideOutlinePlans`); the scene
- * pipeline (`classroom-generation.ts`) calls it, and only when the run carries one.
+ * pipeline (`classroom-generation.ts`) and the single-scene regeneration call it, and
+ * only when the package carries one.
  *
  * - Comparator: each solution item's final line on the canvas («الإجابة (1A): 12») and
  *   each attempt question's keyed option are compared with the approved answer
- *   (`guide-answer-compare.ts`). A missing final line is a mismatch: it is the
- *   comparator's only reading of the canvas, and the writer was told to write it.
- * - Leak guard: no approved value on a try-it slide's canvas or narration, or in an
- *   attempt's question stem or narration (the right option among the options is fine).
- * - One regeneration with a correction naming only the correct final answer; still
- *   failing → the item leaves the lesson: an attempt question is removed (the attempt
- *   itself when no question is left or the question cannot be told), and a solution or
- *   a try-it slide leaves together with its group (never a try without its solution).
+ *   (`guide-answer-compare.ts`), an attempt item on ITS OWN question when that can be
+ *   told. A missing final line is a mismatch: it is the comparator's only reading of
+ *   the canvas, and the writer was told to write it.
+ * - Leak guard: no approved value, and no announced option letter or truth value, on a
+ *   try-it slide's canvas or narration, or in an attempt's question stem or narration
+ *   (the right option among the options is fine). A given of the item's OWN question
+ *   that equals the answer is no leak.
+ * - One regeneration with a correction (the correct final answer for a solution or a
+ *   key; never the value for a leak). Still failing → D-19 (16 Nov 2026), never a slide
+ *   dropped and never a step for a person:
+ *   - a check item: its outline is generated once more WITHOUT the guide answer (the
+ *     plain g5.v10 path) and kept; the item is logged unverified;
+ *   - an exercise item: the exercise leaves the lesson — its attempt question and its
+ *     item on the solution slide (which is generated once more without it); when that
+ *     cannot be done (the slide would solve nothing, or its attempt question cannot be
+ *     told), the slide is generated without the guide answer of that exercise instead;
+ *   - an attempt question at fault is removed; an attempt left with no question is the
+ *     ONLY outline that ever leaves (it is practice, never a coverage item);
+ *   - a narration that still states the answer: an attempt gets the model-free
+ *     narration; a try-it slide keeps its narration, logged.
  */
 import {
+  announcesGuideAnswer,
   compareGuideAnswer,
   leaksGuideAnswer,
   normalizeGuideDigits,
 } from '@/lib/server/teaching-package/guide-answer-compare';
+import { ATTEMPT_OUTLINE_SUFFIX } from '@/lib/server/teaching-package/attempt-quizzes';
 import {
   finalAnswerLine,
   formatGuideAnswer,
+  guideItemKey,
+  guideItemQuestionText,
   SOLUTION_KEY_POINT_PREFIX,
+  withGuideItems,
   type GuideOutlinePlan,
   type KeyedGuideItem,
 } from '@/lib/server/teaching-package/guide-answers';
@@ -43,13 +61,23 @@ export interface GuideAnswerFinding {
   detail: string;
 }
 
-/** What happened to an outline whose finding outlived its one regeneration. */
+/** What one settled outline did (D-19), pinned on the attempt: labels and codes, no answers. */
 export interface GuideAnswerSettlement {
   outlineId: string;
-  action: 'questions_removed' | 'dropped';
-  /** The outline ids that left the lesson (empty when only questions were removed). */
+  action:
+    | 'questions_removed'
+    | 'items_removed'
+    | 'unverified'
+    | 'narration_replaced'
+    | 'attempt_dropped';
+  /** The outline ids that left the lesson: only an attempt left with no question. */
   dropped: string[];
   removedQuestions: number[];
+  /**
+   * The items settled: `removed` = the exercise left the lesson (its attempt question
+   * and its solution item); `unverified` = kept, generated without the guide answer.
+   */
+  items: Array<{ contentUnitId: string; label: string; outcome: 'removed' | 'unverified' }>;
   findings: Array<{
     code: GuideAnswerFindingCode;
     contentUnitId: string;
@@ -58,11 +86,25 @@ export interface GuideAnswerSettlement {
   }>;
 }
 
+/** What the scene does after its one corrected regeneration still failed. */
+export type GuideSettleDecision =
+  /** Keep this content (an attempt's faulty questions leave in `pruneAttempt`). */
+  | { kind: 'keep'; content: unknown }
+  /** Generate ONCE more from this outline (the failing items without their guide answer) and keep it. */
+  | { kind: 'regenerate'; outline: SceneOutline };
+
 export interface GuideAnswerGuard {
   /** The run's final plans (set when the outline is finalized, fresh or resumed). */
   usePlans(plans: ReadonlyMap<string, GuideOutlinePlan>): void;
-  /** The plan of one outline, or undefined when it holds no keyed item. */
+  /**
+   * The items an earlier part of the same run (a paused run, the bound package) already
+   * settled: a removed exercise stays removed, an unverified item stays without its key.
+   */
+  restore(settlements: ReadonlyArray<Pick<GuideAnswerSettlement, 'outlineId' | 'items'>>): void;
+  /** The plan of one outline (settled items out), or undefined when it holds no keyed item. */
   planOf(outlineId: string): GuideOutlinePlan | undefined;
+  /** Every outline's plan, settled items out (what a resumed run injects). */
+  effectivePlans(): Map<string, GuideOutlinePlan>;
   /**
    * Deterministic clean-up of the content that is kept, AFTER the check (which skips
    * these lines): our own «الإجابة الصحيحة المعتمدة» wording, if a writer copied it,
@@ -77,17 +119,33 @@ export interface GuideAnswerGuard {
   /** The one regeneration's correction: the correct final answers only, never a method. */
   correction(outline: SceneOutline, findings: readonly GuideAnswerFinding[]): string;
   /**
-   * Still failing after the one regeneration: the content to keep (an attempt without
-   * its faulty questions) or the outline ids that leave the lesson. `content` is null
-   * for a narration finding.
+   * Still failing after the one regeneration (D-19). `removal: false` (a single-scene
+   * regeneration, which cannot touch another scene) never removes an exercise or a
+   * question: the failing items are generated without their guide answer instead.
    */
   settle(
     outline: SceneOutline,
     content: unknown,
     findings: readonly GuideAnswerFinding[],
-  ): { content: unknown } | { drop: string[] };
+    options?: { removal?: boolean },
+  ): GuideSettleDecision;
+  /** Findings left on the kept content after the settle regeneration: logged, never acted on. */
+  accept(outline: SceneOutline, findings: readonly GuideAnswerFinding[]): void;
+  /** A narration still stating the answer: an attempt's is replaced by the model-free one. */
+  settleNarration(
+    outline: SceneOutline,
+    findings: readonly GuideAnswerFinding[],
+  ): 'keep' | 'model_free';
+  /** An exercise attempt's solution slide (its question removals come from that slide). */
+  solutionOf(attemptId: string): string | undefined;
+  /**
+   * The attempt with its faulty questions and the questions of removed exercises taken
+   * out; `drop` when no question is left (the attempt alone leaves the lesson).
+   */
+  pruneAttempt(outline: SceneOutline, content: unknown): { content: unknown } | { drop: true };
 }
 
+/** Arabic marks and tatweel: U+0610–U+061A, U+064B–U+065F, U+0670, U+0640. */
 const DIACRITICS = /[ؐ-ًؚ-ٰٟـ]/g;
 
 function decode(html: string): string {
@@ -200,6 +258,17 @@ function spoken(actions: ReadonlyArray<{ type: string; text?: unknown }>): strin
     .join('\n');
 }
 
+function uniqueItems(findings: readonly GuideAnswerFinding[]): KeyedGuideItem[] {
+  return [
+    ...new Map(findings.map((finding) => [guideItemKey(finding.item), finding.item])).values(),
+  ];
+}
+
+/** One book question of an exercise item («11a» and «11b» are question 11). */
+function questionKey(item: KeyedGuideItem): string {
+  return `${item.contentUnitId}|${item.number ?? '*'}`;
+}
+
 export function createGuideAnswerGuard(options: {
   /** The book text of each unit (verses and hadith already removed), by unit id. */
   unitTexts: ReadonlyMap<string, string>;
@@ -207,7 +276,65 @@ export function createGuideAnswerGuard(options: {
   onSettled?: (settlement: GuideAnswerSettlement) => void;
 }): GuideAnswerGuard {
   let plans: ReadonlyMap<string, GuideOutlinePlan> = new Map();
-  const bookText = (item: KeyedGuideItem) => options.unitTexts.get(item.contentUnitId) ?? '';
+  /** Exercise items that left the lesson (their attempt question and solution item). */
+  const removed = new Set<string>();
+  /** Per solution or attempt outline: the items it now carries without a guide answer. */
+  const unverified = new Map<string, Set<string>>();
+  /** Per attempt: its own questions at fault, taken out in `pruneAttempt`. */
+  const faultyQuestions = new Map<string, Set<number>>();
+  const ownTexts = new Map<string, string>();
+
+  /** Review finding 3: the item's OWN question text (never the whole unit) holds its givens. */
+  const bookText = (item: KeyedGuideItem) => {
+    const key = guideItemKey(item);
+    let text = ownTexts.get(key);
+    if (text === undefined) {
+      text = guideItemQuestionText(options.unitTexts.get(item.contentUnitId) ?? '', item);
+      ownTexts.set(key, text);
+    }
+    return text;
+  };
+
+  const effective = (outlineId: string): GuideOutlinePlan | undefined => {
+    const plan = plans.get(outlineId);
+    if (!plan) return undefined;
+    const skip = plan.role === 'try' ? undefined : unverified.get(outlineId);
+    const items = plan.items.filter((item) => {
+      const key = guideItemKey(item);
+      return !removed.has(key) && !skip?.has(key);
+    });
+    if (items.length === 0) return undefined;
+    return items.length === plan.items.length ? plan : { ...plan, items };
+  };
+
+  const unverify = (outlineId: string, items: readonly KeyedGuideItem[]) => {
+    const set = unverified.get(outlineId) ?? new Set<string>();
+    for (const item of items) set.add(guideItemKey(item));
+    unverified.set(outlineId, set);
+  };
+
+  const report = (
+    outline: SceneOutline,
+    action: GuideAnswerSettlement['action'],
+    findings: readonly GuideAnswerFinding[],
+    extra: Partial<Pick<GuideAnswerSettlement, 'dropped' | 'removedQuestions' | 'items'>> = {},
+  ) =>
+    options.onSettled?.({
+      outlineId: outline.id,
+      action,
+      dropped: extra.dropped ?? [],
+      removedQuestions: extra.removedQuestions ?? [],
+      items: extra.items ?? [],
+      findings: findings.map((finding) => ({
+        code: finding.code,
+        contentUnitId: finding.item.contentUnitId,
+        label: finding.item.label,
+        where: finding.where,
+      })),
+    });
+
+  const outcomes = (items: readonly KeyedGuideItem[], outcome: 'removed' | 'unverified') =>
+    items.map((item) => ({ contentUnitId: item.contentUnitId, label: item.label, outcome }));
 
   const leaks = (
     items: readonly KeyedGuideItem[],
@@ -215,7 +342,11 @@ export function createGuideAnswerGuard(options: {
     where: GuideAnswerFinding['where'],
   ): GuideAnswerFinding[] =>
     items
-      .filter((item) => leaksGuideAnswer(item.answer, text, bookText(item)))
+      .filter(
+        (item) =>
+          leaksGuideAnswer(item.answer, text, bookText(item)) ||
+          announcesGuideAnswer(item.answer, text),
+      )
       .map((item) => ({ code: 'GUIDE_ANSWER_LEAK', item, where, detail: 'the answer is stated' }));
 
   const solutionFindings = (plan: GuideOutlinePlan, content: unknown): GuideAnswerFinding[] => {
@@ -245,20 +376,28 @@ export function createGuideAnswerGuard(options: {
 
   const attemptFindings = (plan: GuideOutlinePlan, content: unknown): GuideAnswerFinding[] => {
     const questions = questionsOf(content);
+    // Review finding 6: an item is read on its OWN question, when the quiz holds the
+    // questions it was planned with; otherwise (a question cannot be told) on any.
+    const tied = plan.questionCount !== undefined && questions.length === plan.questionCount;
+    const ownQuestion = (item: KeyedGuideItem): number | null => {
+      const index = tied ? plan.questionOf?.[guideItemKey(item)] : null;
+      return index !== null && index !== undefined && index < questions.length ? index : null;
+    };
     const findings: GuideAnswerFinding[] = [];
     for (const item of plan.items) {
+      const own = ownQuestion(item);
       if (item.answer.type === 'choice') {
         // The book's options in the book's order: the keyed letter is the book's.
-        const keyed = questions.some((question) =>
-          keyedValues(question).some((value) => compareGuideAnswer(item.answer, value).match),
-        );
+        const keys = (question: QuizQuestionLike) =>
+          keyedValues(question).some((value) => compareGuideAnswer(item.answer, value).match);
+        const keyed = own !== null ? keys(questions[own]!) : questions.some(keys);
         if (!keyed) {
           findings.push({
             code: 'GUIDE_ANSWER_MISMATCH',
             item,
             where: 'quiz',
-            questions: null,
-            detail: 'no question keys that option',
+            questions: own !== null ? [own] : null,
+            detail: 'another option is keyed',
           });
         }
         continue;
@@ -266,6 +405,7 @@ export function createGuideAnswerGuard(options: {
       const offering: number[] = [];
       let keyed = false;
       questions.forEach((question, index) => {
+        if (own !== null && index !== own) return;
         const right = (question.options ?? []).filter(
           (option) =>
             typeof option.label === 'string' && compareGuideAnswer(item.answer, option.label).match,
@@ -276,11 +416,12 @@ export function createGuideAnswerGuard(options: {
         if (right.some((option) => values.includes(String(option.value)))) keyed = true;
       });
       if (!keyed) {
+        const at = own !== null ? [own] : offering.length > 0 ? offering : null;
         findings.push({
           code: 'GUIDE_ANSWER_MISMATCH',
           item,
           where: 'quiz',
-          questions: offering.length > 0 ? offering : null,
+          questions: at,
           detail: offering.length > 0 ? 'another option is keyed' : 'the answer is not an option',
         });
       }
@@ -295,12 +436,41 @@ export function createGuideAnswerGuard(options: {
     return findings;
   };
 
+  /** An exercise item can leave its solution slide only when its attempt question is told. */
+  const attemptCanLose = (solutionId: string, item: KeyedGuideItem): boolean => {
+    const attempt = plans.get(`${solutionId}${ATTEMPT_OUTLINE_SUFFIX}`);
+    if (!attempt) return true;
+    const key = guideItemKey(item);
+    if (!attempt.items.some((candidate) => guideItemKey(candidate) === key)) return true;
+    const question = attempt.questionOf?.[key];
+    return question !== null && question !== undefined;
+  };
+
   return {
     usePlans(next) {
       plans = next;
     },
-    planOf(outlineId) {
-      return plans.get(outlineId);
+    restore(settlements) {
+      for (const settlement of settlements) {
+        for (const item of settlement.items ?? []) {
+          const key = guideItemKey(item);
+          if (item.outcome === 'removed') removed.add(key);
+          else {
+            const set = unverified.get(settlement.outlineId) ?? new Set<string>();
+            set.add(key);
+            unverified.set(settlement.outlineId, set);
+          }
+        }
+      }
+    },
+    planOf: effective,
+    effectivePlans() {
+      const result = new Map<string, GuideOutlinePlan>();
+      for (const id of plans.keys()) {
+        const plan = effective(id);
+        if (plan) result.set(id, plan);
+      }
+      return result;
     },
     cleanWording(outline, content) {
       if (plans.get(outline.id)?.role !== 'solution') return content;
@@ -334,14 +504,14 @@ export function createGuideAnswerGuard(options: {
       ) as typeof content;
     },
     checkContent(outline, content) {
-      const plan = plans.get(outline.id);
+      const plan = effective(outline.id);
       if (!plan || !content) return [];
       if (plan.role === 'solution') return solutionFindings(plan, content);
       if (plan.role === 'attempt') return attemptFindings(plan, content);
       return leaks(plan.items, canvasLines(content).join('\n'), 'canvas');
     },
     checkNarration(outline, actions) {
-      const plan = plans.get(outline.id);
+      const plan = effective(outline.id);
       if (!plan || plan.role === 'solution') return [];
       return leaks(plan.items, spoken(actions), 'narration');
     },
@@ -351,65 +521,175 @@ export function createGuideAnswerGuard(options: {
       ];
       const seen = new Set<string>();
       for (const finding of findings) {
-        const key = `${finding.code}|${finding.item.contentUnitId}|${finding.item.label}|${finding.where}`;
+        const key = `${finding.code}|${guideItemKey(finding.item)}|${finding.where}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const answer = formatGuideAnswer(finding.item.answer);
         const name = finding.item.display;
         if (finding.code === 'GUIDE_ANSWER_LEAK') {
+          // Review finding 7: a leak note names the item, never its value — the try's
+          // writers must not learn the answer from their own correction.
           lines.push(
             finding.where === 'narration'
-              ? `- The narration comes BEFORE the learner's try of item ${name}: never say, compute or hint its answer (${answer}); read the task only.`
+              ? `- The narration comes BEFORE the learner's try of item ${name}: never say, compute or hint its answer, and never say which option is correct; read the task only.`
               : finding.where === 'stem'
-                ? `- The question on item ${name} is read BEFORE the try: never write its answer (${answer}) in the question text; keep it only as the correct option.`
-                : `- This slide comes BEFORE the learner's try of item ${name}: never show, compute or hint its answer (${answer}); state the task and its givens only.`,
+                ? `- The question on item ${name} is read BEFORE the try: never write its answer, or any hint of it, in the question text; keep it only as the correct option.`
+                : `- This slide comes BEFORE the learner's try of item ${name}: never show, compute or hint its answer, and never say which option is correct; state the task and its givens only.`,
           );
         } else if (outline.type === 'quiz') {
           lines.push(
-            `- The question on item ${name}: its correct option must be exactly ${answer}; put it among the options and mark it as the answer.`,
+            `- The question on item ${name}: its correct option must be exactly ${formatGuideAnswer(finding.item.answer)}; put it among the options and mark it as the answer.`,
           );
         } else {
           lines.push(
-            `- Item ${name}: the correct final answer is ${answer}. Its working must reach exactly this, and the item ends with the line «${finalAnswerLine(finding.item)}».`,
+            `- Item ${name}: the correct final answer is ${formatGuideAnswer(finding.item.answer)}. Its working must reach exactly this, and the item ends with the line «${finalAnswerLine(finding.item)}».`,
           );
         }
       }
       return lines.join('\n');
     },
-    settle(outline, content, findings) {
-      const plan = plans.get(outline.id);
-      const summary = findings.map((finding) => ({
-        code: finding.code,
-        contentUnitId: finding.item.contentUnitId,
-        label: finding.item.label,
-        where: finding.where,
-      }));
-      const drop = (ids: string[]) => {
-        options.onSettled?.({
-          outlineId: outline.id,
-          action: 'dropped',
-          dropped: ids,
-          removedQuestions: [],
-          findings: summary,
-        });
-        return { drop: ids };
-      };
-      if (plan?.role !== 'attempt') return drop(plan?.group.length ? plan.group : [outline.id]);
-      if (content === null || findings.some((finding) => !finding.questions)) {
-        return drop([outline.id]);
+    settle(outline, content, findings, settleOptions = {}) {
+      const original = plans.get(outline.id);
+      if (!original || findings.length === 0) return { kind: 'keep', content };
+      const removal = settleOptions.removal !== false;
+      const failing = uniqueItems(findings);
+      if (original.role === 'try') {
+        // A try-it slide never had the answer: its retry is the plain path. Kept, logged.
+        report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
+        return { kind: 'keep', content };
       }
-      const faulty = new Set(findings.flatMap((finding) => finding.questions ?? []));
-      const questions = questionsOf(content);
-      const kept = questions.filter((_question, index) => !faulty.has(index));
-      if (kept.length === 0) return drop([outline.id]);
-      options.onSettled?.({
-        outlineId: outline.id,
-        action: 'questions_removed',
-        dropped: [],
-        removedQuestions: [...faulty].sort((a, b) => a - b),
-        findings: summary,
+      const keepOf = () =>
+        original.items.filter((item) => {
+          const key = guideItemKey(item);
+          return !removed.has(key) && !unverified.get(outline.id)?.has(key);
+        });
+      if (original.role === 'attempt') {
+        const removable =
+          removal &&
+          findings.every(
+            (finding) =>
+              finding.item.element === 'exercise' &&
+              Array.isArray(finding.questions) &&
+              finding.questions.length > 0,
+          );
+        if (removable) {
+          const set = faultyQuestions.get(outline.id) ?? new Set<number>();
+          for (const finding of findings)
+            for (const index of finding.questions ?? []) set.add(index);
+          faultyQuestions.set(outline.id, set);
+          report(outline, 'questions_removed', findings, {
+            removedQuestions: [...set].sort((a, b) => a - b),
+          });
+          return { kind: 'keep', content };
+        }
+        unverify(outline.id, failing);
+        report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
+        return { kind: 'regenerate', outline: withGuideItems(outline, original, keepOf()) };
+      }
+      // A solution slide: an exercise leaves (D-19) while another question stays on the
+      // slide and its attempt question can be told; any other item loses its guide answer.
+      let leaving = removal
+        ? failing.filter((item) => item.element === 'exercise' && attemptCanLose(outline.id, item))
+        : [];
+      const gone = new Set(
+        [...original.items.filter((item) => removed.has(guideItemKey(item))), ...leaving].map(
+          questionKey,
+        ),
+      );
+      if ((original.solves ?? original.items.length) - gone.size < 1) leaving = [];
+      // A question leaves whole: its other keyed parts («11b» beside «11a») leave with it.
+      const leavingQuestions = new Set(leaving.map(questionKey));
+      const removedNow = original.items.filter(
+        (item) => leavingQuestions.has(questionKey(item)) && !removed.has(guideItemKey(item)),
+      );
+      for (const item of removedNow) removed.add(guideItemKey(item));
+      const kept = failing.filter((item) => !removed.has(guideItemKey(item)));
+      unverify(outline.id, kept);
+      report(outline, removedNow.length > 0 ? 'items_removed' : 'unverified', findings, {
+        items: [...outcomes(removedNow, 'removed'), ...outcomes(kept, 'unverified')],
       });
+      const leaveOut = original.items.filter((item) => removed.has(guideItemKey(item)));
+      return {
+        kind: 'regenerate',
+        outline: withGuideItems(outline, original, keepOf(), leaveOut),
+      };
+    },
+    accept(outline, findings) {
+      const original = plans.get(outline.id);
+      if (!original || findings.length === 0) return;
+      const failing = uniqueItems(findings);
+      if (original.role !== 'try') unverify(outline.id, failing);
+      report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
+    },
+    settleNarration(outline, findings) {
+      const original = plans.get(outline.id);
+      if (original?.role === 'attempt') {
+        report(outline, 'narration_replaced', findings);
+        return 'model_free';
+      }
+      report(outline, 'unverified', findings, {
+        items: outcomes(uniqueItems(findings), 'unverified'),
+      });
+      return 'keep';
+    },
+    solutionOf(attemptId) {
+      if (plans.get(attemptId)?.role !== 'attempt') return undefined;
+      if (!attemptId.endsWith(ATTEMPT_OUTLINE_SUFFIX)) return undefined;
+      const baseId = attemptId.slice(0, -ATTEMPT_OUTLINE_SUFFIX.length);
+      return plans.get(baseId)?.role === 'solution' ? baseId : undefined;
+    },
+    pruneAttempt(outline, content) {
+      const original = plans.get(outline.id);
+      if (original?.role !== 'attempt') return { content };
+      const questions = questionsOf(content);
+      const faulty = new Set(faultyQuestions.get(outline.id) ?? []);
+      // A removed exercise's question, when the quiz holds the questions it was planned with.
+      if (original.questionCount === undefined || questions.length === original.questionCount) {
+        for (const item of original.items) {
+          const question = original.questionOf?.[guideItemKey(item)];
+          if (removed.has(guideItemKey(item)) && question !== null && question !== undefined) {
+            faulty.add(question);
+          }
+        }
+      }
+      if (faulty.size === 0) return { content };
+      const kept = questions.filter((_question, index) => !faulty.has(index));
+      if (kept.length === 0) {
+        report(outline, 'attempt_dropped', [], {
+          dropped: [outline.id],
+          removedQuestions: [...faulty].sort((a, b) => a - b),
+        });
+        return { drop: true };
+      }
       return { content: { ...(content as object), questions: kept } };
     },
   };
+}
+
+/**
+ * A scene's content checked by the guard, with its one corrected regeneration and the
+ * D-19 settlement (at most two more generations). `generate(outline, correction)` is
+ * the caller's content call; it returns null when no content came back.
+ */
+export async function guardedSceneContent<T>(
+  guard: GuideAnswerGuard,
+  outline: SceneOutline,
+  first: T,
+  generate: (outline: SceneOutline, correction?: string) => Promise<T | null>,
+  options: { removal?: boolean; onFinding?: (findings: GuideAnswerFinding[]) => void } = {},
+): Promise<{ content: T; outline: SceneOutline }> {
+  const findings = guard.checkContent(outline, first);
+  if (findings.length === 0) return { content: guard.cleanWording(outline, first), outline };
+  options.onFinding?.(findings);
+  const retry = await generate(outline, guard.correction(outline, findings));
+  const left = retry ? guard.checkContent(outline, retry) : findings;
+  if (retry && left.length === 0) return { content: guard.cleanWording(outline, retry), outline };
+  const decision = guard.settle(outline, retry ?? first, left, {
+    ...(options.removal === false ? { removal: false } : {}),
+  });
+  if (decision.kind === 'keep') {
+    return { content: guard.cleanWording(outline, decision.content as T), outline };
+  }
+  const settled = (await generate(decision.outline)) ?? retry ?? first;
+  guard.accept(decision.outline, guard.checkContent(decision.outline, settled));
+  return { content: guard.cleanWording(decision.outline, settled), outline: decision.outline };
 }

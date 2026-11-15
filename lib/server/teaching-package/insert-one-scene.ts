@@ -49,6 +49,11 @@ import {
 } from '@/lib/server/teaching-package/errors';
 import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import {
+  guideAnswerGuardFor,
+  type GuideAnswerContext,
+} from '@/lib/server/teaching-package/guide-answer-context';
+import { guardedSceneContent } from '@/lib/server/teaching-package/guide-answer-guard';
+import {
   issuesAfterAudioRepair,
   narrationAudioGap,
   stageHasNarrationAudio,
@@ -104,6 +109,11 @@ export interface InsertOneSceneInput {
      */
     exerciseUnitIds?: readonly string[];
   };
+  /**
+   * g5.v11 (review finding 2): the package's pinned guide (`guideAnswerContextOf`).
+   * Present → an inserted try-it slide is leak-checked like the run's. Absent → unchanged.
+   */
+  guideAnswers?: GuideAnswerContext;
   now?: () => number;
   /** Test seams. */
   generateContent?: typeof generateSceneContent;
@@ -167,8 +177,13 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
   const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
-  try {
-    content = await generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {
+  // g5.v11 (review finding 2): an inserted try-it slide is leak-checked like the run's.
+  // An inserted solution slide gets no guide answer (the plain g5.v10 path), so it has
+  // nothing to compare.
+  const guideGuard = input.guideAnswers ? guideAnswerGuardFor(input.guideAnswers, [outline]) : null;
+  const leakGuard = guideGuard?.planOf(outline.id)?.role === 'try' ? guideGuard : null;
+  const generateSlide = (correctiveNote?: string) =>
+    generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {
       agents,
       languageDirective,
       ...(stage.textDirection ? { textDirection: stage.textDirection } : {}),
@@ -179,10 +194,29 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       // g5.v10 (learner-first plan W4): the same canvas rules as the run.
       ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
       ...sacredPrompt,
+      ...(correctiveNote ? { correctiveNote } : {}),
       onFailure: (event) => {
         contentFailure = event;
       },
     });
+  try {
+    content = await generateSlide();
+    if (leakGuard && content && 'elements' in content) {
+      assertRoute();
+      content = (
+        await guardedSceneContent(
+          leakGuard,
+          outline,
+          content,
+          async (_outline, correction) => {
+            const next = await generateSlide(correction);
+            assertRoute();
+            return next && 'elements' in next ? next : null;
+          },
+          { removal: false },
+        )
+      ).content;
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError) {
@@ -221,58 +255,71 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
+  const slideContent = content;
   let actions;
   try {
     const spokenScript = resolveSpokenScriptOptions(stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
-      async (correctiveContext) => {
-        let fellBack: SceneActionsFallback | undefined;
-        const generated = await generateActions(
-          outline,
-          content,
-          input.aiCallFor('scene-actions'),
-          {
-            ctx: sceneCtx,
-            agents,
-            languageDirective,
-            ...(input.registerPolicy
-              ? { spokenLanguagePolicy: input.registerPolicy.directive }
-              : {}),
-            ...(spokenScript ? { spokenScript } : {}),
-            ...(correctiveContext ? { correctiveContext } : {}),
-            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
-            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
-            ...(assignedImages.length > 0
-              ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
-              : {}),
-            ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
-            ...sacredPrompt,
-            onFallback: (info) => {
-              fellBack = info;
+    const narrate = (guideNote?: string) =>
+      generateRegisterCompliantActions(
+        async (registerCorrection) => {
+          const correctiveContext =
+            [guideNote, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+          let fellBack: SceneActionsFallback | undefined;
+          const generated = await generateActions(
+            outline,
+            slideContent,
+            input.aiCallFor('scene-actions'),
+            {
+              ctx: sceneCtx,
+              agents,
+              languageDirective,
+              ...(input.registerPolicy
+                ? { spokenLanguagePolicy: input.registerPolicy.directive }
+                : {}),
+              ...(spokenScript ? { spokenScript } : {}),
+              ...(correctiveContext ? { correctiveContext } : {}),
+              ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
+              ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+              ...(assignedImages.length > 0
+                ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
+                : {}),
+              ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+              ...sacredPrompt,
+              onFallback: (info) => {
+                fellBack = info;
+              },
             },
-          },
-        );
-        if (fellBack) {
-          assertRoute();
-          throw new TeachingPackageError(
-            fallbackCode,
-            'the narration could not be generated (the model answer was unusable); nothing was written',
-            { fallback: fellBack.code },
           );
-        }
-        return filterKnownActions(generated);
-      },
-      input.registerPolicy,
-      { title: outline.title, outlineId: outline.id },
-      { outline, ctx: sceneCtx },
-      undefined,
-      learnerFirstNarrationCheck(
-        isLearnerFirstModel(input.teachingModel),
-        content,
+          if (fellBack) {
+            assertRoute();
+            throw new TeachingPackageError(
+              fallbackCode,
+              'the narration could not be generated (the model answer was unusable); nothing was written',
+              { fallback: fellBack.code },
+            );
+          }
+          return filterKnownActions(generated);
+        },
+        input.registerPolicy,
+        { title: outline.title, outlineId: outline.id },
+        { outline, ctx: sceneCtx },
         undefined,
-        outline.contentRole,
-      ),
-    );
+        learnerFirstNarrationCheck(
+          isLearnerFirstModel(input.teachingModel),
+          slideContent,
+          undefined,
+          outline.contentRole,
+        ),
+      );
+    actions = await narrate();
+    // g5.v11: the inserted try-it slide's narration never states a checked answer:
+    // one more narration with a correction naming no value, then kept (D-19).
+    const leaks = leakGuard ? leakGuard.checkNarration(outline, actions) : [];
+    if (leakGuard && leaks.length > 0) {
+      actions = await narrate(leakGuard.correction(outline, leaks));
+      const left = leakGuard.checkNarration(outline, actions);
+      if (left.length > 0) leakGuard.settleNarration(outline, left);
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError) {

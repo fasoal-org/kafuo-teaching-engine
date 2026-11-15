@@ -48,9 +48,11 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
@@ -1040,8 +1042,20 @@ export async function insertGeneratedSlide(
       );
     }
     const exerciseUnitIds = exerciseScope.unitIds;
+    // g5.v11 (review finding 2): the producing attempt's pinned guide, so an inserted
+    // try-it slide is leak-checked like the run's. Read for g5.v11 only.
+    const guideAnswers =
+      retained && isGuideAnswerModel(version.teachingModel)
+        ? guideAnswerContextOf({
+            teachingModel: version.teachingModel,
+            snapshot: retained.inputSnapshot,
+            units: context.units,
+            language: stage.language,
+          })
+        : null;
     const generated = await (deps.insert ?? insertOneScene)({
       outline: planned.outline,
+      ...(guideAnswers ? { guideAnswers } : {}),
       newSceneId,
       scenes: stageDocument.scenes,
       stage,

@@ -1,6 +1,6 @@
 {
   "contract": "kafuo.guide-answer-compare.v1",
-  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization, a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values; text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words. Leak: a number leaks only at its exact value and only when the item's book text does not hold it; a text answer leaks only on a line announcing an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=» («شوال = 10» in a numbered cycle is given data); choice and bool never leak.",
+  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); a vulgar fraction («½») and \\frac{a}{b} read as a/b, and a whole number before a proper fraction is a mixed number («3 1/2», «3½» = 3.5); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization (Arabic full names alias the symbols: متر = م, سنتيمتر = سم, كيلومتر = كم, درجة = °, ثانية = ث, …), a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values, the FIRST truth word deciding («صحيحة، لا يوجد مثال مضاد» is true; «لا» counts only as a whole reply or before a stop); text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words. Leak: a number leaks only at its exact value and only when the item's book text does not hold it; a text answer leaks only on a line announcing an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=» («شوال = 10» in a numbered cycle is given data); choice and bool never leak.",
   "compare": [
     {
       "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
@@ -81,7 +81,88 @@
       "written": "الى  الاعلى.",
       "match": true
     },
-    { "answer": { "type": "text", "value": "شوال" }, "written": "رمضان", "match": false }
+    { "answer": { "type": "text", "value": "شوال" }, "written": "رمضان", "match": false },
+    {
+      "answer": { "type": "bool", "value": true },
+      "written": "صحيحة، لا يوجد مثال مضاد",
+      "match": true
+    },
+    {
+      "answer": { "type": "bool", "value": false },
+      "written": "لا يوجد عدد يحققها، إذن خاطئة",
+      "match": true
+    },
+    { "answer": { "type": "bool", "value": false }, "written": "لا، العبارة خاطئة", "match": true },
+    { "answer": { "type": "number", "value": 0.5 }, "written": "½", "match": true },
+    { "answer": { "type": "number", "value": 0.75 }, "written": "¾", "match": true },
+    { "answer": { "type": "number", "value": 3.5 }, "written": "3½", "match": true },
+    { "answer": { "type": "number", "value": 15.5 }, "written": "3½", "match": false },
+    { "answer": { "type": "number", "value": 3.5 }, "written": "3 1/2", "match": true },
+    { "answer": { "type": "number", "value": -3.5 }, "written": "-3 1/2", "match": true },
+    { "answer": { "type": "number", "value": 3.5 }, "written": "\\frac{7}{2}", "match": true },
+    { "answer": { "type": "number", "value": 3.5 }, "written": "3\\frac{1}{2}", "match": true },
+    { "answer": { "type": "number", "value": 0.75 }, "written": "$\\dfrac{3}{4}$", "match": true },
+    { "answer": { "type": "number", "value": 2.5 }, "written": "3 5/2", "match": true },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "م²" },
+      "written": "12 م²",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "م²" },
+      "written": "12 متر مربع",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "م" },
+      "written": "12 مترًا",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "م" },
+      "written": "12 أمتار",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "م" },
+      "written": "12 كم",
+      "match": false
+    },
+    {
+      "answer": { "type": "number", "value": 5, "unit": "سم" },
+      "written": "5 سنتيمترات",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 3, "unit": "كم" },
+      "written": "3 كيلومتر",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 2, "unit": "كجم" },
+      "written": "2 كيلوجرام",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 45, "unit": "درجة" },
+      "written": "45°",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 45, "unit": "°" },
+      "written": "45 درجات",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 30, "unit": "ث" },
+      "written": "30 ثانية",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "11.25 ريالًا سعوديًا",
+      "match": true
+    }
   ],
   "leak": [
     {

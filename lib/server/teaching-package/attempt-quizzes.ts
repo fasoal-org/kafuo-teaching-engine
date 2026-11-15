@@ -46,8 +46,9 @@ const ATTEMPT_DESCRIPTION =
   '(the Hijri months, the days of the week) lists the whole cycle with its numbers in the question, ' +
   'as given data. ' +
   // Teacher-guide plan follow-up (16 Nov 2026): item 208's try keyed 51.8 by averaging.
-  "The key and the explanation use the lesson's own method: for a value expected next from data, " +
-  'add the last difference to the last value; never an average change. ' +
+  // D-18 (16 Nov 2026): the method itself is the lesson's; "add the last difference"
+  // keyed 24 for 2, 4, 8, 16, so the attempt names no method of its own.
+  "The key and the explanation use the lesson's own method; never an average change. " +
   'Never reveal or hint the answer ' +
   'in the question, and never mention scores, points or grades.';
 
@@ -63,6 +64,11 @@ export interface AttemptQuizContext {
    * the numbered questions of each multi-question unit that slide solves.
    */
   exerciseSlideQuestions?: ReadonlyArray<Record<string, number[]>>;
+  /**
+   * g5.v11 (review finding 9): the attempts this run already dropped (left with no
+   * question, pinned on the attempt), so a resumed run never inserts them again.
+   */
+  skipAttemptIds?: ReadonlySet<string>;
 }
 
 function unitsOf(book: Book, element: string): Set<string> {
@@ -228,17 +234,24 @@ function ownLines(
   return group.lines;
 }
 
+/** One statement of an exercise attempt, with the book question it asks. */
+interface ExerciseStatement {
+  unitId: string;
+  number: number;
+  statement: string;
+}
+
 /**
  * The book's own question text of the exercise units a slide solves (no answers): one
  * statement per numbered question, holding its continuation lines up to the next one,
  * after its shared task («<task> — <statement>»).
  */
-function exerciseStatements(
+function exerciseStatementEntries(
   cited: readonly string[],
   context: AttemptQuizContext,
   questions: Record<string, number[]> | undefined,
-): string[] {
-  const statements: string[] = [];
+): ExerciseStatement[] {
+  const statements: ExerciseStatement[] = [];
   for (const id of cited) {
     const allowed = questions?.[id];
     // Quality plan follow-up (item 208 Q11, 15 Nov 2026): table rows and «a) b)» lines stay.
@@ -247,10 +260,82 @@ function exerciseStatements(
     groups.forEach((group, index) => {
       if (!group.hasText || (allowed && !allowed.includes(group.number))) return;
       const statement = ownLines(group, groups[index + 1], present).join(' ');
-      statements.push(capStatement(group.task ? `${group.task} — ${statement}` : statement));
+      statements.push({
+        unitId: id,
+        number: group.number,
+        statement: capStatement(group.task ? `${group.task} — ${statement}` : statement),
+      });
     });
   }
   return statements;
+}
+
+function exerciseStatements(
+  cited: readonly string[],
+  context: AttemptQuizContext,
+  questions: Record<string, number[]> | undefined,
+): string[] {
+  return exerciseStatementEntries(cited, context, questions).map((entry) => entry.statement);
+}
+
+/**
+ * g5.v11 (review finding 6): the book question each question of an exercise slide's
+ * attempt asks, in the quiz's order — the same statements {@link insertAttemptQuizzes}
+ * lists, within the quiz's question count. Empty when the unit text prints no numbered
+ * question (the attempt then asks from the slide's title, and no question can be told).
+ */
+export function exerciseAttemptQuestions(
+  cited: readonly string[],
+  context: AttemptQuizContext,
+  questions: Record<string, number[]> | undefined,
+): Array<{ unitId: string; number: number }> {
+  return exerciseStatementEntries(cited, context, questions)
+    .slice(0, ATTEMPT_MAX_QUESTIONS)
+    .map(({ unitId, number }) => ({ unitId, number }));
+}
+
+/** A question line's own number (and «المثال N» margin header) removed. */
+function withoutQuestionNumber(line: string): string {
+  return line
+    .replace(MARGIN_PREFIX, '')
+    .replace(/^\s*\(?\s*[0-9٠-٩]{1,3}\s*[).\-]?\s*/u, '')
+    .trim();
+}
+
+/** A part line's letter removed («a) …», «(b …»). */
+function withoutPartLetter(line: string): string {
+  return line.replace(/^\s*\(?\s*(?:[a-hA-H]|[أبجد])\s*\)?(?=\s|$)/u, '').trim();
+}
+
+/**
+ * g5.v11 (review finding 3): the book's own text of ONE numbered exercise question, for
+ * the leak guard's "a given is no leak" rule — its shared task and its own lines (for a
+ * part «11b», the question's first line and that part's lines), with its number, margin
+ * header and part letter removed. Null when the unit prints no such question.
+ */
+export function exerciseQuestionText(
+  text: string,
+  number: number,
+  letter?: string | null,
+): string | null {
+  const groups = questionGroups(text);
+  const index = groups.findIndex((group) => group.number === number);
+  if (index < 0) return null;
+  const present = new Set(groups.map((group) => group.number));
+  const group = groups[index]!;
+  let lines = ownLines(group, groups[index + 1], present);
+  const part = letter?.toLowerCase();
+  if (part) {
+    const start = lines.findIndex((line, at) => at > 0 && subItemLetter(line) === part);
+    if (start > 0) {
+      const next = lines.findIndex((line, at) => at > start && subItemLetter(line) !== null);
+      lines = [lines[0]!, ...lines.slice(start, next < 0 ? lines.length : next)];
+    }
+  }
+  const own = lines.map((line, at) =>
+    at === 0 ? withoutQuestionNumber(line) : withoutPartLetter(line),
+  );
+  return [group.task, ...own].filter((line) => line !== '').join('\n');
 }
 
 function questionCount(itemCount: number): number {
@@ -337,6 +422,7 @@ export function insertAttemptQuizzes(
   const exercises = unitsOf(book, 'exercise');
   if (tryIts.size === 0 && exercises.size === 0) return outlines;
   const present = new Set(outlines.map((outline) => outline.id));
+  for (const id of context.skipAttemptIds ?? []) present.add(id);
   const result: SceneOutline[] = [];
   let inserted = false;
   let exerciseSlide = 0;

@@ -319,6 +319,23 @@ export interface KafuoTeacherGuide {
   items: KafuoTeacherGuideItem[];
 }
 
+/** One g5.v11 settlement pinned on the attempt (`GuideAnswerSettlement` plus its run). */
+export interface GuideAnswerSettlementRecord {
+  outlineId: string;
+  action:
+    | 'questions_removed'
+    | 'items_removed'
+    | 'unverified'
+    | 'narration_replaced'
+    | 'attempt_dropped';
+  /** The outline ids that left the lesson: only an attempt left with no question. */
+  dropped: string[];
+  removedQuestions: number[];
+  items: Array<{ contentUnitId: string; label: string; outcome: 'removed' | 'unverified' }>;
+  findings: Array<{ code: string; contentUnitId: string; label: string; where: string }>;
+  generationRun: number;
+}
+
 /** Kafuo Learning Objective reference retained on a scene (app-layer field). */
 export interface SceneLearningObjectiveRef {
   objectiveRef: string;
@@ -409,18 +426,13 @@ export interface GenerationInputSnapshot {
    */
   teacherGuide?: KafuoTeacherGuide;
   /**
-   * g5.v11: the items whose checked answer still failed after their one regeneration in
-   * the bound run — an attempt question removed, or the item's outlines dropped. Labels
-   * and codes only, never an answer value.
+   * g5.v11: the items whose checked answer still failed after their one regeneration
+   * (D-19): an attempt question removed, an exercise removed from the lesson, an item
+   * kept unverified, an attempt's narration replaced, or an attempt left with no question
+   * dropped. Pinned per run (merged, never overwritten) BEFORE any pause, so a resumed
+   * run never re-inserts a dropped attempt. Labels and codes only, never an answer value.
    */
-  guideAnswerSettlements?: Array<{
-    outlineId: string;
-    action: 'questions_removed' | 'dropped';
-    dropped: string[];
-    removedQuestions: number[];
-    findings: Array<{ code: string; contentUnitId: string; label: string; where: string }>;
-    generationRun: number;
-  }>;
+  guideAnswerSettlements?: GuideAnswerSettlementRecord[];
   /**
    * Stable resource identity/integrity lineage. NEVER carries `url` — the
    * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).

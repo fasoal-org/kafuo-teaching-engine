@@ -32,7 +32,15 @@ import {
   type TransactionSource,
 } from '@/lib/persistence/owner-bound-document-store';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
-import { readAttemptById, readVersionById } from '@/lib/persistence/teaching-package';
+import {
+  readAttemptById,
+  readContentUnitsForAttempt,
+  readVersionById,
+} from '@/lib/persistence/teaching-package';
+import {
+  guideAnswerContextOf,
+  removedGuideItemKeys,
+} from '@/lib/server/teaching-package/guide-answer-context';
 import {
   isGuideAnswerModel,
   isLearnerFirstModel,
@@ -203,9 +211,27 @@ export async function callPackageReviewer(
   const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
   // g5.v11 (teacher-guide plan §8.6): its solving slides carry their approved guide
   // answers, and the rubric compares with them instead of re-solving (flag only).
+  // Review finding 10: the items resolved to OUR book items with the run's own facts
+  // (from the retained units' full text), shown by the names the writers saw.
   const guideAnswers = isGuideAnswerModel(attempt?.teachingModel);
+  const guideContext =
+    guideAnswers && attempt && review.attemptId
+      ? guideAnswerContextOf({
+          teachingModel: attempt.teachingModel,
+          snapshot: attempt.inputSnapshot,
+          units: await readContentUnitsForAttempt(request.pool, review.attemptId, {
+            tenantId: review.tenantId,
+          }),
+          // Only the resolved items are read here, never the unit texts.
+          language: null,
+        })
+      : null;
   const reviewed = guideAnswers
-    ? withGuideAnswers(slides, attempt?.inputSnapshot.teacherGuide)
+    ? withGuideAnswers(
+        slides,
+        guideContext?.resolved ?? null,
+        removedGuideItemKeys(guideContext?.settlements),
+      )
     : slides;
   const call = await runReviewerCall({
     pool: request.pool,

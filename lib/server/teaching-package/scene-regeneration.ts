@@ -32,9 +32,11 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import {
   citedContentUnitIds,
   isTeachingSlide,
@@ -620,9 +622,25 @@ export async function regenerateSlideScene(
       unitChange && !replannedOutline
         ? `${request.instruction}\n\n${unitChange.directive}`
         : request.instruction;
+    // g5.v11 (review finding 2): the producing attempt's pinned guide, so the editor's
+    // and the AI reviewer's regenerations are checked like the run. Read for g5.v11 only.
+    const guideAnswers =
+      retained && isGuideAnswerModel(version.teachingModel)
+        ? guideAnswerContextOf({
+            teachingModel: version.teachingModel,
+            snapshot: retained.inputSnapshot,
+            units: (
+              await readAllContentUnitsForVersion(pool, grant.versionId, {
+                tenantId: grant.tenantId,
+              })
+            ).units,
+            language: stage.language,
+          })
+        : null;
     const generated = await (deps.regenerate ?? regenerateOneScene)({
       scene: row.previousScene,
       ...(sacredExerciseUnitIds ? { sacredExerciseUnitIds } : {}),
+      ...(guideAnswers ? { guideAnswers } : {}),
       scenes,
       stage,
       ...(stageDocument.outline

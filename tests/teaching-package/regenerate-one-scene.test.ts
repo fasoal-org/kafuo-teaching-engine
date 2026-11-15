@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import { regenerateOneScene } from '@/lib/server/teaching-package/regenerate-one-scene';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import type { AppScene } from '@/lib/types/stage';
@@ -902,5 +903,144 @@ describe('regenerateOneScene — a lesson part moved between slides (owner, 14 N
     expect(regenerationInvariantViolations(pre, pre, ['cu-1', 'cu-9'])).toEqual([
       'sourceContentUnitIds',
     ]);
+  });
+});
+
+// g5.v11 (review findings 1 and 2): a regenerated attempt is checked against the pinned
+// guide like the run's, and its narration writer never reads the hidden key.
+describe('regenerateOneScene — g5.v11 attempt', () => {
+  const V11 = { key: 'g5', version: 'g5.v11' };
+  const book = {
+    templateVersionId: '3',
+    rules: [],
+    units: [
+      {
+        contentUnitId: '6234',
+        kind: 'UNDERSTANDING_CHECK',
+        element: 'try_it' as const,
+        required: true,
+        partIndex: 1,
+      },
+    ],
+  };
+  const guideAnswers = guideAnswerContextOf({
+    teachingModel: V11,
+    snapshot: {
+      bookStructure: book,
+      teacherGuide: {
+        guideId: 'tg-1',
+        items: [
+          {
+            contentUnitId: '6234',
+            label: '1A',
+            status: 'approved',
+            answer: { type: 'number', value: 12 },
+          },
+        ],
+      },
+    },
+    units: [{ unitId: '6234', normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟' }],
+    language: 'ar',
+  })!;
+  const outline: AppDocumentOutline = {
+    ...snapshot(),
+    outlines: [
+      {
+        id: 'o0',
+        order: 1,
+        type: 'slide',
+        title: 'جرّب',
+        description: 'Try it.',
+        keyPoints: ['1A) ما الحد التالي؟'],
+        slideType: 'content',
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['6234'],
+      },
+      {
+        id: 'o0-attempt',
+        order: 2,
+        type: 'quiz',
+        title: 'جرّب بنفسك',
+        description: 'Practice attempt.\n\nHIDDEN ANSWER KEY (g5.v11): the answers\n- item 1A: 12',
+        keyPoints: ['1A) ما الحد التالي؟'],
+        sourceContentUnitIds: ['6234'],
+        quizConfig: { questionCount: 1, difficulty: 'easy', questionTypes: ['single'] },
+      },
+    ],
+  } as unknown as AppDocumentOutline;
+  const pre = {
+    ...preImage(),
+    outlineId: 'o0-attempt',
+    type: 'quiz',
+    title: 'جرّب بنفسك',
+    sourceContentUnitIds: ['6234'],
+    content: { type: 'quiz', questions: [{ id: 'q', type: 'single', question: 'ما التالي؟' }] },
+  } as unknown as AppScene;
+  const quizReply = (keyed: string) =>
+    JSON.stringify([
+      {
+        type: 'single',
+        question: 'الأعداد 3، 6، 9 … ما الحد التالي؟',
+        options: [
+          { value: 'A', label: '11' },
+          { value: 'B', label: '12' },
+          { value: 'C', label: '15' },
+        ],
+        answer: [keyed],
+      },
+    ]);
+
+  it('regenerates a wrongly keyed attempt once with a correction, never giving the narration its key', async () => {
+    const prompts: Array<{ stage: string; system: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, system, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return quizReply(user.includes('CORRECTION (checked final answers') ? 'B' : 'C');
+    };
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: outline,
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'quiz') throw new Error('quiz');
+    expect(result.scene.content.questions[0]!.answer).toEqual(['B']);
+    const content = prompts.filter((prompt) => prompt.stage === 'scene-content:quiz');
+    expect(content).toHaveLength(2);
+    expect(content[0]!.user).toContain('HIDDEN ANSWER KEY');
+    const narration = prompts.filter((prompt) => ACTIONS_PROMPT.test(prompt.system));
+    expect(narration.length).toBeGreaterThan(0);
+    for (const prompt of narration) expect(prompt.user).not.toContain('HIDDEN ANSWER KEY');
+  });
+
+  it('is unchanged without the pinned guide (g5.v10): one content call', async () => {
+    const prompts: string[] = [];
+    const aiCallFor = (stageLabel: string) => async (system: string) => {
+      prompts.push(stageLabel);
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return quizReply('C');
+    };
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: outline,
+      instruction: INSTRUCTION,
+      teachingModel: { key: 'g5', version: 'g5.v10' },
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    expect(prompts.filter((stageLabel) => stageLabel === 'scene-content:quiz')).toHaveLength(1);
   });
 });

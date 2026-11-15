@@ -111,8 +111,13 @@ import {
 } from '@/lib/server/teaching-package/guide-answers';
 import {
   createGuideAnswerGuard,
+  type GuideAnswerGuard,
   type GuideAnswerSettlement,
 } from '@/lib/server/teaching-package/guide-answer-guard';
+import {
+  droppedGuideOutlineIds,
+  mergeGuideSettlements,
+} from '@/lib/server/teaching-package/guide-answer-context';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
@@ -149,6 +154,7 @@ import type { AICallFn, OutlineDiagnostic } from '@openmaic/generation';
 import type {
   GenerationCheckpoint,
   GenerationCheckpointSourceRefs,
+  GuideAnswerSettlementRecord,
   SourceVisualManifestEntry,
 } from '@/lib/types/teaching-package';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -676,32 +682,50 @@ async function runKafuoAttempt(
       : unit.normalizedText;
     return learnerFirst ? stripProviderImageDescriptions(text, kafuo.language) : text;
   };
-  // g5.v11 (teacher-guide plan §8.3–8.5): the code check of the approved answers. Its
-  // settlements are kept per run and pinned on the attempt once the run is bound.
+  // g5.v11 (teacher-guide plan §8.3–8.5): the code check of the approved answers, one
+  // guard per run (a re-rolled run starts clean). Its settlements are pinned on the
+  // attempt, merged, before any pause (review finding 9), and a resumed run restores them.
   const guideSettlements: GuideAnswerSettlement[] = [];
-  const guideGuard =
+  // The leak guard's givens and the attempts' question order: the units' prompt text.
+  const guideUnitTexts =
     guideAnswers && normalizedSource
-      ? createGuideAnswerGuard({
-          // The leak guard's givens: the book text of each unit (a given is no leak).
-          unitTexts: new Map(
-            retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
-              (unit) => [String(unit.unitId), promptUnitText(unit)] as const,
-            ),
+      ? new Map(
+          retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+            (unit) => [String(unit.unitId), promptUnitText(unit)] as const,
           ),
-          onSettled: (settlement) => {
-            guideSettlements.push(settlement);
-            log.warn(
-              `Teaching package attempt ${attemptId}: outline ${settlement.outlineId} still failed its checked answers (${[
-                ...new Set(settlement.findings.map((finding) => finding.code)),
-              ].join(', ')}); ${
-                settlement.action === 'dropped'
-                  ? `dropped ${settlement.dropped.join(', ')}`
-                  : `removed question(s) ${settlement.removedQuestions.join(', ')}`
-              }`,
-            );
-          },
-        })
+        )
       : null;
+  const pinnedGuideSettlements = resume
+    ? (attemptRow?.inputSnapshot.guideAnswerSettlements ?? [])
+    : [];
+  const createRunGuideGuard = (run: number): GuideAnswerGuard | null => {
+    if (!guideUnitTexts) return null;
+    const guard = createGuideAnswerGuard({
+      unitTexts: guideUnitTexts,
+      onSettled: (settlement) => {
+        guideSettlements.push(settlement);
+        log.warn(
+          `Teaching package attempt ${attemptId}: outline ${settlement.outlineId} still failed its checked answers (${[
+            ...new Set(settlement.findings.map((finding) => finding.code)),
+          ].join(', ')}); ${settlement.action}${
+            settlement.dropped.length > 0 ? ` ${settlement.dropped.join(', ')}` : ''
+          }${
+            settlement.removedQuestions.length > 0
+              ? ` question(s) ${settlement.removedQuestions.join(', ')}`
+              : ''
+          }${
+            settlement.items.length > 0
+              ? ` item(s) ${settlement.items.map((item) => `${item.contentUnitId}/${item.label} ${item.outcome}`).join(', ')}`
+              : ''
+          }`,
+        );
+      },
+    });
+    // A resumed run continues its own settlements (a removed exercise stays removed).
+    if (resume)
+      guard.restore(pinnedGuideSettlements.filter((record) => record.generationRun === run));
+    return guard;
+  };
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
@@ -775,8 +799,7 @@ async function runKafuoAttempt(
     ...(learnerFirst ? { learnerFirst: true } : {}),
     // Quality plan W4: the learner-first visual rules, with the book's exercise units.
     ...(learnerFirst ? { learnerFirstVisuals: learnerFirstVisualsOf(kafuo.bookStructure) } : {}),
-    // g5.v11 only: the approved answers' code check (absent for every other model).
-    ...(guideGuard ? { guideAnswerGuard: guideGuard } : {}),
+    // g5.v11 only: the approved answers' code check is added per run (`runExecution`).
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's
     // single governed-mode predicate (plan §7.1.1). The outline contract
@@ -822,6 +845,11 @@ async function runKafuoAttempt(
     if (!resume) coverageGaps.clear();
     // g5.v11: a discarded run's settlements are not this run's either.
     guideSettlements.length = 0;
+    const guideGuard = createRunGuideGuard(run);
+    // Review finding 9: the attempts this run dropped before a pause stay out.
+    const droppedGuideIds = resume
+      ? droppedGuideOutlineIds(pinnedGuideSettlements, run)
+      : new Set<string>();
     if (!resume) await incrementGenerationRuns(pool, attemptId);
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
     const sink = createTeachingPackagePersistenceSink(attemptId);
@@ -847,9 +875,13 @@ async function runKafuoAttempt(
         scenesGenerated: 0,
       });
 
-      const runExecution: GenerationExecutionInput = execution.attribution
+      const attributed: GenerationExecutionInput = execution.attribution
         ? { ...execution, attribution: { ...execution.attribution, generationRun: run } }
         : execution;
+      // g5.v11 only: the approved answers' code check (absent for every other model).
+      const runExecution: GenerationExecutionInput = guideGuard
+        ? { ...attributed, guideAnswerGuard: guideGuard }
+        : attributed;
       const result = await generateClassroom(runExecution, {
         baseUrl: '',
         persistence: trackingSink,
@@ -932,16 +964,19 @@ async function runKafuoAttempt(
                     ...(coverageBook?.teacherParity
                       ? { exerciseSlideQuestions: slideQuestions }
                       : {}),
+                    ...(droppedGuideIds.size > 0 ? { skipAttemptIds: droppedGuideIds } : {}),
                   });
                   // g5.v11 (plan §8): the approved answers go to the solution slides and
-                  // the attempts' hidden keys, never to a try-it slide. Idempotent.
-                  if (!guideAnswers || !kafuo.bookStructure) return withAttempts;
+                  // the attempts' hidden keys, never to a try-it slide. Idempotent; a
+                  // resumed run's settled items (D-19) stay without them.
+                  if (!guideAnswers || !kafuo.bookStructure || !guideGuard) return withAttempts;
                   const plans = guideOutlinePlans(withAttempts, kafuo.bookStructure, guideAnswers, {
                     ...(slideQuestions ? { slideQuestions } : {}),
                     facts: bookFacts,
+                    ...(guideUnitTexts ? { unitTexts: guideUnitTexts } : {}),
                   });
-                  guideGuard?.usePlans(plans);
-                  return injectGuideAnswers(withAttempts, plans);
+                  guideGuard.usePlans(plans);
+                  return injectGuideAnswers(withAttempts, guideGuard.effectivePlans());
                 },
               }
             : {}),
@@ -1029,6 +1064,21 @@ async function runKafuoAttempt(
           },
         },
       });
+
+      // g5.v11 (plan §8.3–8.5, review finding 9): what the code check settled is pinned
+      // on the attempt BEFORE any gate below can pause the run — merged with what this
+      // run pinned before an earlier pause, never overwritten — so a resumed run never
+      // re-inserts a dropped attempt. Labels and codes only, never an answer value.
+      if (guideGuard) {
+        await patchSnapshot(pool, attemptId, (snapshot) => ({
+          ...snapshot,
+          guideAnswerSettlements: mergeGuideSettlements(
+            snapshot.guideAnswerSettlements as GuideAnswerSettlementRecord[] | undefined,
+            guideSettlements,
+            run,
+          ),
+        }));
+      }
 
       const flowCheck = validateExactTeachingFlow(
         result.scenes,
@@ -1256,19 +1306,6 @@ async function runKafuoAttempt(
         (scene) => (scene.generationIssues?.length ?? 0) > 0,
       ).length;
       await patchSnapshot(pool, attemptId, (snapshot) => ({ ...snapshot, scenesNeedingReview }));
-
-      // g5.v11 (plan §8.3–8.5): each item the code check settled (a question removed, or
-      // its outlines dropped) is logged on the attempt — labels and codes, no answers.
-      if (guideSettlements.length > 0) {
-        const settlements = guideSettlements.map((settlement) => ({
-          ...settlement,
-          generationRun: run,
-        }));
-        await patchSnapshot(pool, attemptId, (snapshot) => ({
-          ...snapshot,
-          guideAnswerSettlements: settlements,
-        }));
-      }
 
       // The Submit coverage gate's authority: which sections are essential and
       // which the plan left untaught. Absent (PDF fallback, older packages) →

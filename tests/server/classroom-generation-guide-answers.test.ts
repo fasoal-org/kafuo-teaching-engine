@@ -114,15 +114,16 @@ const ITEM: KeyedGuideItem = {
   answer: { type: 'number', value: 12 },
 };
 
-function guard() {
+function guard(plans: Record<string, GuideOutlinePlan> = PLANS) {
   const instance = createGuideAnswerGuard({ unitTexts: new Map([['6234', 'الأعداد 3، 6، 9']]) });
-  const plans: Record<string, GuideOutlinePlan> = {
-    sol: { role: 'solution', items: [ITEM], group: ['sol', 'sol-attempt'] },
-    'sol-attempt': { role: 'attempt', items: [ITEM], group: ['sol-attempt'] },
-  };
   instance.usePlans(new Map(Object.entries(plans)));
   return instance;
 }
+
+const PLANS: Record<string, GuideOutlinePlan> = {
+  sol: { role: 'solution', items: [ITEM], solves: 2 },
+  'sol-attempt': { role: 'attempt', items: [ITEM] },
+};
 
 const slideContent = (line: string) =>
   JSON.stringify({
@@ -216,12 +217,149 @@ describe('generateClassroom — g5.v11 approved-answer check', () => {
     ).toEqual(['A']);
   });
 
-  it('drops a solution still wrong after its one regeneration, with its attempt', async () => {
+  it('D-19: a check solution still wrong is generated once more without its guide answer and kept', async () => {
     const calls = routeModel({ stubborn: true });
     const result = await run({ ...baseInput, guideAnswerGuard: guard() });
-    expect(calls.solution).toBe(2);
-    expect(result.scenes.map((scene) => scene.outlineId)).toEqual(['open']);
-    expect(result.outlines.map((outline) => outline.id)).toEqual(['open']);
-    expect(persisted.outlines?.map((outline) => outline.id)).toEqual(['open']);
+    // First, corrected, then the plain g5.v10 path — never dropped, never a person.
+    expect(calls.solution).toBe(3);
+    expect(result.scenes.map((scene) => scene.outlineId)).toEqual(['open', 'sol', 'sol-attempt']);
+    expect(persisted.outlines?.map((outline) => outline.id)).toEqual([
+      'open',
+      'sol',
+      'sol-attempt',
+    ]);
+  });
+
+  it('never gives an attempt’s narration writer its hidden key (review finding 1)', async () => {
+    const keyed = outlines.map((outline) =>
+      outline.id === 'sol-attempt'
+        ? {
+            ...outline,
+            description: 'Try it.\n\nHIDDEN ANSWER KEY (g5.v11): the answers\n- item 1A: 12',
+          }
+        : outline,
+    );
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: keyed },
+    });
+    routeModel();
+    await run({ ...baseInput, guideAnswerGuard: guard() });
+    const prompts = mocks.callLLM.mock.calls.map((call) => {
+      const request = call[0] as { messages: Array<{ role: string; content: string }> };
+      return {
+        system: request.messages.find((m) => m.role === 'system')?.content ?? '',
+        user: request.messages.find((m) => m.role === 'user')?.content ?? '',
+      };
+    });
+    const quizContent = prompts.filter((p) => /^# Quiz Content Generator/m.test(p.system));
+    const quizNarration = prompts.filter((p) => /^# Quiz Action Generator/m.test(p.system));
+    expect(quizContent.some((p) => p.user.includes('HIDDEN ANSWER KEY'))).toBe(true);
+    expect(quizNarration.length).toBeGreaterThan(0);
+    for (const prompt of quizNarration) expect(prompt.user).not.toContain('HIDDEN ANSWER KEY');
+  });
+
+  it('D-19: an exercise still wrong leaves its slide and its attempt question', async () => {
+    const EX11: KeyedGuideItem = {
+      contentUnitId: '6249',
+      label: '11',
+      element: 'exercise',
+      number: 11,
+      letter: null,
+      display: 'س11',
+      answer: { type: 'number', value: 32 },
+    };
+    const EX12: KeyedGuideItem = {
+      ...EX11,
+      label: '12',
+      number: 12,
+      display: 'س12',
+      answer: { type: 'number', value: 71.9 },
+    };
+    // The exercise attempt comes BEFORE its solution slide.
+    const exercise = [
+      slideOutline('open', 1, 'Opening'),
+      {
+        ...outlines[2]!,
+        id: 'ex-attempt',
+        order: 2,
+        quizConfig: {
+          questionCount: 2,
+          difficulty: 'easy' as const,
+          questionTypes: ['single' as const],
+        },
+      },
+      slideOutline('ex', 3, 'Exercise'),
+    ];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: exercise },
+    });
+    const prompts: string[] = [];
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        const user = request.messages.find((m) => m.role === 'user')?.content ?? '';
+        if (/Action Generator/.test(system)) return { text: ACTIONS };
+        if (/^# Quiz Content Generator/m.test(system)) {
+          return {
+            text: JSON.stringify([
+              {
+                id: 'q1',
+                type: 'single',
+                question: 'أسعار: 2، 4، 8، 16. ما التالي؟',
+                options: [
+                  { value: 'A', label: '24' },
+                  { value: 'B', label: '32' },
+                ],
+                answer: ['B'],
+              },
+              {
+                id: 'q2',
+                type: 'single',
+                question: 'إنتاج مصنع؟',
+                options: [
+                  { value: 'A', label: '71.9' },
+                  { value: 'B', label: '51.8' },
+                ],
+                answer: ['A'],
+              },
+            ]),
+          };
+        }
+        if (user.includes('Exercise')) {
+          prompts.push(user);
+          return { text: slideContent('الإجابة (س11): 24</p><p>الإجابة (س12): 71.9') };
+        }
+        return { text: slideContent('Body') };
+      },
+    );
+    const result = await run({
+      ...baseInput,
+      guideAnswerGuard: guard({
+        ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+        'ex-attempt': {
+          role: 'attempt',
+          items: [EX11, EX12],
+          questionOf: { '6249|11': 0, '6249|12': 1 },
+          questionCount: 2,
+        },
+      }),
+    });
+    // First, corrected, then once more without question 11.
+    expect(prompts).toHaveLength(3);
+    expect(prompts[2]).toContain('LEFT OUT QUESTIONS (g5.v11)');
+    expect(result.scenes.map((scene) => scene.outlineId)).toEqual(['open', 'ex-attempt', 'ex']);
+    const attempt = result.scenes.find((scene) => scene.outlineId === 'ex-attempt')!;
+    expect(
+      (attempt.content as { questions: Array<{ question: string }> }).questions.map(
+        (question) => question.question,
+      ),
+    ).toEqual(['إنتاج مصنع؟']);
+    // The persisted plan says what the slide now does.
+    const persistedEx = (persisted.outlines as Array<{ id: string; description?: string }>).find(
+      (outline) => outline.id === 'ex',
+    )!;
+    expect(persistedEx.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
   });
 });

@@ -11,11 +11,14 @@ import { teacherParityBook } from '@/lib/server/teaching-package/book-coverage';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import {
   formatGuideAnswer,
+  guideItemQuestionText,
   guideOutlinePlans,
   injectGuideAnswers,
   parseGuideLabel,
   resolveTeacherGuide,
   SOLUTION_KEY_POINT_PREFIX,
+  withGuideItems,
+  withoutHiddenAnswerKey,
 } from '@/lib/server/teaching-package/guide-answers';
 import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -252,17 +255,17 @@ describe('approved answers in first (plan §8 table)', () => {
   const byId = new Map(injected.map((outline) => [outline.id, outline]));
 
   it('maps each outline to the items it solves, tries or asks', () => {
-    expect(plans.get('sol-1')).toMatchObject({
-      role: 'solution',
-      group: ['try-1', 'try-1-attempt', 'sol-1'],
-    });
+    // The check slide solves its two items; the exercise slide its two questions.
+    expect(plans.get('sol-1')).toMatchObject({ role: 'solution', solves: 2 });
     expect(plans.get('sol-1')!.items.map((item) => item.display)).toEqual(['1A']);
     expect(plans.get('try-1')).toMatchObject({ role: 'try' });
     expect(plans.get('try-1-attempt')!.items.map((item) => item.display)).toEqual(['1A']);
     // Question 14 is not on this slide; question 12 is.
     expect(plans.get('ex-1')!.items.map((item) => item.display)).toEqual(['س12']);
-    expect(plans.get('ex-1')!.group).toEqual(['ex-1', 'ex-1-attempt']);
+    expect(plans.get('ex-1')).toMatchObject({ solves: 2 });
     expect(plans.get('ex-1-attempt')!.items.map((item) => item.display)).toEqual(['س12']);
+    // Without the unit texts, no attempt question can be told (review finding 6).
+    expect(plans.get('ex-1-attempt')!.questionOf).toEqual({ '6249|12': null });
   });
 
   it('gives the solution slide the answer as key points and a writer instruction', () => {
@@ -289,5 +292,102 @@ describe('approved answers in first (plan §8 table)', () => {
 
   it('is idempotent on a resumed outline', () => {
     expect(injectGuideAnswers(injected, plans)).toBe(injected);
+  });
+
+  it('cuts the hidden key off before the narration writer (review finding 1)', () => {
+    const attempt = byId.get('try-1-attempt')!;
+    const spoken = withoutHiddenAnswerKey(attempt);
+    expect(spoken.description).not.toContain('HIDDEN ANSWER KEY');
+    expect(spoken.description).not.toContain('12');
+    expect(spoken.description).toBe(withAttempts.find((o) => o.id === attempt.id)!.description);
+    // Every other outline is returned as it is (g5.v8–v10 never carry a key).
+    const plain = byId.get('try-1')!;
+    expect(withoutHiddenAnswerKey(plain)).toBe(plain);
+  });
+
+  it('rebuilds a settled outline without the failing items (D-19)', () => {
+    const exercise = byId.get('ex-1')!;
+    const plan = plans.get('ex-1')!;
+    const leftOut = withGuideItems(exercise, plan, [], plan.items);
+    expect(leftOut.keyPoints.some((point) => point.startsWith(SOLUTION_KEY_POINT_PREFIX))).toBe(
+      false,
+    );
+    expect(leftOut.description).not.toContain('71.9');
+    expect(leftOut.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
+    expect(leftOut.description).toContain('- س12');
+    // A resumed run never injects the answers again into a settled slide.
+    const resumed = injectGuideAnswers([leftOut], plans);
+    expect(resumed[0]).toBe(leftOut);
+    // Unverified: no guide answer and no left-out note (the plain g5.v10 path).
+    const unverified = withGuideItems(exercise, plan, []);
+    expect(unverified.description).toBe(withAttempts.find((o) => o.id === 'ex-1')!.description);
+    const attempt = withGuideItems(byId.get('ex-1-attempt')!, plans.get('ex-1-attempt')!, []);
+    expect(attempt.description).not.toContain('HIDDEN ANSWER KEY');
+  });
+});
+
+describe('attempt questions told apart (review finding 6)', () => {
+  const unitTexts = new Map([
+    ['6234', '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) هل التخمين «12 عدد زوجي» صحيح؟'],
+    [
+      '6249',
+      [
+        'استعمل الأنماط للإجابة:',
+        '11) أسعار: 2، 4، 8، 16. ما العدد التالي؟',
+        '12) إنتاج مصنع: 41.6، 51.8، 61.7. ما الإنتاج المتوقع؟',
+        '13) ما الحد التالي في 5، 10، 15؟',
+        '14) ما الحد التالي في 1، 3، 5؟',
+      ].join('\n'),
+    ],
+  ]);
+  const resolved = resolveTeacherGuide(
+    guide([approved('6234', '1B', 1), approved('6249', '12', 71.9), approved('6249', '11', 32)]),
+    BOOK,
+    FACTS,
+  );
+  const slideQuestions = [{ '6249': [11, 12] }];
+  const withAttempts = insertAttemptQuizzes(outlines(), BOOK, {
+    facts: FACTS,
+    unitTexts,
+    exerciseSlideQuestions: slideQuestions,
+  });
+  const plans = guideOutlinePlans(withAttempts, BOOK, resolved, {
+    slideQuestions,
+    facts: FACTS,
+    unitTexts,
+  });
+
+  it('ties each exercise item to the question of its own book statement', () => {
+    const attempt = plans.get('ex-1-attempt')!;
+    expect(attempt.questionCount).toBe(2);
+    expect(attempt.questionOf).toEqual({ '6249|11': 0, '6249|12': 1 });
+  });
+
+  it('ties each check item to its label position', () => {
+    expect(plans.get('try-1-attempt')!.questionOf).toEqual({ '6234|1B': 1 });
+  });
+});
+
+describe('an item’s own question text (review finding 3)', () => {
+  const check = '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) هل العدد 12 زوجي؟';
+  const exercise = 'المثال 3 12) كم ضلعًا للمضلع ذي 7 أضلاع؟\n13) كم وجهًا للمكعب؟';
+
+  it('cuts a check item from its label to the next one, the label out', () => {
+    const text = guideItemQuestionText(check, { element: 'try_it', number: 1, letter: 'A' });
+    expect(text).toContain('3، 6، 9');
+    expect(text).not.toContain('12');
+    expect(text).not.toContain('1A');
+  });
+
+  it('reads one exercise question without its number or margin header', () => {
+    const text = guideItemQuestionText(exercise, { element: 'exercise', number: 12, letter: null });
+    expect(text).toContain('7 أضلاع');
+    expect(text).not.toMatch(/12|المثال|وجه/u);
+  });
+
+  it('falls back to the unit text with every label out when the item is not printed', () => {
+    const text = guideItemQuestionText(exercise, { element: 'exercise', number: 40, letter: null });
+    expect(text).not.toMatch(/(?:^|\s)(?:12|13)\)/u);
+    expect(text).toContain('7');
   });
 });

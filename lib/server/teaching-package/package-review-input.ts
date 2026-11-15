@@ -17,9 +17,12 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { readContentUnitsForAttempt } from '@/lib/persistence/teaching-package';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
-import { formatGuideAnswer, isKeyedGuideItem } from '@/lib/server/teaching-package/guide-answers';
+import {
+  formatGuideAnswer,
+  guideItemKey,
+  type ResolvedTeacherGuide,
+} from '@/lib/server/teaching-package/guide-answers';
 import type { AppScene } from '@/lib/types/stage';
-import type { KafuoTeacherGuide } from '@/lib/types/teaching-package';
 
 /** Bounds that keep one review inside one call (plan §7: ~8k book, ~30k slide text). */
 export const REVIEW_UNIT_TEXT_MAX_CHARS = 12_000;
@@ -73,13 +76,16 @@ export const REVIEW_GUIDE_ANSWER_PREFIX = 'إجابة دليل المعلم';
 /**
  * g5.v11: each solution slide (contentRole worked_example) and quiz gets the approved or
  * settled guide answers of the units it cites. A try-it slide never does (it shows no
- * answer, so there is nothing to compare). Items the guide did not approve add nothing.
+ * answer, so there is nothing to compare). Review finding 10: only the items resolved to
+ * OUR book items (`resolveTeacherGuide`), named as the writers were told («1A», «س11»);
+ * an unresolved item, and an exercise the run removed from the lesson, add nothing.
  */
 export function withGuideAnswers(
   slides: readonly ReviewSlide[],
-  guide: KafuoTeacherGuide | undefined,
+  guide: Pick<ResolvedTeacherGuide, 'keyed'> | null | undefined,
+  removedItemKeys: ReadonlySet<string> = new Set(),
 ): ReviewSlide[] {
-  const keyed = (guide?.items ?? []).filter(isKeyedGuideItem);
+  const keyed = (guide?.keyed ?? []).filter((item) => !removedItemKeys.has(guideItemKey(item)));
   if (keyed.length === 0) return [...slides];
   return slides.map((slide) => {
     const solves =
@@ -90,7 +96,7 @@ export function withGuideAnswers(
       .filter((item) => slide.citedUnitIds.includes(item.contentUnitId))
       .map(
         (item) =>
-          `${REVIEW_GUIDE_ANSWER_PREFIX} (${item.label}): ${formatGuideAnswer(item.answer)}`,
+          `${REVIEW_GUIDE_ANSWER_PREFIX} (${item.display}): ${formatGuideAnswer(item.answer)}`,
       );
     return lines.length > 0 ? { ...slide, guideAnswers: lines } : slide;
   });

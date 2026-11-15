@@ -1,15 +1,22 @@
 /**
- * g5.v11 (teacher-guide answer referee plan §8.3–8.5), wave 4: the comparator of the
- * solution slides' final lines and the attempts' keyed options, and the leak guard of
- * the try-it slides, their narration and the attempt stems.
+ * g5.v11 (teacher-guide answer referee plan §8.3–8.5): the comparator of the solution
+ * slides' final lines and the attempts' keyed options, the leak guard of the try-it
+ * slides, their narration and the attempt stems, and the D-19 settlement (16 Nov 2026):
+ * never a slide dropped, never a step for a person.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   canvasLines,
   createGuideAnswerGuard,
+  guardedSceneContent,
   type GuideAnswerSettlement,
 } from '@/lib/server/teaching-package/guide-answer-guard';
+import {
+  droppedGuideOutlineIds,
+  latestRunSettlements,
+  mergeGuideSettlements,
+} from '@/lib/server/teaching-package/guide-answer-context';
 import type { GuideOutlinePlan, KeyedGuideItem } from '@/lib/server/teaching-package/guide-answers';
 import type { SceneOutline } from '@/lib/types/generation';
 
@@ -29,9 +36,32 @@ const CHOICE: KeyedGuideItem = {
   display: '1B',
   answer: { type: 'choice', value: 'ج' },
 };
+const TRUTH: KeyedGuideItem = {
+  ...ITEM,
+  label: '1C',
+  letter: 'C',
+  display: '1C',
+  answer: { type: 'bool', value: false },
+};
+const EX11: KeyedGuideItem = {
+  contentUnitId: '6249',
+  label: '11',
+  element: 'exercise',
+  number: 11,
+  letter: null,
+  display: 'س11',
+  answer: { type: 'number', value: 32 },
+};
+const EX12: KeyedGuideItem = {
+  ...EX11,
+  label: '12',
+  number: 12,
+  display: 'س12',
+  answer: { type: 'number', value: 71.9 },
+};
 
-const outline = (id: string, type: 'slide' | 'quiz' = 'slide') =>
-  ({ id, type, title: id, description: '', keyPoints: [], order: 1 }) as SceneOutline;
+const outline = (id: string, type: 'slide' | 'quiz' = 'slide', extra: Partial<SceneOutline> = {}) =>
+  ({ id, type, title: id, description: '', keyPoints: [], order: 1, ...extra }) as SceneOutline;
 
 const slide = (...lines: string[]) => ({
   elements: lines.map((line, index) => ({
@@ -52,23 +82,29 @@ const quiz = (...questions: Array<{ question: string; options: string[]; answer:
   })),
 });
 
+const UNIT_TEXTS = new Map([
+  [
+    '6234',
+    '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) اختر: أ) 3 ب) 6 ج) 12 د) 15\n1C) العدد 12 فردي.',
+  ],
+  [
+    '6249',
+    '11) أسعار: 2، 4، 8، 16. ما العدد التالي؟\n12) إنتاج مصنع: 41.6، 51.8، 61.7. ما المتوقع؟',
+  ],
+]);
+
 function guard(plans: Record<string, GuideOutlinePlan>) {
   const settled: GuideAnswerSettlement[] = [];
   const instance = createGuideAnswerGuard({
-    unitTexts: new Map([['6234', '1A) الأعداد 3، 6، 9 … ما الحد التالي؟ 1B) اختر']]),
+    unitTexts: UNIT_TEXTS,
     onSettled: (settlement) => settled.push(settlement),
   });
   instance.usePlans(new Map(Object.entries(plans)));
   return { instance, settled };
 }
 
-const SOLUTION: GuideOutlinePlan = {
-  role: 'solution',
-  items: [ITEM],
-  group: ['try', 'try-attempt', 'sol'],
-};
-const ATTEMPT: GuideOutlinePlan = { role: 'attempt', items: [ITEM], group: ['try-attempt'] };
-const TRY: GuideOutlinePlan = { role: 'try', items: [ITEM], group: ['try', 'try-attempt', 'sol'] };
+const SOLUTION: GuideOutlinePlan = { role: 'solution', items: [ITEM], solves: 3 };
+const ATTEMPT: GuideOutlinePlan = { role: 'attempt', items: [ITEM] };
 
 describe('the solution comparator', () => {
   const { instance } = guard({ sol: SOLUTION });
@@ -84,12 +120,6 @@ describe('the solution comparator', () => {
   it('reports a wrong final answer and a missing final line', () => {
     expect(check('الإجابة (1A): 13')).toEqual(['GUIDE_ANSWER_MISMATCH']);
     expect(check('نضيف 3 فيكون الحد التالي 12')).toEqual(['GUIDE_ANSWER_MISSING']);
-  });
-
-  it('never reads an unkeyed item’s unlabelled line as the keyed one', () => {
-    // 1A keyed, 1B doubtful: both items end unlabelled, so neither line can be told apart.
-    expect(check('الإجابة: 12', 'الإجابة: 7')).toEqual(['GUIDE_ANSWER_MISSING']);
-    expect(check('الإجابة (1A): 12', 'الإجابة (1B): 7')).toEqual([]);
   });
 
   it('never reads back its own injected key point', () => {
@@ -113,38 +143,48 @@ describe('the solution comparator', () => {
   });
 });
 
-describe('the attempt comparator and stem guard', () => {
-  const { instance, settled } = guard({ 'try-attempt': ATTEMPT });
-  const attempt = outline('try-attempt', 'quiz');
+describe('the attempt comparator (review finding 6)', () => {
+  const attempt = outline('ex-attempt', 'quiz');
 
   it('accepts the approved answer keyed among the options', () => {
+    const { instance } = guard({ 'ex-attempt': { role: 'attempt', items: [ITEM] } });
     const content = quiz({ question: 'ما الحد التالي؟', options: ['11', '12', '15'], answer: 'B' });
     expect(instance.checkContent(attempt, content)).toEqual([]);
   });
 
-  it('reports another option keyed, naming the question', () => {
+  it('reads a choice item on its OWN question, never on another one keying that letter', () => {
+    const { instance } = guard({
+      'ex-attempt': {
+        role: 'attempt',
+        items: [CHOICE, { ...CHOICE, label: '1D', display: '1D' }],
+        questionOf: { '6234|1B': 0, '6234|1D': 1 },
+        questionCount: 2,
+      },
+    });
     const content = quiz(
-      { question: 'سؤال آخر', options: ['1', '2'], answer: 'A' },
-      { question: 'ما الحد التالي؟', options: ['11', '12', '15'], answer: 'C' },
+      { question: 'اختر', options: ['a', 'b', 'c', 'd'], answer: 'C' },
+      { question: 'اختر', options: ['a', 'b', 'c', 'd'], answer: 'D' },
     );
-    const findings = instance.checkContent(attempt, content);
-    expect(findings).toMatchObject([{ code: 'GUIDE_ANSWER_MISMATCH', questions: [1] }]);
-    // Still wrong after the one regeneration: that question leaves, the other stays.
-    const result = instance.settle(attempt, content, findings);
-    expect(
-      'content' in result && (result.content as { questions: unknown[] }).questions,
-    ).toHaveLength(1);
-    expect(settled.at(-1)).toMatchObject({ action: 'questions_removed', removedQuestions: [1] });
+    expect(instance.checkContent(attempt, content)).toMatchObject([
+      { code: 'GUIDE_ANSWER_MISMATCH', item: { label: '1D' }, questions: [1] },
+    ]);
   });
 
-  it('drops the attempt when the answer is not an option at all', () => {
-    const content = quiz({ question: 'ما الحد التالي؟', options: ['11', '13'], answer: 'A' });
-    const findings = instance.checkContent(attempt, content);
-    expect(findings).toMatchObject([{ questions: null }]);
-    expect(instance.settle(attempt, content, findings)).toEqual({ drop: ['try-attempt'] });
+  it('reads any question when the quiz does not hold the questions it was planned with', () => {
+    const { instance } = guard({
+      'ex-attempt': {
+        role: 'attempt',
+        items: [CHOICE],
+        questionOf: { '6234|1B': 1 },
+        questionCount: 2,
+      },
+    });
+    const content = quiz({ question: 'اختر', options: ['a', 'b', 'c', 'd'], answer: 'C' });
+    expect(instance.checkContent(attempt, content)).toEqual([]);
   });
 
   it('reports a stem that states the answer', () => {
+    const { instance } = guard({ 'ex-attempt': { role: 'attempt', items: [ITEM] } });
     const content = quiz({
       question: 'الحد التالي هو 12، صح؟',
       options: ['12', '15'],
@@ -154,64 +194,247 @@ describe('the attempt comparator and stem guard', () => {
       { code: 'GUIDE_ANSWER_LEAK', where: 'stem', questions: [0] },
     ]);
   });
-
-  it('compares a choice item by the keyed letter', () => {
-    const { instance: choices } = guard({
-      'try-attempt': { role: 'attempt', items: [CHOICE], group: ['try-attempt'] },
-    });
-    const right = quiz({ question: 'اختر', options: ['a', 'b', 'c', 'd'], answer: 'C' });
-    const wrong = quiz({ question: 'اختر', options: ['a', 'b', 'c', 'd'], answer: 'D' });
-    expect(choices.checkContent(attempt, right)).toEqual([]);
-    expect(choices.checkContent(attempt, wrong)).toMatchObject([{ questions: null }]);
-  });
 });
 
 describe('the try-it leak guard', () => {
-  const { instance } = guard({ try: TRY });
+  const { instance } = guard({ try: { role: 'try', items: [ITEM, CHOICE, TRUTH] } });
   const tryIt = outline('try');
+  const narration = (text: string) =>
+    instance.checkNarration(tryIt, [{ type: 'speech', text }]).map((finding) => finding.item.label);
 
-  it('lets the givens through and flags the answer', () => {
+  it('lets the givens of the item’s OWN question through and flags the answer', () => {
     expect(instance.checkContent(tryIt, slide('الأعداد 3، 6، 9 … ما الحد التالي؟'))).toEqual([]);
     expect(instance.checkContent(tryIt, slide('الحد التالي 12'))).toMatchObject([
-      { code: 'GUIDE_ANSWER_LEAK', where: 'canvas' },
+      { code: 'GUIDE_ANSWER_LEAK', where: 'canvas', item: { label: '1A' } },
     ]);
+  });
+
+  it('never exempts a value only another item of the unit holds (review finding 3)', () => {
+    // «12» is a given of 1B and 1C, never of 1A: stating it on 1A's try is a leak.
+    expect(narration('في النمط 3، 6، 9 يكون الحد التالي 12')).toEqual(['1A']);
+  });
+
+  it('flags an announced option letter or truth value (review finding 1)', () => {
+    expect(narration('الخيار ج هو الصحيح')).toEqual(['1B']);
+    expect(narration('الإجابة الصحيحة هي ج.')).toEqual(['1B']);
+    expect(narration('إذن العبارة خاطئة.')).toEqual(['1C']);
+    expect(narration('التخمين غير صحيح لأن 3 فردي.')).toEqual(['1C']);
+  });
+
+  it('never flags the options read aloud, the task, or a question', () => {
+    expect(narration('اختر الإجابة الصحيحة: أ) 3 ب) 6 ج) 18 د) 15')).toEqual([]);
+    expect(narration('هل العبارة صحيحة أم خاطئة؟ فكّر قبل أن تجيب.')).toEqual([]);
+    expect(narration('حدّد إن كانت العبارة صحيحة أو خاطئة')).toEqual([]);
+    expect(narration('انتبه للخطأ الشائع في الجمع')).toEqual([]);
+  });
+
+  it('names the item, never its value, in a leak correction (review finding 7)', () => {
+    const findings = instance.checkContent(tryIt, slide('الحد التالي 12'));
+    const note = instance.correction(tryIt, findings);
+    expect(note).toContain('item 1A');
+    expect(note).not.toContain('12');
+    const spoken = instance.checkNarration(tryIt, [{ type: 'speech', text: 'الجواب هو 12' }]);
+    expect(instance.correction(tryIt, spoken)).not.toContain('12');
   });
 
   it('checks the narration of a try-it slide, never of a solution slide', () => {
     const speech = [{ type: 'speech', text: 'الجواب هو 12' }];
-    expect(instance.checkNarration(tryIt, speech)).toMatchObject([{ where: 'narration' }]);
     const { instance: solution } = guard({ sol: SOLUTION });
     expect(solution.checkNarration(outline('sol'), speech)).toEqual([]);
   });
 
-  it('drops the whole check group when a try-it slide still leaks', () => {
+  it('keeps a try-it slide that still leaks (D-19: no group is ever dropped)', () => {
     const findings = instance.checkContent(tryIt, slide('الحد التالي 12'));
-    expect(instance.settle(tryIt, null, findings)).toEqual({ drop: ['try', 'try-attempt', 'sol'] });
-  });
-
-  it('checks nothing on an outline without a plan', () => {
-    expect(instance.checkContent(outline('other'), slide('12'))).toEqual([]);
-    expect(instance.planOf('other')).toBeUndefined();
+    expect(instance.settle(tryIt, slide('x'), findings)).toEqual({
+      kind: 'keep',
+      content: slide('x'),
+    });
+    expect(instance.settleNarration(tryIt, findings)).toBe('keep');
   });
 });
 
-describe('settling a solution slide', () => {
-  it('drops the slide with its group and reports it', () => {
-    const onSettled = vi.fn();
-    const instance = createGuideAnswerGuard({ unitTexts: new Map(), onSettled });
-    instance.usePlans(new Map([['sol', SOLUTION]]));
-    const findings = instance.checkContent(outline('sol'), slide('الإجابة (1A): 13'));
-    expect(instance.settle(outline('sol'), slide('x'), findings)).toEqual({
-      drop: ['try', 'try-attempt', 'sol'],
+describe('D-19 settlement', () => {
+  it('generates a check item’s solution once more WITHOUT its guide answer, and keeps it', () => {
+    const { instance, settled } = guard({ sol: SOLUTION });
+    const sol = outline('sol', 'slide', {
+      keyPoints: ['نجمع 3', 'الإجابة الصحيحة المعتمدة (1A): 12'],
+      description: 'plan\n\nAPPROVED FINAL ANSWERS (g5.v11): …\n- الإجابة (1A): 12',
     });
-    expect(onSettled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outlineId: 'sol',
-        action: 'dropped',
-        findings: [
-          { code: 'GUIDE_ANSWER_MISMATCH', contentUnitId: '6234', label: '1A', where: 'canvas' },
-        ],
-      }),
+    const findings = instance.checkContent(sol, slide('الإجابة (1A): 13'));
+    const decision = instance.settle(sol, slide('الإجابة (1A): 13'), findings);
+    expect(decision.kind).toBe('regenerate');
+    const rebuilt = (decision as { outline: SceneOutline }).outline;
+    expect(rebuilt.keyPoints).toEqual(['نجمع 3']);
+    expect(rebuilt.description).toBe('plan');
+    expect(settled.at(-1)).toMatchObject({
+      action: 'unverified',
+      items: [{ contentUnitId: '6234', label: '1A', outcome: 'unverified' }],
+    });
+    // The kept slide is no longer compared with an answer it was never given.
+    expect(instance.planOf('sol')).toBeUndefined();
+  });
+
+  it('leaves an exercise out of its slide and removes its attempt question', () => {
+    const { instance, settled } = guard({
+      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX11, EX12],
+        questionOf: { '6249|11': 0, '6249|12': 1 },
+        questionCount: 2,
+      },
+    });
+    const ex = outline('ex');
+    const findings = instance.checkContent(ex, slide('الإجابة (س11): 24', 'الإجابة (س12): 71.9'));
+    const decision = instance.settle(ex, null, findings);
+    expect(decision.kind).toBe('regenerate');
+    const rebuilt = (decision as { outline: SceneOutline }).outline;
+    expect(rebuilt.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
+    expect(rebuilt.description).toContain('- س11');
+    expect(rebuilt.description).toContain('- الإجابة (س12): 71.9');
+    expect(rebuilt.description).not.toContain('(س11): 32');
+    expect(settled.at(-1)).toMatchObject({
+      action: 'items_removed',
+      items: [{ label: '11', outcome: 'removed' }],
+    });
+    // The attempt (before its slide in the lesson) loses that question only.
+    const attemptQuiz = quiz(
+      { question: 'أسعار؟', options: ['24', '32'], answer: 'B' },
+      { question: 'إنتاج؟', options: ['71.9', '51.8'], answer: 'A' },
     );
+    const pruned = instance.pruneAttempt(outline('ex-attempt', 'quiz'), attemptQuiz);
+    expect(
+      'content' in pruned && (pruned.content as { questions: unknown[] }).questions,
+    ).toHaveLength(1);
+    expect(instance.solutionOf('ex-attempt')).toBe('ex');
+  });
+
+  it('never empties a slide: its only exercise loses its guide answer instead', () => {
+    const { instance, settled } = guard({ ex: { role: 'solution', items: [EX11], solves: 1 } });
+    const findings = instance.checkContent(outline('ex'), slide('الإجابة (س11): 24'));
+    const decision = instance.settle(outline('ex'), null, findings);
+    expect(decision.kind).toBe('regenerate');
+    expect(settled.at(-1)).toMatchObject({ action: 'unverified' });
+  });
+
+  it('keeps an exercise whose attempt question cannot be told, without its guide answer', () => {
+    const { instance, settled } = guard({
+      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX11],
+        questionOf: { '6249|11': null },
+        questionCount: 1,
+      },
+    });
+    const findings = instance.checkContent(
+      outline('ex'),
+      slide('الإجابة (س11): 24', 'الإجابة (س12): 71.9'),
+    );
+    instance.settle(outline('ex'), null, findings);
+    expect(settled.at(-1)).toMatchObject({ action: 'unverified', items: [{ label: '11' }] });
+  });
+
+  it('removes an attempt’s own faulty question, and drops an attempt left with none', () => {
+    const plan: GuideOutlinePlan = {
+      role: 'attempt',
+      items: [EX11],
+      questionOf: { '6249|11': 0 },
+      questionCount: 1,
+    };
+    const { instance, settled } = guard({ 'ex-attempt': plan });
+    const attempt = outline('ex-attempt', 'quiz');
+    const content = quiz({ question: 'أسعار؟', options: ['24', '32'], answer: 'A' });
+    const findings = instance.checkContent(attempt, content);
+    expect(findings).toMatchObject([{ questions: [0] }]);
+    expect(instance.settle(attempt, content, findings)).toEqual({ kind: 'keep', content });
+    expect(instance.pruneAttempt(attempt, content)).toEqual({ drop: true });
+    expect(settled.map((entry) => entry.action)).toEqual(['questions_removed', 'attempt_dropped']);
+  });
+
+  it('gives an attempt a model-free narration when it still states the answer', () => {
+    const { instance } = guard({ 'ex-attempt': ATTEMPT });
+    const findings = instance.checkNarration(outline('ex-attempt', 'quiz'), [
+      { type: 'speech', text: 'الجواب 12' },
+    ]);
+    expect(instance.settleNarration(outline('ex-attempt', 'quiz'), findings)).toBe('model_free');
+  });
+
+  it('restores a paused run’s settlements: a removed exercise stays removed', () => {
+    const { instance } = guard({
+      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX11, EX12],
+        questionOf: { '6249|11': 0, '6249|12': 1 },
+        questionCount: 2,
+      },
+    });
+    instance.restore([
+      { outlineId: 'ex', items: [{ contentUnitId: '6249', label: '11', outcome: 'removed' }] },
+    ]);
+    expect(instance.planOf('ex')!.items.map((item) => item.label)).toEqual(['12']);
+    const pruned = instance.pruneAttempt(
+      outline('ex-attempt', 'quiz'),
+      quiz(
+        { question: 'أسعار؟', options: ['24', '32'], answer: 'B' },
+        { question: 'إنتاج؟', options: ['71.9'], answer: 'A' },
+      ),
+    );
+    expect((pruned as { content: { questions: unknown[] } }).content.questions).toHaveLength(1);
+  });
+});
+
+describe('pinned settlements (review finding 9)', () => {
+  const record = (outlineId: string, run: number, dropped: string[] = []) => ({
+    outlineId,
+    action: dropped.length > 0 ? ('attempt_dropped' as const) : ('unverified' as const),
+    dropped,
+    removedQuestions: [],
+    items: [],
+    findings: [],
+    generationRun: run,
+  });
+
+  it('merges a resumed run’s settlements with what it pinned before the pause', () => {
+    const before = [record('a-attempt', 2, ['a-attempt']), record('old', 1)];
+    const merged = mergeGuideSettlements(before, [record('b', 2)], 2);
+    // Run 1 was discarded; run 2 keeps its pre-pause record and adds the new one, once.
+    expect(merged.map((entry) => entry.outlineId)).toEqual(['a-attempt', 'b']);
+    expect(mergeGuideSettlements(merged, [record('b', 2)], 2)).toHaveLength(2);
+  });
+
+  it('names the attempts THIS run dropped, never another run’s', () => {
+    const pinned = [record('a-attempt', 2, ['a-attempt']), record('x-attempt', 1, ['x-attempt'])];
+    expect([...droppedGuideOutlineIds(pinned, 2)]).toEqual(['a-attempt']);
+    expect(latestRunSettlements(pinned).map((entry) => entry.outlineId)).toEqual(['a-attempt']);
+  });
+});
+
+describe('guardedSceneContent', () => {
+  it('regenerates once with the correction, then once more from the settled outline', async () => {
+    const { instance } = guard({ sol: SOLUTION });
+    const corrections: Array<string | undefined> = [];
+    const generate = vi.fn(async (_outline: SceneOutline, correction?: string) => {
+      corrections.push(correction);
+      return slide('الإجابة (1A): 13');
+    });
+    const sol = outline('sol');
+    const result = await guardedSceneContent(instance, sol, slide('الإجابة (1A): 13'), generate);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(corrections[0]).toContain('CORRECTION');
+    expect(corrections[1]).toBeUndefined();
+    expect(result.outline).not.toBe(sol);
+    expect(canvasLines(result.content)).toEqual(['الإجابة (1A): 13']);
+  });
+
+  it('returns the first content untouched when it agrees', async () => {
+    const { instance } = guard({ sol: SOLUTION });
+    const generate = vi.fn();
+    const first = slide('الإجابة (1A): 12');
+    const sol = outline('sol');
+    const result = await guardedSceneContent(instance, sol, first, generate);
+    expect(generate).not.toHaveBeenCalled();
+    expect(result).toEqual({ content: first, outline: sol });
   });
 });
