@@ -103,6 +103,24 @@ export function isLearnerFirstModel(
 }
 
 /**
+ * g5.v10 quality plan W4: the outline checks' learner-first visual rules, with the
+ * book's exercise units («تمارين»; never the checks): an exercise slide shows no
+ * image of its exercise list.
+ */
+export function learnerFirstVisualsOf(
+  book:
+    | { units: ReadonlyArray<{ element?: string | null; contentUnitId: string | number }> }
+    | null
+    | undefined,
+): { exerciseUnitIds: string[] } {
+  return {
+    exerciseUnitIds: (book?.units ?? [])
+      .filter((unit) => unit.element === 'exercise')
+      .map((unit) => String(unit.contentUnitId)),
+  };
+}
+
+/**
  * The book map as the coverage gate reads it. The two extra fields are
  * TE-derived — never on the wire, never in the request digest, never pinned in
  * the input snapshot: they are rebuilt from the attempt's Teaching Model and
@@ -977,7 +995,10 @@ function learnerFirstLines(book: KafuoBookStructure): string[] {
         ]
       : []),
     '- CLAIMS: a slide that tests a conjecture or gives a counterexample states the conjecture itself first, verbatim from the book, in its key points.',
-    '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use.',
+    '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use. To estimate a next value, add the last difference again (the latest rise: «آخر زيادة 4، إذن 41 + 4 = 45») and plan that working as key points.',
+    // Quality plan W4 (item 208, 15 Nov 2026): no month list at check 1; the wrong pictures.
+    '- CYCLES: an item on a fixed named cycle (the Hijri months, the days of the week) gives the whole cycle, numbered in order, as given data on its try-it slide and on its solution slide. Listing the cycle is the data of the item, never a hint.',
+    "- PICTURES: a unit's book picture is shown once, on the slide whose item it shows. A slide that only solves exercises shows no picture of the exercise list.",
     "- ATTEMPT: never plan a quiz for a check or an exercise; the engine adds the learner's attempt itself, right after each try-it slide and before each exercise slide.",
     '- Say the caution that examples do not prove a conjecture at most once per lesson part.',
   ];
@@ -1068,8 +1089,8 @@ function learnerFirstRequirement(book: KafuoBookStructure, rules: string): strin
         ? [
             'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
             'just before the closing summary slide, comes the exercises block: one transition slide',
-            '«تمارين» (when the book prints a study tip for these exercises, the transition slide',
-            'states it), then the exercise slides (contentRole worked_example). The engine fixes',
+            '«تمارين», a title only (a study tip is taught where the book prints it, in book order,',
+            'never moved onto this slide), then the exercise slides (contentRole worked_example). The engine fixes',
             'which exercise units the block solves and on which slide (EXERCISES BLOCK below), easiest',
             "first, and adds the learner's attempt before each exercise slide. Plan EXACTLY the",
             'exercise slides the EXERCISES BLOCK lists, each citing exactly its listed units: one',

@@ -92,6 +92,7 @@ import {
   isLearnerFirstModel,
   isSacredExerciseElement,
   isTeacherParityModel,
+  learnerFirstVisualsOf,
   plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
   teacherParityBook,
@@ -721,6 +722,8 @@ async function runKafuoAttempt(
     // g5.v10 (learner-first plan W2/W3): canvas and narration rules, the
     // narration check and the digit style. Absent for every earlier version.
     ...(learnerFirst ? { learnerFirst: true } : {}),
+    // Quality plan W4: the learner-first visual rules, with the book's exercise units.
+    ...(learnerFirst ? { learnerFirstVisuals: learnerFirstVisualsOf(kafuo.bookStructure) } : {}),
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's
     // single governed-mode predicate (plan §7.1.1). The outline contract

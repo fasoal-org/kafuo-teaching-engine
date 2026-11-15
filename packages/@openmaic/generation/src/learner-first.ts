@@ -97,9 +97,11 @@ export function learnerFirstSlideRules(): string {
     "1. Show every item this slide sets or solves; label items with the slide's own labels (أ، ب، ج or ١، ٢، ٣). For a textbook exercise, number it locally («تمرين ١») and put the book's number only as a small grey tag in brackets, for example «(س٣٥ في كتابك)» — never as the item's label.",
     '2. When the slide tests a claim or gives a counterexample, write the claim itself first, in full, on the canvas, labelled «التخمين:».',
     "3. The first time a term the lesson teaches appears, show a definition box: the term and the book's own definition sentence, verbatim. A term the lesson uses but the book never defines gets a one-line plain meaning.",
-    '4. Use only the methods the textbook source uses. Never add a method of your own (for example an "average rate of change") to reach a result.',
+    '4. Use only the methods the textbook source uses. Never add a method of your own (for example an "average rate of change") to reach a result. To estimate a next value from data, add the last difference again (the latest rise) and show that working on the slide.',
     '5. A conjecture from data states what is expected next («غالبًا سيزيد عدد الطلاب في السنة القادمة»), then why the data support it; never only a statement about the past.',
     '6. Never draw an empty placeholder (an empty box, a shape labelled only «إجابة»): every shape carries real content.',
+    // Quality plan W4 (item 208 slides 6–8): the learner had no month list to count with.
+    '7. An item on a fixed named cycle (the Hijri months, the days of the week) shows the whole cycle, numbered in order, as the given data — on the try-it slide too. It is the data of the item, never a hint.',
   ].join('\n');
 }
 
@@ -116,11 +118,29 @@ export function learnerFirstNarrationVars(
     : {};
 }
 
+/**
+ * Quality plan W4: the canvas rules of a learner-first STRUCTURAL slide (a part opener,
+ * contents, end). It teaches nothing, so it gets no definition box and no diagram.
+ */
+export function learnerFirstStructuralSlideRules(): string {
+  return [
+    '1. This slide only opens or closes a part of the lesson: show its title and at most one short line saying what the learner will do next.',
+    '2. Teach nothing here: no definition box, no example, no worked step, no diagram and no numbers. The next slide teaches the idea.',
+  ].join('\n');
+}
+
 /** The prompt variables of a learner-first slide-content call (empty otherwise). */
-export function learnerFirstSlideVars(learnerFirst: boolean | undefined): Record<string, unknown> {
-  return learnerFirst
-    ? { hasLearnerFirstSlide: true, learnerFirstSlideRules: learnerFirstSlideRules() }
-    : {};
+export function learnerFirstSlideVars(
+  learnerFirst: boolean | undefined,
+  structural = false,
+): Record<string, unknown> {
+  if (!learnerFirst) return {};
+  return {
+    hasLearnerFirstSlide: true,
+    learnerFirstSlideRules: structural
+      ? learnerFirstStructuralSlideRules()
+      : learnerFirstSlideRules(),
+  };
 }
 
 /**

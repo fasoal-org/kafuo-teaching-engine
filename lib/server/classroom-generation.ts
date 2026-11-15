@@ -604,6 +604,12 @@ export interface GenerateClassroomInput {
    */
   learnerFirst?: boolean;
   /**
+   * g5.v10 quality plan W4: the learner-first visual rules of the outline checks
+   * (no visual on a structural slide, no book image on an exercise slide, a unit's
+   * image once per lesson), with the book's exercise units. Absent → unchanged.
+   */
+  learnerFirstVisuals?: { exerciseUnitIds: readonly string[] };
+  /**
    * Quran and hadith (Kafuo plan Q-4 to Q-15): the protected quotes of the
    * approved source. Present → every learner-text prompt carries the fixed
    * policy and the cited quotes verbatim, narration and image prompts are
@@ -1631,6 +1637,7 @@ export async function generateClassroom(
         ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
         : {}),
       ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
+      ...(input.learnerFirstVisuals ? { learnerFirstVisuals: input.learnerFirstVisuals } : {}),
     });
     outlines = analysis.outlines;
     outlineRepairs = analysis.repairs;
@@ -1700,6 +1707,7 @@ export async function generateClassroom(
             ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
             : {}),
           ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
+          ...(input.learnerFirstVisuals ? { learnerFirstVisuals: input.learnerFirstVisuals } : {}),
           // W1: the outline contract boolean DERIVES from the single governed-mode
           // predicate — no second discriminator exists anywhere in the pipeline.
           ...(input.governed ? { skillPolicy: true } : {}),
@@ -1804,6 +1812,7 @@ export async function generateClassroom(
           ? { prohibitedWidgetTypes: input.prohibitedWidgetTypes }
           : {}),
         ...(input.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
+        ...(input.learnerFirstVisuals ? { learnerFirstVisuals: input.learnerFirstVisuals } : {}),
       });
     const reasonsById = new Map<string, string[]>();
     // Outlines whose image SELECTION is in question (not only its notes).

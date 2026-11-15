@@ -153,6 +153,63 @@ describe('engine-placed attempt quizzes', () => {
     expect(insertAttemptQuizzes(plain, BOOK)).toBe(plain);
   });
 
+  it('quality plan W4: a check with bare «A) B) C)» under «3)» gets three tries (item 208 unit 6241)', () => {
+    const unitTexts = new Map([
+      [
+        '6234',
+        [
+          '✓ تحقق من فهمك',
+          '3) أسعار: يبين الجدول المجاور سعر',
+          'منتج خلال السنوات من 1419هـ إلى 1444هـ.',
+          'A) أنشئ التمثيل البياني الأنسب لعرض هذه البيانات.',
+          'B) ضع تخمينًا لسعر المنتج عام 1449هـ.',
+          'C) هل من المنطقي القول بأن هذا النمط سيستمر بمرور الزمن؟',
+        ].join('\n'),
+      ],
+    ]);
+    const check = [slide('try3', 'check_understanding', ['6234'], ['تمرين 1: أسعار'])];
+    const [, attempt] = insertAttemptQuizzes(check, BOOK, {
+      unitTexts,
+      facts: { '6234': { itemLabels: ['3'] } as never },
+    });
+    expect(attempt!.quizConfig?.questionCount).toBe(3);
+    expect(attempt!.keyPoints).toContain(
+      'C) هل من المنطقي القول بأن هذا النمط سيستمر بمرور الزمن؟',
+    );
+    // A check whose labels the facts already split keeps its count.
+    const [, labelled] = insertAttemptQuizzes(check, BOOK, {
+      unitTexts,
+      facts: { '6234': { itemLabels: ['3A', '3B'] } as never },
+    });
+    expect(labelled!.quizConfig?.questionCount).toBe(2);
+    expect(labelled!.keyPoints).toEqual(['تمرين 1: أسعار']);
+  });
+
+  it('quality plan W4: «المثال 3 11)» is question 11 (item 208 unit 6249)', () => {
+    const unitTexts = new Map([
+      [
+        '6247',
+        [
+          '8) خمّن العلاقة بين a و b إذا كان a + b = 0',
+          'المثال 3 11) إنتاج مصنع: استعمل الجدول المجاور الذي يبين عدد القطع المنتجة.',
+          'a) أنشئ التمثيل البياني الأنسب لعرض هذه البيانات.',
+          '12) الزاويتان A و B متتامتان',
+        ].join('\n'),
+      ],
+    ]);
+    const solving = [slide('exer2', 'worked_example', ['6247'])];
+    const [attempt] = insertAttemptQuizzes(solving, BOOK, {
+      unitTexts,
+      exerciseSlideQuestions: [{ '6247': [8, 11, 12] }],
+    });
+    expect(attempt!.keyPoints).toEqual([
+      '8) خمّن العلاقة بين a و b إذا كان a + b = 0',
+      'المثال 3 11) إنتاج مصنع: استعمل الجدول المجاور الذي يبين عدد القطع المنتجة.',
+      '12) الزاويتان A و B متتامتان',
+    ]);
+    expect(attempt!.quizConfig?.questionCount).toBe(3);
+  });
+
   it('caps an attempt at four questions and falls back to the slide key points', () => {
     const many = [slide('t', 'check_understanding', ['6234'], ['1', '2', '3', '4', '5', '6'])];
     const [, attempt] = insertAttemptQuizzes(many, BOOK);

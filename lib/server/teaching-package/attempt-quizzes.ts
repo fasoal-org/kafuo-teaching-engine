@@ -42,7 +42,9 @@ const ATTEMPT_DESCRIPTION =
   "item's own givens and wording; four options, exactly one correct, and the wrong options are " +
   'the common mistakes for that item. An item that asks to write a conjecture becomes "which ' +
   'conjecture do the data support?"; a counterexample item becomes "which value (or figure) is a ' +
-  'counterexample?"; a data item becomes "what is expected next?". Never reveal or hint the answer ' +
+  'counterexample?"; a data item becomes "what is expected next?". An item on a fixed named cycle ' +
+  '(the Hijri months, the days of the week) lists the whole cycle with its numbers in the question, ' +
+  'as given data. Never reveal or hint the answer ' +
   'in the question, and never mention scores, points or grades.';
 
 type Book = Pick<KafuoBookStructure, 'units'> | undefined;
@@ -73,7 +75,22 @@ function citesAny(outline: SceneOutline, ids: ReadonlySet<string>): string[] {
 
 const ARABIC_INDIC = '٠١٢٣٤٥٦٧٨٩';
 // A numbered book question at the start of a line: «(1 التكلفة …», «1) …», «(١٢) …».
-const QUESTION_LINE = /^\s*\(?\s*([0-9٠-٩]{1,3})\s*[).\-]?\s+\S/u;
+// Quality plan W4: also after the parse's «المثال N» header on the same line
+// («المثال 3 11) إنتاج مصنع…», item 208 unit 6249: Q11 had no try).
+const QUESTION_LINE = /^\s*(?:المثال\s*[0-9٠-٩]{1,2}\s+)?\(?\s*([0-9٠-٩]{1,3})\s*[).\-]?\s+\S/u;
+
+// Quality plan W4: a check's lettered sub-items printed bare under one number
+// («3) أسعار…» then «A) … B) … C) …», item 208 unit 6241: only 3B got a try).
+const BARE_SUB_ITEM = /(?:^|\s)\(?([A-H]|[أبجد])\)\s+\S/gmu;
+
+/** The bare lettered sub-items of a check unit's text, in book order, each once. */
+export function bareSubItems(text: string): string[] {
+  const letters: string[] = [];
+  for (const match of text.matchAll(BARE_SUB_ITEM)) {
+    if (!letters.includes(match[1]!)) letters.push(match[1]!);
+  }
+  return letters;
+}
 
 function questionNumberOf(line: string): number | null {
   const match = QUESTION_LINE.exec(line);
@@ -135,17 +152,24 @@ function checkAttempt(
   cited: readonly string[],
   context: AttemptQuizContext,
 ): SceneOutline {
-  const fromFacts = cited.reduce(
-    (total, id) => total + (context.facts?.[id]?.itemLabels.length ?? 0),
-    0,
-  );
+  let bareItems = 0;
+  const bareLines: string[] = [];
+  const fromFacts = cited.reduce((total, id) => {
+    const labels = context.facts?.[id]?.itemLabels.length ?? 0;
+    // W4: one numbered check whose items are bare «A) B) C)» counts each item, and
+    // the book's own item lines (questions, never answers) join the key points.
+    const text = context.unitTexts?.get(id) ?? '';
+    const bare = labels <= 1 ? bareSubItems(text) : [];
+    if (bare.length >= 2) {
+      bareItems += bare.length;
+      bareLines.push(...text.split('\n').filter((line) => line.trim() !== ''));
+      return total + bare.length;
+    }
+    return total + labels;
+  }, 0);
   // The try-it slide states the items without answers, so its key points are safe.
-  return attemptFor(
-    slide,
-    cited,
-    slide.keyPoints,
-    fromFacts > 0 ? fromFacts : slide.keyPoints.length,
-  );
+  const items = bareItems > 0 ? [...slide.keyPoints, ...bareLines] : slide.keyPoints;
+  return attemptFor(slide, cited, items, fromFacts > 0 ? fromFacts : slide.keyPoints.length);
 }
 
 function exerciseAttempt(

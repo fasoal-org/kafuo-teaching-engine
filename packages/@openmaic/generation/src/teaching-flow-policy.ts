@@ -244,6 +244,35 @@ export const STRUCTURAL_CONTENT_ROLE_DROPPED = 'STRUCTURAL_CONTENT_ROLE_DROPPED'
 const STRUCTURAL_SLIDE_TYPES: readonly string[] = ['contents', 'transition', 'end'];
 
 /**
+ * g5.v10 (quality plan W4, 15 Nov 2026): the visual rules of a learner-first run.
+ * Present only on g5.v10; every other run keeps the rules below unchanged.
+ * - A structural slide (contents, transition, end) needs no visual at all.
+ * - A slide that cites only exercise units is never forced to show a book image
+ *   (item 208 slide 26 showed the circle patterns of items the lesson skips).
+ * - A unit's book image is required once per lesson, not on every slide citing it
+ *   (item 208 slide 5 had to take the 54-segment answer figure).
+ */
+export interface LearnerFirstVisualOptions {
+  /** The book's exercise units («تمارين»), as Content Unit ids. */
+  exerciseUnitIds: readonly string[];
+}
+
+export function isStructuralSlide(outline: Pick<SceneOutline, 'type' | 'slideType'>): boolean {
+  return outline.type === 'slide' && STRUCTURAL_SLIDE_TYPES.includes(String(outline.slideType));
+}
+
+/** A v10 slide that cites only exercise units: it never has to show a book image. */
+function citesOnlyExercises(
+  outline: SceneOutline,
+  options: LearnerFirstVisualOptions | undefined,
+): boolean {
+  if (!options) return false;
+  const cited = (outline.sourceContentUnitIds ?? []).map(String);
+  const exercises = new Set(options.exerciseUnitIds.map(String));
+  return cited.length > 0 && cited.every((id) => exercises.has(id));
+}
+
+/**
  * A structural slide (contents, transition, end) needs no content role: it gets
  * the structural guidance whatever the role. When the planner nevertheless gave
  * it a role its position does not allow — lesson 306's part transitions came
@@ -298,20 +327,61 @@ export function normalizeSourceGroundedVisuals(
   outlines: readonly SceneOutline[],
   flow: readonly TeachingFlowEntry[],
   sourceImages: readonly PdfImage[],
+  options: { learnerFirstVisuals?: LearnerFirstVisualOptions } = {},
 ): { outlines: SceneOutline[]; repairs: OutlineDiagnostic[] } {
   const orderedImages = sortDocumentImagesForVision([...sourceImages]);
   const imageById = new Map(orderedImages.map((image) => [image.id, image] as const));
   const repairs: OutlineDiagnostic[] = [];
+  const v10 = options.learnerFirstVisuals;
+  const selectedAnywhere = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
 
   const normalized = outlines.map((outline, index) => {
     const { policy, entry } = positionPolicy(outline, flow);
     if (outline.type !== 'slide' || policy?.visual !== 'source_grounded') return outline;
 
+    // W4 (g5.v10): a structural slide shows no visual; its plan's visual is dropped.
+    if (v10 && isStructuralSlide(outline)) {
+      if (!outline.visualPlan && !outline.suggestedImageIds?.length) return outline;
+      const {
+        visualPlan: _droppedPlan,
+        suggestedImageIds: _droppedIds,
+        imagePlans: _droppedImagePlans,
+        ...bare
+      } = outline;
+      repairs.push({
+        code: SOURCE_VISUAL_NORMALIZED,
+        disposition: 'repaired',
+        outlineIndex: index,
+        outlineId: outline.id,
+        field: 'visualPlan',
+        previousValue: {
+          visualPlan: outline.visualPlan ?? null,
+          suggestedImageIds: outline.suggestedImageIds ?? [],
+        },
+        message: `a ${outline.slideType} slide teaches nothing, so its visual was dropped (g5.v10)`,
+        ...(entry ? { flowIndex: outline.teachingStage!.flowIndex, stage: entry.stage } : {}),
+      });
+      return bare as SceneOutline;
+    }
+
     const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
-    const grounded = orderedImages.filter((image) =>
+    const linked = orderedImages.filter((image) =>
       (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
     );
-    const suggested = (outline.suggestedImageIds ?? []).filter((id) => imageById.has(id));
+    // W4 (g5.v10): an exercise slide shows no book image of its unit — the image
+    // belongs to the whole exercise list, not to the exercises the lesson selected
+    // (item 208 slide 26). A unit's image another slide already shows is not forced
+    // here again.
+    const exerciseOnly = v10 !== undefined && citesOnlyExercises(outline, v10);
+    const suggested = (outline.suggestedImageIds ?? []).filter(
+      (id) => imageById.has(id) && !(exerciseOnly && linked.some((image) => image.id === id)),
+    );
+    const linkedChosenHere = linked.some((image) => suggested.includes(image.id));
+    const relaxed =
+      v10 !== undefined &&
+      !linkedChosenHere &&
+      (exerciseOnly || linked.some((image) => selectedAnywhere.has(image.id)));
+    const grounded = relaxed ? [] : linked;
     const selectedGrounded = suggested.filter((id) => grounded.some((image) => image.id === id));
     const nonImageMedia = (outline.mediaGenerations ?? []).filter(
       (request) => request.type !== 'image',
@@ -418,7 +488,9 @@ export function teachingFlowDiagnostics(
   outlines: readonly SceneOutline[],
   flow: readonly TeachingFlowEntry[],
   sourceImages: readonly PdfImage[] = [],
+  options: { learnerFirstVisuals?: LearnerFirstVisualOptions } = {},
 ): OutlineDiagnostic[] {
+  const v10 = options.learnerFirstVisuals;
   const diagnostics: OutlineDiagnostic[] = [];
   // Textbook images some slide already shows: a unit split over several slides
   // shows its image once, on the slide it illustrates (lesson 306's check 4025).
@@ -552,6 +624,8 @@ export function teachingFlowDiagnostics(
         message: `${label} covers ${entry.stage} with contentRole ${JSON.stringify(outline.contentRole)}, which this position does not allow; choose one of: ${policy.contentRoles.join(', ')}`,
       });
     }
+    // W4 (g5.v10): a structural slide teaches nothing and needs no visual.
+    if (v10 && isStructuralSlide(outline)) continue;
     if (policy.visual) {
       const mode = outline.visualPlan?.mode;
       if (mode !== 'image' && mode !== 'native') {
@@ -566,7 +640,7 @@ export function teachingFlowDiagnostics(
     }
     if (policy.visual === 'source_grounded') {
       diagnostics.push(
-        ...sourceGroundedVisualDiagnostics(outline, label, at, sourceImages, selectedImageIds),
+        ...sourceGroundedVisualDiagnostics(outline, label, at, sourceImages, selectedImageIds, v10),
       );
     }
   }
@@ -673,6 +747,7 @@ function sourceGroundedVisualDiagnostics(
   at: Pick<OutlineDiagnostic, 'disposition' | 'outlineIndex' | 'outlineId' | 'flowIndex' | 'stage'>,
   sourceImages: readonly PdfImage[],
   selectedElsewhere: ReadonlySet<string> = new Set(),
+  v10?: LearnerFirstVisualOptions,
 ): OutlineDiagnostic[] {
   const stage = at.stage;
   if (outline.mediaGenerations?.some((request) => request.type === 'image')) {
@@ -686,17 +761,24 @@ function sourceGroundedVisualDiagnostics(
     ];
   }
   const contentUnitIds = new Set(outline.sourceContentUnitIds ?? []);
-  const groundedBookImages = sourceImages.filter((image) =>
-    (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
-  );
+  // W4 (g5.v10): an exercise slide is never required to show its unit's book image.
+  const groundedBookImages = citesOnlyExercises(outline, v10)
+    ? []
+    : sourceImages.filter((image) =>
+        (image.sourceContentUnitIds ?? []).some((id) => contentUnitIds.has(id)),
+      );
   const suggested = new Set(outline.suggestedImageIds ?? []);
   const selectedBookImages = sourceImages.filter((image) => suggested.has(image.id));
   // Another slide on the same unit already shows its image: this one may use a
   // native diagram (or another selected image) and is checked as such below.
+  // W4 (g5.v10): once per lesson — one of the unit's images shown elsewhere is enough.
+  const notChosenHere = !groundedBookImages.some((image) => suggested.has(image.id));
   const shownElsewhere =
     groundedBookImages.length > 0 &&
-    groundedBookImages.every((image) => selectedElsewhere.has(image.id)) &&
-    !groundedBookImages.some((image) => suggested.has(image.id));
+    notChosenHere &&
+    (v10
+      ? groundedBookImages.some((image) => selectedElsewhere.has(image.id))
+      : groundedBookImages.every((image) => selectedElsewhere.has(image.id)));
   if (groundedBookImages.length > 0 && !shownElsewhere) {
     const selectedGrounded = groundedBookImages.some((image) => suggested.has(image.id));
     if (outline.visualPlan?.mode !== 'image' || !selectedGrounded) {

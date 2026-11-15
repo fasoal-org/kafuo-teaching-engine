@@ -34,6 +34,7 @@ import {
 import {
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  learnerFirstVisualsOf,
   requireEssentialUntypedUnits,
   teacherParityBook,
   type BookCoverageGap,
@@ -251,6 +252,10 @@ export function diagnoseCandidateOutlines(
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
     // Restored after the W6 review: a non-check Kafuo quiz still needs gradable keys.
     keyedQuizzesOnly: true,
+    // Quality plan W4: a g5.v10 plan is checked with the rules it was planned under.
+    ...(context.bookStructure?.learnerFirst
+      ? { learnerFirstVisuals: learnerFirstVisualsOf(context.bookStructure) }
+      : {}),
   });
   const normalized = analysis.outlines.map((outline, index) => ({ ...outline, order: index + 1 }));
   return {

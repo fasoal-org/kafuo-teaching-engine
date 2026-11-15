@@ -98,6 +98,7 @@ import {
   MAX_SCENE_SOURCE_CHARS,
   type SourceUnitText,
 } from './source-unit-context.js';
+import { isStructuralSlide } from './teaching-flow-policy.js';
 import { isAbortError } from './generation-retry.js';
 import { generatePBLV2ProjectSingleCall } from './pbl/planner-single-call.js';
 import {
@@ -658,9 +659,14 @@ export async function generateSceneContent(
           textDirection,
           options.correctiveNote,
           {
-            ...sceneSourceVars(outline, options.sourceUnits, log),
+            // Quality plan W4 (g5.v10): a structural slide (a part opener, contents,
+            // end) gets no source text, so it never re-teaches its part's first unit
+            // (item 208 slides 3↔4 and 18↔19 showed one definition twice).
+            ...(options.learnerFirst && isStructuralSlide(outline)
+              ? {}
+              : sceneSourceVars(outline, options.sourceUnits, log)),
             ...sceneSacredVars(outline, options.sacredText),
-            ...learnerFirstSlideVars(options.learnerFirst),
+            ...learnerFirstSlideVars(options.learnerFirst, isStructuralSlide(outline)),
           },
           options.visibleWorkingSteps,
         );

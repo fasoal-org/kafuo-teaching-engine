@@ -13,6 +13,7 @@ import {
   isTeacherParityModel,
   LEARNER_FIRST_TEACHING_MODEL,
   learnerFirstPlannerCatalogue,
+  learnerFirstVisualsOf,
 } from '@/lib/server/teaching-package/book-coverage';
 import type { KafuoBookStructure } from '@/lib/types/teaching-package';
 
@@ -97,6 +98,25 @@ describe('g5.v10 learner-first switch', () => {
     expect(v10).toContain('states the conjecture itself first');
     expect(v10).toContain('never plan a quiz for a check or an exercise');
     expect(v10).not.toContain(AVERAGE_CHANGE_STEP);
+    // Quality plan W4 (item 208, 15 Nov 2026).
+    expect(v10).toContain('a title only (a study tip is taught where the book prints it');
+    expect(v10).toContain('add the last difference again');
+    expect(v10).toContain('- CYCLES: an item on a fixed named cycle');
+    expect(v10).toContain("- PICTURES: a unit's book picture is shown once");
+    expect(v8).not.toContain('- CYCLES');
+  });
+
+  it('quality plan W4: the learner-first visual rules carry the exercise units only', () => {
+    expect(
+      learnerFirstVisualsOf({
+        units: [
+          { contentUnitId: 6247, element: 'exercise' },
+          { contentUnitId: 6234, element: 'try_it' },
+          { contentUnitId: 6230, element: 'worked_example' },
+        ],
+      }),
+    ).toEqual({ exerciseUnitIds: ['6247'] });
+    expect(learnerFirstVisualsOf(undefined)).toEqual({ exerciseUnitIds: [] });
   });
 
   it("rewrites the catalogue's average-change row for g5.v10 only (D-2.5)", () => {

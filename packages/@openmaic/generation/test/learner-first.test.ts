@@ -8,6 +8,7 @@ import {
   learnerFirstNarrationRules,
   learnerFirstSlideRules,
 } from '@openmaic/generation';
+import { learnerFirstSlideVars } from '../src/learner-first.js';
 import { buildPrompt, PROMPT_IDS } from '../src/prompts/index.js';
 import {
   AVERAGE_CHANGE_STEP,
@@ -112,6 +113,11 @@ describe('g5.v10 learner-first prompts', () => {
     expect(narration).toContain('«المتغير إن»');
     expect(narration).toContain('Never describe colours, line styles or positions');
     expect(narration).toContain('say the claim itself in full');
+    // Quality plan W4: a structural slide gets its own two rules, no definition box.
+    const structural = learnerFirstSlideVars(true, true).learnerFirstSlideRules as string;
+    expect(structural).toContain('Teach nothing here: no definition box');
+    expect(structural).not.toContain('show a definition box');
+    expect(learnerFirstSlideVars(false, true)).toEqual({});
     // Quality plan W3 (item 208, 15 Nov 2026).
     expect(narration).toContain('8:30 «الثامنة والنصف»');
     expect(narration).toContain('Never «ثمانية وثلاثين»');

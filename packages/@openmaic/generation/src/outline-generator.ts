@@ -28,6 +28,7 @@ import {
   dropStructuralSlideRoles,
   normalizeSourceGroundedVisuals,
   teachingFlowDiagnostics,
+  type LearnerFirstVisualOptions,
 } from './teaching-flow-policy.js';
 import type {
   ImageMapping,
@@ -82,6 +83,8 @@ export interface OutlinePromptContext {
   prohibitedWidgetTypes?: readonly WidgetType[];
   /** See {@link OutlineAnalysisContext.keyedQuizzesOnly}. */
   keyedQuizzesOnly?: boolean;
+  /** See {@link OutlineAnalysisContext.learnerFirstVisuals}. */
+  learnerFirstVisuals?: LearnerFirstVisualOptions;
   /**
    * The rejection reason of the previous attempt, fed back on a bounded
    * re-roll so the model corrects that answer instead of repeating it.
@@ -357,6 +360,12 @@ export interface OutlineAnalysisContext {
    * quiz's `questionTypes` (`QUIZ_OPEN_ANSWER_REMOVED`). Absent → unchanged.
    */
   keyedQuizzesOnly?: boolean;
+  /**
+   * g5.v10 (quality plan W4): the learner-first visual rules — no visual on a
+   * structural slide, no forced book image on an exercise slide, a unit's book
+   * image once per lesson. Absent → the rules are unchanged.
+   */
+  learnerFirstVisuals?: LearnerFirstVisualOptions;
 }
 
 /** Diagnostic code recorded when an open-answer type is removed from a quiz plan. */
@@ -441,8 +450,16 @@ export function analyzeOutlines(
   const roleRepair = flow
     ? dropStructuralSlideRoles(semanticRepair.outlines, flow)
     : { outlines: semanticRepair.outlines, repairs: [] as OutlineDiagnostic[] };
+  const visualOptions = context.learnerFirstVisuals
+    ? { learnerFirstVisuals: context.learnerFirstVisuals }
+    : {};
   const visualRepair = flow
-    ? normalizeSourceGroundedVisuals(roleRepair.outlines, flow, context.sourceImages ?? [])
+    ? normalizeSourceGroundedVisuals(
+        roleRepair.outlines,
+        flow,
+        context.sourceImages ?? [],
+        visualOptions,
+      )
     : { outlines: roleRepair.outlines, repairs: [] as OutlineDiagnostic[] };
   const normalized = visualRepair.outlines;
 
@@ -459,7 +476,7 @@ export function analyzeOutlines(
     message: issue.message,
   }));
   const flowDiagnostics = flow
-    ? teachingFlowDiagnostics(normalized, flow, context.sourceImages ?? [])
+    ? teachingFlowDiagnostics(normalized, flow, context.sourceImages ?? [], visualOptions)
     : [];
 
   return {
@@ -754,6 +771,7 @@ export async function generateSceneOutlinesFromRequirements(
         ? { prohibitedWidgetTypes: context.prohibitedWidgetTypes }
         : {}),
       ...(context.keyedQuizzesOnly ? { keyedQuizzesOnly: true } : {}),
+      ...(context.learnerFirstVisuals ? { learnerFirstVisuals: context.learnerFirstVisuals } : {}),
     });
     const enriched = analysis.outlines;
     for (const repair of analysis.repairs) {
