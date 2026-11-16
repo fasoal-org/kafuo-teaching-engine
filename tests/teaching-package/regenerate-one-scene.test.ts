@@ -1021,12 +1021,27 @@ describe('regenerateOneScene — g5.v11 attempt', () => {
     for (const prompt of narration) expect(prompt.user).not.toContain('HIDDEN ANSWER KEY');
   });
 
+  // The check's try-it slide, before the slide under test (re-review finding 1).
+  const tryOutline = {
+    id: 'o0',
+    order: 0,
+    type: 'slide',
+    title: 'جرّب',
+    description: 'Try it.',
+    keyPoints: ['1A) ما الحد التالي؟'],
+    slideType: 'content',
+    contentRole: 'check_understanding',
+    sourceContentUnitIds: ['6234'],
+  };
+  const withTry = (overrides: Record<string, unknown>): AppDocumentOutline => {
+    const base = snapshot({ suggestedImageIds: undefined, visualPlan: undefined, ...overrides });
+    return { ...base, outlines: [tryOutline, ...base.outlines] } as unknown as AppDocumentOutline;
+  };
+
   it('regenerates a solution slide once with a correction when its final line disagrees', async () => {
-    const solutionOutline = snapshot({
+    const solutionOutline = withTry({
       contentRole: 'worked_example',
       sourceContentUnitIds: ['6234'],
-      suggestedImageIds: undefined,
-      visualPlan: undefined,
     });
     const solutionPre = {
       ...preImage([]),
@@ -1069,6 +1084,92 @@ describe('regenerateOneScene — g5.v11 attempt', () => {
     expect(JSON.stringify(result.scene.content.canvas.elements)).toMatch(
       /الإجابة \(1A\): (?:12|١٢)</u,
     );
+  });
+
+  const tryPre = (units: string[]) =>
+    ({
+      ...preImage([]),
+      content: { ...preImage([]).content, contentRole: 'check_understanding' },
+      sourceContentUnitIds: units,
+    }) as unknown as AppScene;
+  const textLine = (text: string) => ({
+    type: 'text',
+    content: `<p>${text}</p>`,
+    left: 60,
+    top: 200,
+    width: 400,
+    height: 60,
+  });
+
+  it('re-review finding 5c: keeps the slide as it was when the regenerated try still states the answer', async () => {
+    const prompts: string[] = [];
+    const aiCallFor = (stageLabel: string) => async (system: string) => {
+      prompts.push(stageLabel);
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([textLine('الحد التالي هو 12')]);
+    };
+    const pre = tryPre(['6234']);
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot({
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['6234'],
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+      }),
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('SCENE_CONTENT_GENERATION_FAILED');
+    expect(result.details).toEqual({ failure: 'GUIDE_ANSWER_LEAK' });
+    // First, then once with the leak correction; never a narration for the leaking slide.
+    expect(prompts.filter((stageLabel) => stageLabel === 'scene-content:slide')).toHaveLength(2);
+    expect(prompts).not.toContain('scene-actions');
+  });
+
+  it('re-review finding 3: a moved part is checked against its NEW units', async () => {
+    const prompts: Array<{ stage: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([
+        textLine(user.includes('BEFORE the learner') ? 'ما الحد التالي؟' : 'الحد التالي هو 12'),
+      ]);
+    };
+    // The stored plan cites another unit; the move brings the check's unit onto it.
+    const pre = tryPre(['cu-1']);
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot({
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['cu-1'],
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+      }),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds: ['6234'],
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    const slides = prompts.filter((prompt) => prompt.stage === 'scene-content:slide');
+    expect(slides).toHaveLength(2);
+    expect(slides[1]!.user).toContain("BEFORE the learner's try of item 1A");
   });
 
   it('is unchanged without the pinned guide (g5.v10): one content call', async () => {

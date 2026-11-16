@@ -9,8 +9,9 @@
  * an answer is "keyed"; doubtful, changed, reference and missing items are never given.
  *
  * Who gets a keyed answer (plan §8 table, binding):
- * - the solution slide (a worked_example citing the item's unit): its key points and a
- *   writer instruction; its narration follows the canvas;
+ * - the solution slide (a worked_example citing the item's unit, and for a check item
+ *   only AFTER that check's try-it slide): its key points and a writer instruction; its
+ *   narration follows the canvas;
  * - the practice attempt quiz: a hidden key in its description, never in its key points
  *   (the quiz stem is written from those), and cut off before its narration writer
  *   ({@link withoutHiddenAnswerKey});
@@ -383,6 +384,12 @@ export interface GuideOutlinePlan {
   role: GuideOutlineRole;
   items: KeyedGuideItem[];
   /**
+   * Re-review finding 1: a solution slide's check items whose try-it slide comes LATER
+   * in the lesson, or that no try-it slide states. They get no answer here and are
+   * leak-checked, as on a try-it slide.
+   */
+  beforeTry?: KeyedGuideItem[];
+  /**
    * Solutions: how many book questions the slide solves, keyed or not. An exercise item
    * leaves the slide only while another question stays on it.
    */
@@ -427,6 +434,19 @@ export function guideOutlinePlans(
   const plans = new Map<string, GuideOutlinePlan>();
   const checkLabels = (unitId: string) => options.facts?.[unitId]?.itemLabels ?? [];
 
+  // Re-review finding 1: where each check is first tried. A worked example solves a
+  // check's items only after that try-it slide; before it (the order gate skips a check
+  // with no paired example, and an editor may ignore `solution_before_try_it`), or with
+  // no try at all, the slide comes before the learner's try: it gets no answer and is
+  // leak-checked.
+  const firstTry = new Map<string, number>();
+  outlines.forEach((outline, index) => {
+    if (outline.type !== 'slide' || outline.contentRole !== 'check_understanding') return;
+    for (const unitId of citedUnits(outline, 'try_it', elements)) {
+      if (!firstTry.has(unitId)) firstTry.set(unitId, index);
+    }
+  });
+
   // The items each slide solves, and (exercise slides) in which order they are asked.
   const asked = new Map<
     string,
@@ -434,7 +454,7 @@ export function guideOutlinePlans(
   >();
   const slideQuestionsOf = new Map<string, Readonly<Record<string, number[]>> | undefined>();
   let exerciseSlide = 0;
-  for (const outline of outlines) {
+  for (const [index, outline] of outlines.entries()) {
     if (outline.type !== 'slide') continue;
     const exercises = citedUnits(outline, 'exercise', elements);
     const checks = citedUnits(outline, 'try_it', elements);
@@ -442,8 +462,10 @@ export function guideOutlinePlans(
       const questions = exercises.length > 0 ? options.slideQuestions?.[exerciseSlide] : undefined;
       if (exercises.length > 0) exerciseSlide += 1;
       slideQuestionsOf.set(outline.id, questions);
+      const tried = checks.filter((unitId) => (firstTry.get(unitId) ?? Infinity) < index);
+      const beforeTry = checks.filter((unitId) => !tried.includes(unitId)).flatMap(keyedOf);
       const items = [
-        ...checks.flatMap(keyedOf),
+        ...tried.flatMap(keyedOf),
         ...exercises.flatMap((unitId) =>
           keyedOf(unitId).filter((item) => {
             const listed = questions?.[unitId];
@@ -461,12 +483,20 @@ export function guideOutlinePlans(
         },
       );
       asked.set(outline.id, order);
-      if (items.length === 0) continue;
-      const checkItems = checks.reduce(
+      if (items.length === 0) {
+        if (beforeTry.length > 0) plans.set(outline.id, { role: 'try', items: beforeTry });
+        continue;
+      }
+      const checkItems = tried.reduce(
         (total, unitId) => total + Math.max(1, checkLabels(unitId).length),
         0,
       );
-      plans.set(outline.id, { role: 'solution', items, solves: order.length + checkItems });
+      plans.set(outline.id, {
+        role: 'solution',
+        items,
+        solves: order.length + checkItems,
+        ...(beforeTry.length > 0 ? { beforeTry } : {}),
+      });
       continue;
     }
     if (outline.contentRole === 'check_understanding' && checks.length > 0) {
@@ -514,7 +544,8 @@ export function guideOutlinePlans(
         }
       });
     } else {
-      const solutionItems = plans.get(baseId)?.items ?? [];
+      const basePlan = plans.get(baseId);
+      const solutionItems = basePlan?.role === 'solution' ? basePlan.items : [];
       const exercises = citedUnits(base, 'exercise', elements);
       const statements = options.unitTexts
         ? exerciseAttemptQuestions(
@@ -566,53 +597,143 @@ export function guideOutlinePlans(
   return plans;
 }
 
+/** One of the engine's «الإجابة الصحيحة المعتمدة (…): …» key points. */
+function isSolutionKeyPoint(point: unknown): boolean {
+  return typeof point === 'string' && point.startsWith(SOLUTION_KEY_POINT_PREFIX);
+}
+
+function sameStrings(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
+/**
+ * Re-review finding 2: the outline without ANY of the engine's g5.v11 blocks (the
+ * description's appended blocks and the solution key points), whichever role put them
+ * there. The SAME object when it carries none.
+ */
+function withoutGuideBlocks(outline: SceneOutline): SceneOutline {
+  const description = plannedDescription(outline.description);
+  const keyPoints = outline.keyPoints?.filter((point) => !isSolutionKeyPoint(point));
+  if (description === outline.description && sameStrings(keyPoints, outline.keyPoints)) {
+    return outline;
+  }
+  return { ...outline, description, ...(keyPoints ? { keyPoints } : {}) };
+}
+
+/**
+ * Re-review finding 2: the outlines with every g5.v11 block taken out, so an attempt
+ * built from a resumed outline (`insertAttemptQuizzes` copies a check slide's key points)
+ * never copies a key its slide carried under an earlier role. The SAME array when no
+ * outline carries one.
+ */
+export function withoutGuideAnswers(outlines: SceneOutline[]): SceneOutline[] {
+  let changed = false;
+  const result = outlines.map((outline) => {
+    const clean = withoutGuideBlocks(outline);
+    if (clean !== outline) changed = true;
+    return clean;
+  });
+  return changed ? result : outlines;
+}
+
+/** A clean outline with the blocks of its role: `keep` keyed, `leaveOut` left out. */
+function withBlocks(
+  base: SceneOutline,
+  role: GuideOutlineRole,
+  keep: readonly KeyedGuideItem[],
+  leaveOut: readonly KeyedGuideItem[],
+): SceneOutline {
+  if (role === 'try') return base;
+  if (role === 'attempt') {
+    return keep.length > 0
+      ? { ...base, description: `${base.description}\n\n${attemptKey(keep)}` }
+      : base;
+  }
+  const blocks = [
+    ...(keep.length > 0 ? [solutionNote(keep)] : []),
+    ...(leaveOut.length > 0 ? [leaveOutNote(leaveOut)] : []),
+  ];
+  if (blocks.length === 0) return base;
+  return {
+    ...base,
+    keyPoints: [...(base.keyPoints ?? []), ...keep.map(solutionKeyPoint)],
+    description: [base.description, ...blocks].join('\n\n'),
+  };
+}
+
 /**
  * The outlines with the keyed answers in place: a solution slide's key points and writer
- * instruction, an attempt's hidden key. Idempotent (a resumed outline gets nothing twice);
- * a try-it slide is never touched. Returns the SAME array when nothing changes.
+ * instruction, an attempt's hidden key, a settled slide's left-out questions. Re-review
+ * finding 2: EVERY outline is first cleaned of the engine's g5.v11 blocks, then gets the
+ * blocks of its CURRENT plan (`plans`: the guard's effective plans, settled items out;
+ * `leftOut`: the exercises a settlement removed from each solution slide) — so a resumed
+ * outline whose role a correction changed never keeps a key its new role must not hold.
+ * A try-it slide gets nothing. Idempotent; returns the SAME array when nothing changes.
  */
 export function injectGuideAnswers(
   outlines: SceneOutline[],
   plans: ReadonlyMap<string, GuideOutlinePlan>,
+  leftOut: ReadonlyMap<string, readonly KeyedGuideItem[]> = new Map(),
 ): SceneOutline[] {
   let changed = false;
   const result = outlines.map((outline) => {
     const plan = plans.get(outline.id);
-    if (!plan || plan.role === 'try') return outline;
-    if (plan.role === 'solution') {
-      // A slide already settled (D-19) keeps its rebuilt blocks.
-      if (
-        outline.description.includes(SOLUTION_NOTE_MARKER) ||
-        outline.description.includes(LEAVE_OUT_MARKER)
-      ) {
-        return outline;
-      }
-      changed = true;
-      const points = plan.items
-        .map(solutionKeyPoint)
-        .filter((point) => !outline.keyPoints.includes(point));
-      return {
-        ...outline,
-        keyPoints: [...outline.keyPoints, ...points],
-        description: `${outline.description}\n\n${solutionNote(plan.items)}`,
-      };
+    const leaveOut = plan?.role === 'try' ? [] : (leftOut.get(outline.id) ?? []);
+    const role: GuideOutlineRole = plan?.role ?? (leaveOut.length > 0 ? 'solution' : 'try');
+    const next = withBlocks(withoutGuideBlocks(outline), role, plan?.items ?? [], leaveOut);
+    if (
+      next.description === outline.description &&
+      sameStrings(next.keyPoints, outline.keyPoints)
+    ) {
+      return outline;
     }
-    if (outline.description.includes(ATTEMPT_KEY_MARKER)) return outline;
     changed = true;
-    return { ...outline, description: `${outline.description}\n\n${attemptKey(plan.items)}` };
+    return next;
   });
   return changed ? result : outlines;
 }
 
 /**
  * Review finding 1: the outline an attempt's NARRATION writer reads — its hidden key
- * cut off, since the key may reach the quiz content writer only. The SAME object when
- * the outline carries no key (every other outline, every other Teaching Model).
+ * cut off, since the key may reach the quiz content writer only. Re-review finding 2:
+ * on any outline but a solution slide, every g5.v11 block and solution key point is cut
+ * too (a check attempt copies its slide's key points). The SAME object when the outline
+ * carries none (every other outline, every other Teaching Model).
  */
-export function withoutHiddenAnswerKey<T extends Pick<SceneOutline, 'description'>>(outline: T): T {
+export function withoutHiddenAnswerKey<
+  T extends Pick<SceneOutline, 'description'> &
+    Partial<Pick<SceneOutline, 'type' | 'contentRole' | 'keyPoints'>>,
+>(outline: T): T {
+  const solution = outline.type === 'slide' && outline.contentRole === 'worked_example';
   const at = outline.description.indexOf(`\n\n${ATTEMPT_KEY_MARKER}`);
-  if (at < 0) return outline;
-  return { ...outline, description: outline.description.slice(0, at) };
+  const description = solution
+    ? at < 0
+      ? outline.description
+      : outline.description.slice(0, at)
+    : plannedDescription(outline.description);
+  const keyPoints = solution
+    ? outline.keyPoints
+    : outline.keyPoints?.filter((point) => !isSolutionKeyPoint(point));
+  if (description === outline.description && sameStrings(keyPoints, outline.keyPoints)) {
+    return outline;
+  }
+  return { ...outline, description, ...(keyPoints ? { keyPoints } : {}) };
+}
+
+/**
+ * Re-review finding 6: the items whose hidden key an attempt outline carries
+ * (`attemptKey`), of `items`.
+ */
+export function keyedInAttempt(
+  outline: Pick<SceneOutline, 'description'>,
+  items: readonly KeyedGuideItem[],
+): KeyedGuideItem[] {
+  const at = outline.description.indexOf(`\n\n${ATTEMPT_KEY_MARKER}`);
+  if (at < 0) return [];
+  const block = outline.description.slice(at);
+  return items.filter((item) => block.includes(`\n- item ${item.display}: `));
 }
 
 /** The marker of the "leave these questions out" instruction (D-19). */
@@ -637,8 +758,8 @@ function plannedDescription(description: string): string {
 /**
  * D-19 (16 Nov 2026): the outline rebuilt with only `keep` of its plan's items keyed;
  * the others get no guide answer (the plain g5.v10 path). `leaveOut` (a solution's
- * exercise items) are named as questions the slide no longer solves. A try-it outline is
- * returned unchanged: it never had an answer.
+ * exercise items) are named as questions the slide no longer solves. A try-it outline
+ * gets no block: it never had an answer.
  */
 export function withGuideItems(
   outline: SceneOutline,
@@ -646,25 +767,8 @@ export function withGuideItems(
   keep: readonly KeyedGuideItem[],
   leaveOut: readonly KeyedGuideItem[] = [],
 ): SceneOutline {
-  if (plan.role === 'try') return outline;
-  const injected = new Set(plan.items.map(solutionKeyPoint));
-  const base = {
-    ...outline,
-    keyPoints: outline.keyPoints.filter((point) => !injected.has(point)),
-    description: plannedDescription(outline.description),
-  };
-  if (plan.role === 'attempt') {
-    return keep.length > 0
-      ? { ...base, description: `${base.description}\n\n${attemptKey(keep)}` }
-      : base;
-  }
-  const blocks = [
-    ...(keep.length > 0 ? [solutionNote(keep)] : []),
-    ...(leaveOut.length > 0 ? [leaveOutNote(leaveOut)] : []),
-  ];
-  return {
-    ...base,
-    keyPoints: [...base.keyPoints, ...keep.map(solutionKeyPoint)],
-    description: [base.description, ...blocks].join('\n\n'),
-  };
+  const base = withoutGuideBlocks(outline);
+  if (plan.role === 'try') return base;
+  // Always a new outline: the caller records it as the settled one.
+  return { ...withBlocks(base, plan.role, keep, leaveOut) };
 }

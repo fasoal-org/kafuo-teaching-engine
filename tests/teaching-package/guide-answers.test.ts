@@ -18,6 +18,7 @@ import {
   resolveTeacherGuide,
   SOLUTION_KEY_POINT_PREFIX,
   withGuideItems,
+  withoutGuideAnswers,
   withoutHiddenAnswerKey,
 } from '@/lib/server/teaching-package/guide-answers';
 import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
@@ -315,14 +316,97 @@ describe('approved answers in first (plan §8 table)', () => {
     expect(leftOut.description).not.toContain('71.9');
     expect(leftOut.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
     expect(leftOut.description).toContain('- س12');
-    // A resumed run never injects the answers again into a settled slide.
-    const resumed = injectGuideAnswers([leftOut], plans);
+    // A resumed run rebuilds the same blocks from the guard's effective plans and its
+    // left-out exercises: nothing is injected again.
+    const resumed = injectGuideAnswers([leftOut], new Map(), new Map([['ex-1', plan.items]]));
     expect(resumed[0]).toBe(leftOut);
     // Unverified: no guide answer and no left-out note (the plain g5.v10 path).
     const unverified = withGuideItems(exercise, plan, []);
     expect(unverified.description).toBe(withAttempts.find((o) => o.id === 'ex-1')!.description);
     const attempt = withGuideItems(byId.get('ex-1-attempt')!, plans.get('ex-1-attempt')!, []);
     expect(attempt.description).not.toContain('HIDDEN ANSWER KEY');
+  });
+});
+
+describe('re-review finding 1: a solution slide is keyed only after its check’s try', () => {
+  const resolved = resolveTeacherGuide(
+    guide([approved('6234', '1A', 12), approved('6249', '12', 71.9)]),
+    BOOK,
+    FACTS,
+  );
+  const [tryIt, solution, exercise] = outlines();
+  const slideQuestions = [{ '6249': [11, 12] }];
+  const plan = (lesson: SceneOutline[]) =>
+    guideOutlinePlans(lesson, BOOK, resolved, { slideQuestions, facts: FACTS });
+
+  it('keys a worked example placed after the try-it slide', () => {
+    expect(plan([tryIt!, solution!]).get('sol-1')).toMatchObject({ role: 'solution' });
+  });
+
+  it('treats a worked example placed BEFORE the try (or with no try) as a try-side slide', () => {
+    const before = plan([solution!, tryIt!]);
+    expect(before.get('sol-1')).toMatchObject({ role: 'try' });
+    expect(plan([solution!]).get('sol-1')).toMatchObject({ role: 'try' });
+    // Never injected: the slide comes before the learner's try.
+    const lesson = [solution!, tryIt!];
+    expect(injectGuideAnswers(lesson, before)).toBe(lesson);
+  });
+
+  it('keys a mixed slide’s exercise and guards its untried check', () => {
+    const mixed = { ...exercise!, sourceContentUnitIds: ['6249', '6234'] };
+    const plans = plan([mixed, tryIt!]);
+    expect(plans.get('ex-1')).toMatchObject({ role: 'solution' });
+    expect(plans.get('ex-1')!.items.map((item) => item.display)).toEqual(['س12']);
+    expect(plans.get('ex-1')!.beforeTry!.map((item) => item.display)).toEqual(['1A']);
+    const [injected] = injectGuideAnswers([mixed], plans);
+    expect(injected!.description).toContain('(س12): 71.9');
+    expect(injected!.description).not.toContain('(1A)');
+  });
+});
+
+describe('re-review finding 2: the guide blocks follow the CURRENT role', () => {
+  const resolved = resolveTeacherGuide(guide([approved('6234', '1A', 12)]), BOOK, FACTS);
+  const plansOf = (lesson: SceneOutline[]) =>
+    guideOutlinePlans(lesson, BOOK, resolved, { facts: FACTS });
+  const keyed = injectGuideAnswers(outlines(), plansOf(outlines()));
+  const stale = keyed.find((outline) => outline.id === 'sol-1')!;
+
+  it('strips a former solution slide that a correction made a check, then rebuilds nothing', () => {
+    expect(stale.description).toContain('APPROVED FINAL ANSWERS');
+    // A scenes-phase correction turned the solution slide into a check.
+    const corrected = keyed.map((outline) =>
+      outline.id === 'sol-1'
+        ? { ...outline, contentRole: 'check_understanding' as const }
+        : outline,
+    );
+    const resumed = injectGuideAnswers(corrected, plansOf(corrected));
+    const now = resumed.find((outline) => outline.id === 'sol-1')!;
+    expect(now.description).toBe('plan of sol-1');
+    expect(now.keyPoints.some((point) => point.startsWith(SOLUTION_KEY_POINT_PREFIX))).toBe(false);
+  });
+
+  it('never lets a check attempt copy a stale key point', () => {
+    const corrected = keyed.map((outline) =>
+      outline.id === 'sol-1'
+        ? { ...outline, contentRole: 'check_understanding' as const }
+        : outline,
+    );
+    const withAttempts = insertAttemptQuizzes(withoutGuideAnswers(corrected), BOOK, {
+      facts: FACTS,
+    });
+    const attempt = withAttempts.find((outline) => outline.id === 'sol-1-attempt')!;
+    expect(attempt.keyPoints.some((point) => point.startsWith(SOLUTION_KEY_POINT_PREFIX))).toBe(
+      false,
+    );
+    // The narration writer never reads one either, even on an outline that kept it.
+    const copied = { ...attempt, keyPoints: [...attempt.keyPoints, stale.keyPoints.at(-1)!] };
+    expect(
+      withoutHiddenAnswerKey(copied).keyPoints.some((point) =>
+        point.startsWith(SOLUTION_KEY_POINT_PREFIX),
+      ),
+    ).toBe(false);
+    // A solution slide's own narration still follows its key points.
+    expect(withoutHiddenAnswerKey(stale)).toBe(stale);
   });
 });
 

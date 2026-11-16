@@ -324,7 +324,7 @@ describe('D-19 settlement', () => {
     expect(
       'content' in pruned && (pruned.content as { questions: unknown[] }).questions,
     ).toHaveLength(1);
-    expect(instance.solutionOf('ex-attempt')).toBe('ex');
+    expect(instance.solutionsOf('ex-attempt')).toEqual(['ex']);
   });
 
   it('never empties a slide: its only exercise loses its guide answer instead', () => {
@@ -453,6 +453,125 @@ describe('guardedSceneContent', () => {
     const sol = outline('sol');
     const result = await guardedSceneContent(instance, sol, first, generate);
     expect(generate).not.toHaveBeenCalled();
-    expect(result).toEqual({ content: first, outline: sol });
+    expect(result).toEqual({ content: first, outline: sol, leaks: [] });
+  });
+
+  it('returns what a kept try-it slide still states before the try (re-review finding 5c)', async () => {
+    const { instance } = guard({ try: { role: 'try', items: [ITEM] } });
+    const generate = vi.fn(async () => slide('الحد التالي 12'));
+    const result = await guardedSceneContent(
+      instance,
+      outline('try'),
+      slide('الحد التالي 12'),
+      generate,
+    );
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(result.leaks).toMatchObject([{ code: 'GUIDE_ANSWER_LEAK', item: { label: '1A' } }]);
+  });
+});
+
+describe('re-review fixes', () => {
+  it('finding 1: a solution slide’s check before its try is leak-checked, never compared', () => {
+    const { instance, settled } = guard({
+      ex: { role: 'solution', items: [EX11], solves: 1, beforeTry: [ITEM] },
+    });
+    const ex = outline('ex');
+    const canvas = slide('الإجابة (س11): 32', 'وفي التحقق الحد التالي 12');
+    const findings = instance.checkContent(ex, canvas);
+    expect(findings).toMatchObject([{ code: 'GUIDE_ANSWER_LEAK', item: { label: '1A' } }]);
+    expect(
+      instance.checkNarration(ex, [{ type: 'speech', text: 'الحد التالي اثنا عشر' }]),
+    ).toMatchObject([{ code: 'GUIDE_ANSWER_LEAK', where: 'narration' }]);
+    // Still leaking: kept (D-19), and the slide's own items keep their guide answer.
+    expect(instance.settle(ex, canvas, findings)).toEqual({ kind: 'keep', content: canvas });
+    expect(settled.at(-1)).toMatchObject({ action: 'unverified', items: [{ label: '1A' }] });
+    expect(instance.planOf('ex')!.items.map((item) => item.label)).toEqual(['11']);
+  });
+
+  it('finding 4: a final line that cannot be compared is never a mismatch', () => {
+    const PI: KeyedGuideItem = { ...ITEM, answer: { type: 'number', value: 3.142 } };
+    const { instance } = guard({ sol: { role: 'solution', items: [PI], solves: 1 } });
+    expect(instance.checkContent(outline('sol'), slide('الإجابة (1A): 3,142'))).toEqual([]);
+    expect(instance.checkContent(outline('sol'), slide('الإجابة (1A): 2,718'))).toMatchObject([
+      { code: 'GUIDE_ANSWER_MISMATCH' },
+    ]);
+  });
+
+  it('finding 4: a narration that says the answer in words leaks', () => {
+    const { instance } = guard({ try: { role: 'try', items: [ITEM] } });
+    expect(
+      instance.checkNarration(outline('try'), [
+        { type: 'speech', text: 'إذن الحد التالي اثنا عشر' },
+      ]),
+    ).toMatchObject([{ code: 'GUIDE_ANSWER_LEAK', item: { label: '1A' } }]);
+  });
+
+  it('finding 5a: never removes a question that only lists the value as a wrong option', () => {
+    const { instance } = guard({
+      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+      // The quiz's questions cannot be told apart (no question count).
+      'ex-attempt': { role: 'attempt', items: [EX11] },
+    });
+    const attempt = outline('ex-attempt', 'quiz');
+    const content = quiz(
+      { question: 'أسعار؟', options: ['24', '32'], answer: 'A' },
+      // Another item's correct question, offering 32 as a wrong option.
+      { question: 'إنتاج؟', options: ['32', '71.9'], answer: 'B' },
+    );
+    const findings = instance.checkContent(attempt, content);
+    expect(findings).toMatchObject([{ code: 'GUIDE_ANSWER_MISMATCH', questions: null }]);
+    // Not removable: the item loses its guide key instead (D-19), and no question leaves.
+    expect(instance.settle(attempt, content, findings).kind).toBe('regenerate');
+    const pruned = instance.pruneAttempt(attempt, content);
+    expect((pruned as { content: { questions: unknown[] } }).content.questions).toHaveLength(2);
+  });
+
+  it('finding 6: a check item unverified on its solution slide loses its attempt key', () => {
+    const { instance, settled } = guard({
+      try: { role: 'try', items: [ITEM] },
+      'try-attempt': { role: 'attempt', items: [ITEM] },
+      sol: SOLUTION,
+    });
+    expect(instance.solutionsOf('try-attempt')).toEqual(['sol']);
+    const attempt = outline('try-attempt', 'quiz', {
+      description: 'Try.\n\nHIDDEN ANSWER KEY (g5.v11): …\n- item 1A: 12',
+    });
+    // Nothing settled yet: the attempt keeps its key.
+    expect(instance.rekeyAttempt(attempt)).toBeUndefined();
+    const sol = outline('sol');
+    const findings = instance.checkContent(sol, slide('الإجابة (1A): 13'));
+    expect(instance.settle(sol, slide('الإجابة (1A): 13'), findings).kind).toBe('regenerate');
+    // The attempt is generated once more without that key, and plans without it.
+    const rekeyed = instance.rekeyAttempt(attempt)!;
+    expect(rekeyed.description).toBe('Try.');
+    expect(instance.planOf('try-attempt')).toBeUndefined();
+    expect(settled.at(-1)).toMatchObject({
+      outlineId: 'try-attempt',
+      action: 'unverified',
+      items: [{ label: '1A', outcome: 'unverified' }],
+    });
+    expect(instance.rekeyAttempt(rekeyed)).toBeUndefined();
+  });
+
+  it('finding 6: a resumed run’s attempt is planned without a key its solution was settled without', () => {
+    const { instance } = guard({
+      'try-attempt': { role: 'attempt', items: [ITEM] },
+      sol: SOLUTION,
+    });
+    instance.restore([
+      { outlineId: 'sol', items: [{ contentUnitId: '6234', label: '1A', outcome: 'unverified' }] },
+    ]);
+    expect(instance.planOf('try-attempt')).toBeUndefined();
+    expect(instance.effectivePlans().has('try-attempt')).toBe(false);
+  });
+
+  it('names the exercises a settlement removed per solution slide', () => {
+    const { instance } = guard({ ex: { role: 'solution', items: [EX11, EX12], solves: 2 } });
+    instance.restore([
+      { outlineId: 'ex', items: [{ contentUnitId: '6249', label: '11', outcome: 'removed' }] },
+    ]);
+    expect([...instance.leftOut().entries()].map(([id, items]) => [id, items.length])).toEqual([
+      ['ex', 1],
+    ]);
   });
 });

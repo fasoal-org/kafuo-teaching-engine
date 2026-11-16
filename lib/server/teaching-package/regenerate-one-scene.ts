@@ -69,7 +69,10 @@ import {
   guardedSceneContent,
   type GuideAnswerGuard,
 } from '@/lib/server/teaching-package/guide-answer-guard';
-import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
+import {
+  injectGuideAnswers,
+  withoutHiddenAnswerKey,
+} from '@/lib/server/teaching-package/guide-answers';
 import {
   isLearnerFirstModel,
   isTeacherParityModel,
@@ -354,16 +357,40 @@ function codeOf(error: unknown): string | undefined {
 
 /**
  * g5.v11 (review finding 2): the guard over the package's outline, its run's
- * settlements restored — or null (no guide pinned, or this outline holds no keyed item).
+ * settlements restored, and the outline to generate with its guide blocks rebuilt for
+ * its current plan (re-review finding 2) — or null (no guide pinned). `guard` is null
+ * when this outline holds no keyed item. Re-review finding 3: the plans are made with
+ * THIS outline in the package's outline, so a moved lesson part's slide is planned with
+ * its new units, never the stored ones.
  */
-function guideGuardOf(input: RegenerateOneSceneInput, outlineId: string): GuideAnswerGuard | null {
+function guideGuardOf(
+  input: RegenerateOneSceneInput,
+  outline: SceneOutline,
+): { guard: GuideAnswerGuard | null; outline: SceneOutline } | null {
   if (!input.guideAnswers) return null;
-  const guard = guideAnswerGuardFor(
-    input.guideAnswers,
-    (input.outlineSnapshot?.outlines ?? []) as SceneOutline[],
-  );
-  return guard.planOf(outlineId) ? guard : null;
+  // A moved part's slide is planned with the units it will carry.
+  const planned = input.sourceContentUnitIds
+    ? { ...outline, sourceContentUnitIds: [...input.sourceContentUnitIds] }
+    : outline;
+  const stored = (input.outlineSnapshot?.outlines ?? []) as SceneOutline[];
+  const outlines = stored.some((entry) => entry.id === planned.id)
+    ? stored.map((entry) => (entry.id === planned.id ? planned : entry))
+    : [...stored, planned];
+  const guard = guideAnswerGuardFor(input.guideAnswers, outlines);
+  const [rebuilt] = injectGuideAnswers([planned], guard.effectivePlans(), guard.leftOut());
+  return {
+    guard: guard.planOf(outline.id) ? guard : null,
+    // Only the guide blocks change; the generated outline keeps its own fields.
+    outline:
+      rebuilt && rebuilt !== planned
+        ? { ...outline, description: rebuilt.description, keyPoints: rebuilt.keyPoints }
+        : outline,
+  };
 }
+
+/** Re-review finding 5c: a regenerated slide that still states a checked answer is not kept. */
+const GUIDE_LEAK_KEPT_AS_IT_WAS =
+  "the regenerated slide still states a checked answer before the learner's try; the slide was kept as it was";
 
 export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
@@ -407,7 +434,10 @@ export async function regenerateOneScene(
   const replanned = input.replannedOutline
     ? withSlideIdentity(input.replannedOutline, seeded, input.sourceContentUnitIds)
     : null;
-  const outline = replanned ?? seeded;
+  // g5.v11: the guard planned with THIS outline (a moved part's new units, re-review
+  // finding 3), and the outline's guide blocks rebuilt for its current plan.
+  const guided = guideGuardOf(input, replanned ?? seeded);
+  const outline = guided?.outline ?? replanned ?? seeded;
   const legacyInPlace =
     outline.slideType === undefined &&
     outline.contentRole === undefined &&
@@ -435,7 +465,7 @@ export async function regenerateOneScene(
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
   // g5.v11 (review finding 2): the regenerated slide is checked like the run's.
-  const guard = guideGuardOf(input, outline.id);
+  const guard = guided?.guard ?? null;
   let settledOutline = outline;
   const generateSlide = (fromOutline: SceneOutline, correctiveNote?: string) =>
     generateContent(fromOutline, input.aiCallFor(sceneContentStage('slide')), {
@@ -473,6 +503,15 @@ export async function regenerateOneScene(
         },
         { removal: false },
       );
+      // Re-review finding 5c: still stating a checked answer before the try → the slide
+      // stays as it was before this regeneration (nothing is written).
+      if (checked.leaks.length > 0) {
+        return failure(
+          input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+          GUIDE_LEAK_KEPT_AS_IT_WAS,
+          { failure: 'GUIDE_ANSWER_LEAK' },
+        );
+      }
       content = checked.content;
       settledOutline = checked.outline;
     }
@@ -642,7 +681,8 @@ async function slideActions(
     learnerFirst?: boolean;
     /**
      * g5.v11: a try-it slide's narration never states a checked answer — one more
-     * narration with a correction naming no value; still stating it, it is kept (D-19).
+     * narration with a correction naming no value; still stating it, nothing is written
+     * and the slide stays as it was (re-review finding 5c).
      */
     guard?: GuideAnswerGuard;
   },
@@ -713,7 +753,15 @@ async function slideActions(
         [directive, guard.correction(outline, leaks)].filter(Boolean).join('\n\n'),
       );
       const left = guard.checkNarration(outline, actions);
-      if (left.length > 0) guard.settleNarration(outline, left);
+      if (left.length > 0) {
+        guard.settleNarration(outline, left);
+        // Re-review finding 5c: the slide stays as it was before this regeneration.
+        throw new TeachingPackageError(
+          fallbackCode,
+          GUIDE_LEAK_KEPT_AS_IT_WAS.replace('regenerated slide', "regenerated slide's narration"),
+          { failure: 'GUIDE_ANSWER_LEAK' },
+        );
+      }
     }
   } catch (error) {
     assertRoute();
@@ -771,7 +819,7 @@ async function regenerateSlideNarration(
           Object.fromEntries(shown.map((entry) => [entry.id, entry.servingPath])),
         )
       : {};
-  const narrationGuard = guideGuardOf(input, outline.id);
+  const narrationGuard = guideGuardOf(input, outline)?.guard ?? null;
   const generated = await slideActions(
     input,
     outline,
@@ -818,7 +866,10 @@ async function regenerateQuizScene(
   const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
 
-  const outline: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
+  const seeded: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
+  // g5.v11: an attempt's hidden key rebuilt for its current plan (re-review finding 2).
+  const guided = guideGuardOf(input, seeded);
+  const outline = guided?.outline ?? seeded;
 
   const stage = input.stage;
   const agents = stage.generatedAgentConfigs;
@@ -827,7 +878,7 @@ async function regenerateQuizScene(
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
   // g5.v11 (review finding 2): an attempt's regenerated key is checked like the run's.
-  const guard = guideGuardOf(input, outline.id);
+  const guard = guided?.guard ?? null;
   let settledOutline = outline;
   const generateQuiz = (fromOutline: SceneOutline, correction?: string) =>
     generateContent(fromOutline, input.aiCallFor(sceneContentStage('quiz')), {

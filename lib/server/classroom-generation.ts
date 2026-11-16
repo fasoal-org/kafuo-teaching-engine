@@ -81,6 +81,7 @@ import {
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import {
   guardedSceneContent,
+  guideLeakIssue,
   type GuideAnswerGuard,
 } from '@/lib/server/teaching-package/guide-answer-guard';
 import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
@@ -2270,6 +2271,19 @@ export async function generateClassroom(
         retainedByOutline.set(scene.outlineId, scene);
       }
     }
+    // g5.v11 (re-review finding 6): an attempt and the solution slides it keys are one
+    // unit. A kept attempt whose solution slide is generated (and settled) again is
+    // generated again with it, so it never keeps asking a question that slide left out,
+    // nor keeps a key that slide was settled without. Never set on any other run.
+    if (input.guideAnswerGuard && resumeScenes) {
+      for (const outline of outlines) {
+        if (!retainedByOutline.has(outline.id)) continue;
+        const solutions = input.guideAnswerGuard.solutionsOf(outline.id);
+        if (solutions.some((id) => !retainedByOutline.has(id))) {
+          retainedByOutline.delete(outline.id);
+        }
+      }
+    }
     const retainedSceneIds = new Set<string>();
 
     // Pre-pass, before ANY content spend (the prefetch below starts calls at once):
@@ -2488,6 +2502,9 @@ export async function generateClassroom(
           );
           content = checked.content;
           if (checked.outline !== safeOutline) guideOutline = checked.outline;
+          // Re-review finding 5c: a slide still stating a checked answer before the
+          // learner's try is kept (D-19) and marked, so the reviewer's fix loop sees it.
+          if (checked.leaks.length > 0) sceneIssues.push(guideLeakIssue(checked.leaks));
         }
         return {
           bankQuiz,
@@ -2588,12 +2605,34 @@ export async function generateClassroom(
         // The content was started by the prefetch pool above (at most
         // `SCENE_CONTENT_CONCURRENCY` Scenes at once); the loop waits for THIS Scene's
         // result in order, while actions stay strictly serial for `previousSpeeches`.
-        const produced = await sceneContents[index];
+        let produced = await sceneContents[index];
         assertRouteAvailable();
         if (!produced) continue; // only when a route failure stopped the pool (thrown above)
+        const guideGuard = input.guideAnswerGuard;
+        if (produced.content && guideGuard) {
+          // An attempt comes BEFORE the solution slides of its items: their settlement (an
+          // exercise left out, a check item without its guide answer) is awaited first.
+          for (const solutionId of guideGuard.solutionsOf(safeOutline.id)) {
+            const solutionIndex = outlines.findIndex((planned) => planned.id === solutionId);
+            if (solutionIndex > index) {
+              await sceneContents[solutionIndex];
+              assertRouteAvailable();
+            }
+          }
+          // Re-review finding 6: a check item its solution slide now solves without the
+          // guide answer (D-19) loses its key here too — generated once more without it.
+          const rekeyed = guideGuard.rekeyAttempt(produced.guideOutline ?? safeOutline);
+          if (rekeyed) {
+            log.warn(
+              `Scene ${index + 1}/${outlines.length} keys an answer its solution slide no longer shows; regenerating it once without that key: ${safeOutline.title}`,
+            );
+            const again = await produceSceneContent(index, rekeyed);
+            assertRouteAvailable();
+            produced = { ...again, guideOutline: again.guideOutline ?? rekeyed };
+          }
+        }
         const { bankQuiz, contentFailure, sceneIssues } = produced;
         let content = produced.content;
-        const guideGuard = input.guideAnswerGuard;
         // g5.v11 (D-19): a settled outline (an exercise left out, an item without its
         // guide answer) replaces its plan entry, so the persisted plan, a later
         // regeneration and the reviewer read what the slide now does.
@@ -2603,16 +2642,6 @@ export async function generateClassroom(
           outlines = outlines.map((planned) => (planned.id === settled.id ? settled : planned));
         }
         if (content && guideGuard) {
-          // An exercise attempt comes BEFORE its solution slide: that slide's settlement
-          // (an exercise left out) is awaited first, so its question leaves this attempt.
-          const solutionId = guideGuard.solutionOf(safeOutline.id);
-          const solutionIndex = solutionId
-            ? outlines.findIndex((planned) => planned.id === solutionId)
-            : -1;
-          if (solutionIndex > index) {
-            await sceneContents[solutionIndex];
-            assertRouteAvailable();
-          }
           const pruned = guideGuard.pruneAttempt(safeOutline, content);
           if ('drop' in pruned) {
             sceneRefusalScope = null;
@@ -2790,7 +2819,7 @@ export async function generateClassroom(
         // g5.v11 (plan §8.5): a try-it slide's or an attempt's narration never states a
         // checked answer. One more narration with a correction naming no value; still
         // stating it (D-19) → an attempt gets the model-free narration, a try-it slide
-        // keeps its own (logged). Nothing leaves the lesson for a narration.
+        // keeps its own (marked for the reviewer). Nothing leaves the lesson for a narration.
         if (actionsAiCall && guideGuard?.planOf(safeOutline.id)) {
           const leaks = guideGuard.checkNarration(safeOutline, actions);
           if (leaks.length > 0) {
@@ -2802,10 +2831,16 @@ export async function generateClassroom(
             sceneIssues.length = sceneIssuesBeforeActions;
             actions = await produceActions();
             const left = guideGuard.checkNarration(safeOutline, actions);
-            if (left.length > 0 && guideGuard.settleNarration(safeOutline, left) === 'model_free') {
-              sceneIssues.length = sceneIssuesBeforeActions;
-              actionsFellBack = false;
-              actions = bankQuizActions(input.language, input.subjectCode);
+            if (left.length > 0) {
+              if (guideGuard.settleNarration(safeOutline, left) === 'model_free') {
+                sceneIssues.length = sceneIssuesBeforeActions;
+                actionsFellBack = false;
+                actions = bankQuizActions(input.language, input.subjectCode);
+              } else {
+                // Re-review finding 5c: a slide's narration still stating it is kept and
+                // marked, so the reviewer's fix loop sees that slide.
+                sceneIssues.push(guideLeakIssue(left));
+              }
             }
           }
         }

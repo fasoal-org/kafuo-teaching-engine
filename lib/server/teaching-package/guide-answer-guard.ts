@@ -22,10 +22,19 @@
  *     item on the solution slide (which is generated once more without it); when that
  *     cannot be done (the slide would solve nothing, or its attempt question cannot be
  *     told), the slide is generated without the guide answer of that exercise instead;
- *   - an attempt question at fault is removed; an attempt left with no question is the
- *     ONLY outline that ever leaves (it is practice, never a coverage item);
+ *   - an attempt question TIED to the item at fault is removed (re-review finding 5a:
+ *     never a question that only lists the value as a wrong option); an attempt left
+ *     with no question is the ONLY outline that ever leaves (it is practice, never a
+ *     coverage item);
+ *   - a check item left without its guide answer on its solution slide loses its key in
+ *     its attempt too (re-review finding 6), so the key and the solution never disagree;
  *   - a narration that still states the answer: an attempt gets the model-free
- *     narration; a try-it slide keeps its narration, logged.
+ *     narration; a try-it slide keeps its narration;
+ *   - a try-it slide (or a solution slide's check before its try) that still states the
+ *     answer is kept and marked for the reviewer (re-review finding 5c,
+ *     {@link guideLeakIssue}); a single-slide regeneration keeps the slide as it was.
+ * - Re-review finding 4: a written number that cannot be compared (it reads two ways)
+ *   is never a mismatch.
  */
 import {
   announcesGuideAnswer,
@@ -39,6 +48,7 @@ import {
   formatGuideAnswer,
   guideItemKey,
   guideItemQuestionText,
+  keyedInAttempt,
   SOLUTION_KEY_POINT_PREFIX,
   withGuideItems,
   type GuideOutlinePlan,
@@ -105,6 +115,8 @@ export interface GuideAnswerGuard {
   planOf(outlineId: string): GuideOutlinePlan | undefined;
   /** Every outline's plan, settled items out (what a resumed run injects). */
   effectivePlans(): Map<string, GuideOutlinePlan>;
+  /** Per solution slide, the exercises a settlement removed (its «left out» note). */
+  leftOut(): Map<string, KeyedGuideItem[]>;
   /**
    * Deterministic clean-up of the content that is kept, AFTER the check (which skips
    * these lines): our own «الإجابة الصحيحة المعتمدة» wording, if a writer copied it,
@@ -136,13 +148,40 @@ export interface GuideAnswerGuard {
     outline: SceneOutline,
     findings: readonly GuideAnswerFinding[],
   ): 'keep' | 'model_free';
-  /** An exercise attempt's solution slide (its question removals come from that slide). */
-  solutionOf(attemptId: string): string | undefined;
+  /**
+   * The solution slides an attempt's settlement comes from: an exercise attempt's own
+   * slide (its question removals), and the slides that solve a check attempt's items
+   * (re-review finding 6: an item left without its guide answer there). Empty for any
+   * other outline.
+   */
+  solutionsOf(attemptId: string): string[];
+  /**
+   * Re-review finding 6: once {@link solutionsOf} settled, the attempt outline to
+   * generate once more when it still keys a check item its solution slide now solves
+   * without the guide answer (that key out); undefined when nothing changed.
+   */
+  rekeyAttempt(outline: SceneOutline): SceneOutline | undefined;
   /**
    * The attempt with its faulty questions and the questions of removed exercises taken
    * out; `drop` when no question is left (the attempt alone leaves the lesson).
    */
   pruneAttempt(outline: SceneOutline, content: unknown): { content: unknown } | { drop: true };
+}
+
+/**
+ * Re-review finding 5c: the scene issue of a slide kept while it still states a checked
+ * answer before the learner's try, so the package reviewer's fix loop sees it. Names
+ * the items, never their answers.
+ */
+export function guideLeakIssue(findings: readonly GuideAnswerFinding[]): {
+  code: 'GUIDE_ANSWER_LEAK';
+  message: string;
+} {
+  const items = [...new Set(findings.map((finding) => finding.item.display))].join(', ');
+  return {
+    code: 'GUIDE_ANSWER_LEAK',
+    message: `this slide may state the answer of item ${items} before the learner's try; regenerate it so it states the task and its givens only`,
+  };
 }
 
 /** Arabic marks and tatweel: U+0610–U+061A, U+064B–U+065F, U+0670, U+0640. */
@@ -295,15 +334,30 @@ export function createGuideAnswerGuard(options: {
     return text;
   };
 
+  /** Re-review finding 6: a check item a solution slide now solves without its guide answer. */
+  const unverifiedOnSolution = (key: string): boolean => {
+    for (const [outlineId, keys] of unverified) {
+      if (!keys.has(key)) continue;
+      const plan = plans.get(outlineId);
+      if (plan?.role === 'solution' && plan.items.some((item) => guideItemKey(item) === key)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const effective = (outlineId: string): GuideOutlinePlan | undefined => {
     const plan = plans.get(outlineId);
     if (!plan) return undefined;
     const skip = plan.role === 'try' ? undefined : unverified.get(outlineId);
     const items = plan.items.filter((item) => {
       const key = guideItemKey(item);
-      return !removed.has(key) && !skip?.has(key);
+      if (removed.has(key) || skip?.has(key)) return false;
+      // Its attempt never keys what its solution slide no longer reaches.
+      return !(plan.role === 'attempt' && item.element === 'try_it' && unverifiedOnSolution(key));
     });
-    if (items.length === 0) return undefined;
+    // A solution slide whose items all settled still guards its checks before their try.
+    if (items.length === 0 && (plan.beforeTry?.length ?? 0) === 0) return undefined;
     return items.length === plan.items.length ? plan : { ...plan, items };
   };
 
@@ -344,8 +398,10 @@ export function createGuideAnswerGuard(options: {
     items
       .filter(
         (item) =>
-          leaksGuideAnswer(item.answer, text, bookText(item)) ||
-          announcesGuideAnswer(item.answer, text),
+          // Re-review finding 4: a narration's numbers said in words are read too.
+          leaksGuideAnswer(item.answer, text, bookText(item), {
+            spoken: where === 'narration',
+          }) || announcesGuideAnswer(item.answer, text),
       )
       .map((item) => ({ code: 'GUIDE_ANSWER_LEAK', item, where, detail: 'the answer is stated' }));
 
@@ -366,10 +422,16 @@ export function createGuideAnswerGuard(options: {
       if (candidates.length === 0) {
         return [{ code: 'GUIDE_ANSWER_MISSING', item, where: 'canvas', detail: 'no final line' }];
       }
-      if (candidates.some((line) => compareGuideAnswer(item.answer, line.value).match)) return [];
-      const reason = compareGuideAnswer(item.answer, candidates[candidates.length - 1]!.value);
+      const verdicts = candidates.map((line) => compareGuideAnswer(item.answer, line.value));
+      // Re-review finding 4: a line that cannot be compared is never a mismatch.
+      if (verdicts.some((verdict) => verdict.match || verdict.undecided)) return [];
       return [
-        { code: 'GUIDE_ANSWER_MISMATCH', item, where: 'canvas', detail: reason.reason ?? '' },
+        {
+          code: 'GUIDE_ANSWER_MISMATCH',
+          item,
+          where: 'canvas',
+          detail: verdicts[verdicts.length - 1]!.reason ?? '',
+        },
       ];
     });
   };
@@ -402,27 +464,31 @@ export function createGuideAnswerGuard(options: {
         }
         continue;
       }
-      const offering: number[] = [];
+      let offered = false;
       let keyed = false;
       questions.forEach((question, index) => {
         if (own !== null && index !== own) return;
-        const right = (question.options ?? []).filter(
-          (option) =>
-            typeof option.label === 'string' && compareGuideAnswer(item.answer, option.label).match,
-        );
+        // Re-review finding 4: an option that cannot be compared may be the right one.
+        const right = (question.options ?? []).filter((option) => {
+          if (typeof option.label !== 'string') return false;
+          const verdict = compareGuideAnswer(item.answer, option.label);
+          return verdict.match || verdict.undecided === true;
+        });
         if (right.length === 0) return;
-        offering.push(index);
+        offered = true;
         const values = keyedValues(question);
         if (right.some((option) => values.includes(String(option.value)))) keyed = true;
       });
       if (!keyed) {
-        const at = own !== null ? [own] : offering.length > 0 ? offering : null;
+        // Re-review finding 5a: only the item's OWN question is at fault. A question that
+        // merely lists the value (another item's, as a wrong option) is never removed;
+        // when the item's question cannot be told, none is (D-19: no guide key instead).
         findings.push({
           code: 'GUIDE_ANSWER_MISMATCH',
           item,
           where: 'quiz',
-          questions: at,
-          detail: offering.length > 0 ? 'another option is keyed' : 'the answer is not an option',
+          questions: own !== null ? [own] : null,
+          detail: offered ? 'another option is keyed' : 'the answer is not an option',
         });
       }
     }
@@ -481,6 +547,15 @@ export function createGuideAnswerGuard(options: {
       }
       return result;
     },
+    leftOut() {
+      const result = new Map<string, KeyedGuideItem[]>();
+      for (const [id, plan] of plans) {
+        if (plan.role !== 'solution') continue;
+        const items = plan.items.filter((item) => removed.has(guideItemKey(item)));
+        if (items.length > 0) result.set(id, items);
+      }
+      return result;
+    },
     cleanWording(outline, content) {
       if (plans.get(outline.id)?.role !== 'solution') return content;
       const elements = elementsOf(content);
@@ -515,13 +590,21 @@ export function createGuideAnswerGuard(options: {
     checkContent(outline, content) {
       const plan = effective(outline.id);
       if (!plan || !content) return [];
-      if (plan.role === 'solution') return solutionFindings(plan, content);
+      if (plan.role === 'solution') {
+        // Re-review finding 1: its checks tried only later are leak-checked as on a try.
+        return [
+          ...solutionFindings(plan, content),
+          ...leaks(plan.beforeTry ?? [], canvasLines(content).join('\n'), 'canvas'),
+        ];
+      }
       if (plan.role === 'attempt') return attemptFindings(plan, content);
       return leaks(plan.items, canvasLines(content).join('\n'), 'canvas');
     },
     checkNarration(outline, actions) {
       const plan = effective(outline.id);
-      if (!plan || plan.role === 'solution') return [];
+      if (!plan) return [];
+      if (plan.role === 'solution')
+        return leaks(plan.beforeTry ?? [], spoken(actions), 'narration');
       return leaks(plan.items, spoken(actions), 'narration');
     },
     correction(outline, findings) {
@@ -556,21 +639,29 @@ export function createGuideAnswerGuard(options: {
       }
       return lines.join('\n');
     },
-    settle(outline, content, findings, settleOptions = {}) {
+    settle(outline, content, allFindings, settleOptions = {}) {
       const original = plans.get(outline.id);
-      if (!original || findings.length === 0) return { kind: 'keep', content };
+      if (!original || allFindings.length === 0) return { kind: 'keep', content };
       const removal = settleOptions.removal !== false;
-      const failing = uniqueItems(findings);
-      if (original.role === 'try') {
-        // A try-it slide never had the answer: its retry is the plain path. Kept, logged.
-        report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
-        return { kind: 'keep', content };
-      }
-      const keepOf = () =>
-        original.items.filter((item) => {
-          const key = guideItemKey(item);
-          return !removed.has(key) && !unverified.get(outline.id)?.has(key);
+      // A try-it slide, and a solution slide's checks tried only later (re-review
+      // finding 1), never had the answer: their retry was the plain path. Kept and
+      // logged; the caller marks the slide for the reviewer (`guideLeakIssue`).
+      const beforeTry = new Set((original.beforeTry ?? []).map(guideItemKey));
+      const tryFindings =
+        original.role === 'try'
+          ? allFindings
+          : allFindings.filter((finding) => beforeTry.has(guideItemKey(finding.item)));
+      if (tryFindings.length > 0) {
+        report(outline, 'unverified', tryFindings, {
+          items: outcomes(uniqueItems(tryFindings), 'unverified'),
         });
+      }
+      const findings = allFindings.filter((finding) => !tryFindings.includes(finding));
+      if (findings.length === 0) return { kind: 'keep', content };
+      const failing = uniqueItems(findings);
+      // What the outline still keys (re-review finding 6: an attempt's check items its
+      // solution slide no longer reaches are out too).
+      const keepOf = () => effective(outline.id)?.items ?? [];
       if (original.role === 'attempt') {
         const removable =
           removal &&
@@ -626,7 +717,14 @@ export function createGuideAnswerGuard(options: {
       const original = plans.get(outline.id);
       if (!original || findings.length === 0) return;
       const failing = uniqueItems(findings);
-      if (original.role !== 'try') unverify(outline.id, failing);
+      // Only an item the outline keys loses its key (never a check before its try).
+      const keyed = new Set(original.items.map(guideItemKey));
+      if (original.role !== 'try') {
+        unverify(
+          outline.id,
+          failing.filter((item) => keyed.has(guideItemKey(item))),
+        );
+      }
       report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
     },
     settleNarration(outline, findings) {
@@ -640,11 +738,32 @@ export function createGuideAnswerGuard(options: {
       });
       return 'keep';
     },
-    solutionOf(attemptId) {
-      if (plans.get(attemptId)?.role !== 'attempt') return undefined;
-      if (!attemptId.endsWith(ATTEMPT_OUTLINE_SUFFIX)) return undefined;
+    solutionsOf(attemptId) {
+      const plan = plans.get(attemptId);
+      if (plan?.role !== 'attempt' || !attemptId.endsWith(ATTEMPT_OUTLINE_SUFFIX)) return [];
       const baseId = attemptId.slice(0, -ATTEMPT_OUTLINE_SUFFIX.length);
-      return plans.get(baseId)?.role === 'solution' ? baseId : undefined;
+      if (plans.get(baseId)?.role === 'solution') return [baseId];
+      // A check attempt: the solution slides of its items.
+      const keys = new Set(plan.items.map(guideItemKey));
+      return [...plans.entries()]
+        .filter(
+          ([id, other]) =>
+            id !== attemptId &&
+            other.role === 'solution' &&
+            other.items.some((item) => keys.has(guideItemKey(item))),
+        )
+        .map(([id]) => id);
+    },
+    rekeyAttempt(outline) {
+      const original = plans.get(outline.id);
+      if (original?.role !== 'attempt') return undefined;
+      const stale = keyedInAttempt(outline, original.items).filter(
+        (item) => item.element === 'try_it' && unverifiedOnSolution(guideItemKey(item)),
+      );
+      if (stale.length === 0) return undefined;
+      unverify(outline.id, stale);
+      report(outline, 'unverified', [], { items: outcomes(stale, 'unverified') });
+      return withGuideItems(outline, original, effective(outline.id)?.items ?? []);
     },
     pruneAttempt(outline, content) {
       const original = plans.get(outline.id);
@@ -677,7 +796,10 @@ export function createGuideAnswerGuard(options: {
 /**
  * A scene's content checked by the guard, with its one corrected regeneration and the
  * D-19 settlement (at most two more generations). `generate(outline, correction)` is
- * the caller's content call; it returns null when no content came back.
+ * the caller's content call; it returns null when no content came back. `leaks`
+ * (re-review finding 5c): what a kept SLIDE still states before the learner's try —
+ * the pipeline marks the scene for the reviewer, a single-slide regeneration keeps the
+ * slide as it was.
  */
 export async function guardedSceneContent<T>(
   guard: GuideAnswerGuard,
@@ -685,20 +807,37 @@ export async function guardedSceneContent<T>(
   first: T,
   generate: (outline: SceneOutline, correction?: string) => Promise<T | null>,
   options: { removal?: boolean; onFinding?: (findings: GuideAnswerFinding[]) => void } = {},
-): Promise<{ content: T; outline: SceneOutline }> {
+): Promise<{ content: T; outline: SceneOutline; leaks: GuideAnswerFinding[] }> {
+  const slideLeaks = (findings: readonly GuideAnswerFinding[]) =>
+    outline.type === 'slide'
+      ? findings.filter((finding) => finding.code === 'GUIDE_ANSWER_LEAK')
+      : [];
   const findings = guard.checkContent(outline, first);
-  if (findings.length === 0) return { content: guard.cleanWording(outline, first), outline };
+  if (findings.length === 0) {
+    return { content: guard.cleanWording(outline, first), outline, leaks: [] };
+  }
   options.onFinding?.(findings);
   const retry = await generate(outline, guard.correction(outline, findings));
   const left = retry ? guard.checkContent(outline, retry) : findings;
-  if (retry && left.length === 0) return { content: guard.cleanWording(outline, retry), outline };
+  if (retry && left.length === 0) {
+    return { content: guard.cleanWording(outline, retry), outline, leaks: [] };
+  }
   const decision = guard.settle(outline, retry ?? first, left, {
     ...(options.removal === false ? { removal: false } : {}),
   });
   if (decision.kind === 'keep') {
-    return { content: guard.cleanWording(outline, decision.content as T), outline };
+    return {
+      content: guard.cleanWording(outline, decision.content as T),
+      outline,
+      leaks: slideLeaks(left),
+    };
   }
   const settled = (await generate(decision.outline)) ?? retry ?? first;
-  guard.accept(decision.outline, guard.checkContent(decision.outline, settled));
-  return { content: guard.cleanWording(decision.outline, settled), outline: decision.outline };
+  const final = guard.checkContent(decision.outline, settled);
+  guard.accept(decision.outline, final);
+  return {
+    content: guard.cleanWording(decision.outline, settled),
+    outline: decision.outline,
+    leaks: slideLeaks(final),
+  };
 }

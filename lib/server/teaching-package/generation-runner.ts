@@ -108,6 +108,7 @@ import {
   guideOutlinePlans,
   injectGuideAnswers,
   resolveTeacherGuide,
+  withoutGuideAnswers,
 } from '@/lib/server/teaching-package/guide-answers';
 import {
   createGuideAnswerGuard,
@@ -953,7 +954,11 @@ async function runKafuoAttempt(
                   const slideQuestions = coverageBook?.teacherParity
                     ? selectExercises(coverageBook, coverageBook.unitFacts)?.slideQuestions
                     : undefined;
-                  const withAttempts = insertAttemptQuizzes(final, kafuo.bookStructure, {
+                  // g5.v11 (re-review finding 2): a resumed outline's guide blocks are
+                  // taken out first, so an attempt never copies a key its slide carried
+                  // under an earlier role; they are rebuilt below for the current roles.
+                  const planned = guideAnswers && guideGuard ? withoutGuideAnswers(final) : final;
+                  const withAttempts = insertAttemptQuizzes(planned, kafuo.bookStructure, {
                     facts: bookFacts,
                     // An exercise attempt asks the book's own question lines (no answers).
                     unitTexts: new Map(
@@ -967,8 +972,9 @@ async function runKafuoAttempt(
                     ...(droppedGuideIds.size > 0 ? { skipAttemptIds: droppedGuideIds } : {}),
                   });
                   // g5.v11 (plan §8): the approved answers go to the solution slides and
-                  // the attempts' hidden keys, never to a try-it slide. Idempotent; a
-                  // resumed run's settled items (D-19) stay without them.
+                  // the attempts' hidden keys, never to a try-it slide. Rebuilt on every
+                  // outline from the current plans (re-review finding 2); a resumed run's
+                  // settled items (D-19) stay without them, its removed ones left out.
                   if (!guideAnswers || !kafuo.bookStructure || !guideGuard) return withAttempts;
                   const plans = guideOutlinePlans(withAttempts, kafuo.bookStructure, guideAnswers, {
                     ...(slideQuestions ? { slideQuestions } : {}),
@@ -976,7 +982,11 @@ async function runKafuoAttempt(
                     ...(guideUnitTexts ? { unitTexts: guideUnitTexts } : {}),
                   });
                   guideGuard.usePlans(plans);
-                  return injectGuideAnswers(withAttempts, guideGuard.effectivePlans());
+                  return injectGuideAnswers(
+                    withAttempts,
+                    guideGuard.effectivePlans(),
+                    guideGuard.leftOut(),
+                  );
                 },
               }
             : {}),

@@ -32,7 +32,11 @@ import {
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import { validateAppScene } from '@/lib/document-store/validators';
 import { omitUndefinedObjectMembers } from '@/lib/persistence/plain-json';
-import { actionContext, filterKnownActions } from '@/lib/server/agent-runtime/generation-tools';
+import {
+  actionContext,
+  filterKnownActions,
+  outlineFromScene,
+} from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
 import {
   generateRegisterCompliantActions,
@@ -132,6 +136,26 @@ function failure(
   return { ok: false, code, message, ...(details === undefined ? {} : { details }) };
 }
 
+/**
+ * g5.v11: the lesson's outlines in order — each live Scene as its outline (its stored
+ * classification and units), the inserted outline at its position (`order`: the Scenes
+ * from that order on come after it).
+ */
+function lessonOutlinesWith(scenes: readonly AppScene[], outline: SceneOutline): SceneOutline[] {
+  const ordered = [...scenes].sort((a, b) => a.order - b.order);
+  const asOutline = (scene: AppScene): SceneOutline => ({
+    ...outlineFromScene(scene as Scene, undefined),
+    ...(scene.sourceContentUnitIds
+      ? { sourceContentUnitIds: [...scene.sourceContentUnitIds] }
+      : {}),
+  });
+  return [
+    ...ordered.filter((scene) => scene.order < outline.order).map(asOutline),
+    outline,
+    ...ordered.filter((scene) => scene.order >= outline.order).map(asOutline),
+  ];
+}
+
 function codeOf(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : undefined;
@@ -180,7 +204,11 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
   // g5.v11 (review finding 2): an inserted try-it slide is leak-checked like the run's.
   // An inserted solution slide gets no guide answer (the plain g5.v10 path), so it has
   // nothing to compare.
-  const guideGuard = input.guideAnswers ? guideAnswerGuardFor(input.guideAnswers, [outline]) : null;
+  // Re-review finding 1: planned among the lesson's slides in order, so a solution slide
+  // inserted after its check's try is told from one placed before it.
+  const guideGuard = input.guideAnswers
+    ? guideAnswerGuardFor(input.guideAnswers, lessonOutlinesWith(input.scenes, outline))
+    : null;
   const leakGuard = guideGuard?.planOf(outline.id)?.role === 'try' ? guideGuard : null;
   const generateSlide = (correctiveNote?: string) =>
     generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {

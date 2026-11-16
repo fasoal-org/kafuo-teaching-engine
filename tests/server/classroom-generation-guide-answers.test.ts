@@ -362,4 +362,210 @@ describe('generateClassroom — g5.v11 approved-answer check', () => {
     )!;
     expect(persistedEx.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
   });
+
+  const quizPrompts = () =>
+    mocks.callLLM.mock.calls
+      .map((call) => {
+        const request = call[0] as { messages: Array<{ role: string; content: string }> };
+        return {
+          system: request.messages.find((m) => m.role === 'system')?.content ?? '',
+          user: request.messages.find((m) => m.role === 'user')?.content ?? '',
+        };
+      })
+      .filter((prompt) => /^# Quiz Content Generator/m.test(prompt.system))
+      .map((prompt) => prompt.user);
+
+  it('re-review finding 6: a check attempt loses the key its solution slide was settled without', async () => {
+    // try → its attempt (keyed) → the solution, which stays wrong and loses its guide answer.
+    const lesson = [
+      slideOutline('open', 1, 'Opening'),
+      slideOutline('try', 2, 'Try slide'),
+      {
+        ...outlines[2]!,
+        id: 'try-attempt',
+        order: 3,
+        description: 'Try it.\n\nHIDDEN ANSWER KEY (g5.v11): the answers\n- item 1A: 12',
+      },
+      slideOutline('sol', 4, 'Solution'),
+    ];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: lesson },
+    });
+    const calls = routeModel({ stubborn: true });
+    const result = await run({
+      ...baseInput,
+      guideAnswerGuard: guard({
+        try: { role: 'try', items: [ITEM] },
+        'try-attempt': { role: 'attempt', items: [ITEM] },
+        sol: { role: 'solution', items: [ITEM], solves: 1 },
+      }),
+    });
+    // The solution: first, corrected, then the plain path. The attempt: once with its
+    // key, then once more without it, after the solution settled.
+    expect(calls).toEqual({ solution: 3, quiz: 2 });
+    const prompts = quizPrompts();
+    expect(prompts[0]).toContain('HIDDEN ANSWER KEY');
+    expect(prompts[1]).not.toContain('HIDDEN ANSWER KEY');
+    expect(result.scenes.map((scene) => scene.outlineId)).toEqual([
+      'open',
+      'try',
+      'try-attempt',
+      'sol',
+    ]);
+    const attempt = (persisted.outlines as Array<{ id: string; description?: string }>).find(
+      (outline) => outline.id === 'try-attempt',
+    )!;
+    expect(attempt.description).not.toContain('HIDDEN ANSWER KEY');
+  });
+
+  it('re-review finding 5c: a try-it slide that still states the answer is kept and marked', async () => {
+    const lesson = [slideOutline('open', 1, 'Opening'), slideOutline('try', 2, 'Leaky try')];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: lesson },
+    });
+    let leaky = 0;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        const user = request.messages.find((m) => m.role === 'user')?.content ?? '';
+        if (/Action Generator/.test(system)) return { text: ACTIONS };
+        if (user.includes('Leaky try')) {
+          leaky += 1;
+          return { text: slideContent('الحد التالي هو 12') };
+        }
+        return { text: slideContent('Body') };
+      },
+    );
+    const result = await run({
+      ...baseInput,
+      guideAnswerGuard: guard({ try: { role: 'try', items: [ITEM] } }),
+    });
+    expect(leaky).toBe(2);
+    const tryScene = result.scenes.find((scene) => scene.outlineId === 'try')!;
+    expect(tryScene.generationIssues?.map((issue) => issue.code)).toContain('GUIDE_ANSWER_LEAK');
+    expect(JSON.stringify(tryScene.generationIssues)).not.toMatch(/\b12\b/);
+  });
+
+  it('re-review finding 6: a resumed attempt before a solution settled again never keeps a removed question', async () => {
+    const EX11: KeyedGuideItem = {
+      contentUnitId: '6249',
+      label: '11',
+      element: 'exercise',
+      number: 11,
+      letter: null,
+      display: 'س11',
+      answer: { type: 'number', value: 32 },
+    };
+    const EX12: KeyedGuideItem = {
+      ...EX11,
+      label: '12',
+      number: 12,
+      display: 'س12',
+      answer: { type: 'number', value: 71.9 },
+    };
+    const plans: Record<string, GuideOutlinePlan> = {
+      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX11, EX12],
+        questionOf: { '6249|11': 0, '6249|12': 1 },
+        questionCount: 2,
+      },
+    };
+    const lesson = [
+      slideOutline('open', 1, 'Opening'),
+      {
+        ...outlines[2]!,
+        id: 'ex-attempt',
+        order: 2,
+        quizConfig: {
+          questionCount: 2,
+          difficulty: 'easy' as const,
+          questionTypes: ['single' as const],
+        },
+      },
+      slideOutline('ex', 3, 'Exercise'),
+    ];
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: lesson },
+    });
+    let exerciseLine = 'الإجابة (س11): 32</p><p>الإجابة (س12): 71.9';
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        const user = request.messages.find((m) => m.role === 'user')?.content ?? '';
+        if (/Action Generator/.test(system)) return { text: ACTIONS };
+        if (/^# Quiz Content Generator/m.test(system)) {
+          return {
+            text: JSON.stringify([
+              {
+                id: 'q1',
+                type: 'single',
+                question: 'أسعار: 2، 4، 8، 16. ما التالي؟',
+                options: [
+                  { value: 'A', label: '24' },
+                  { value: 'B', label: '32' },
+                ],
+                answer: ['B'],
+              },
+              {
+                id: 'q2',
+                type: 'single',
+                question: 'إنتاج مصنع؟',
+                options: [
+                  { value: 'A', label: '71.9' },
+                  { value: 'B', label: '51.8' },
+                ],
+                answer: ['A'],
+              },
+            ]),
+          };
+        }
+        if (user.includes('Exercise')) return { text: slideContent(exerciseLine) };
+        return { text: slideContent('Body') };
+      },
+    );
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const first = await generateClassroom(
+      { ...baseInput, guideAnswerGuard: guard(plans) } as never,
+      { baseUrl: '', persistence: sink() },
+    );
+    const asked = (scenes: typeof first.scenes) =>
+      (
+        scenes.find((scene) => scene.outlineId === 'ex-attempt')!.content as {
+          questions: unknown[];
+        }
+      ).questions.length;
+    expect(asked(first.scenes)).toBe(2);
+
+    // The resumed run generates the solution slide again; it now stays wrong on س11.
+    exerciseLine = 'الإجابة (س11): 24</p><p>الإجابة (س12): 71.9';
+    const resumed = await generateClassroom(
+      { ...baseInput, guideAnswerGuard: guard(plans) } as never,
+      {
+        baseUrl: '',
+        persistence: sink(),
+        correction: {
+          resumeOutlines: {
+            outlines: persisted.outlines as never,
+            courseTitle: null,
+            languageDirective: 'Arabic.',
+          },
+          resumeScenes: {
+            stageId: first.id,
+            stage: first.stage,
+            scenes: first.scenes,
+            regenerateOutlineIds: ['ex'],
+            sourceServingMapping: {},
+            sourceManifest: [],
+          },
+        },
+      },
+    );
+    expect(resumed.scenes.map((scene) => scene.outlineId)).toEqual(['open', 'ex-attempt', 'ex']);
+    expect(asked(resumed.scenes)).toBe(1);
+  });
 });
