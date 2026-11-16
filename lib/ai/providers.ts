@@ -471,6 +471,26 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
           },
         },
       },
+      {
+        // Owner, 16 Nov 2026. Anthropic's model table: 1M context, 128K output.
+        // Thinking is always adaptive: the API rejects `disabled` with a 400, so
+        // effort is the only control, as on Opus 5.5. Listed last so the
+        // provider's default and the picker order stay as they were.
+        id: 'claude-sonnet-5-5',
+        name: 'Claude Sonnet 5.5',
+        contextWindow: 1000000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: false,
+            defaultEnabled: true,
+          },
+        },
+      },
     ],
   },
 
@@ -662,6 +682,42 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
       {
         id: 'gemini-2.5-pro',
         name: 'Gemini 2.5 Pro',
+        contextWindow: 1048576,
+        outputWindow: 65536,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
+      {
+        // Owner, 16 Nov 2026. Google's Gemini API model page, 16 Nov 2026: 1M
+        // context; the 64K output limit is the page's standard one. Thinking is
+        // always on (levels low, medium, high; no `minimal`). Both Gemini 4
+        // models are listed last so the provider's default stays as it was.
+        id: 'gemini-4-carbon',
+        name: 'Gemini 4 Carbon',
+        contextWindow: 1048576,
+        outputWindow: 65536,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: false,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
+      {
+        id: 'gemini-4-hydrogen',
+        name: 'Gemini 4 Hydrogen',
         contextWindow: 1048576,
         outputWindow: 65536,
         capabilities: {

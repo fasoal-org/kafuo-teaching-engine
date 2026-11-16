@@ -50,6 +50,28 @@ describe('rate card', () => {
     ]);
   });
 
+  it('prices Sonnet 5.5 and Gemini 4 Carbon/Hydrogen (owner, 16 Nov 2026)', () => {
+    expect(BASE_RATE_CARD.entries['anthropic:claude-sonnet-5-5']).toEqual({
+      inputPerM: 2,
+      cachedInputPerM: 0.1,
+      cacheWritePerM: 2.5,
+      outputPerM: 10,
+    });
+    // Carbon at its 1 Dec 2026 rate: an upper bound through 30 Nov, never a discount.
+    expect(BASE_RATE_CARD.entries['google:gemini-4-carbon']).toEqual({
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: null,
+      outputPerM: 20,
+    });
+    expect(BASE_RATE_CARD.entries['google:gemini-4-hydrogen']).toEqual({
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    });
+  });
+
   it('prices both AI reviewer models (ai-reviewer-layer plan §4.9, verified 10 Nov 2026)', () => {
     expect(BASE_RATE_CARD.entries['anthropic:claude-opus-5-5']).toEqual({
       inputPerM: 4,

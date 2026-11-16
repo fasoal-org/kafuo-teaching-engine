@@ -28,9 +28,19 @@
  *  - gpt-6-sol (the AI reviewer's fallback): OpenAI model page, 10 Nov 2026:
  *    2 input, 0.20 cached input, 2.50 cache write, 10 output per 1M tokens. A
  *    request over 272K input tokens is billed at 2x input and cache, 1.5x output.
+ *  - claude-sonnet-5-5 (owner, 16 Nov 2026): Anthropic's model table: 2 input,
+ *    0.10 cache hit, 10 output per 1M tokens; cache write 2.50 (5 minutes, 1.25x
+ *    input, as for Opus 5.5); the full 1M window at one rate.
+ *  - gemini-4-carbon (owner, 16 Nov 2026): Google's pricing page, 16 Nov 2026:
+ *    2 input / 0.10 cached / 10 output through 30 Nov 2026, then 4 / 0.20 / 20
+ *    from 1 Dec. Priced at the 1 Dec rate: an explicit upper bound, never a
+ *    silent discount, and no re-pricing on 1 Dec. Implicit caching only, so no
+ *    cache write charge.
+ *  - gemini-4-hydrogen (owner, 16 Nov 2026): the same page: 1.50 input, 0.075
+ *    cached, 7.50 output per 1M tokens; implicit caching only, no write charge.
  *
- * The reviewer entries are additive: no existing model is re-priced, so the
- * version string is unchanged.
+ * The reviewer and new-model entries are additive: no existing model is
+ * re-priced, so the version string is unchanged.
  */
 
 export const RATE_CARD_VERSION = 'rc-2026-09-23';
@@ -133,6 +143,24 @@ export const BASE_RATE_CARD: RateCard = Object.freeze({
     'openai:gpt-6-sol': {
       ...SOL_TIERS[0]!,
       tiers: SOL_TIERS,
+    },
+    'anthropic:claude-sonnet-5-5': {
+      inputPerM: 2,
+      cachedInputPerM: 0.1,
+      cacheWritePerM: 2.5,
+      outputPerM: 10,
+    },
+    'google:gemini-4-carbon': {
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: null,
+      outputPerM: 20,
+    },
+    'google:gemini-4-hydrogen': {
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
     },
   }),
 });

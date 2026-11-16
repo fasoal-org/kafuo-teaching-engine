@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getModelInfo, PROVIDERS } from '@/lib/ai/providers';
 import { getCatalogThinkingCapability, getModelMetadataKey } from '@/lib/ai/model-metadata';
+import { pickThinkingLevel } from '@/lib/ai/thinking-config';
 import {
   REVIEWER_MAX_OUTPUT_TOKENS,
   reviewerMaxOutputTokens,
@@ -91,6 +92,30 @@ describe('model metadata thinking capabilities', () => {
     const sol = getCatalogThinkingCapability('openai', 'gpt-6-sol');
     expect(sol).toEqual(getCatalogThinkingCapability('openai', 'gpt-6-luna'));
     expect(sol?.effortValues).toContain('high');
+  });
+
+  it('owner 16 Nov 2026: Sonnet 5.5 is effort-only like Opus 5.5; Gemini 4 never sends minimal', () => {
+    const sonnet = getCatalogThinkingCapability('anthropic', 'claude-sonnet-5-5');
+    expect(sonnet).toEqual(getCatalogThinkingCapability('anthropic', 'claude-opus-5-5'));
+    expect(sonnet?.effortValues).not.toContain('none');
+    expect(getModelInfo('anthropic', 'claude-sonnet-5-5')).toMatchObject({
+      contextWindow: 1_000_000,
+      outputWindow: 128_000,
+    });
+
+    const carbon = getCatalogThinkingCapability('google', 'gemini-4-carbon');
+    const hydrogen = getCatalogThinkingCapability('google', 'gemini-4-hydrogen');
+    expect(carbon).toMatchObject({ control: 'level', defaultLevel: 'medium', toggleable: false });
+    expect(hydrogen).toMatchObject({ control: 'level', defaultLevel: 'high', toggleable: false });
+    for (const capability of [carbon!, hydrogen!]) {
+      expect(capability.levelValues).toEqual(['low', 'medium', 'high']);
+      // A thinking-off request falls to the lowest level Gemini 4 accepts.
+      expect(pickThinkingLevel(capability, { mode: 'disabled' })).toBe('low');
+    }
+
+    // Listed last: each provider's first model (its default) is unchanged.
+    expect(PROVIDERS.anthropic.models[0]?.id).toBe('claude-opus-5');
+    expect(PROVIDERS.google.models[0]?.id).toBe('gemini-3.6-flash');
   });
 
   it('D-4: the reviewer output bound (64k) sits inside both reviewer models’ real output windows', () => {

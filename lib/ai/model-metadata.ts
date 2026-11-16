@@ -317,6 +317,9 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   // Opus 5.5 always thinks adaptively (a `disabled` request is a 400), so it
   // shares Fable 5's effort-only capability: no `none`, never toggleable.
   [getModelMetadataKey('anthropic', 'claude-opus-5-5')]: anthropicFable5Effort,
+  // Sonnet 5.5 rejects `disabled` thinking with a 400 too (owner, 16 Nov 2026):
+  // the same effort-only capability, default `high` as the API's own default.
+  [getModelMetadataKey('anthropic', 'claude-sonnet-5-5')]: anthropicFable5Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-5')]: anthropicClaude5Effort,
   [getModelMetadataKey('anthropic', 'claude-sonnet-5')]: anthropicClaude5Effort,
   [getModelMetadataKey('anthropic', 'claude-opus-4-8')]: anthropicOpus47Effort,
@@ -326,6 +329,17 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   [getModelMetadataKey('anthropic', 'claude-sonnet-4-5')]: anthropicManualEffort,
   [getModelMetadataKey('anthropic', 'claude-haiku-4-5')]: anthropicBudget,
 
+  // Gemini 4 (owner, 16 Nov 2026; Google's thinking page): no `minimal` level, so
+  // a thinking-off request degrades to `low`. Hydrogen's `xhigh` is not offered:
+  // the engine's level type stops at `high`.
+  [getModelMetadataKey('google', 'gemini-4-carbon')]: levelCapability(
+    ['low', 'medium', 'high'],
+    'medium',
+  ),
+  [getModelMetadataKey('google', 'gemini-4-hydrogen')]: levelCapability(
+    ['low', 'medium', 'high'],
+    'high',
+  ),
   [getModelMetadataKey('google', 'gemini-3.6-flash')]: levelCapability(
     ['minimal', 'low', 'medium', 'high'],
     'medium',
