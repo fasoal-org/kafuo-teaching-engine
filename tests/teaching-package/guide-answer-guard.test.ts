@@ -716,4 +716,100 @@ describe('lesson 1-1: a final line on a slide that solves another item', () => {
     });
     expect(fresh.settled).toEqual([]);
   });
+
+  /** A guard reading these units' book text (the items' own numbers). */
+  const withTexts = (plans: Record<string, GuideOutlinePlan>, texts: Record<string, string>) => {
+    const settled: GuideAnswerSettlement[] = [];
+    const instance = createGuideAnswerGuard({
+      unitTexts: new Map(Object.entries(texts)),
+      onSettled: (settlement) => settled.push(settlement),
+    });
+    instance.usePlans(new Map(Object.entries(plans)));
+    return { instance, settled };
+  };
+  const lines = (guard: ReturnType<typeof withTexts>, content: unknown) =>
+    canvasLines(guard.instance.settleUnsolved(keyed(), content).content);
+  const BOOK_6247 =
+    '1) التكلفة بالريال: 4.50، 6.75، 9.00، … ما التكلفة التالية؟\n' +
+    '2) مواعيد الحافلات: 10:15، 11:00، 11:45 صباحًا. ما الموعد التالي؟\n' +
+    '5) 3، 3، 6، 9، 15، … ما الحد التالي؟';
+
+  it('open point: a planned tag copied over another item’s working is not solved', () => {
+    // Question 2's bus working under the «(س5)» tag holds none of 5's own numbers.
+    expect(lines(withTexts(PLANS, { '6247': BOOK_6247 }), scene26('5'))).not.toContain(
+      'الإجابة (س5): 24',
+    );
+    // Question 5 solved under its tag keeps its line.
+    const solved = slide('تمرين 2 (س5 في كتابك) — 3، 3، 6، 9، 15: 9 + 15 = 24', 'الإجابة (س5): 24');
+    expect(lines(withTexts(PLANS, { '6247': BOOK_6247 }), solved)).toContain('الإجابة (س5): 24');
+  });
+
+  it('review MED: a unit solved whole is read by its label’s number, or by its own numbers', () => {
+    // A single-question unit: `resolveTeacherGuide` gives it no number.
+    const WHOLE: KeyedGuideItem = {
+      contentUnitId: '6260',
+      label: '11',
+      element: 'exercise',
+      number: null,
+      letter: null,
+      display: 'س11',
+      answer: { type: 'number', value: 71.9 },
+    };
+    const plans = { sol: { role: 'solution' as const, items: [EX1, WHOLE], solves: 2 } };
+    const texts = {
+      '6247': BOOK_6247,
+      '6260': 'إنتاج مصنع بالملايين: 5، 7.2، 9.2، 14.1، 19.7، 28.4. ما المتوقع عام 2027؟',
+    };
+    const ex1 = '(س1 في كتابك) 4.50، 6.75، 9.00 → 11.25';
+    // Tagged by its label's number.
+    expect(
+      lines(
+        withTexts(plans, texts),
+        slide(ex1, '(س11 في كتابك) الإنتاج: 5، 7.2 … 28.4', 'الإجابة (س11): 71.9'),
+      ),
+    ).toContain('الإجابة (س11): 71.9');
+    // Untagged (the writer gets no tag for it), its own numbers on the slide.
+    expect(
+      lines(
+        withTexts(plans, texts),
+        slide(ex1, 'تمرين 4 — 5، 7.2، 9.2، 14.1، 19.7، 28.4؛ 2027', 'الإجابة (س11): 71.9'),
+      ),
+    ).toContain('الإجابة (س11): 71.9');
+    // Its line under question 1's working, none of its numbers anywhere: not solved.
+    const guard = withTexts(plans, texts);
+    expect(lines(guard, slide(ex1, 'الإجابة (س11): 71.9'))).not.toContain('الإجابة (س11): 71.9');
+    expect(guard.settled.at(-1)).toMatchObject({
+      items: [{ contentUnitId: '6260', label: '11', outcome: 'unverified' }],
+    });
+  });
+
+  it('review LOW: reads a tag’s parts and its wording variants', () => {
+    const EX11A: KeyedGuideItem = {
+      ...EX1,
+      contentUnitId: '6249',
+      label: '11a',
+      number: 11,
+      letter: 'A',
+      display: 'س11a',
+      answer: { type: 'number', value: 32 },
+    };
+    const EX11B: KeyedGuideItem = { ...EX11A, label: '11b', letter: 'B', display: 'س11b' };
+    const plans = { sol: { role: 'solution' as const, items: [EX11A, EX11B, EX7], solves: 2 } };
+    const finals = ['الإجابة (س11a): 32', 'الإجابة (س11b): 32', 'الإجابة (س7): عدد زوجي'];
+    const read = (...tags: string[]) => lines(withTexts(plans, {}), slide(...tags, ...finals));
+    // A tag naming part a never clears part b.
+    expect(read('(س11أ في كتابك)', '(س٧ في كتابك)')).toEqual([
+      '(س11أ في كتابك)',
+      '(س٧ في كتابك)',
+      'الإجابة (س11a): 32',
+      'الإجابة (س7): عدد زوجي',
+    ]);
+    // Several parts in one tag, and «من كتابك», are tags: every line stays.
+    expect(read('(س١١أ، ب)', '(س٧ في كتابك)')).toEqual(['(س١١أ، ب)', '(س٧ في كتابك)', ...finals]);
+    expect(read('(س11 في كتابك)', '(س٧ من كتابك)')).toEqual([
+      '(س11 في كتابك)',
+      '(س٧ من كتابك)',
+      ...finals,
+    ]);
+  });
 });

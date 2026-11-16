@@ -36,9 +36,11 @@
  * - Re-review finding 4: a written number that cannot be compared (it reads two ways)
  *   is never a mismatch.
  * - Lesson 1-1 (16 Nov 2026, scene 26): a solution slide must SOLVE each keyed exercise
- *   it ends with a final line for. A slide that tags its exercises with the book's
- *   number («(س2 في كتابك)») and never tags a keyed one has solved another item there:
- *   that item's final line leaves the canvas, its key leaves the outline the narration
+ *   it ends with a final line for. On a slide that tags its exercises with the book's
+ *   number («(س2 في كتابك)»), a keyed exercise is solved when its tag (its part too) is
+ *   there over a block holding one of its own book numbers, or — a unit solved whole,
+ *   which the writer is given no tag for — when half its book numbers are on the slide.
+ *   Otherwise its final line leaves the canvas, its key leaves the outline the narration
  *   is written from, and the item is logged unverified on that slide. Deterministic:
  *   no generation, never a pause; its attempt keeps its compared key.
  */
@@ -55,6 +57,7 @@ import {
   guideItemKey,
   guideItemQuestionText,
   keyedInAttempt,
+  parseGuideLabel,
   SOLUTION_KEY_POINT_PREFIX,
   withGuideItems,
   type GuideOutlinePlan,
@@ -132,12 +135,12 @@ export interface GuideAnswerGuard {
    */
   cleanWording<T>(outline: SceneOutline, content: T): T;
   /**
-   * Lesson 1-1 (16 Nov 2026): on the kept content of a solution slide, the keyed
-   * exercises it does not solve (no «(سN في كتابك)» tag of theirs while the slide tags
-   * the exercises it solves) lose their final line on the canvas and their key on the
-   * outline (so the narration never states it), and are logged unverified on this slide.
-   * The SAME content and outline when every keyed exercise is solved, or when the slide
-   * tags none (it cannot be told).
+   * Lesson 1-1 (16 Nov 2026): on the kept content of a solution slide that tags its
+   * exercises («(سN في كتابك)»), the keyed exercises it does not solve (see the file
+   * header) lose their final line on the canvas and their key on the outline (so the
+   * narration never states it), and are logged unverified on this slide. The SAME
+   * content and outline when every keyed exercise is solved, or when the slide tags none
+   * (it cannot be told).
    */
   settleUnsolved<T>(outline: SceneOutline, content: T): { content: T; outline: SceneOutline };
   checkContent(outline: SceneOutline, content: unknown): GuideAnswerFinding[];
@@ -312,43 +315,115 @@ function labelKey(label: string): string {
     .replace(/[^0-9a-h]/g, '');
 }
 
+/** One question a book tag names; `parts` empty = every part of it. */
+interface TaggedQuestion {
+  number: number;
+  parts: Set<string>;
+}
+
+/** The text of one tagged exercise: from its tag to the next one (untagged elements join it). */
+interface TagBlock {
+  questions: TaggedQuestion[];
+  text: string;
+}
+
 /**
  * The book's tag of an exercise on a solution slide (`learnerFirstExerciseLabels`):
- * «(س٥ في كتابك)», «(س11ب)», «(س5، س6 في كتابك)», «(س5–7 في كتابك)». Bracketed, and a
- * dash only before a bare number, so a coordinate «(س2 - س1)» is never one. The lesson's
- * «تمرين ٢» label is never read: it is the label PLANNED for an item, and the writer may
- * solve another one under it.
+ * «(س٥ في كتابك)», «(س٧ من كتابك)», «(س11ب)», «(س١١أ، ب)», «(س5، س6 في كتابك)»,
+ * «(س5–7 في كتابك)». Bracketed, holding only numbers, part letters and separators, so a
+ * coordinate «(س2 - س1)» or «(س1، ص1)» is never one. The lesson's «تمرين ٢» label is never
+ * read: it is the label PLANNED for an item, and the writer may solve another one under it.
  */
-const TAG_NEXT = /\s*(?:(?:[،,]|و)\s*(?:س\s*)?|([-–—])\s*)(\d{1,3})\s*[a-hأابجد]?/giu;
-const BOOK_TAG = new RegExp(
-  `[(（[]\\s*س\\s*(\\d{1,3})\\s*[a-hأابجد]?((?:${TAG_NEXT.source})*)\\s*(?:في\\s+(?:ال)?كتاب\\S*\\s*)?[)）\\]]`,
-  'giu',
-);
+const TAG_SPAN = /[(（[]\s*(س\s*\d[^()（）[\]]{0,60}?)\s*[)）\]]/gu;
+const TAG_WORDING = /\s*(?:(?:في|من|ب)\s*)?(?:ال)?كتاب[ء-ي]*\s*$/u;
+const TAG_BODY = /^(?:\s|س|\d{1,3}|[a-h](?![a-z])|[أابجد](?![ء-ي])|[،,و]|[-–—])+$/iu;
+const TAG_TOKEN = /\d{1,3}|[a-h](?![a-z])|[أابجد](?![ء-ي])|[-–—]/giu;
+const PART_LETTER: Readonly<Record<string, string>> = { أ: 'a', ا: 'a', ب: 'b', ج: 'c', د: 'd' };
 
-/** The book question numbers a canvas tags, outside its final lines. */
-function taggedQuestions(lines: readonly string[]): Set<number> {
-  const numbers = new Set<number>();
-  for (const line of lines) {
-    const plain = line
-      .replace(DIACRITICS, '')
-      .replace(/[٠-٩]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660))
-      .replace(/[۰-۹]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0));
-    const final = FINAL_LINE.exec(plain);
-    const text = final ? plain.slice(0, final.index) : plain;
-    for (const tag of text.matchAll(BOOK_TAG)) {
-      let last = Number(tag[1]);
-      numbers.add(last);
-      for (const [, dash, digits] of tag[2]!.matchAll(TAG_NEXT)) {
-        const next = Number(digits);
-        if (dash && next > last && next - last <= 20) {
-          for (let number = last + 1; number < next; number += 1) numbers.add(number);
+/** Marks out and Western digits, for reading tags and numbers off the canvas. */
+function plainText(text: string): string {
+  return text
+    .replace(DIACRITICS, '')
+    .replace(/[٠-٩]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+}
+
+/** The questions one bracketed tag names, or null when it is not a book tag. */
+function tagQuestions(inner: string): TaggedQuestion[] | null {
+  const body = inner.replace(TAG_WORDING, '');
+  if (!TAG_BODY.test(body) || /[-–—]\s*س/u.test(body)) return null;
+  const questions: TaggedQuestion[] = [];
+  let range = false;
+  for (const [token] of body.matchAll(TAG_TOKEN)) {
+    if (/\d/u.test(token)) {
+      const number = Number(token);
+      const last = questions.at(-1)?.number;
+      if (range && last !== undefined && number > last && number - last <= 20) {
+        for (let between = last + 1; between < number; between += 1) {
+          questions.push({ number: between, parts: new Set() });
         }
-        numbers.add(next);
-        last = next;
       }
+      questions.push({ number, parts: new Set() });
+      range = false;
+    } else if (/[-–—]/u.test(token)) {
+      range = true;
+    } else {
+      questions.at(-1)?.parts.add(PART_LETTER[token] ?? token.toLowerCase());
+      range = false;
     }
   }
-  return numbers;
+  return questions.length > 0 ? questions : null;
+}
+
+/** A canvas line without its final-line part (the comparator's reading), marks out. */
+function solvedPart(line: string): string {
+  const plain = plainText(line);
+  const final = FINAL_LINE.exec(plain);
+  return final ? plain.slice(0, final.index) : plain;
+}
+
+/**
+ * The tagged exercises of a canvas, element by element in order, outside the final
+ * lines: a tag's block runs to the next tag, and an untagged element joins the block
+ * before it (its working may sit apart from its title).
+ */
+function tagBlocks(content: unknown): { blocks: TagBlock[]; text: string } {
+  const blocks: TagBlock[] = [];
+  const texts: string[] = [];
+  for (const element of elementsOf(content)) {
+    const text = canvasLines({ elements: [element] })
+      .map(solvedPart)
+      .join('\n');
+    texts.push(text);
+    const tags = [...text.matchAll(TAG_SPAN)].flatMap((match) => {
+      const questions = tagQuestions(match[1]!);
+      return questions ? [{ at: match.index ?? 0, questions }] : [];
+    });
+    if (tags.length === 0) {
+      if (blocks.length > 0) blocks[blocks.length - 1]!.text += `\n${text}`;
+      continue;
+    }
+    tags.forEach((tag, index) => {
+      const from = index === 0 ? 0 : tag.at;
+      const to = tags[index + 1]?.at ?? text.length;
+      blocks.push({ questions: tag.questions, text: text.slice(from, to) });
+    });
+  }
+  return { blocks, text: texts.join('\n') };
+}
+
+/** The numbers a text holds («9.00» is 9, a time «10:15» stays whole). */
+function numberTokens(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const [token] of normalizeGuideDigits(text).matchAll(/\d+(?:[.:]\d+)*/g)) {
+    tokens.add(token.includes(':') ? token : String(Number(token)));
+  }
+  return tokens;
+}
+
+/** A block's own numbers: its tags and «تمرين N» labels out. */
+function blockNumbers(text: string): Set<string> {
+  return numberTokens(text.replace(TAG_SPAN, ' ').replace(/تمرين\s*\d+/gu, ' '));
 }
 
 /** «الإجابة» in an element's HTML, with any marks between its letters. */
@@ -494,6 +569,55 @@ export function createGuideAnswerGuard(options: {
       ownTexts.set(key, text);
     }
     return text;
+  };
+
+  /** An exercise item's numbers in its OWN book question (its question number out). */
+  const givensOf = (item: KeyedGuideItem, number: number | null): Set<string> => {
+    const own = guideItemQuestionText(options.unitTexts.get(item.contentUnitId) ?? '', {
+      element: item.element,
+      number,
+      letter: item.letter,
+    });
+    const tokens = numberTokens(plainText(own));
+    if (number !== null) tokens.delete(String(number));
+    return tokens;
+  };
+
+  /**
+   * Lesson 1-1: whether a solution slide that tags its exercises solves this one.
+   * - Tagged with its number (and its part, when the tag names parts): solved, unless its
+   *   own book question holds two or more numbers and none of them is in the tagged
+   *   block (the planned tag copied over another item's working).
+   * - Untagged, a question the engine gave the writer a tag for (a listed question of a
+   *   multi-question unit): not solved.
+   * - Untagged, a unit solved whole (its writer gets no tag; review: its `number` is
+   *   null, so its label's number is read): solved when at least half of its book
+   *   numbers, two or more, are on the slide.
+   */
+  const solvedHere = (
+    item: KeyedGuideItem,
+    blocks: readonly TagBlock[],
+    slideNumbers: ReadonlySet<string>,
+  ): boolean => {
+    const number = item.number ?? parseGuideLabel(item.label).number;
+    const part = item.letter?.toLowerCase() ?? null;
+    const givens = [...givensOf(item, number)];
+    const tagged = blocks.filter((block) =>
+      block.questions.some(
+        (question) =>
+          question.number === number &&
+          (part === null || question.parts.size === 0 || question.parts.has(part)),
+      ),
+    );
+    if (tagged.length > 0) {
+      if (givens.length < 2) return true;
+      return tagged.some((block) => {
+        const own = blockNumbers(block.text);
+        return givens.some((given) => own.has(given));
+      });
+    }
+    if (item.number !== null || givens.length < 2) return false;
+    return givens.filter((given) => slideNumbers.has(given)).length * 2 >= givens.length;
   };
 
   /** Re-review finding 6: a check item a solution slide now solves without its guide answer. */
@@ -753,11 +877,12 @@ export function createGuideAnswerGuard(options: {
       const original = plans.get(outline.id);
       const plan = effective(outline.id);
       if (!original || plan?.role !== 'solution') return { content, outline };
-      const tagged = taggedQuestions(canvasLines(content));
+      const { blocks, text } = tagBlocks(content);
       // A slide that tags none of its exercises cannot be told: its lines stay.
-      if (tagged.size === 0) return { content, outline };
+      if (blocks.length === 0) return { content, outline };
+      const slideNumbers = blockNumbers(text);
       const unsolved = plan.items.filter(
-        (item) => item.element === 'exercise' && item.number !== null && !tagged.has(item.number),
+        (item) => item.element === 'exercise' && !solvedHere(item, blocks, slideNumbers),
       );
       if (unsolved.length === 0) return { content, outline };
       const labels = new Set(unsolved.map((item) => labelKey(item.display)));
