@@ -592,7 +592,8 @@ export function createGuideAnswerGuard(options: {
    *   multi-question unit): not solved.
    * - Untagged, a unit solved whole (its writer gets no tag; review: its `number` is
    *   null, so its label's number is read): solved when at least half of its book
-   *   numbers, two or more, are on the slide.
+   *   numbers are on the slide; with fewer than two book numbers it cannot be told and
+   *   is kept.
    */
   const solvedHere = (
     item: KeyedGuideItem,
@@ -616,7 +617,9 @@ export function createGuideAnswerGuard(options: {
         return givens.some((given) => own.has(given));
       });
     }
-    if (item.number !== null || givens.length < 2) return false;
+    if (item.number !== null) return false;
+    // Final review: a whole unit with fewer than two own numbers cannot be told: kept.
+    if (givens.length < 2) return true;
     return givens.filter((given) => slideNumbers.has(given)).length * 2 >= givens.length;
   };
 

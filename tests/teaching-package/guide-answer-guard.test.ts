@@ -783,6 +783,33 @@ describe('lesson 1-1: a final line on a slide that solves another item', () => {
     });
   });
 
+  it('final review: an untagged whole unit with fewer than two own numbers keeps its line', () => {
+    const PROOF: KeyedGuideItem = {
+      contentUnitId: '6261',
+      label: '29',
+      element: 'exercise',
+      number: null,
+      letter: null,
+      display: 'س29',
+      answer: { type: 'text', value: 'عدد فردي' },
+    };
+    const plans = { sol: { role: 'solution' as const, items: [EX1, PROOF], solves: 2 } };
+    const guard = withTexts(plans, {
+      '6247': BOOK_6247,
+      '6261': 'ضع تخمينًا لناتج ضرب عددين فرديين، ثم برهنه.',
+    });
+    const content = slide(
+      '(س1 في كتابك) 4.50، 6.75، 9.00 → 11.25',
+      'الإجابة (س1): 11.25',
+      'تمرين 5 — ناتج ضرب عددين فرديين: 2(2من + م + ن) + 1',
+      'الإجابة (س29): عدد فردي',
+    );
+    const sol = keyed();
+    // The slide tags another exercise; this one cannot be told, so nothing changes.
+    expect(guard.instance.settleUnsolved(sol, content)).toEqual({ content, outline: sol });
+    expect(guard.settled).toEqual([]);
+  });
+
   it('review LOW: reads a tag’s parts and its wording variants', () => {
     const EX11A: KeyedGuideItem = {
       ...EX1,
