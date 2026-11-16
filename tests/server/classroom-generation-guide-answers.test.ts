@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClassroomPersistenceSink } from '@/lib/server/classroom-generation';
 import { createGuideAnswerGuard } from '@/lib/server/teaching-package/guide-answer-guard';
-import type { GuideOutlinePlan, KeyedGuideItem } from '@/lib/server/teaching-package/guide-answers';
+import {
+  injectGuideAnswers,
+  type GuideOutlinePlan,
+  type KeyedGuideItem,
+} from '@/lib/server/teaching-package/guide-answers';
 
 /**
  * g5.v11 (teacher-guide answer referee plan §8.3–8.5): the scene pipeline runs the code
@@ -567,5 +571,82 @@ describe('generateClassroom — g5.v11 approved-answer check', () => {
     );
     expect(resumed.scenes.map((scene) => scene.outlineId)).toEqual(['open', 'ex-attempt', 'ex']);
     expect(asked(resumed.scenes)).toBe(1);
+  });
+
+  it('lesson 1-1: a final line under another exercise leaves the slide and its narration, never pausing', async () => {
+    const EX1: KeyedGuideItem = {
+      contentUnitId: '6247',
+      label: '1',
+      element: 'exercise',
+      number: 1,
+      letter: null,
+      display: 'س1',
+      answer: { type: 'number', value: 11.25 },
+    };
+    const EX5: KeyedGuideItem = {
+      ...EX1,
+      label: '5',
+      number: 5,
+      display: 'س5',
+      answer: { type: 'number', value: 24 },
+    };
+    const plans: Record<string, GuideOutlinePlan> = {
+      ex: { role: 'solution', items: [EX1, EX5], solves: 2 },
+    };
+    // The run injects the keys before the scenes (`injectGuideAnswers`).
+    const lesson = injectGuideAnswers(
+      [
+        slideOutline('open', 1, 'Opening'),
+        { ...slideOutline('ex', 2, 'Exercise'), contentRole: 'worked_example' as const },
+      ],
+      new Map(Object.entries(plans)),
+    );
+    expect(lesson[1]!.description).toContain('الإجابة (س5): 24');
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'Arabic.', outlines: lesson },
+    });
+    let exerciseSlides = 0;
+    const narrationPrompts: string[] = [];
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        const user = request.messages.find((m) => m.role === 'user')?.content ?? '';
+        if (/Action Generator/.test(system)) {
+          if (user.includes('Title: Exercise')) narrationPrompts.push(user);
+          return { text: ACTIONS };
+        }
+        if (user.includes('Exercise')) {
+          exerciseSlides += 1;
+          // Item 208 scene 26: question 2 solved under the planned label, then 5's line.
+          return {
+            text: slideContent(
+              'تمرين 1 (س1 في كتابك): 9.00 + 2.25 = 11.25</p><p>الإجابة (س1): 11.25</p>' +
+                '<p>تمرين 2 (س2 في كتابك): 11:45 + 45 دقيقة = 12:30 مساءً</p><p>الإجابة (س5): 24',
+            ),
+          };
+        }
+        return { text: slideContent('Body') };
+      },
+    );
+    const result = await run({ ...baseInput, guideAnswerGuard: guard(plans) });
+    // Generated once: no regeneration, no pause.
+    expect(exerciseSlides).toBe(1);
+    expect(result.scenes.map((scene) => scene.outlineId)).toEqual(['open', 'ex']);
+    const slide = canvasText(result.scenes.find((scene) => scene.outlineId === 'ex')!);
+    expect(slide).toContain('الإجابة (س1): 11.25');
+    expect(slide).toContain('12:30 مساءً');
+    expect(slide).not.toContain('(س5)');
+    // The narration writer never reads 5's answer, nor does the persisted plan hold it.
+    expect(narrationPrompts.length).toBeGreaterThan(0);
+    for (const prompt of narrationPrompts) {
+      expect(prompt).not.toContain('(س5)');
+      expect(prompt).toContain('(س1)');
+    }
+    const persistedEx = (
+      persisted.outlines as Array<{ id: string; description?: string; keyPoints?: string[] }>
+    ).find((outline) => outline.id === 'ex')!;
+    expect(persistedEx.description).not.toContain('(س5)');
+    expect(persistedEx.keyPoints?.join('\n')).not.toContain('(س5)');
   });
 });

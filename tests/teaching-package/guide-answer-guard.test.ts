@@ -17,7 +17,11 @@ import {
   latestRunSettlements,
   mergeGuideSettlements,
 } from '@/lib/server/teaching-package/guide-answer-context';
-import type { GuideOutlinePlan, KeyedGuideItem } from '@/lib/server/teaching-package/guide-answers';
+import {
+  injectGuideAnswers,
+  type GuideOutlinePlan,
+  type KeyedGuideItem,
+} from '@/lib/server/teaching-package/guide-answers';
 import type { SceneOutline } from '@/lib/types/generation';
 
 const ITEM: KeyedGuideItem = {
@@ -573,5 +577,143 @@ describe('re-review fixes', () => {
     expect([...instance.leftOut().entries()].map(([id, items]) => [id, items.length])).toEqual([
       ['ex', 1],
     ]);
+  });
+});
+
+describe('lesson 1-1: a final line on a slide that solves another item', () => {
+  const EX1: KeyedGuideItem = {
+    contentUnitId: '6247',
+    label: '1',
+    element: 'exercise',
+    number: 1,
+    letter: null,
+    display: 'س1',
+    answer: { type: 'number', value: 11.25, unit: 'ريالاً' },
+  };
+  const EX5: KeyedGuideItem = {
+    ...EX1,
+    label: '5',
+    number: 5,
+    display: 'س5',
+    answer: { type: 'number', value: 24 },
+  };
+  const EX7: KeyedGuideItem = {
+    ...EX1,
+    contentUnitId: '6248',
+    label: '7',
+    number: 7,
+    display: 'س7',
+    answer: { type: 'text', value: 'عدد زوجي' },
+  };
+  const PLANS: Record<string, GuideOutlinePlan> = {
+    sol: { role: 'solution', items: [EX1, EX5, EX7], solves: 3 },
+    'sol-attempt': {
+      role: 'attempt',
+      items: [EX1, EX5, EX7],
+      questionOf: { '6247|1': 0, '6247|5': 1, '6248|7': 2 },
+      questionCount: 3,
+    },
+  };
+  const P = '<p style="font-size:14px;text-align:right;">';
+  const tag = (n: string) => `<span style="color:#6b7280;">(س${n} في كتابك)</span>`;
+  /** Item 208 scene 26 as the run stored it: question 2 under the label planned for 5. */
+  const scene26 = (secondTag: string) => ({
+    elements: [
+      {
+        type: 'text',
+        content: `${P}<strong>تمرين 1</strong> ${tag('1')} — التكلفة بالريال: 4.50، 6.75، 9.00.</p>${P}التخمين: 9.00 + 2.25 = 11.25.</p>${P}<strong>الإجابة (س1): 11.25 ريالاً</strong></p>`,
+      },
+      {
+        type: 'text',
+        content: `${P}<strong>تمرين 2</strong> ${tag(secondTag)} — مواعيد الحافلات: 10:15 صباحًا، 11:00 صباحًا، 11:45 صباحًا.</p>${P}11:45 صباحًا + 45 دقيقة = 12:30 مساءً.</p>${P}<strong>موعد الحافلة التالي: 12:30 مساءً</strong></p>${P}<strong>الإجابة (س5): 24</strong></p>`,
+      },
+      {
+        type: 'text',
+        content: `${P}<strong>تمرين 3</strong> ${tag('7')} — 2 × 4 = 8، و6 × 8 = 48.</p>${P}<strong>الإجابة (س7): عدد زوجي</strong></p>`,
+      },
+    ],
+  });
+  const keyed = () =>
+    injectGuideAnswers(
+      [
+        outline('sol', 'slide', {
+          contentRole: 'worked_example',
+          description: 'حل التمارين ١–٣',
+          keyPoints: ['تمرين ١', 'تمرين ٢', 'تمرين ٣'],
+        }),
+      ],
+      new Map(Object.entries(PLANS)),
+    )[0]!;
+
+  it('keeps the final line of an exercise the slide solves', async () => {
+    const { instance, settled } = guard(PLANS);
+    const generate = vi.fn();
+    const sol = keyed();
+    const first = scene26('5');
+    const result = await guardedSceneContent(instance, sol, first, generate);
+    expect(generate).not.toHaveBeenCalled();
+    expect(result).toEqual({ content: first, outline: sol, leaks: [] });
+    expect(settled).toEqual([]);
+  });
+
+  it('strips the line of an exercise the slide does not solve, never pausing, and logs it unverified', async () => {
+    const { instance, settled } = guard(PLANS);
+    const generate = vi.fn();
+    const sol = keyed();
+    expect(sol.description).toContain('الإجابة (س5): 24');
+    const first = scene26('2');
+    const result = await guardedSceneContent(instance, sol, first, generate);
+    // Deterministic: nothing is generated again, nothing throws.
+    expect(generate).not.toHaveBeenCalled();
+    const before = canvasLines(first);
+    const after = canvasLines(result.content);
+    expect(after).toEqual(before.filter((line) => line !== 'الإجابة (س5): 24'));
+    expect(after).toContain('موعد الحافلة التالي: 12:30 مساءً');
+    expect(after).toContain('الإجابة (س1): 11.25 ريالاً');
+    expect(after).toContain('الإجابة (س7): عدد زوجي');
+    // The paragraph leaves whole; the element's other paragraphs stay as they were.
+    const bus = (result.content as { elements: Array<{ content: string }> }).elements[1]!.content;
+    expect(bus).toBe(first.elements[1]!.content.slice(0, bus.length));
+    expect(bus.endsWith('12:30 مساءً</strong></p>')).toBe(true);
+    // The narration's outline (and the persisted plan) no longer carry 5's answer.
+    expect(result.outline).not.toBe(sol);
+    expect(result.outline.description).not.toContain('(س5)');
+    expect(result.outline.keyPoints?.join('\n')).not.toContain('(س5)');
+    expect(result.outline.description).toContain('الإجابة (س1): 11.25 ريالاً');
+    expect(settled).toEqual([
+      expect.objectContaining({
+        outlineId: 'sol',
+        action: 'unverified',
+        items: [{ contentUnitId: '6247', label: '5', outcome: 'unverified' }],
+        findings: [
+          { code: 'GUIDE_ANSWER_UNSOLVED', contentUnitId: '6247', label: '5', where: 'canvas' },
+        ],
+      }),
+    ]);
+    // Unverified on the slide; its attempt keeps the key it was compared with.
+    expect(instance.planOf('sol')?.items.map((item) => item.label)).toEqual(['1', '7']);
+    expect(instance.planOf('sol-attempt')?.items.map((item) => item.label)).toEqual([
+      '1',
+      '5',
+      '7',
+    ]);
+  });
+
+  it('cuts an inline final line, and keeps every line on a slide that tags no exercise', () => {
+    const { instance } = guard(PLANS);
+    const inline = slide('(س1 في كتابك) 11.25 الإجابة (س1): 11.25', 'موعد 12:30 الإجابة (س5): 24');
+    expect(canvasLines(instance.settleUnsolved(keyed(), inline).content)).toEqual([
+      '(س1 في كتابك) 11.25 الإجابة (س1): 11.25',
+      'موعد 12:30',
+    ]);
+    // A coordinate «(س2 - س1)» is never a book tag: the slide cannot be told.
+    const fresh = guard(PLANS);
+    const untagged = slide('م = (ص2 - ص1) ÷ (س2 - س1)', 'الإجابة (س5): 24');
+    const sol = keyed();
+    expect(fresh.instance.settleUnsolved(sol, untagged)).toEqual({
+      content: untagged,
+      outline: sol,
+    });
+    expect(fresh.settled).toEqual([]);
   });
 });

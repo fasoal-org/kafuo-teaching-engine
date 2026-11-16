@@ -35,6 +35,12 @@
  *     {@link guideLeakIssue}); a single-slide regeneration keeps the slide as it was.
  * - Re-review finding 4: a written number that cannot be compared (it reads two ways)
  *   is never a mismatch.
+ * - Lesson 1-1 (16 Nov 2026, scene 26): a solution slide must SOLVE each keyed exercise
+ *   it ends with a final line for. A slide that tags its exercises with the book's
+ *   number («(س2 في كتابك)») and never tags a keyed one has solved another item there:
+ *   that item's final line leaves the canvas, its key leaves the outline the narration
+ *   is written from, and the item is logged unverified on that slide. Deterministic:
+ *   no generation, never a pause; its attempt keeps its compared key.
  */
 import {
   announcesGuideAnswer,
@@ -59,7 +65,9 @@ import type { SceneOutline } from '@/lib/types/generation';
 export type GuideAnswerFindingCode =
   | 'GUIDE_ANSWER_MISMATCH'
   | 'GUIDE_ANSWER_MISSING'
-  | 'GUIDE_ANSWER_LEAK';
+  | 'GUIDE_ANSWER_LEAK'
+  /** A solution slide ends with an exercise's final line but solves another item. */
+  | 'GUIDE_ANSWER_UNSOLVED';
 
 export interface GuideAnswerFinding {
   code: GuideAnswerFindingCode;
@@ -123,6 +131,15 @@ export interface GuideAnswerGuard {
    * leaves the canvas as «الإجابة الصحيحة».
    */
   cleanWording<T>(outline: SceneOutline, content: T): T;
+  /**
+   * Lesson 1-1 (16 Nov 2026): on the kept content of a solution slide, the keyed
+   * exercises it does not solve (no «(سN في كتابك)» tag of theirs while the slide tags
+   * the exercises it solves) lose their final line on the canvas and their key on the
+   * outline (so the narration never states it), and are logged unverified on this slide.
+   * The SAME content and outline when every keyed exercise is solved, or when the slide
+   * tags none (it cannot be told).
+   */
+  settleUnsolved<T>(outline: SceneOutline, content: T): { content: T; outline: SceneOutline };
   checkContent(outline: SceneOutline, content: unknown): GuideAnswerFinding[];
   checkNarration(
     outline: SceneOutline,
@@ -293,6 +310,130 @@ function labelKey(label: string): string {
     .replace(/(?<=\d)\s*([أابجد])(?![ء-ي])/gu, (_all, letter: string) => LABEL_LETTER[letter]!)
     .toLowerCase()
     .replace(/[^0-9a-h]/g, '');
+}
+
+/**
+ * The book's tag of an exercise on a solution slide (`learnerFirstExerciseLabels`):
+ * «(س٥ في كتابك)», «(س11ب)», «(س5، س6 في كتابك)», «(س5–7 في كتابك)». Bracketed, and a
+ * dash only before a bare number, so a coordinate «(س2 - س1)» is never one. The lesson's
+ * «تمرين ٢» label is never read: it is the label PLANNED for an item, and the writer may
+ * solve another one under it.
+ */
+const TAG_NEXT = /\s*(?:(?:[،,]|و)\s*(?:س\s*)?|([-–—])\s*)(\d{1,3})\s*[a-hأابجد]?/giu;
+const BOOK_TAG = new RegExp(
+  `[(（[]\\s*س\\s*(\\d{1,3})\\s*[a-hأابجد]?((?:${TAG_NEXT.source})*)\\s*(?:في\\s+(?:ال)?كتاب\\S*\\s*)?[)）\\]]`,
+  'giu',
+);
+
+/** The book question numbers a canvas tags, outside its final lines. */
+function taggedQuestions(lines: readonly string[]): Set<number> {
+  const numbers = new Set<number>();
+  for (const line of lines) {
+    const plain = line
+      .replace(DIACRITICS, '')
+      .replace(/[٠-٩]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660))
+      .replace(/[۰-۹]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+    const final = FINAL_LINE.exec(plain);
+    const text = final ? plain.slice(0, final.index) : plain;
+    for (const tag of text.matchAll(BOOK_TAG)) {
+      let last = Number(tag[1]);
+      numbers.add(last);
+      for (const [, dash, digits] of tag[2]!.matchAll(TAG_NEXT)) {
+        const next = Number(digits);
+        if (dash && next > last && next - last <= 20) {
+          for (let number = last + 1; number < next; number += 1) numbers.add(number);
+        }
+        numbers.add(next);
+        last = next;
+      }
+    }
+  }
+  return numbers;
+}
+
+/** «الإجابة» in an element's HTML, with any marks between its letters. */
+const MARKS = '[\\u0610-\\u061A\\u064B-\\u065F\\u0670\\u0640]*';
+const ANSWER_WORD = new RegExp(
+  `(?:ا${MARKS}ل${MARKS})?[إاأ]${MARKS}ج${MARKS}ا${MARKS}ب${MARKS}[ةه]`,
+  'gu',
+);
+/** Where `decode` ends a canvas line. */
+const LINE_BREAK = /(<br\s*\/?>|<\/(?:p|div|li|h[1-6]|tr)>)/giu;
+
+/** Where, in one HTML line, the final line of a label `strip` names starts; or null. */
+function finalLineStart(segment: string, strip: (label: string) => boolean): number | null {
+  for (const word of segment.matchAll(ANSWER_WORD)) {
+    const at = word.index ?? 0;
+    // Never a word inside a tag (an attribute).
+    if (segment.lastIndexOf('<', at) > segment.lastIndexOf('>', at)) continue;
+    const before = decode(segment.slice(0, at)).replace(DIACRITICS, '');
+    if (before.length > 0 && !/[\s(]$/u.test(before)) continue;
+    const rest = decode(segment.slice(at)).replace(DIACRITICS, '').replace(/\s+/g, ' ').trim();
+    const final = FINAL_LINE.exec(rest);
+    if (!final || final.index !== 0) continue;
+    const label = final[1]?.trim();
+    return label && strip(label) ? at : null;
+  }
+  return null;
+}
+
+/**
+ * The HTML without the final lines of the labels `strip` names: the text from «الإجابة»
+ * to the line's end leaves (its tags stay, so the markup stays whole), and a paragraph
+ * left empty leaves whole. The SAME string when no such line is there.
+ */
+function withoutFinalLines(html: string, strip: (label: string) => boolean): string {
+  const parts = html.split(LINE_BREAK);
+  const kept: string[] = [];
+  let changed = false;
+  for (let index = 0; index < parts.length; index += 2) {
+    const segment = parts[index]!;
+    const lineEnd = parts[index + 1] ?? '';
+    const at = finalLineStart(segment, strip);
+    if (at === null) {
+      kept.push(segment, lineEnd);
+      continue;
+    }
+    changed = true;
+    const newline = segment.indexOf('\n', at);
+    const end = newline < 0 ? segment.length : newline;
+    const rest = segment.slice(0, at) + segment.slice(at, end).replace(/[^<>]+(?=<|$)/g, '');
+    const next = rest + segment.slice(end);
+    const closes = /^<\/(\w+)>$/u.exec(lineEnd)?.[1];
+    const opensHere = closes !== undefined && new RegExp(`^\\s*<${closes}\\b`, 'iu').test(next);
+    if (opensHere && decode(next).trim() === '') continue;
+    kept.push(next, lineEnd);
+  }
+  return changed ? kept.join('') : html;
+}
+
+/** The content with `edit` applied to each text and shape element's HTML (as `cleanWording`). */
+function editTexts<T>(content: T, edit: (html: string) => string): T {
+  const elements = elementsOf(content);
+  let changed = false;
+  const next = elements.map((element) => {
+    if (element.type === 'text' && typeof element.content === 'string') {
+      const html = edit(element.content);
+      if (html === element.content) return element;
+      changed = true;
+      return { ...element, content: html };
+    }
+    const inner = (element.text as { content?: unknown } | undefined)?.content;
+    if (element.type === 'shape' && typeof inner === 'string') {
+      const html = edit(inner);
+      if (html === inner) return element;
+      changed = true;
+      return { ...element, text: { ...(element.text as object), content: html } };
+    }
+    return element;
+  });
+  if (!changed) return content;
+  const record = content as Record<string, unknown>;
+  return (
+    Array.isArray(record.elements)
+      ? { ...record, elements: next }
+      : { ...record, canvas: { ...(record.canvas as object), elements: next } }
+  ) as T;
 }
 
 interface QuizQuestionLike {
@@ -608,6 +749,41 @@ export function createGuideAnswerGuard(options: {
           : { ...record, canvas: { ...(record.canvas as object), elements: next } }
       ) as typeof content;
     },
+    settleUnsolved(outline, content) {
+      const original = plans.get(outline.id);
+      const plan = effective(outline.id);
+      if (!original || plan?.role !== 'solution') return { content, outline };
+      const tagged = taggedQuestions(canvasLines(content));
+      // A slide that tags none of its exercises cannot be told: its lines stay.
+      if (tagged.size === 0) return { content, outline };
+      const unsolved = plan.items.filter(
+        (item) => item.element === 'exercise' && item.number !== null && !tagged.has(item.number),
+      );
+      if (unsolved.length === 0) return { content, outline };
+      const labels = new Set(unsolved.map((item) => labelKey(item.display)));
+      const stripped = editTexts(content, (html) =>
+        withoutFinalLines(html, (label) => labels.has(labelKey(label))),
+      );
+      unverify(outline.id, unsolved);
+      report(
+        outline,
+        'unverified',
+        unsolved.map((item) => ({
+          code: 'GUIDE_ANSWER_UNSOLVED',
+          item,
+          where: 'canvas',
+          detail: 'the slide solves another item',
+        })),
+        { items: outcomes(unsolved, 'unverified') },
+      );
+      // Its key point and final-line instruction leave the outline the narration is
+      // written from (and the persisted plan); a D-19 «left out» note stays.
+      const leaveOut = original.items.filter((item) => removed.has(guideItemKey(item)));
+      return {
+        content: stripped,
+        outline: withGuideItems(outline, original, effective(outline.id)?.items ?? [], leaveOut),
+      };
+    },
     checkContent(outline, content) {
       const plan = effective(outline.id);
       if (!plan || !content) return [];
@@ -833,32 +1009,24 @@ export async function guardedSceneContent<T>(
     outline.type === 'slide'
       ? findings.filter((finding) => finding.code === 'GUIDE_ANSWER_LEAK')
       : [];
+  // Lesson 1-1 (16 Nov 2026): whatever is kept, a final line of an exercise the slide
+  // does not solve leaves it (`settleUnsolved`) — no generation, never a pause.
+  const kept = (content: T, from: SceneOutline, leaks: GuideAnswerFinding[]) => {
+    const solved = guard.settleUnsolved(from, guard.cleanWording(from, content));
+    return { content: solved.content, outline: solved.outline, leaks };
+  };
   const findings = guard.checkContent(outline, first);
-  if (findings.length === 0) {
-    return { content: guard.cleanWording(outline, first), outline, leaks: [] };
-  }
+  if (findings.length === 0) return kept(first, outline, []);
   options.onFinding?.(findings);
   const retry = await generate(outline, guard.correction(outline, findings));
   const left = retry ? guard.checkContent(outline, retry) : findings;
-  if (retry && left.length === 0) {
-    return { content: guard.cleanWording(outline, retry), outline, leaks: [] };
-  }
+  if (retry && left.length === 0) return kept(retry, outline, []);
   const decision = guard.settle(outline, retry ?? first, left, {
     ...(options.removal === false ? { removal: false } : {}),
   });
-  if (decision.kind === 'keep') {
-    return {
-      content: guard.cleanWording(outline, decision.content as T),
-      outline,
-      leaks: slideLeaks(left),
-    };
-  }
+  if (decision.kind === 'keep') return kept(decision.content as T, outline, slideLeaks(left));
   const settled = (await generate(decision.outline)) ?? retry ?? first;
   const final = guard.checkContent(decision.outline, settled);
   guard.accept(decision.outline, final);
-  return {
-    content: guard.cleanWording(decision.outline, settled),
-    outline: decision.outline,
-    leaks: slideLeaks(final),
-  };
+  return kept(settled, decision.outline, slideLeaks(final));
 }
