@@ -168,6 +168,10 @@ export interface GuideAnswerGuard {
   pruneAttempt(outline: SceneOutline, content: unknown): { content: unknown } | { drop: true };
 }
 
+const GUIDE_LEAK_ISSUE_HEAD = 'this slide may state the answer of item ';
+const GUIDE_LEAK_ISSUE_TAIL =
+  " before the learner's try; regenerate it so it states the task and its givens only";
+
 /**
  * Re-review finding 5c: the scene issue of a slide kept while it still states a checked
  * answer before the learner's try, so the package reviewer's fix loop sees it. Names
@@ -180,8 +184,25 @@ export function guideLeakIssue(findings: readonly GuideAnswerFinding[]): {
   const items = [...new Set(findings.map((finding) => finding.item.display))].join(', ');
   return {
     code: 'GUIDE_ANSWER_LEAK',
-    message: `this slide may state the answer of item ${items} before the learner's try; regenerate it so it states the task and its givens only`,
+    message: `${GUIDE_LEAK_ISSUE_HEAD}${items}${GUIDE_LEAK_ISSUE_TAIL}`,
   };
+}
+
+/**
+ * The item names a {@link guideLeakIssue} carries (never an answer), for the package
+ * reviewer's must-fix finding on that slide. Empty for any other issue or wording.
+ */
+export function guideLeakIssueItems(issue: { code: string; message: string }): string[] {
+  const { code, message } = issue;
+  if (code !== 'GUIDE_ANSWER_LEAK') return [];
+  if (!message.startsWith(GUIDE_LEAK_ISSUE_HEAD) || !message.endsWith(GUIDE_LEAK_ISSUE_TAIL)) {
+    return [];
+  }
+  return message
+    .slice(GUIDE_LEAK_ISSUE_HEAD.length, message.length - GUIDE_LEAK_ISSUE_TAIL.length)
+    .split(', ')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 /** Arabic marks and tatweel: U+0610–U+061A, U+064B–U+065F, U+0670, U+0640. */

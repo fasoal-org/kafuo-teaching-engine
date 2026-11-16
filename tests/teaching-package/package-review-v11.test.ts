@@ -8,24 +8,63 @@ import { describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   readAttemptById: vi.fn(),
   readContentUnitsForAttempt: vi.fn(),
+  readVersionById: vi.fn(),
   runReviewerCall: vi.fn(),
+  claimReview: vi.fn(),
+  renewReviewLease: vi.fn(),
+  saveReviewProgress: vi.fn(),
+  finishReview: vi.fn(),
+  sumReviewSpend: vi.fn(),
+  enqueueWebhookEvent: vi.fn(),
 }));
 vi.mock('@/lib/persistence/teaching-package', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/persistence/teaching-package')>()),
   readAttemptById: mocks.readAttemptById,
   readContentUnitsForAttempt: mocks.readContentUnitsForAttempt,
+  readVersionById: mocks.readVersionById,
 }));
 vi.mock('@/lib/server/teaching-model/reviewer-call', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/server/teaching-model/reviewer-call')>()),
   runReviewerCall: mocks.runReviewerCall,
 }));
+// The review job's rows, ledger and outbox (re-review finding 5c tests): no database.
+vi.mock('@/lib/server/teaching-package/package-review-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/teaching-package/package-review-store')>()),
+  claimReview: mocks.claimReview,
+  renewReviewLease: mocks.renewReviewLease,
+  saveReviewProgress: mocks.saveReviewProgress,
+  finishReview: mocks.finishReview,
+}));
+vi.mock('@/lib/persistence/teaching-model-attempts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/persistence/teaching-model-attempts')>()),
+  sumReviewSpend: mocks.sumReviewSpend,
+}));
+vi.mock('@/lib/server/teaching-package/webhook-events', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/teaching-package/webhook-events')>()),
+  enqueueWebhookEvent: mocks.enqueueWebhookEvent,
+}));
+vi.mock('@openmaic/storage/server/reference', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openmaic/storage/server/reference')>()),
+  nodePostgresTransaction: () => (work: (tx: unknown) => unknown) => work({}),
+}));
 
-import { callPackageReviewer } from '@/lib/server/teaching-package/package-review';
+import {
+  callPackageReviewer,
+  guideLeakFindings,
+  runPackageReview,
+} from '@/lib/server/teaching-package/package-review';
+import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
   REVIEW_GUIDE_ANSWER_PREFIX,
+  reviewedSceneDigest,
+  reviewSlidesOf,
   withGuideAnswers,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
+import type { PackageReview } from '@/lib/server/teaching-package/package-review-store';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import { guideLeakIssue } from '@/lib/server/teaching-package/guide-answer-guard';
+import type { AppScene } from '@/lib/types/stage';
 import {
   PACKAGE_REVIEW_SYSTEM,
   PACKAGE_REVIEW_SYSTEM_V11,
@@ -220,5 +259,254 @@ describe('callPackageReviewer picks the rubric and the input by the Teaching Mod
     expect(request.prompt).not.toContain('دليل المعلم');
     // g5.v10 reads nothing new.
     expect(mocks.readContentUnitsForAttempt).not.toHaveBeenCalled();
+  });
+});
+
+// Re-review finding 5c: a slide the run kept while it may still state a checked answer
+// before the learner's try (its GUIDE_ANSWER_LEAK scene issue) is a must-fix finding the
+// fix loop regenerates once, naming the item only. g5.v10 reviews exactly as before.
+describe('the package review fixes a slide kept with a GUIDE_ANSWER_LEAK issue', () => {
+  const ISSUE = guideLeakIssue([
+    { code: 'GUIDE_ANSWER_LEAK', item: RESOLVED.keyed[0]!, where: 'canvas', detail: 'stated' },
+  ]);
+  /** The answer of item 1A (12), in either digit style. */
+  const VALUE = /12|١٢/;
+  const tryScene = (text: string, issues?: Array<{ code: string; message: string }>) =>
+    ({
+      id: 'try',
+      stageId: 'stage-1',
+      title: 'جرّب',
+      order: 1,
+      type: 'slide',
+      sourceContentUnitIds: ['6234'],
+      content: {
+        type: 'slide',
+        contentRole: 'check_understanding',
+        canvas: { elements: [{ id: 'e', type: 'text', content: `<p>${text}</p>` }] },
+      },
+      actions: [{ id: 'a', type: 'speech', text: 'جرّب بنفسك.' }],
+      ...(issues ? { generationIssues: issues } : {}),
+    }) as unknown as AppScene;
+  const LEAKING = tryScene('الأعداد 3، 6، 9 … والحد التالي هو العدد المطلوب', [ISSUE]);
+  const FIXED = tryScene('الأعداد 3، 6، 9 … ما الحد التالي؟');
+
+  const CLAIMED: PackageReview = {
+    id: 'review-1',
+    tenantId: 'tenant-1',
+    learningItem: { type: 'lesson', id: '208' },
+    versionId: 'version-1',
+    attemptId: 'attempt-1',
+    stageId: 'stage-1',
+    subjectCode: 'MATH',
+    status: 'running',
+    provider: null,
+    model: null,
+    summary: null,
+    findings: [],
+    fixes: [],
+    errorCode: null,
+    inputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+    bookTruncated: false,
+    runAttempts: 1,
+    leaseOwner: 'w',
+    leaseUntil: 2,
+    reviewedAt: null,
+    createdAt: 1,
+    startedAt: 1,
+    completedAt: null,
+  };
+
+  function job(version: string, scenes: AppScene[], regenerate?: ReturnType<typeof vi.fn>) {
+    mocks.readAttemptById.mockReset().mockResolvedValue({
+      teachingModel: { key: 'g5', version },
+      inputSnapshot: { teacherGuide: GUIDE, bookStructure: BOOK },
+    });
+    mocks.readContentUnitsForAttempt.mockResolvedValue(UNITS);
+    mocks.readVersionById.mockResolvedValue({
+      id: 'version-1',
+      tenantId: 'tenant-1',
+      status: 'draft',
+      currentStageId: 'stage-1',
+    });
+    mocks.claimReview.mockResolvedValue({ ...CLAIMED });
+    mocks.renewReviewLease.mockResolvedValue(true);
+    mocks.saveReviewProgress.mockReset().mockResolvedValue(undefined);
+    mocks.sumReviewSpend.mockResolvedValue({ rows: 0 });
+    mocks.enqueueWebhookEvent.mockResolvedValue(undefined);
+    mocks.finishReview
+      .mockReset()
+      .mockImplementation(async (_tx: unknown, _id: string, _worker: string, outcome: object) => ({
+        ...CLAIMED,
+        ...outcome,
+      }));
+    const regen =
+      regenerate ??
+      vi.fn(async (_grant: unknown, sceneId: string) => ({
+        status: 200,
+        body: {
+          regenerationId: `tpsr-${sceneId}`,
+          status: 'succeeded',
+          replayed: false,
+          sceneId,
+          scene: FIXED,
+          resultSceneRev: 2,
+          current: { rev: 2, scene: FIXED },
+        },
+      }));
+    const regenerateAudio = vi.fn(async (_grant: unknown, sceneId: string) => ({
+      sceneId,
+      scene: FIXED,
+      rev: 3,
+      generated: 1,
+      missing: 0,
+    }));
+    const callReviewer = vi.fn(async () => ({
+      answer: { summary: 's', findings: [] },
+      call: { provider: 'anthropic' as const, modelString: 'anthropic:model', usage: null },
+    }));
+    const fixLoop = createPackageReviewFixLoop({
+      regenerate: regen as never,
+      regenerateAudio: regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'version-1',
+        tenantId: 'tenant-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        const scene = scenes.find((candidate) => candidate.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    const run = () =>
+      runPackageReview('review-1', {
+        pool: {} as never,
+        now: () => 5,
+        workerId: 'w',
+        callReviewer: callReviewer as never,
+        fixLoop,
+        loadScenes: async () => scenes,
+      });
+    return { run, regenerate: regen, regenerateAudio };
+  }
+
+  it('g5.v11: the issue is a must-fix finding, stored with the first answer and regenerated once', async () => {
+    // The reviewer itself reports nothing: the issue alone sends the slide to the fix loop.
+    const { run, regenerate, regenerateAudio } = job('g5.v11', [LEAKING]);
+    const finished = await run();
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    const [, sceneId, request] = regenerate.mock.calls[0] as unknown as [
+      unknown,
+      string,
+      { instruction: string; reason: string },
+    ];
+    expect(sceneId).toBe('try');
+    expect(request.instruction).toContain('(S7) لا تذكر الإجابة النهائية للبند 1A');
+    expect(regenerateAudio).toHaveBeenCalledTimes(1);
+    expect(finished).toMatchObject({
+      status: 'fixed',
+      findings: [{ id: 'g1', targetId: 'try', check: 'S7', severity: 'high', status: 'fixed' }],
+      fixes: [{ sceneId: 'try', outcome: 'fixed' }],
+    });
+    const stored = (
+      mocks.saveReviewProgress.mock.calls[0] as unknown as [
+        unknown,
+        string,
+        string,
+        { findings: Array<{ id: string; status: string }>; reviewedAt: number },
+      ]
+    )[3];
+    expect(stored.reviewedAt).toBe(5);
+    expect(stored.findings).toMatchObject([{ id: 'g1', status: 'open' }]);
+    // Never the answer: not in the regeneration's instruction, its reason, or the finding.
+    const written = finished!.findings[0]!;
+    for (const text of [
+      request.instruction,
+      request.reason,
+      written.whatIsWrong,
+      written.fixNote,
+    ]) {
+      expect(text).not.toMatch(VALUE);
+      expect(text).not.toContain('دليل المعلم');
+    }
+  });
+
+  it('g5.v11: a regeneration that still states it keeps the slide as it was, the finding open', async () => {
+    const regenerate = vi.fn(async () => {
+      throw new TeachingPackageError(
+        'SCENE_CONTENT_GENERATION_FAILED',
+        "the regenerated slide still states a checked answer before the learner's try; the slide was kept as it was",
+        { regenerationId: 'tpsr-try', failure: 'GUIDE_ANSWER_LEAK' },
+      );
+    });
+    const { run, regenerateAudio } = job('g5.v11', [LEAKING], regenerate);
+    const finished = await run();
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(finished).toMatchObject({
+      status: 'needs_teacher',
+      findings: [{ id: 'g1', status: 'open', teacherReason: 'REGENERATION_REFUSED' }],
+      fixes: [{ sceneId: 'try', outcome: 'refused', code: 'SCENE_CONTENT_GENERATION_FAILED' }],
+    });
+    // Nothing was written: the review last saw the slide as it was, its issue in place.
+    expect(finished!.findings[0]!.sceneDigest).toBe(reviewedSceneDigest(LEAKING));
+    expect(LEAKING.generationIssues).toEqual([ISSUE]);
+  });
+
+  it('g5.v10: unchanged — no finding from the issue, and without it nothing new is read', async () => {
+    const leaking = job('g5.v10', [LEAKING]);
+    const finished = await leaking.run();
+    expect(leaking.regenerate).not.toHaveBeenCalled();
+    expect(finished).toMatchObject({ status: 'passed', findings: [], fixes: [] });
+    const clean = job('g5.v10', [FIXED]);
+    expect(await clean.run()).toMatchObject({ status: 'passed', findings: [] });
+    expect(mocks.readAttemptById).not.toHaveBeenCalled();
+  });
+
+  it('names every item of the issue, or none when its wording is unknown; slides only', () => {
+    const two = guideLeakIssue([
+      { code: 'GUIDE_ANSWER_LEAK', item: RESOLVED.keyed[0]!, where: 'canvas', detail: 'x' },
+      { code: 'GUIDE_ANSWER_LEAK', item: RESOLVED.keyed[1]!, where: 'narration', detail: 'x' },
+    ]);
+    const quiz = {
+      ...tryScene('x', [ISSUE]),
+      id: 'quiz',
+      order: 3,
+      type: 'quiz',
+      content: { type: 'quiz', questions: [] },
+    } as unknown as AppScene;
+    const scenes = [
+      tryScene('x', [two]),
+      { ...tryScene('x', [{ code: 'GUIDE_ANSWER_LEAK', message: 'other' }]), id: 'b', order: 2 },
+      quiz,
+    ] as AppScene[];
+    const findings = guideLeakFindings(scenes, reviewSlidesOf(scenes));
+    expect(findings.map((finding) => [finding.id, finding.targetId])).toEqual([
+      ['g1', 'try'],
+      ['g2', 'b'],
+    ]);
+    expect(findings[0]!.fixNote).toContain('للبنود 1A، س11');
+    expect(findings[1]!.fixNote).toContain('لأي بند');
+    for (const finding of findings) expect(finding.fixNote).not.toMatch(/12|١٢|71\.9/);
+  });
+
+  it('a solution slide carrying the issue (a check tried later) keeps its other working', () => {
+    const solution = {
+      ...tryScene('الحل', [ISSUE]),
+      id: 'sol',
+      content: {
+        type: 'slide',
+        contentRole: 'worked_example',
+        canvas: { elements: [{ id: 'e', type: 'text', content: '<p>الحل</p>' }] },
+      },
+    } as unknown as AppScene;
+    const [finding] = guideLeakFindings([solution], reviewSlidesOf([solution]));
+    expect(finding).toMatchObject({ targetId: 'sol', check: 'S7' });
+    // Only the named item loses its answer; the rest of the slide stays as it is.
+    expect(finding!.fixNote).toContain('لا تذكر الإجابة النهائية للبند 1A');
+    expect(finding!.fixNote).toContain('وأبقِ كل ما سواه كما هو');
+    expect(finding!.fixNote).not.toContain('فقط');
   });
 });

@@ -41,6 +41,7 @@ import {
   guideAnswerContextOf,
   removedGuideItemKeys,
 } from '@/lib/server/teaching-package/guide-answer-context';
+import { guideLeakIssueItems } from '@/lib/server/teaching-package/guide-answer-guard';
 import {
   isGuideAnswerModel,
   isLearnerFirstModel,
@@ -343,6 +344,56 @@ export function toStoredFindings(
   });
 }
 
+/** The scene issue a g5.v11 run leaves on a slide it kept while it states a checked answer. */
+const GUIDE_LEAK_ISSUE_CODE = 'GUIDE_ANSWER_LEAK';
+
+function carriesGuideLeak(scene: AppScene): boolean {
+  return (scene.generationIssues ?? []).some((issue) => issue.code === GUIDE_LEAK_ISSUE_CODE);
+}
+
+/**
+ * g5.v11 (re-review finding 5c): each slide the run kept while it may still state a
+ * checked answer before the learner's try (its `GUIDE_ANSWER_LEAK` scene issue) as one
+ * must-fix S7 finding («a check is attempted before its solution is shown»), so the fix
+ * loop regenerates that slide once like any other finding. The note names the items,
+ * never an answer (the issue carries none). Ids `g<n>`, after the reviewer's `f<n>`.
+ */
+export function guideLeakFindings(
+  scenes: readonly AppScene[],
+  slides: readonly ReviewSlide[],
+): StoredFinding[] {
+  const byId = new Map(scenes.map((scene) => [scene.id, scene]));
+  const findings: StoredFinding[] = [];
+  for (const slide of slides) {
+    const scene = byId.get(slide.id);
+    if (slide.sceneType !== 'slide' || !scene || !carriesGuideLeak(scene)) continue;
+    const items = [
+      ...new Set((scene.generationIssues ?? []).flatMap((issue) => guideLeakIssueItems(issue))),
+    ];
+    const answerOf =
+      items.length === 0
+        ? 'لأي بند'
+        : items.length === 1
+          ? `للبند ${items[0]}`
+          : `للبنود ${items.join('، ')}`;
+    findings.push({
+      id: `g${findings.length + 1}`,
+      targetId: slide.id,
+      targetTitle: slide.title,
+      targetOrder: slide.order,
+      check: 'S7',
+      severity: 'high',
+      bookEvidence: { quote: '', unitId: null },
+      whatIsWrong: `قد تذكر هذه الشريحة الإجابة النهائية ${answerOf} قبل أن يحاول المتعلم.`,
+      // Only the named items: a solution slide solving others keeps their working.
+      fixNote: `لا تذكر الإجابة النهائية ${answerOf} على هذه الشريحة، لا في نصها ولا في شرحها، وأبقِ كل ما سواه كما هو.`,
+      status: 'open',
+      teacherReason: null,
+    });
+  }
+  return findings;
+}
+
 /** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
 export function withSceneDigests(
   findings: readonly StoredFinding[],
@@ -566,6 +617,22 @@ export async function runPackageReview(
     let review = claimed;
     let findings: StoredFinding[];
     if (claimed.reviewedAt === null) {
+      // g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
+      // answer before the learner's try is a must-fix finding, stored with the first
+      // answer (a resume and a flagged-slide regeneration read it back). Only a g5.v11
+      // run leaves that issue; the attempt is read only then, so every other package
+      // reads and reviews exactly as before. A failed read adds nothing (never a new
+      // failure point).
+      let leakFindings: StoredFinding[] = [];
+      if (scenes.some(carriesGuideLeak)) {
+        const attempt = await readAttemptById(
+          pool as unknown as Queryable,
+          claimed.attemptId,
+        ).catch(() => null);
+        if (isGuideAnswerModel(attempt?.teachingModel)) {
+          leakFindings = guideLeakFindings(scenes, slides);
+        }
+      }
       // HIGH-1: the reads above may have stalled past the lease (evicted, or
       // claimed elsewhere): never start the paid call under a lost lease.
       if (!(await heartbeat())) {
@@ -576,7 +643,7 @@ export async function runPackageReview(
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
       // An answer that arrives after the eviction is the resumed run's to get.
       if (deps.signal?.aborted) return null;
-      findings = toStoredFindings(answer, slides);
+      findings = [...toStoredFindings(answer, slides), ...leakFindings];
       await recordUsage(call, {
         summary: answer.summary,
         findings,

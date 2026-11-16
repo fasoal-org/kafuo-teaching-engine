@@ -56,7 +56,11 @@ import {
   guideAnswerGuardFor,
   type GuideAnswerContext,
 } from '@/lib/server/teaching-package/guide-answer-context';
-import { guardedSceneContent } from '@/lib/server/teaching-package/guide-answer-guard';
+import {
+  guardedSceneContent,
+  guideLeakIssue,
+  type GuideAnswerFinding,
+} from '@/lib/server/teaching-package/guide-answer-guard';
 import {
   issuesAfterAudioRepair,
   narrationAudioGap,
@@ -210,6 +214,9 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
     ? guideAnswerGuardFor(input.guideAnswers, lessonOutlinesWith(input.scenes, outline))
     : null;
   const leakGuard = guideGuard?.planOf(outline.id)?.role === 'try' ? guideGuard : null;
+  // Re-review finding 5c: what the kept try-it slide may still state after its check
+  // (canvas or narration); it is marked like the run's, so the reviewer sees it.
+  const leaks: GuideAnswerFinding[] = [];
   const generateSlide = (correctiveNote?: string) =>
     generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {
       agents,
@@ -231,19 +238,19 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
     content = await generateSlide();
     if (leakGuard && content && 'elements' in content) {
       assertRoute();
-      content = (
-        await guardedSceneContent(
-          leakGuard,
-          outline,
-          content,
-          async (_outline, correction) => {
-            const next = await generateSlide(correction);
-            assertRoute();
-            return next && 'elements' in next ? next : null;
-          },
-          { removal: false },
-        )
-      ).content;
+      const checked = await guardedSceneContent(
+        leakGuard,
+        outline,
+        content,
+        async (_outline, correction) => {
+          const next = await generateSlide(correction);
+          assertRoute();
+          return next && 'elements' in next ? next : null;
+        },
+        { removal: false },
+      );
+      content = checked.content;
+      leaks.push(...checked.leaks);
     }
   } catch (error) {
     assertRoute();
@@ -341,12 +348,14 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       );
     actions = await narrate();
     // g5.v11: the inserted try-it slide's narration never states a checked answer:
-    // one more narration with a correction naming no value, then kept (D-19).
-    const leaks = leakGuard ? leakGuard.checkNarration(outline, actions) : [];
-    if (leakGuard && leaks.length > 0) {
-      actions = await narrate(leakGuard.correction(outline, leaks));
+    // one more narration with a correction naming no value, then kept (D-19) and marked.
+    const spoken = leakGuard ? leakGuard.checkNarration(outline, actions) : [];
+    if (leakGuard && spoken.length > 0) {
+      actions = await narrate(leakGuard.correction(outline, spoken));
       const left = leakGuard.checkNarration(outline, actions);
-      if (left.length > 0) leakGuard.settleNarration(outline, left);
+      if (left.length > 0 && leakGuard.settleNarration(outline, left) === 'keep') {
+        leaks.push(...left);
+      }
     }
   } catch (error) {
     assertRoute();
@@ -417,7 +426,22 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
     const first = findings[0]!;
     return failure(first.code, first.message, { findings: findings.length });
   }
-  const storable = omitUndefinedObjectMembers(withNarrationAudioMark(assembled, input.scenes));
+  // Re-review finding 5c: an inserted try-it slide kept while it may still state a
+  // checked answer carries the run's GUIDE_ANSWER_LEAK issue (item names only), so the
+  // package reviewer's fix loop sees it. Never set without the pinned guide (g5.v11).
+  const marked: AppScene =
+    leaks.length > 0
+      ? {
+          ...assembled,
+          generationIssues: [
+            ...(assembled.generationIssues ?? []).filter(
+              (issue) => issue.code !== 'GUIDE_ANSWER_LEAK',
+            ),
+            guideLeakIssue(leaks),
+          ],
+        }
+      : assembled;
+  const storable = omitUndefinedObjectMembers(withNarrationAudioMark(marked, input.scenes));
   const validation = validateAppScene(storable);
   if (!validation.valid) {
     return failure(
