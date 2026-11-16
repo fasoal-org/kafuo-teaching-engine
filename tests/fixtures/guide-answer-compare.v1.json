@@ -1,6 +1,6 @@
 {
   "contract": "kafuo.guide-answer-compare.v1",
-  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫», «،» or «,» between digits is a decimal point (a «,» or «٬» before exactly three digits groups thousands); a vulgar fraction («½») and \\frac{a}{b} read as a/b, and a whole number before a proper fraction is a mixed number («3 1/2», «3½» = 3.5); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text is the answer; a written unit must match after normalization (Arabic full names alias the symbols: متر = م, سنتيمتر = سم, كيلومتر = كم, درجة = °, ثانية = ث, …), a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values, the FIRST truth word deciding («صحيحة، لا يوجد مثال مضاد» is true; «لا» counts only as a whole reply or before a stop); text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words. Leak: a number leaks only at its exact value and only when the item's book text does not hold it; a text answer leaks only on a line announcing an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=» («شوال = 10» in a numbered cycle is given data); choice and bool never leak.",
+  "specification": "teacher-guide-answer-referee-plan-2026-11-16 §6 comparison rules: Arabic-Indic and Western digits; «٫» or «،» between digits is a decimal point and «٬» groups thousands; a «,» between digits is a decimal point unless exactly three digits follow it, and then the context decides: several groups («1,234,567»), a decimal tail («1,250.5»), a «.» decimal elsewhere in the text or a group ending in 0 («1,000», «2,500») group thousands; a lead of 0 or of four or more digits («0,125»), or a «,» decimal elsewhere, is a decimal point; otherwise («3,142») it reads both ways; a space before groups of exactly three digits («1 250») groups thousands unless the lead is 0 or the text lists numbers with bare spaces elsewhere (then both ways); a number that reads both ways with two different verdicts cannot be compared and is never a match; a vulgar fraction («½») and \\frac{a}{b} read as a/b, and a whole number before a proper fraction is a mixed number («3 1/2», «3½» = 3.5); number within 1% relative, 5% when approximate or the unit says «تقريب»; the LAST number of the written text that is not part of a date («عام ١٤٤٠», «١٤٤٠هـ»), a page («ص 48») or a reference («المثال 3», «س11», «2A») is the answer, and every number when there is no other; a written unit must match after normalization (Arabic full names alias the symbols: متر = م, سنتيمتر = سم, كيلومتر = كم, درجة = °, ثانية = ث, …; words aliased one by one are looked up again, «سنتيمترًا مربعًا» = سم²), a missing one is accepted; choice letters with أ/ب/ج/د = A–D; truth values, the FIRST truth word deciding, with the accusative and feminine forms («صحيحًا», «خاطئًا», «صائبة»; «صحيحة، لا يوجد مثال مضاد» is true; «لا» counts only as a whole reply or before a stop); text equal after normalization (diacritics, tatweel, hamza/alef, ة/ه, ى/ي, case, spaces, punctuation) or contained as whole words. Leak: a number leaks only at its exact value, never as an item label («2A»), a reference («السؤال 11») or a page, and only when the item's book text does not hold it; a text answer leaks only on a line announcing an answer («الإجابة», «الجواب», «الحل», «الناتج») or right after «=» («شوال = 10» in a numbered cycle is given data); choice and bool never leak.",
   "compare": [
     {
       "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
@@ -162,6 +162,62 @@
       "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
       "written": "11.25 ريالًا سعوديًا",
       "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "سم²" },
+      "written": "12 سنتيمترًا مربعًا",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "سم²" },
+      "written": "12 سنتيمترات مربعة",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 12, "unit": "سم²" },
+      "written": "12 سم",
+      "match": false
+    },
+    { "answer": { "type": "bool", "value": true }, "written": "صحيحًا", "match": true },
+    { "answer": { "type": "bool", "value": false }, "written": "خاطئًا", "match": true },
+    { "answer": { "type": "bool", "value": true }, "written": "خاطئًا", "match": false },
+    { "answer": { "type": "bool", "value": true }, "written": "العبارة صائبة", "match": true },
+    { "answer": { "type": "bool", "value": false }, "written": "غير صائبة", "match": true },
+    {
+      "answer": { "type": "number", "value": 71.9 },
+      "written": "71.9 في عام ١٤٤٠",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 71.9 },
+      "written": "٧١٫٩ مليون طن (١٤٤٠هـ)",
+      "match": true
+    },
+    {
+      "answer": { "type": "number", "value": 11.25, "unit": "ريال" },
+      "written": "11.25 ريالًا، انظر ص 48",
+      "match": true
+    },
+    { "answer": { "type": "number", "value": 12 }, "written": "12 كما في المثال 3", "match": true },
+    { "answer": { "type": "number", "value": 1440 }, "written": "عام ١٤٤٠", "match": true },
+    { "answer": { "type": "number", "value": 1250 }, "written": "1 250", "match": true },
+    {
+      "answer": { "type": "number", "value": 1250, "unit": "ريال" },
+      "written": "١ ٢٥٠ ريالًا",
+      "match": true
+    },
+    { "answer": { "type": "number", "value": 250 }, "written": "1 250", "match": false },
+    { "answer": { "type": "number", "value": 3142.5 }, "written": "3,142.5", "match": true },
+    { "answer": { "type": "number", "value": 0.125 }, "written": "0,125", "match": true },
+    { "answer": { "type": "number", "value": 2500 }, "written": "2,500", "match": true },
+    { "answer": { "type": "number", "value": 1234567 }, "written": "1,234,567", "match": true },
+    { "answer": { "type": "number", "value": 3.142 }, "written": "3,142", "match": false },
+    { "answer": { "type": "number", "value": 3142 }, "written": "3,142", "match": false },
+    { "answer": { "type": "number", "value": 50 }, "written": "3,142", "match": false },
+    {
+      "answer": { "type": "number", "value": 1250 },
+      "written": "الحدود 2 4 8 والمجموع 1 250",
+      "match": false
     }
   ],
   "leak": [
@@ -230,6 +286,31 @@
       "text": "التخمين خاطئ",
       "book": "",
       "leak": false
+    },
+    {
+      "answer": { "type": "number", "value": 2 },
+      "text": "حل التمرين 2A ثم 2B بنفسك",
+      "book": "",
+      "leak": false
+    },
+    { "answer": { "type": "number", "value": 2 }, "text": "الناتج 2", "book": "", "leak": true },
+    {
+      "answer": { "type": "number", "value": 11 },
+      "text": "حل السؤال 11 بنفسك",
+      "book": "",
+      "leak": false
+    },
+    {
+      "answer": { "type": "number", "value": 11 },
+      "text": "ابدأ بـ (س11)",
+      "book": "",
+      "leak": false
+    },
+    {
+      "answer": { "type": "number", "value": 1250 },
+      "text": "المجموع 1 250",
+      "book": "",
+      "leak": true
     }
   ]
 }
