@@ -23,15 +23,16 @@ function titleFor(numbers: number[], arabic: boolean): string {
     : `حل التمارين ${numbers.map(show).join('، ')}`;
 }
 
-export function retitledExerciseSolution<T extends { elements: Array<Record<string, unknown>> }>(
+export function retitledExerciseSolution<T extends { elements: readonly object[] }>(
   title: string,
   canvas: T,
 ): { title: string; content: T } | null {
   if (!TITLE.test(title)) return null;
+  const textOf = (element: object) => (element as { content?: unknown }).content;
   const numbers = [
     ...new Set(
       canvas.elements
-        .map((element) => EXERCISE_LINE.exec(plain(element.content))?.[1])
+        .map((element) => EXERCISE_LINE.exec(plain(textOf(element)))?.[1])
         .filter((digits): digits is string => digits !== undefined)
         .map(toNumber),
     ),
@@ -40,10 +41,10 @@ export function retitledExerciseSolution<T extends { elements: Array<Record<stri
   const next = title.replace(TITLE, titleFor(numbers, /[٠-٩]/.test(title)));
   if (next === title) return null;
   const elements = canvas.elements.map((element) => {
-    const text = element.content;
+    const text = textOf(element);
     if (typeof text !== 'string' || !TITLE.test(text)) return element;
     const match = TITLE.exec(text)?.[0] ?? '';
     return { ...element, content: text.replace(TITLE, titleFor(numbers, /[٠-٩]/.test(match))) };
   });
-  return { title: next, content: { ...canvas, elements } };
+  return { title: next, content: { ...canvas, elements } as T };
 }
