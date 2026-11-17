@@ -85,6 +85,8 @@ import {
   type GuideAnswerGuard,
 } from '@/lib/server/teaching-package/guide-answer-guard';
 import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
+import { withGuideWrittenQuestions } from '@/lib/server/teaching-package/guide-written-attempts';
+import { retitledExerciseSolution } from '@/lib/server/teaching-package/exercise-slide-title';
 import {
   bankQuizActions,
   bankQuizContent,
@@ -625,6 +627,14 @@ export interface GenerateClassroomInput {
    */
   guideAnswerGuard?: GuideAnswerGuard;
   /**
+   * g5.v11 only (owner, 17 Nov 2026): the teacher guide's answer drawings the run fetched
+   * and verified (`src-guide-<n>`). NEVER offered to the outline planner (they are not in
+   * `pdfContent.pdfImages`): the engine itself selects each on the worked-solution outline
+   * that solves its question (`injectGuideAnswers` → `suggestedImageIds`). From there they
+   * are stored, assigned and narrated like that slide's source visuals. Absent → as before.
+   */
+  guideAnswerFigures?: PdfImage[];
+  /**
    * Quran and hadith (Kafuo plan Q-4 to Q-15): the protected quotes of the
    * approved source. Present → every learner-text prompt carries the fixed
    * policy and the cited quotes verbatim, narration and image prompts are
@@ -988,6 +998,12 @@ export interface GenerationCorrectionOptions {
     blocking: OutlineDiagnostic[],
     aiCall: AICallFn,
   ) => Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11): once the plan passed the gates (nothing blocks),
+   * one more planning step that never pauses: a book example with no slide of its own
+   * before its check is planned once; the refined plan, or `null` to keep it as it is.
+   */
+  refineOutlines?: (outlines: SceneOutline[], aiCall: AICallFn) => Promise<SceneOutline[] | null>;
   /**
    * The final plan, cleaned of planner-only text before any Scene is generated
    * (e.g. Content Unit id labels a key point copied from the exercises block).
@@ -2146,10 +2162,39 @@ export async function generateClassroom(
         repairs: outlineRepairs,
       });
     }
+    // Lesson 2-5 (17 Nov 2026): a book example taught only on a check's slides is planned
+    // once before that check; one the plan cannot place is logged, never a pause.
+    if (correction.refineOutlines) {
+      const refined = await correction.refineOutlines(outlines, outlineAiCall);
+      if (refined) outlines = refined;
+    }
   }
   if (correction?.finalizeOutlines) {
     outlines = correction.finalizeOutlines(outlines);
   }
+  // g5.v11 (owner, 17 Nov 2026): from here on, the slide images are the source visuals
+  // plus the guide's answer drawings the engine just selected on solution outlines. The
+  // planner above never saw a drawing; without any, everything below is as before.
+  let guideFigures = input.guideAnswerFigures ?? [];
+  // A lesson without book images never checked its slide model for vision (book images
+  // fail the run without it). A drawing never does: without vision it is left out.
+  if (guideFigures.length > 0 && !routed && !hasSourceVisuals) {
+    const slideStage = 'scene-content:slide' as LlmStage;
+    const slideModelInfo = getStageModel(slideStage)
+      ? (await resolveModel({ stage: slideStage })).modelInfo
+      : modelInfo;
+    if (slideModelInfo?.capabilities?.vision !== true) {
+      log.warn(
+        "The slide model reports no vision capability; the guide's answer drawings are left out",
+      );
+      guideFigures = [];
+    }
+  }
+  const guideFigureIds = new Set(guideFigures.map((figure) => figure.id));
+  const slideImages =
+    guideFigures.length > 0 ? [...(sourceImages ?? []), ...guideFigures] : sourceImages;
+  const hasSlideImages = (slideImages?.length ?? 0) > 0;
+  for (const figure of guideFigures) sourceImageMapping[figure.id] = figure.src;
 
   // Resolve agents based on agentMode — now AFTER outlines so we can use languageDirective
   let agents: AgentInfo[];
@@ -2245,6 +2290,36 @@ export async function generateClassroom(
       }
       sourceServingMapping = materialized.servingMapping;
       sourceManifest = materialized.manifest;
+    }
+  }
+  // The selected answer drawings (owner, 17 Nov 2026) are stored beside them, on a resumed
+  // Stage too when it does not hold one yet. FAIL-SOFT: a drawing that cannot be stored is
+  // never assigned (below), and the lesson goes on without it.
+  if (guideFigures.length > 0 && options.sourceVisuals) {
+    const selectedIds = new Set(outlines.flatMap((outline) => outline.suggestedImageIds ?? []));
+    const selected = guideFigures.filter(
+      (figure) => selectedIds.has(figure.id) && !sourceServingMapping[figure.id],
+    );
+    if (selected.length > 0) {
+      try {
+        const materialized = await options.sourceVisuals.materialize(stageId, selected);
+        const failed = new Set(materialized.failedIds);
+        sourceServingMapping = {
+          ...sourceServingMapping,
+          ...Object.fromEntries(
+            Object.entries(materialized.servingMapping).filter(([id]) => !failed.has(id)),
+          ),
+        };
+        sourceManifest = [
+          ...sourceManifest,
+          ...materialized.manifest.filter((entry) => !failed.has(entry.id)),
+        ];
+      } catch (error) {
+        log.warn(
+          `The guide's answer drawing(s) ${selected.map((figure) => figure.id).join(', ')} could not be stored; left out:`,
+          error instanceof Error ? error.name : 'error',
+        );
+      }
     }
   }
 
@@ -2355,11 +2430,16 @@ export async function generateClassroom(
         const contentCall = bankQuiz ? null : await resolveSceneContentCall(safeOutline.type);
         // The outline's assigned source visuals (slide scenes only): a visual
         // need the model fills by referencing the image id, resolved onto the
-        // serving path after generation.
-        const outlineAssignedImages =
-          hasSourceVisuals && safeOutline.type === 'slide'
-            ? (sourceImages?.filter((image) => safeOutline.suggestedImageIds?.includes(image.id)) ??
-              [])
+        // serving path after generation. A guide answer drawing (g5.v11) is assigned
+        // only once stored, and only while the outline generated selects it: a question
+        // that left a settled slide (D-19) takes its drawing with it.
+        const assignedImagesOf = (outline: SceneOutline) =>
+          hasSlideImages && safeOutline.type === 'slide'
+            ? (slideImages?.filter(
+                (image) =>
+                  outline.suggestedImageIds?.includes(image.id) &&
+                  (!guideFigureIds.has(image.id) || sourceServingMapping[image.id] !== undefined),
+              ) ?? [])
             : undefined;
         let contentFailure: { code: string; detail?: string } | undefined;
         // 3 Oct 2026: a governed slide problem is recorded on the scene and the
@@ -2374,6 +2454,7 @@ export async function generateClassroom(
           fromOutline: SceneOutline = safeOutline,
         ) => {
           if (!contentCall) return null;
+          const outlineAssignedImages = assignedImagesOf(fromOutline);
           try {
             return await withGenerationRetry(
               () =>
@@ -2648,7 +2729,12 @@ export async function generateClassroom(
             dropGuideOutlines([safeOutline.id]);
             continue;
           }
-          content = pruned.content as typeof content;
+          // Owner (17 Nov 2026): the engine's written questions (a proof or «إجابة ممكنة»
+          // item the lesson solves) go after the checked ones, before the narration.
+          content = withGuideWrittenQuestions(
+            pruned.content,
+            guideGuard.writtenQuestionsOf(safeOutline.id),
+          ) as typeof content;
         }
         // Review finding 1: an attempt's narration writer never reads its hidden key.
         const narrationOutline = guideGuard ? withoutHiddenAnswerKey(sceneOutline) : safeOutline;
@@ -2753,11 +2839,11 @@ export async function generateClassroom(
                         ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                         ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                         ...(input.learnerFirst ? { learnerFirst: true } : {}),
-                        ...(safeOutline.type === 'slide' && hasSourceVisuals
+                        ...(safeOutline.type === 'slide' && hasSlideImages
                           ? {
                               imageNotes: buildNarrationImageNotes(
                                 safeOutline,
-                                sourceImages,
+                                slideImages,
                                 sourceServingMapping,
                               ),
                             }
@@ -3151,6 +3237,25 @@ export async function generateClassroom(
       canvas.elements = nativeContent.elements as never;
       scene.actions = nativeActions as never;
       if (nativeRegisterIssues.length > 0) markSceneIssues(store, scene.id, nativeRegisterIssues);
+    }
+
+    if (input.guideAnswerGuard) {
+      // Lesson 2-5 (17 Nov 2026): an exercise solution slide's title names exactly the
+      // exercises its canvas solves (scene 35 kept «حل التمارين ٤–٦» over ex 20 alone);
+      // the persisted plan says the same.
+      for (const scene of freshScenes) {
+        if (scene.type !== 'slide' || scene.content.type !== 'slide') continue;
+        const retitled = retitledExerciseSolution(scene.title, scene.content.canvas);
+        if (!retitled) continue;
+        log.warn(
+          `Exercise solution slide ${scene.outlineId ?? scene.id} retitled to the exercises it solves`,
+        );
+        scene.title = retitled.title;
+        scene.content.canvas = retitled.content;
+        outlines = outlines.map((outline) =>
+          outline.id === scene.outlineId ? { ...outline, title: retitled.title } : outline,
+        );
+      }
     }
 
     // 3 Oct 2026: on a governed run an invalid Action no longer pauses the

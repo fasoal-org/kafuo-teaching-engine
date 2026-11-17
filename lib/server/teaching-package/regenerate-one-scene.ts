@@ -74,9 +74,16 @@ import {
   withoutHiddenAnswerKey,
 } from '@/lib/server/teaching-package/guide-answers';
 import {
+  isGuideWrittenQuestionId,
+  withGuideWrittenQuestions,
+} from '@/lib/server/teaching-package/guide-written-attempts';
+import {
+  isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
+import { asksForTry } from '@/lib/server/teaching-package/try-prompt';
+import { retitledExerciseSolution } from '@/lib/server/teaching-package/exercise-slide-title';
 import {
   normalizeQuizPoints,
   normalizeSceneDigits,
@@ -98,7 +105,7 @@ import {
 } from '@/lib/server/teaching-package/sacred-text';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
-import type { AppScene, Scene } from '@/lib/types/stage';
+import type { AppScene, QuizQuestion, Scene } from '@/lib/types/stage';
 
 export interface RegenerateOneSceneInput {
   /** The pre-image (a slide Scene). */
@@ -366,7 +373,12 @@ function codeOf(error: unknown): string | undefined {
 function guideGuardOf(
   input: RegenerateOneSceneInput,
   outline: SceneOutline,
-): { guard: GuideAnswerGuard | null; outline: SceneOutline } | null {
+): {
+  guard: GuideAnswerGuard | null;
+  outline: SceneOutline;
+  /** Owner (17 Nov 2026): the attempt's engine-written questions (keyed or not). */
+  written: QuizQuestion[];
+} | null {
   if (!input.guideAnswers) return null;
   // A moved part's slide is planned with the units it will carry.
   const planned = input.sourceContentUnitIds
@@ -380,6 +392,7 @@ function guideGuardOf(
   const [rebuilt] = injectGuideAnswers([planned], guard.effectivePlans(), guard.leftOut());
   return {
     guard: guard.planOf(outline.id) ? guard : null,
+    written: guard.writtenQuestionsOf(outline.id),
     // Only the guide blocks change; the generated outline keeps its own fields.
     outline:
       rebuilt && rebuilt !== planned
@@ -391,6 +404,27 @@ function guideGuardOf(
 /** Re-review finding 5c: a regenerated slide that still states a checked answer is not kept. */
 const GUIDE_LEAK_KEPT_AS_IT_WAS =
   "the regenerated slide still states a checked answer before the learner's try; the slide was kept as it was";
+
+/**
+ * Lesson 2-5 (17 Nov 2026, item 214 scene 33): a regenerated solution slide that asks the
+ * learner to try on the screen that shows the answer is not kept: the try belongs on a
+ * slide or attempt before it, which no single-slide edit can add.
+ */
+const TRY_ON_SOLUTION_KEPT_AS_IT_WAS =
+  'the regenerated solution slide asks the learner to try on the screen that shows the answer; the slide was kept as it was';
+
+/** g5.v11: whether a regenerated solution slide poses a try (see the note above). */
+function posesTryOnSolution(
+  input: RegenerateOneSceneInput,
+  elements: ReadonlyArray<Record<string, unknown>>,
+  actions?: ReadonlyArray<{ type: string; text?: unknown }>,
+): boolean {
+  const pre = input.scene;
+  if (!isGuideAnswerModel(input.teachingModel)) return false;
+  if (pre.content.type !== 'slide' || pre.content.contentRole !== 'worked_example') return false;
+  if (elements.some((element) => asksForTry(element.content))) return true;
+  return (actions ?? []).some((action) => action.type === 'speech' && asksForTry(action.text));
+}
 
 export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
@@ -532,6 +566,14 @@ export async function regenerateOneScene(
       contentFailure ? { failure: contentFailure.code } : undefined,
     );
   }
+  // Lesson 2-5 (17 Nov 2026): a try on the screen that shows the answer → kept as it was.
+  if (posesTryOnSolution(input, content.elements as never)) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      TRY_ON_SOLUTION_KEPT_AS_IT_WAS,
+      { failure: 'TRY_ON_SOLUTION_SLIDE' },
+    );
+  }
 
   // 4. Actions under the register policy; fallback defaults refused.
   // Each lifted book image reaches narration with its own planned note.
@@ -554,6 +596,13 @@ export async function regenerateOneScene(
   });
   if (!generatedActions.ok) return generatedActions;
   const actions = generatedActions.actions;
+  if (posesTryOnSolution(input, content.elements as never, actions as never)) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      TRY_ON_SOLUTION_KEPT_AS_IT_WAS,
+      { failure: 'TRY_ON_SOLUTION_SLIDE' },
+    );
+  }
 
   // 5. Assembly: same id, carried assistance, the pre-image's canvas frame.
   const built = buildCompleteScene(
@@ -599,6 +648,18 @@ export async function regenerateOneScene(
         : {}),
   } as AppScene;
   candidate = learnerFirstNormalized(input, candidate);
+  // Lesson 2-5 (17 Nov 2026, g5.v11): an exercise solution slide's title names exactly
+  // the exercises its new canvas solves (scene 35: «حل التمارين ٤–٦» over ex 20 alone).
+  if (isGuideAnswerModel(input.teachingModel) && candidate.content.type === 'slide') {
+    const retitled = retitledExerciseSolution(candidate.title ?? '', candidate.content.canvas);
+    if (retitled) {
+      candidate = {
+        ...candidate,
+        title: retitled.title,
+        content: { ...candidate.content, canvas: retitled.content },
+      } as AppScene;
+    }
+  }
   if (input.governed) {
     // A governed regeneration is a fresh generation-origin baseline (W4.4).
     const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
@@ -874,7 +935,12 @@ async function regenerateQuizScene(
   const stage = input.stage;
   const agents = stage.generatedAgentConfigs;
   const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
-  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(pre.content.questions)}`;
+  // Owner (17 Nov 2026): the engine's written questions are never the model's to rewrite;
+  // they are appended again after the checks, under the same ids.
+  const ownQuestions = pre.content.questions.filter(
+    (question) => !isGuideWrittenQuestionId(question.id),
+  );
+  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(ownQuestions)}`;
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
   // g5.v11 (review finding 2): an attempt's regenerated key is checked like the run's.
@@ -908,6 +974,10 @@ async function regenerateQuizScene(
       );
       content = checked.content;
       settledOutline = checked.outline;
+    }
+    // Owner (17 Nov 2026): the written questions after the model's (none of its own kept).
+    if (guided && content && 'questions' in content) {
+      content = withGuideWrittenQuestions(content, guided.written);
     }
   } catch (error) {
     assertRoute();

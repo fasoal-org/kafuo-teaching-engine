@@ -26,6 +26,7 @@ import {
   withoutSacredItems,
 } from '@/lib/server/teaching-package/sacred-text';
 
+import { exerciseQuestionText } from '@/lib/server/teaching-package/attempt-quizzes';
 import {
   selectExercises,
   type ExerciseGuideStatuses,
@@ -175,6 +176,13 @@ export interface CoverageBookStructure extends KafuoBookStructure {
    * caller (planner text, gates, repair, attempts, correction) picks the same set.
    */
   exerciseGuide?: ExerciseGuideStatuses;
+  /**
+   * g5.v11 only (lesson 2-5, 17 Nov 2026): every book example keeps a slide of its own
+   * before its check — a slide teaching another example is never merged into a check's
+   * solution, and an example taught only on a check's slides is planned once
+   * ({@link missingExampleGaps}).
+   */
+  examplesKept?: true;
 }
 
 /** The units whose text the g5.v8 gates read: checks and exercises. */
@@ -257,6 +265,11 @@ function noItemsLeft(body: string, stripped: string): boolean {
 export function bookUnitFactsOf(
   book: KafuoBookStructure,
   units: ReadonlyArray<{ id: string; text: string }>,
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11 callers only): questions sharing a book line are
+   * counted each («(25 … (26 …»). Off, every earlier model counts as the backend does.
+   */
+  options: { inlineQuestions?: boolean } = {},
 ): Record<string, BookUnitFacts> {
   const text = new Map(units.map((unit) => [String(unit.id), unit.text] as const));
   const facts: Record<string, BookUnitFacts> = {};
@@ -266,9 +279,21 @@ export function bookUnitFactsOf(
     // 4 Nov 2026: a verse or hadith item is never an exercise or check item,
     // so it is not counted (and the engine never selects it).
     const items = isSacredExerciseElement(unit) ? withoutSacredItems(body) : body;
+    const unitFacts = bookUnitFacts(items, options);
+    // Lesson 2-5 (g5.v11): a question whose own text the attempt cannot read, or that
+    // prints no given (a graph-only one), is never set as a try without its figure.
+    const numbers = unitFacts.questionNumbers ?? [];
+    const unaskable =
+      options.inlineQuestions === true && unit.element === 'exercise' && numbers.length >= 2
+        ? numbers.filter((number) => {
+            const own = exerciseQuestionText(items, number, null, true);
+            return own === null || !/[0-9٠-٩]/u.test(own);
+          })
+        : [];
     facts[unit.contentUnitId] = {
-      ...bookUnitFacts(items),
+      ...unitFacts,
       ...(noItemsLeft(body, items) ? { noItemsLeft: true as const } : {}),
+      ...(unaskable.length > 0 ? { unaskableQuestions: unaskable } : {}),
     };
   }
   return facts;
@@ -294,6 +319,7 @@ export function teacherParityBook(
     ...(teacherGuide && isGuideAnswerModel(teachingModel)
       ? { exerciseGuide: resolveTeacherGuide(teacherGuide, book, unitFacts).exerciseStatuses }
       : {}),
+    ...(isGuideAnswerModel(teachingModel) ? { examplesKept: true as const } : {}),
   };
 }
 
@@ -326,7 +352,9 @@ export type BookCoverageGapKind =
   | 'solution_before_try_it'
   // g5.v8 only:
   | 'missing_recall'
-  | 'missing_exercises';
+  | 'missing_exercises'
+  // g5.v11 only (`missingExampleGaps`, never a diagnosis: planned once, else logged):
+  | 'missing_example';
 
 export interface BookCoverageGap {
   kind: BookCoverageGapKind;
@@ -456,6 +484,70 @@ export function findBookCoverageGaps(
     // the repair (`mergeDuplicateSolutions`).
   }
   if (book.teacherParity) gaps.push(...teacherParityGaps(outlines, book));
+  return gaps;
+}
+
+/**
+ * Lesson 2-5 (17 Nov 2026, g5.v11 books only, `examplesKept`): the book's required worked
+ * examples that have no slide of their own before the check that follows them — cited
+ * only by a check's try-it slide or a check's solution (item 214: Example 3 sat only on
+ * check 2's solution and check 3's try, so check 3 was tried with no example). Each is
+ * anchored right before that check's try-it slide (with no such try, after the last
+ * slide of an earlier unit of its part). NOT a coverage diagnosis: the runner plans each
+ * once after the outline gates, and only logs one it cannot place — never a pause.
+ */
+export function missingExampleGaps(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure | undefined,
+): BookCoverageGap[] {
+  if (!book?.examplesKept) return [];
+  const checks = new Set(
+    book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
+  );
+  const ownSlide = (outline: SceneOutline) =>
+    teaches(outline) &&
+    outline.contentRole !== 'check_understanding' &&
+    !(outline.sourceContentUnitIds ?? []).some((id) => checks.has(String(id)));
+  const gaps: BookCoverageGap[] = [];
+  book.units.forEach((unit, position) => {
+    if (unit.element !== 'worked_example' || !unit.required) return;
+    const check = book.units.find(
+      (other) => other.element === 'try_it' && other.pairedExampleUnitId === unit.contentUnitId,
+    );
+    const tryAt = check
+      ? outlines.findIndex(
+          (outline) =>
+            teaches(outline) &&
+            outline.contentRole === 'check_understanding' &&
+            cites(outline, check.contentUnitId),
+        )
+      : -1;
+    const before = tryAt >= 0 ? outlines.slice(0, tryAt) : outlines;
+    if (before.some((outline) => ownSlide(outline) && cites(outline, unit.contentUnitId))) return;
+    const earlier = new Set(
+      book.units
+        .slice(0, position)
+        .filter((other) => other.partIndex !== undefined && other.partIndex === unit.partIndex)
+        .map((other) => other.contentUnitId),
+    );
+    const anchorIndex =
+      tryAt > 0
+        ? tryAt - 1
+        : earlier.size > 0
+          ? lastIndexWhere(
+              outlines,
+              (outline) =>
+                teaches(outline) &&
+                (outline.sourceContentUnitIds ?? []).some((id) => earlier.has(String(id))),
+            )
+          : undefined;
+    gaps.push({
+      kind: 'missing_example',
+      unit,
+      message: `${describe(unit)} has no slide of its own before its check`,
+      ...(anchorIndex !== undefined && anchorIndex >= 0 ? { anchorIndex } : {}),
+    });
+  });
   return gaps;
 }
 
@@ -898,6 +990,45 @@ function teacherParityDiagnostics(
  * this the planner could drop it unnoticed and Submit alone would refuse the
  * package (`ESSENTIAL_SECTION_UNCOVERED`), after every scene was paid for.
  */
+/**
+ * Lesson 2-5 (17 Nov 2026): the normalized content's practice subtypes, as the book
+ * profile kinds they print («تأكد» = GUIDED_PRACTICE, «تدرب وحل المسائل» = PRACTICE).
+ */
+const PRACTICE_SUBTYPE_KIND: Readonly<Record<string, string>> = {
+  GUIDED_PRACTICE: 'GUIDED_PRACTICE',
+  INDEPENDENT_PRACTICE: 'PRACTICE',
+};
+
+/**
+ * Lesson 2-5 (17 Nov 2026, g5.v11 callers only): a practice unit the book map left
+ * untyped (`kind` and `element` null: a «تأكد» or a «تدرب» continuation printed without
+ * its title, units 6419 and 6423) takes the kind its normalized subtype names, and the
+ * element the map's OWN rules give that kind (`exercise`). Only a `PRACTICE_SET` unit,
+ * only a subtype listed above, only when the rules make it an exercise; every other unit
+ * (an `ignore`d test-prep or cumulative review among them) is left as the map sent it.
+ * The SAME book when nothing changes.
+ */
+export function withTypedPracticeUnits<T extends KafuoBookStructure>(
+  book: T | undefined,
+  units: ReadonlyArray<{ id: string; role?: string | null; subtype?: string | null }>,
+): T | undefined {
+  if (!book) return book;
+  const byId = new Map(units.map((unit) => [String(unit.id), unit] as const));
+  let changed = false;
+  const typed = book.units.map((unit) => {
+    if (unit.element !== null || unit.kind !== null) return unit;
+    const source = byId.get(String(unit.contentUnitId));
+    if (source?.role?.toUpperCase() !== 'PRACTICE_SET') return unit;
+    const kind = PRACTICE_SUBTYPE_KIND[source.subtype?.toUpperCase() ?? ''];
+    if (!kind) return unit;
+    const element = book.rules.find((rule) => rule.kind === kind)?.element;
+    if (element !== 'exercise') return unit;
+    changed = true;
+    return { ...unit, kind, element };
+  });
+  return changed ? { ...book, units: typed } : book;
+}
+
 export function requireEssentialUntypedUnits<T extends KafuoBookStructure>(
   book: T | undefined,
   essentialIds: readonly string[] | null | undefined,

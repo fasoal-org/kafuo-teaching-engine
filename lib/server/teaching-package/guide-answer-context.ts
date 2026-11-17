@@ -15,6 +15,7 @@ import {
   isGuideAnswerModel,
   isSacredExerciseElement,
   teacherParityBook,
+  withTypedPracticeUnits,
 } from '@/lib/server/teaching-package/book-coverage';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import {
@@ -28,6 +29,7 @@ import {
   resolveTeacherGuide,
   type ResolvedTeacherGuide,
 } from '@/lib/server/teaching-package/guide-answers';
+import { guideWrittenAttempts } from '@/lib/server/teaching-package/guide-written-attempts';
 import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
 import { stripProviderImageDescriptions } from '@/lib/server/teaching-package/learner-first-source';
 import { withoutSacredItems } from '@/lib/server/teaching-package/sacred-text';
@@ -119,15 +121,30 @@ export function guideAnswerContextOf(input: {
       }
     | null
     | undefined;
-  units: ReadonlyArray<{ unitId: string; normalizedText: string }>;
+  units: ReadonlyArray<{
+    unitId: string;
+    normalizedText: string;
+    role?: string | null;
+    subtype?: string | null;
+  }>;
   language: string | null | undefined;
 }): GuideAnswerContext | null {
   const guide = input.snapshot?.teacherGuide;
-  const book = input.snapshot?.bookStructure;
+  // Lesson 2-5 (17 Nov 2026): the run's typed practice units («تأكد», a «تدرب» part).
+  const book = withTypedPracticeUnits(
+    input.snapshot?.bookStructure,
+    input.units.map((unit) => ({
+      id: String(unit.unitId),
+      role: unit.role,
+      subtype: unit.subtype,
+    })),
+  );
   if (!isGuideAnswerModel(input.teachingModel) || !guide || !book) return null;
   const facts = bookUnitFactsOf(
     book,
     input.units.map((unit) => ({ id: String(unit.unitId), text: unit.normalizedText })),
+    // Lesson 2-5: the g5.v11 run's count of questions that share a book line.
+    { inlineQuestions: true },
   );
   const sacred = new Set(
     book.units.filter(isSacredExerciseElement).map((unit) => String(unit.contentUnitId)),
@@ -164,13 +181,19 @@ export function guideAnswerGuardFor(
     unitTexts: context.unitTexts,
     ...(onSettled ? { onSettled } : {}),
   });
-  guard.usePlans(
-    guideOutlinePlans(outlines, context.book, context.resolved, {
-      ...(context.slideQuestions ? { slideQuestions: context.slideQuestions } : {}),
-      facts: context.facts,
+  const plans = guideOutlinePlans(outlines, context.book, context.resolved, {
+    ...(context.slideQuestions ? { slideQuestions: context.slideQuestions } : {}),
+    facts: context.facts,
+    unitTexts: context.unitTexts,
+  });
+  guard.usePlans(plans);
+  guard.restore(context.settlements);
+  // Owner (17 Nov 2026): the written attempts, minted exactly as the run minted them.
+  guard.useWrittenAttempts(
+    guideWrittenAttempts(outlines, plans, {
+      guideId: context.resolved.guideId,
       unitTexts: context.unitTexts,
     }),
   );
-  guard.restore(context.settlements);
   return guard;
 }

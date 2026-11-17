@@ -300,23 +300,74 @@ export function checkItemLabels(text: string): string[] {
  * runs of consecutive numbers (1..12, 37..42), so one stray bracket never does.
  * Returned ascending, once per number.
  */
-export function trailingItemNumbers(text: string): number[] {
+export function trailingItemNumbers(
+  text: string,
+  /**
+   * Lesson 2-5 (17 Nov 2026): the unit's line-start question numbers. A trailing number
+   * next to one of them is in a run too: «(25 … (26 …» / «(27 … (28 …» prints 26 and 28
+   * after the line's own question, and neither has a trailing neighbour.
+   */
+  lineStarts: ReadonlySet<number> = new Set(),
+): number[] {
   const candidates = new Set<number>();
   for (const line of text.split('\n')) {
-    for (const match of line.matchAll(/\((\d{1,3})(?:(?=\s|$)|\)(?=\s*$))/gu)) {
-      const at = match.index ?? 0;
-      const before = line.slice(0, at).trimEnd();
-      if (before === '' || before.endsWith('(')) continue;
-      const after = line.slice(at + match[0].length);
-      const close = after.indexOf(')');
-      const open = after.indexOf('(');
-      if (close >= 0 && (open < 0 || close < open)) continue;
-      candidates.add(Number(match[1]));
-    }
+    for (const match of inlineQuestionMarks(line)) candidates.add(match.number);
   }
-  return [...candidates]
-    .filter((n) => candidates.has(n - 1) || candidates.has(n + 1))
-    .sort((a, b) => a - b);
+  const near = (n: number) => candidates.has(n) || lineStarts.has(n);
+  return [...candidates].filter((n) => near(n - 1) || near(n + 1)).sort((a, b) => a - b);
+}
+
+/**
+ * The «(N» marks after a line's start that may open a question: the mark is never the
+ * line's first text, never a bracket's inside («(5 + 2)», closed before the next «(»).
+ */
+function inlineQuestionMarks(line: string): Array<{ at: number; number: number }> {
+  const marks: Array<{ at: number; number: number }> = [];
+  for (const match of line.matchAll(/\((\d{1,3})(?:(?=\s|$)|\)(?=\s*$))/gu)) {
+    const at = match.index ?? 0;
+    const before = line.slice(0, at).trimEnd();
+    if (before === '' || before.endsWith('(')) continue;
+    const after = line.slice(at + match[0].length);
+    const close = after.indexOf(')');
+    const open = after.indexOf('(');
+    if (close >= 0 && (open < 0 || close < open)) continue;
+    marks.push({ at, number: Number(match[1]) });
+  }
+  return marks;
+}
+
+/**
+ * Lesson 2-5 (17 Nov 2026): the unit's text with each inline question on its own line —
+ * «(13 m = -5, b = -2 (14 m = -7, b = -4 (15 m = 9, b = 2» becomes three lines — so a
+ * question that shares its book line with another gets its own statement (and its own
+ * attempt question: item 214's ex 14 had none, and the reviewer put its try on the slide
+ * that solves it). Only a mark {@link exerciseQuestionNumbers} counts as a question
+ * splits a line, and only on a line that itself opens with a question. g5.v11 callers only.
+ */
+export function splitInlineQuestions(text: string): string {
+  const questions = new Set(exerciseQuestionNumbers(text, { inlineQuestions: true }));
+  if (questions.size < 2) return text;
+  return text
+    .split('\n')
+    .map((raw) => {
+      const line = asciiDigits(raw);
+      const body = line.replace(EXERCISE_HEADER, ' ');
+      const opening = /^[^\S\n]*\(?[^\S\n]*(\d{1,3})(?=[\s).\-–])/u.exec(body.trimStart());
+      if (!opening || !questions.has(Number(opening[1]))) return raw;
+      const cuts = inlineQuestionMarks(line)
+        .filter((mark) => questions.has(mark.number) && mark.number > Number(opening[1]))
+        .map((mark) => mark.at);
+      if (cuts.length === 0) return raw;
+      const pieces: string[] = [];
+      let start = 0;
+      for (const cut of cuts) {
+        pieces.push(raw.slice(start, cut).trimEnd());
+        start = cut;
+      }
+      pieces.push(raw.slice(start));
+      return pieces.filter((piece) => piece.trim() !== '').join('\n');
+    })
+    .join('\n');
 }
 
 /** Arabic-Indic digits as ASCII digits; nothing else changes. */
@@ -343,10 +394,25 @@ const LINE_ITEM_NUMBER =
  * («1.», «1-», «1)», «(1)», a bare «1 »); «●» bullets and an «المثال N» header
  * never do.
  */
-export function exerciseQuestionNumbers(text: string): number[] {
+export function exerciseQuestionNumbers(
+  text: string,
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11 callers only): a trailing number beside a non-bare
+   * line-start question is in a run too («(25 … (26 …»: 26, 28 and 30). Off, the count
+   * is the backend's `exercise_question_count`, as every earlier model reads it.
+   */
+  options: { inlineQuestions?: boolean } = {},
+): number[] {
   if (!text) return [];
   const body = asciiDigits(text).replace(EXERCISE_HEADER, ' ');
-  const all = trailingItemNumbers(body);
+  const lineStarts = new Set(
+    options.inlineQuestions === true
+      ? [...body.matchAll(LINE_ITEM_NUMBER)]
+          .filter((match) => match[1] !== undefined || !/^[^\S\n]*\d+$/.test(match[0]))
+          .map((match) => Number(match[1] ?? match[2]))
+      : [],
+  );
+  const all = trailingItemNumbers(body, lineStarts);
   const numbers: number[] = [];
   for (const match of body.matchAll(LINE_ITEM_NUMBER)) {
     // A unit using the OCR form «value (N» prints a value, not a question, as a
@@ -380,10 +446,20 @@ export interface BookUnitFacts {
    * or hadith, so nothing is left to set or solve; the engine never selects it.
    */
   noItemsLeft?: true;
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11 facts only): the numbered questions an attempt
+   * cannot ask from the book's text — none of their own text is printed, or it holds no
+   * given (a graph-only «\overleftrightarrow{EF} (31»). The engine never selects them.
+   */
+  unaskableQuestions?: number[];
 }
 
-export function bookUnitFacts(text: string): BookUnitFacts {
-  const questionNumbers = exerciseQuestionNumbers(text);
+export function bookUnitFacts(
+  text: string,
+  /** Lesson 2-5 (g5.v11 callers only): {@link exerciseQuestionNumbers}' inline questions. */
+  options: { inlineQuestions?: boolean } = {},
+): BookUnitFacts {
+  const questionNumbers = exerciseQuestionNumbers(text, options);
   return {
     itemLabels: checkItemLabels(text),
     hiddenSteps: detectHiddenStepTypes(text),

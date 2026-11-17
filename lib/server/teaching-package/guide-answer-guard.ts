@@ -13,21 +13,24 @@
  *   try-it slide's canvas or narration, or in an attempt's question stem or narration
  *   (the right option among the options is fine). A given of the item's OWN question
  *   that equals the answer is no leak.
+ * - Lesson 2-5 (17 Nov 2026): the canvas is read whole — a slide with no final line
+ *   that still SHOWS the answer in any element (a LaTeX `\boxed{y=3x}`, «المعادلة:»
+ *   beside `y=0`), in the comparator's notation, is no finding (`guideAnswerShown`).
  * - One regeneration with a correction (the correct final answer for a solution or a
- *   key; never the value for a leak). Still failing → D-19 (16 Nov 2026), never a slide
- *   dropped and never a step for a person:
- *   - a check item: its outline is generated once more WITHOUT the guide answer (the
- *     plain g5.v10 path) and kept; the item is logged unverified;
- *   - an exercise item: the exercise leaves the lesson — its attempt question and its
- *     item on the solution slide (which is generated once more without it); when that
- *     cannot be done (the slide would solve nothing, or its attempt question cannot be
- *     told), the slide is generated without the guide answer of that exercise instead;
- *   - an attempt question TIED to the item at fault is removed (re-review finding 5a:
- *     never a question that only lists the value as a wrong option); an attempt left
- *     with no question is the ONLY outline that ever leaves (it is practice, never a
- *     coverage item);
- *   - a check item left without its guide answer on its solution slide loses its key in
- *     its attempt too (re-review finding 6), so the key and the solution never disagree;
+ *   key; never the value for a leak). Still failing → owner rule (17 Nov 2026, replacing
+ *   D-19's removals): the guide's approved answer is the truth, never a slide, an
+ *   exercise or a quiz dropped, never a step for a person:
+ *   - a solution slide (a check or an exercise item) keeps its content, and its approved
+ *     final line is written in by code (`withApprovedFinalLines`: a wrong final line
+ *     replaced, a missing one added in the slide's own text style), logged
+ *     `final_line_written`; its attempt keeps its key;
+ *   - an attempt question tied to the item is keyed to the approved answer by code
+ *     (`keyedToApprovedAnswer`), logged `key_rewritten`; one that cannot be told, or a
+ *     stem stating the answer, is generated once more without that key; a stem that
+ *     STILL states it loses that question (the leak guard), and an attempt left with no
+ *     question is the ONLY outline that ever leaves (it is practice, never coverage);
+ *   - a check item left without its guide answer on its solution slide (it does not
+ *     solve it) loses its key in its attempt too (re-review finding 6);
  *   - a narration that still states the answer: an attempt gets the model-free
  *     narration; a try-it slide keeps its narration;
  *   - a try-it slide (or a solution slide's check before its try) that still states the
@@ -43,10 +46,15 @@
  *   Otherwise its final line leaves the canvas, its key leaves the outline the narration
  *   is written from, and the item is logged unverified on that slide. Deterministic:
  *   no generation, never a pause; its attempt keeps its compared key.
+ * - Owner decision (17 Nov 2026): it also holds the run's written attempts (a proof or
+ *   «إجابة ممكنة» item's engine-written short answer, `guide-written-attempts.ts`). They
+ *   are appended after the checks, never compared or leak-checked here (the Backend grades
+ *   them after submission); an attempt left with only them is kept, never dropped.
  */
 import {
   announcesGuideAnswer,
   compareGuideAnswer,
+  guideAnswerShown,
   leaksGuideAnswer,
   normalizeGuideDigits,
 } from '@/lib/server/teaching-package/guide-answer-compare';
@@ -63,7 +71,9 @@ import {
   type GuideOutlinePlan,
   type KeyedGuideItem,
 } from '@/lib/server/teaching-package/guide-answers';
+import type { GuideWrittenAttempt } from '@/lib/server/teaching-package/guide-written-attempts';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { QuizQuestion } from '@/lib/types/stage';
 
 export type GuideAnswerFindingCode =
   | 'GUIDE_ANSWER_MISMATCH'
@@ -90,15 +100,25 @@ export interface GuideAnswerSettlement {
     | 'items_removed'
     | 'unverified'
     | 'narration_replaced'
-    | 'attempt_dropped';
+    | 'attempt_dropped'
+    /** Owner (17 Nov 2026): the approved final line was written into the solution slide. */
+    | 'final_line_written'
+    /** Owner (17 Nov 2026): an attempt question was keyed to the approved answer. */
+    | 'key_rewritten';
   /** The outline ids that left the lesson: only an attempt left with no question. */
   dropped: string[];
   removedQuestions: number[];
   /**
-   * The items settled: `removed` = the exercise left the lesson (its attempt question
-   * and its solution item); `unverified` = kept, generated without the guide answer.
+   * The items settled: `written` = kept, its approved answer written in by code (owner,
+   * 17 Nov 2026: the guide's approved answer is the truth); `unverified` = kept without
+   * the guide answer (a try, or an item its slide does not solve). `removed` (the
+   * exercise left the lesson) is no longer settled; a run pinned before 17 Nov keeps it.
    */
-  items: Array<{ contentUnitId: string; label: string; outcome: 'removed' | 'unverified' }>;
+  items: Array<{
+    contentUnitId: string;
+    label: string;
+    outcome: 'removed' | 'unverified' | 'written';
+  }>;
   findings: Array<{
     code: GuideAnswerFindingCode;
     contentUnitId: string;
@@ -151,9 +171,12 @@ export interface GuideAnswerGuard {
   /** The one regeneration's correction: the correct final answers only, never a method. */
   correction(outline: SceneOutline, findings: readonly GuideAnswerFinding[]): string;
   /**
-   * Still failing after the one regeneration (D-19). `removal: false` (a single-scene
-   * regeneration, which cannot touch another scene) never removes an exercise or a
-   * question: the failing items are generated without their guide answer instead.
+   * Still failing after the one regeneration. Owner (17 Nov 2026): nothing leaves the
+   * lesson for a checked answer any more, in a run or a single-scene regeneration alike
+   * (`options.removal` is kept for the callers and changes nothing): a solution slide
+   * keeps its content with the approved final lines written in; an attempt question is
+   * keyed to the approved answer; what cannot be told is generated once more without
+   * its key.
    */
   settle(
     outline: SceneOutline,
@@ -161,7 +184,10 @@ export interface GuideAnswerGuard {
     findings: readonly GuideAnswerFinding[],
     options?: { removal?: boolean },
   ): GuideSettleDecision;
-  /** Findings left on the kept content after the settle regeneration: logged, never acted on. */
+  /**
+   * Findings left on the kept content after the settle regeneration: logged; an attempt
+   * stem that still states the answer loses that question (the leak guard).
+   */
   accept(outline: SceneOutline, findings: readonly GuideAnswerFinding[]): void;
   /** A narration still stating the answer: an attempt's is replaced by the model-free one. */
   settleNarration(
@@ -183,9 +209,21 @@ export interface GuideAnswerGuard {
   rekeyAttempt(outline: SceneOutline): SceneOutline | undefined;
   /**
    * The attempt with its faulty questions and the questions of removed exercises taken
-   * out; `drop` when no question is left (the attempt alone leaves the lesson).
+   * out; `drop` when no question is left (the attempt alone leaves the lesson). An
+   * attempt that still has written questions to take ({@link writtenQuestionsOf}) is
+   * never dropped: it is kept for them.
    */
   pruneAttempt(outline: SceneOutline, content: unknown): { content: unknown } | { drop: true };
+  /**
+   * Owner decision (17 Nov 2026): the run's written attempts (`guideWrittenAttempts`), by
+   * attempt outline id.
+   */
+  useWrittenAttempts(attempts: ReadonlyMap<string, GuideWrittenAttempt>): void;
+  /**
+   * The written questions an attempt appends after its own (`withGuideWrittenQuestions`);
+   * a question of an exercise that left the lesson is out. Empty for any other outline.
+   */
+  writtenQuestionsOf(outlineId: string): QuizQuestion[];
 }
 
 const GUIDE_LEAK_ISSUE_HEAD = 'this slide may state the answer of item ';
@@ -511,10 +549,251 @@ function editTexts<T>(content: T, edit: (html: string) => string): T {
   ) as T;
 }
 
+// ── Lesson 2-5 (owner, 17 Nov 2026): the answer read off any element, and written in ──
+
+/** A check item's label opening a canvas line: «3A:», «3أ)», «(3B», «البند 3A». */
+const LINE_ITEM_LABEL =
+  /^[^\p{L}\p{N}]*(?:(?:البند|بند|الفرع|فرع)\s*)?\(?\s*(\d{1,3})\s*([A-Ha-h]|[أابجد])?(?![\p{L}\p{N}])/u;
+
+/** The item labels («3a», «25») a canvas line opens with, or tags («(س25 في كتابك)»). */
+function lineLabels(line: string): string[] {
+  const plain = plainText(line);
+  const labels: string[] = [];
+  const opening = LINE_ITEM_LABEL.exec(plain);
+  if (opening) labels.push(labelKey(`${opening[1]}${opening[2] ?? ''}`));
+  for (const match of plain.matchAll(TAG_SPAN)) {
+    for (const question of tagQuestions(match[1]!) ?? []) {
+      if (question.parts.size === 0) labels.push(String(question.number));
+      for (const part of question.parts) labels.push(`${question.number}${part}`);
+    }
+  }
+  return labels;
+}
+
+/**
+ * On a slide solving two or more keyed items, each item's own canvas lines: from the line
+ * that names it («3B: …», «(س25 في كتابك)») to the line that names another. Null on a
+ * one-item slide (its whole canvas is its own). An item no line names gets no entry.
+ */
+function itemScopes(
+  items: readonly KeyedGuideItem[],
+  lines: readonly string[],
+): Map<string, string[]> | null {
+  if (items.length < 2) return null;
+  const byLabel = new Map(items.map((item) => [labelKey(item.display), guideItemKey(item)]));
+  const scopes = new Map<string, string[]>();
+  let current: string | undefined;
+  for (const line of lines) {
+    const named = lineLabels(line)
+      .map((label) => byLabel.get(label))
+      .find((key) => key !== undefined);
+    if (named) current = named;
+    if (!current) continue;
+    const scope = scopes.get(current) ?? [];
+    scope.push(line);
+    scopes.set(current, scope);
+  }
+  return scopes;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Where, in one HTML line, a final line whose label `matches` (null: unlabelled) starts. */
+function finalLineAt(segment: string, matches: (label: string | null) => boolean): number | null {
+  for (const word of segment.matchAll(ANSWER_WORD)) {
+    const at = word.index ?? 0;
+    if (segment.lastIndexOf('<', at) > segment.lastIndexOf('>', at)) continue;
+    const before = decode(segment.slice(0, at)).replace(DIACRITICS, '');
+    if (before.length > 0 && !/[\s(]$/u.test(before)) continue;
+    const rest = decode(segment.slice(at)).replace(DIACRITICS, '').replace(/\s+/g, ' ').trim();
+    const final = FINAL_LINE.exec(rest);
+    if (!final || final.index !== 0) continue;
+    return matches(final[1]?.trim() || null) ? at : null;
+  }
+  return null;
+}
+
+/**
+ * The HTML with each final line `matches` names holding `line` instead: the new text
+ * takes the old one's place and markup (its tags stay whole). The SAME string when none.
+ */
+function withFinalLineReplaced(
+  html: string,
+  matches: (label: string | null) => boolean,
+  line: string,
+): string {
+  const parts = html.split(LINE_BREAK);
+  let changed = false;
+  for (let index = 0; index < parts.length; index += 2) {
+    const segment = parts[index]!;
+    const at = finalLineAt(segment, matches);
+    if (at === null) continue;
+    changed = true;
+    const newline = segment.indexOf('\n', at);
+    const end = newline < 0 ? segment.length : newline;
+    const tail = segment.slice(at, end).replace(/[^<>]+(?=<|$)/g, '');
+    // The new text goes inside the first tag run of the old line (its <strong> too).
+    const open = /^(?:<[^/][^>]*>)*/u.exec(tail)?.[0] ?? '';
+    parts[index] =
+      segment.slice(0, at) + open + escapeHtml(line) + tail.slice(open.length) + segment.slice(end);
+  }
+  return changed ? parts.join('') : html;
+}
+
+const SLIDE_WIDTH = 1000;
+const SLIDE_HEIGHT = 562.5;
+const FINAL_LINE_HEIGHT = 40;
+
+/**
+ * The canvas with the approved final line of each item (owner, 17 Nov 2026): a final
+ * line of that item (labelled, or the slide's only unlabelled one when it solves one
+ * keyed item) holds the approved answer instead; an item with none, or whose line sat
+ * in a formula, gets a new text line under the canvas's lowest element, in the style of
+ * the slide's own last text (its font, colour and size). Deterministic, no model call.
+ */
+export function withApprovedFinalLines<T>(
+  content: T,
+  items: readonly KeyedGuideItem[],
+  options: { onlyItem?: boolean } = {},
+): T {
+  if (items.length === 0) return content;
+  let next = content;
+  const appended: string[] = [];
+  const unlabelled = options.onlyItem === true && items.length === 1;
+  for (const item of items) {
+    const key = labelKey(item.display);
+    const line = finalAnswerLine(item);
+    const matches = (label: string | null) =>
+      label === null ? unlabelled : labelKey(label) === key;
+    let replaced = false;
+    next = editTexts(next, (html) => {
+      const result = withFinalLineReplaced(html, matches, line);
+      if (result !== html) replaced = true;
+      return result;
+    });
+    // A final line inside a formula cannot be rewritten in place: it leaves, and the
+    // approved line is written as text below.
+    const elements = elementsOf(next);
+    const kept = elements.filter(
+      (element) =>
+        !(
+          element.type === 'latex' &&
+          typeof element.latex === 'string' &&
+          finalLines([element.latex]).some((final) => matches(final.label))
+        ),
+    );
+    if (kept.length !== elements.length) next = withElements(next, kept);
+    if (!replaced) appended.push(line);
+  }
+  return appended.length > 0 ? withTextLines(next, appended) : next;
+}
+
+/** The content with `elements` as its canvas elements (a copy). */
+function withElements<T>(content: T, elements: Element[]): T {
+  const record = content as Record<string, unknown>;
+  return (
+    Array.isArray(record.elements)
+      ? { ...record, elements }
+      : { ...record, canvas: { ...(record.canvas as object), elements } }
+  ) as T;
+}
+
+/** One new text element holding `lines`, under the lowest element, in the slide's text style. */
+function withTextLines<T>(content: T, lines: readonly string[]): T {
+  const elements = elementsOf(content);
+  const texts = elements.filter(
+    (element) => element.type === 'text' && typeof element.content === 'string',
+  );
+  // The slide's body style: its last text that sets a size (a bare line sets none).
+  const style =
+    [...texts].reverse().find((element) => /font-size/u.test(String(element.content))) ??
+    texts[texts.length - 1];
+  const size = /font-size:\s*(\d{2})px/u.exec(String(style?.content ?? ''))?.[1] ?? '18';
+  const bottom = elements.reduce((lowest, element) => {
+    const top = typeof element.top === 'number' ? element.top : 0;
+    const height = typeof element.height === 'number' ? element.height : 0;
+    return Math.max(lowest, top + height);
+  }, 0);
+  const height = FINAL_LINE_HEIGHT * lines.length;
+  const top = Math.max(0, Math.min(bottom + 4, SLIDE_HEIGHT - height - 4));
+  const ids = new Set(elements.map((element) => String(element.id)));
+  let id = 'text_guide_final';
+  for (let n = 2; ids.has(id); n += 1) id = `text_guide_final_${n}`;
+  const element: Element = {
+    id,
+    type: 'text',
+    left: 60,
+    top,
+    width: SLIDE_WIDTH - 120,
+    height,
+    rotate: 0,
+    content: lines
+      .map(
+        (line) =>
+          `<p style="font-size:${size}px; text-align:right;"><strong>${escapeHtml(line)}</strong></p>`,
+      )
+      .join(''),
+    defaultFontName:
+      typeof style?.defaultFontName === 'string' ? style.defaultFontName : 'Microsoft YaHei',
+    defaultColor: typeof style?.defaultColor === 'string' ? style.defaultColor : '#17324d',
+  };
+  return withElements(content, [...elements, element]);
+}
+
 interface QuizQuestionLike {
   question?: unknown;
   options?: Array<{ value?: unknown; label?: unknown }>;
   answer?: unknown;
+  analysis?: unknown;
+}
+
+const CHOICE_LETTER: Readonly<Record<string, string>> = { ا: 'A', أ: 'A', ب: 'B', ج: 'C', د: 'D' };
+
+/**
+ * Owner (17 Nov 2026): an attempt question keyed to the approved answer, never removed.
+ * The option that states it is keyed; when none does, the keyed option (or the first)
+ * now states it. Its explanation, written for the old key, says the approved answer.
+ */
+export function keyedToApprovedAnswer<Q extends QuizQuestionLike>(
+  question: Q,
+  item: KeyedGuideItem,
+): Q {
+  const options = question.options ?? [];
+  if (options.length === 0) return question;
+  const approved = formatGuideAnswer(item.answer);
+  const analysis = `الإجابة الصحيحة: ${approved}.`;
+  if (item.answer.type === 'choice') {
+    const letter =
+      CHOICE_LETTER[item.answer.value.trim()] ?? item.answer.value.trim().toUpperCase();
+    const option = options.find((candidate) => String(candidate.value).toUpperCase() === letter);
+    return option ? { ...question, answer: [String(option.value)], analysis } : question;
+  }
+  const right = options.find(
+    (option) =>
+      typeof option.label === 'string' && compareGuideAnswer(item.answer, option.label).match,
+  );
+  if (right) return { ...question, answer: [String(right.value)], analysis };
+  const keyed = keyedValues(question)[0] ?? String(options[0]!.value);
+  // Written in the options' own notation: an option list in «ص/س» never gets one «y/x».
+  const arabicVariables = options.some(
+    (option) => typeof option.label === 'string' && /(?<![ء-ي])[صس](?![ء-ي])/u.test(option.label),
+  );
+  const label = arabicVariables
+    ? approved
+        .replace(/(?<![A-Za-z])y(?![A-Za-z])/gu, 'ص')
+        .replace(/(?<![A-Za-z])x(?![A-Za-z])/gu, 'س')
+        .replace(/−/gu, '-')
+    : approved;
+  return {
+    ...question,
+    options: options.map((option) =>
+      String(option.value) === keyed ? { ...option, label } : option,
+    ),
+    answer: [keyed],
+    analysis,
+  };
 }
 
 function questionsOf(content: unknown): QuizQuestionLike[] {
@@ -559,6 +838,39 @@ export function createGuideAnswerGuard(options: {
   /** Per attempt: its own questions at fault, taken out in `pruneAttempt`. */
   const faultyQuestions = new Map<string, Set<number>>();
   const ownTexts = new Map<string, string>();
+  /** Owner (17 Nov 2026): the written attempts, by attempt outline id. */
+  let written: ReadonlyMap<string, GuideWrittenAttempt> = new Map();
+
+  /** The solution slides a KEYED attempt's settlement comes from (`solutionsOf`). */
+  const keyedSolutionsOf = (attemptId: string, plan: GuideOutlinePlan): string[] => {
+    const baseId = attemptId.slice(0, -ATTEMPT_OUTLINE_SUFFIX.length);
+    if (plans.get(baseId)?.role === 'solution') return [baseId];
+    // A check attempt: the solution slides of its items.
+    const keys = new Set(plan.items.map(guideItemKey));
+    return [...plans.entries()]
+      .filter(
+        ([id, other]) =>
+          id !== attemptId &&
+          other.role === 'solution' &&
+          other.items.some((item) => keys.has(guideItemKey(item))),
+      )
+      .map(([id]) => id);
+  };
+
+  /** The written questions of an attempt, those of an exercise that left the lesson out. */
+  const writtenOf = (outlineId: string): QuizQuestion[] => {
+    const attempt = written.get(outlineId);
+    if (!attempt) return [];
+    const gone = new Set<string>();
+    for (const plan of plans.values()) {
+      for (const item of plan.items) {
+        if (removed.has(guideItemKey(item))) gone.add(questionKey(item));
+      }
+    }
+    return attempt.questions
+      .filter((entry) => !gone.has(entry.questionKey))
+      .map((entry) => ({ ...entry.question }));
+  };
 
   /** Review finding 3: the item's OWN question text (never the whole unit) holds its givens. */
   const bookText = (item: KeyedGuideItem) => {
@@ -645,8 +957,15 @@ export function createGuideAnswerGuard(options: {
       // Its attempt never keys what its solution slide no longer reaches.
       return !(plan.role === 'attempt' && item.element === 'try_it' && unverifiedOnSolution(key));
     });
-    // A solution slide whose items all settled still guards its checks before their try.
-    if (items.length === 0 && (plan.beforeTry?.length ?? 0) === 0) return undefined;
+    // A solution slide whose items all settled still guards its checks before their try,
+    // and still gives its writer its model answers (owner, 17 Nov 2026; never compared).
+    if (
+      items.length === 0 &&
+      (plan.beforeTry?.length ?? 0) === 0 &&
+      (plan.modelAnswers?.length ?? 0) === 0
+    ) {
+      return undefined;
+    }
     return items.length === plan.items.length ? plan : { ...plan, items };
   };
 
@@ -676,8 +995,10 @@ export function createGuideAnswerGuard(options: {
       })),
     });
 
-  const outcomes = (items: readonly KeyedGuideItem[], outcome: 'removed' | 'unverified') =>
-    items.map((item) => ({ contentUnitId: item.contentUnitId, label: item.label, outcome }));
+  const outcomes = (
+    items: readonly KeyedGuideItem[],
+    outcome: 'removed' | 'unverified' | 'written',
+  ) => items.map((item) => ({ contentUnitId: item.contentUnitId, label: item.label, outcome }));
 
   const leaks = (
     items: readonly KeyedGuideItem[],
@@ -695,8 +1016,12 @@ export function createGuideAnswerGuard(options: {
       .map((item) => ({ code: 'GUIDE_ANSWER_LEAK', item, where, detail: 'the answer is stated' }));
 
   const solutionFindings = (plan: GuideOutlinePlan, content: unknown): GuideAnswerFinding[] => {
-    const finals = finalLines(canvasLines(content));
+    const lines = canvasLines(content);
+    const finals = finalLines(lines);
     const unlabelled = finals.filter((line) => line.label === null);
+    // Our own key point wording is the writer's input, never its answer (`finalLines`).
+    const shown = lines.filter((line) => !/المعتمد/u.test(line.replace(DIACRITICS, '')));
+    const scopes = itemScopes(plan.items, shown);
     return plan.items.flatMap((item): GuideAnswerFinding[] => {
       const key = labelKey(item.display);
       const labelled = finals.filter((line) => line.label !== null && labelKey(line.label) === key);
@@ -709,6 +1034,12 @@ export function createGuideAnswerGuard(options: {
             ? unlabelled
             : [];
       if (candidates.length === 0) {
+        // Lesson 2-5 (17 Nov 2026): no final line, but the answer may still be shown —
+        // «المعادلة:» beside `y=-\frac{3}{4}x+\frac{15}{4}`, a boxed `\boxed{y=3x}`. Every
+        // element that can carry it is read (text, LaTeX, tables, shapes) in the
+        // comparator's notation; on a slide of several items, only that item's lines.
+        const own = scopes?.get(guideItemKey(item));
+        if (guideAnswerShown(item.answer, own && own.length > 0 ? own : shown)) return [];
         return [{ code: 'GUIDE_ANSWER_MISSING', item, where: 'canvas', detail: 'no final line' }];
       }
       const verdicts = candidates.map((line) => compareGuideAnswer(item.answer, line.value));
@@ -800,16 +1131,6 @@ export function createGuideAnswerGuard(options: {
     return findings;
   };
 
-  /** An exercise item can leave its solution slide only when its attempt question is told. */
-  const attemptCanLose = (solutionId: string, item: KeyedGuideItem): boolean => {
-    const attempt = plans.get(`${solutionId}${ATTEMPT_OUTLINE_SUFFIX}`);
-    if (!attempt) return true;
-    const key = guideItemKey(item);
-    if (!attempt.items.some((candidate) => guideItemKey(candidate) === key)) return true;
-    const question = attempt.questionOf?.[key];
-    return question !== null && question !== undefined;
-  };
-
   return {
     usePlans(next) {
       plans = next;
@@ -819,7 +1140,8 @@ export function createGuideAnswerGuard(options: {
         for (const item of settlement.items ?? []) {
           const key = guideItemKey(item);
           if (item.outcome === 'removed') removed.add(key);
-          else {
+          // Owner (17 Nov 2026): a written item kept its approved answer and its key.
+          else if (item.outcome === 'unverified') {
             const set = unverified.get(settlement.outlineId) ?? new Set<string>();
             set.add(key);
             unverified.set(settlement.outlineId, set);
@@ -964,10 +1286,9 @@ export function createGuideAnswerGuard(options: {
       }
       return lines.join('\n');
     },
-    settle(outline, content, allFindings, settleOptions = {}) {
+    settle(outline, content, allFindings) {
       const original = plans.get(outline.id);
       if (!original || allFindings.length === 0) return { kind: 'keep', content };
-      const removal = settleOptions.removal !== false;
       // A try-it slide, and a solution slide's checks tried only later (re-review
       // finding 1), never had the answer: their retry was the plain path. Kept and
       // logged; the caller marks the slide for the reviewer (`guideLeakIssue`).
@@ -988,59 +1309,75 @@ export function createGuideAnswerGuard(options: {
       // solution slide no longer reaches are out too).
       const keepOf = () => effective(outline.id)?.items ?? [];
       if (original.role === 'attempt') {
-        const removable =
-          removal &&
-          findings.every(
-            (finding) =>
-              finding.item.element === 'exercise' &&
-              Array.isArray(finding.questions) &&
-              finding.questions.length > 0,
-          );
-        if (removable) {
-          const set = faultyQuestions.get(outline.id) ?? new Set<number>();
-          for (const finding of findings)
-            for (const index of finding.questions ?? []) set.add(index);
-          faultyQuestions.set(outline.id, set);
-          report(outline, 'questions_removed', findings, {
-            removedQuestions: [...set].sort((a, b) => a - b),
+        // Owner (17 Nov 2026): the guide's approved answer is the truth, so an attempt
+        // question keyed otherwise is keyed to it by code (`keyedToApprovedAnswer`) —
+        // never removed. A question that cannot be told, or a stem that states the
+        // answer before the try (the leak guard), is generated once more without that key.
+        const questions = questionsOf(content);
+        const rekey = findings.filter(
+          (finding) =>
+            finding.code === 'GUIDE_ANSWER_MISMATCH' &&
+            finding.where === 'quiz' &&
+            finding.questions?.length === 1 &&
+            finding.questions[0]! < questions.length,
+        );
+        let next = content;
+        if (rekey.length > 0) {
+          next = {
+            ...(content as object),
+            questions: questions.map((question, index) => {
+              const finding = rekey.find((candidate) => candidate.questions![0] === index);
+              return finding ? keyedToApprovedAnswer(question, finding.item) : question;
+            }),
+          };
+          report(outline, 'key_rewritten', rekey, {
+            items: outcomes(uniqueItems(rekey), 'written'),
           });
-          return { kind: 'keep', content };
         }
-        unverify(outline.id, failing);
-        report(outline, 'unverified', findings, { items: outcomes(failing, 'unverified') });
+        const rest = findings.filter((finding) => !rekey.includes(finding));
+        if (rest.length === 0) return { kind: 'keep', content: next };
+        const untold = uniqueItems(rest);
+        unverify(outline.id, untold);
+        report(outline, 'unverified', rest, { items: outcomes(untold, 'unverified') });
         return { kind: 'regenerate', outline: withGuideItems(outline, original, keepOf()) };
       }
-      // A solution slide: an exercise leaves (D-19) while another question stays on the
-      // slide and its attempt question can be told; any other item loses its guide answer.
-      let leaving = removal
-        ? failing.filter((item) => item.element === 'exercise' && attemptCanLose(outline.id, item))
-        : [];
-      const gone = new Set(
-        [...original.items.filter((item) => removed.has(guideItemKey(item))), ...leaving].map(
-          questionKey,
-        ),
-      );
-      if ((original.solves ?? original.items.length) - gone.size < 1) leaving = [];
-      // A question leaves whole: its other keyed parts («11b» beside «11a») leave with it.
-      const leavingQuestions = new Set(leaving.map(questionKey));
-      const removedNow = original.items.filter(
-        (item) => leavingQuestions.has(questionKey(item)) && !removed.has(guideItemKey(item)),
-      );
-      for (const item of removedNow) removed.add(guideItemKey(item));
-      const kept = failing.filter((item) => !removed.has(guideItemKey(item)));
-      unverify(outline.id, kept);
-      report(outline, removedNow.length > 0 ? 'items_removed' : 'unverified', findings, {
-        items: [...outcomes(removedNow, 'removed'), ...outcomes(kept, 'unverified')],
+      // A solution slide (owner, 17 Nov 2026: the guide's approved answer is the truth):
+      // the item never leaves and is never generated without its answer. Its approved
+      // final line is written into the kept canvas by code — a wrong final line replaced,
+      // a missing one added — before its narration is written from that canvas.
+      const keys = new Set(keepOf().map(guideItemKey));
+      const writable = failing.filter((item) => keys.has(guideItemKey(item)));
+      const plan = effective(outline.id);
+      const written = withApprovedFinalLines(content, writable, {
+        onlyItem: (plan?.items.length ?? 0) === 1,
       });
-      const leaveOut = original.items.filter((item) => removed.has(guideItemKey(item)));
-      return {
-        kind: 'regenerate',
-        outline: withGuideItems(outline, original, keepOf(), leaveOut),
-      };
+      // The write is checked again: an item still failing (it cannot be) is logged unverified.
+      const stillFailing = new Set(
+        (plan ? solutionFindings(plan, written) : [])
+          .filter((finding) => finding.code !== 'GUIDE_ANSWER_LEAK')
+          .map((finding) => guideItemKey(finding.item)),
+      );
+      const settled = writable.filter((item) => !stillFailing.has(guideItemKey(item)));
+      const unsettled = failing.filter((item) => !settled.includes(item));
+      if (unsettled.length > 0) unverify(outline.id, unsettled);
+      report(outline, settled.length > 0 ? 'final_line_written' : 'unverified', findings, {
+        items: [...outcomes(settled, 'written'), ...outcomes(unsettled, 'unverified')],
+      });
+      return { kind: 'keep', content: written };
     },
     accept(outline, findings) {
       const original = plans.get(outline.id);
       if (!original || findings.length === 0) return;
+      // An attempt stem that STILL states the answer after its regeneration without the
+      // key leaves (the leak guard): only that question, in `pruneAttempt`.
+      if (original.role === 'attempt') {
+        const set = faultyQuestions.get(outline.id) ?? new Set<number>();
+        for (const finding of findings) {
+          if (finding.code !== 'GUIDE_ANSWER_LEAK' || finding.where !== 'stem') continue;
+          for (const index of finding.questions ?? []) set.add(index);
+        }
+        if (set.size > 0) faultyQuestions.set(outline.id, set);
+      }
       const failing = uniqueItems(findings);
       // Only an item the outline keys loses its key (never a check before its try).
       const keyed = new Set(original.items.map(guideItemKey));
@@ -1065,19 +1402,14 @@ export function createGuideAnswerGuard(options: {
     },
     solutionsOf(attemptId) {
       const plan = plans.get(attemptId);
-      if (plan?.role !== 'attempt' || !attemptId.endsWith(ATTEMPT_OUTLINE_SUFFIX)) return [];
-      const baseId = attemptId.slice(0, -ATTEMPT_OUTLINE_SUFFIX.length);
-      if (plans.get(baseId)?.role === 'solution') return [baseId];
-      // A check attempt: the solution slides of its items.
-      const keys = new Set(plan.items.map(guideItemKey));
-      return [...plans.entries()]
-        .filter(
-          ([id, other]) =>
-            id !== attemptId &&
-            other.role === 'solution' &&
-            other.items.some((item) => keys.has(guideItemKey(item))),
-        )
-        .map(([id]) => id);
+      // Owner (17 Nov 2026): a written attempt's solution slides too (an exercise that
+      // leaves one takes its written question with it).
+      const writtenSolutions = written.get(attemptId)?.solutionIds ?? [];
+      if (plan?.role !== 'attempt' || !attemptId.endsWith(ATTEMPT_OUTLINE_SUFFIX)) {
+        return [...writtenSolutions];
+      }
+      const keyed = keyedSolutionsOf(attemptId, plan);
+      return [...keyed, ...writtenSolutions.filter((id) => !keyed.includes(id))];
     },
     rekeyAttempt(outline) {
       const original = plans.get(outline.id);
@@ -1106,7 +1438,8 @@ export function createGuideAnswerGuard(options: {
       }
       if (faulty.size === 0) return { content };
       const kept = questions.filter((_question, index) => !faulty.has(index));
-      if (kept.length === 0) {
+      // Owner (17 Nov 2026): an attempt left only with its written questions stays for them.
+      if (kept.length === 0 && writtenOf(outline.id).length === 0) {
         report(outline, 'attempt_dropped', [], {
           dropped: [outline.id],
           removedQuestions: [...faulty].sort((a, b) => a - b),
@@ -1115,6 +1448,10 @@ export function createGuideAnswerGuard(options: {
       }
       return { content: { ...(content as object), questions: kept } };
     },
+    useWrittenAttempts(attempts) {
+      written = attempts;
+    },
+    writtenQuestionsOf: writtenOf,
   };
 }
 

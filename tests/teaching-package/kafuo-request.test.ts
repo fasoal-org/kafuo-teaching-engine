@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -6,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildKafuoStartRequest,
   canonicalRequestDigest,
+  canonicalRequestPayload,
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
 
@@ -194,6 +196,118 @@ describe('canonicalRequestDigest', () => {
       const { request } = parseKafuoGenerationRequest(vector.request);
       expect(canonicalRequestDigest(request)).toBe(vector.digest);
     }
+  });
+
+  it('covers the g5.v11 model answers only when sent (vector 7, owner 17 Nov 2026)', () => {
+    const vector = vectors.vectors[6]!;
+    const guide = vector.request.teacherGuide as {
+      items: Array<Record<string, unknown>>;
+    };
+    expect(guide.items.filter((item) => 'modelAnswer' in item)).toHaveLength(2);
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    // Kept exactly as sent (multi-line text included), key by key.
+    expect(request.teacherGuide?.items[1]?.modelAnswer).toEqual(guide.items[1]!.modelAnswer);
+    // The same block without its model answers: another digest, and no `modelAnswer` key.
+    const stripped = parseKafuoGenerationRequest({
+      ...vector.request,
+      teacherGuide: {
+        ...guide,
+        items: guide.items.map(({ modelAnswer: _modelAnswer, ...item }) => item),
+      },
+    }).request;
+    expect(canonicalRequestDigest(stripped)).not.toBe(vector.digest);
+    expect(stripped.teacherGuide?.items.some((item) => 'modelAnswer' in item)).toBe(false);
+    // `modelAnswer: null` is the Backend's "absent" (D-20): digested as never sent.
+    const nulls = parseKafuoGenerationRequest({
+      ...vector.request,
+      teacherGuide: {
+        ...guide,
+        items: guide.items.map(({ modelAnswer: _modelAnswer, ...item }) =>
+          item.status === 'reference' ? { ...item, modelAnswer: null } : item,
+        ),
+      },
+    }).request;
+    expect(canonicalRequestDigest(nulls)).toBe(canonicalRequestDigest(stripped));
+  });
+
+  it('covers a figure model answer without its presigned URL (vector 8, owner 17 Nov 2026)', () => {
+    const vector = vectors.vectors[7]!;
+    const guide = vector.request.teacherGuide as { items: Array<Record<string, unknown>> };
+    const sent = guide.items[0]!.modelAnswer as { image: Record<string, unknown> };
+    expect(typeof sent.image.url).toBe('string');
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    // The request keeps the URL (the runner fetches the drawing from it) ...
+    expect(request.teacherGuide?.items[0]?.modelAnswer).toEqual(sent);
+    // ... the digest covers exactly the three stable image facts.
+    const payload = canonicalRequestPayload(request) as {
+      teacherGuide: { items: Array<{ modelAnswer: { kind: string; image: object } }> };
+    };
+    expect(payload.teacherGuide.items[0]!.modelAnswer).toEqual({
+      kind: 'figure',
+      image: {
+        checksumSha256: sent.image.checksumSha256,
+        mimeType: 'image/png',
+        sizeBytes: sent.image.sizeBytes,
+      },
+    });
+    expect(JSON.stringify(payload)).not.toContain('X-Amz-Signature=fig');
+    // An independent encoding of the shared rules (the Backend's `semantic_payload`: sorted
+    // keys, compact, UTF-8; the figure's `url` left out) gives the pinned digest.
+    const raw = vector.request as Record<string, Record<string, unknown>> & {
+      learningObjectives: Array<{ objectiveRef: string; snapshot: { statement: string } }>;
+    };
+    const { url: _url, ...stableImage } = sent.image;
+    const semantic = {
+      tenantContext: raw.tenantContext,
+      learningItem: raw.learningItem,
+      learningObjectives: raw.learningObjectives.map((objective) => ({
+        objectiveRef: objective.objectiveRef,
+        snapshot: { statement: objective.snapshot.statement },
+      })),
+      teachingModel: raw.teachingModel,
+      contentResource: { id: raw.contentResource.id, mimeType: raw.contentResource.mimeType },
+      generation: raw.generation,
+      teacherGuide: {
+        guideId: raw.teacherGuide.guideId,
+        items: [{ ...guide.items[0], modelAnswer: { kind: 'figure', image: stableImage } }],
+      },
+    };
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(sorted)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((key) => [key, sorted((value as Record<string, unknown>)[key])]),
+            )
+          : value;
+    expect(
+      createHash('sha256')
+        .update(JSON.stringify(sorted(semantic)), 'utf8')
+        .digest('hex'),
+    ).toBe(vector.digest);
+    const withImage = (image: Record<string, unknown>) =>
+      parseKafuoGenerationRequest({
+        ...vector.request,
+        teacherGuide: {
+          ...guide,
+          items: [
+            { ...guide.items[0], modelAnswer: { ...sent, image: { ...sent.image, ...image } } },
+          ],
+        },
+      }).request;
+    // A re-minted URL (a resumed or re-sent request) is the same semantic request.
+    expect(
+      canonicalRequestDigest(
+        withImage({ url: 'https://r2.example.test/teacher-guides/tg-2/answer-15.png?sig=NEW' }),
+      ),
+    ).toBe(vector.digest);
+    // Another drawing is another request.
+    expect(canonicalRequestDigest(withImage({ checksumSha256: 'f'.repeat(64) }))).not.toBe(
+      vector.digest,
+    );
+    expect(canonicalRequestDigest(withImage({ sizeBytes: 48_214 }))).not.toBe(vector.digest);
   });
 
   it('is independent of the signed retrieval URL', () => {

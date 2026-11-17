@@ -7,7 +7,8 @@
  * and is pinned by the mirrored vector file `tests/fixtures/kafuo-digest-vectors.json`.
  * It covers the authoritative generation inputs and deliberately excludes
  * `contentResource.url` — a regenerated presigned URL for the same resource id
- * with the same integrity metadata is the same semantic request.
+ * with the same integrity metadata is the same semantic request. The same holds for
+ * `normalizedContentResource.url` and a teacher-guide figure's `image.url`.
  */
 import { createHash } from 'node:crypto';
 
@@ -37,13 +38,17 @@ import type { StageTtsRoute } from '@/lib/types/stage';
 import {
   KAFUO_EXERCISE_UNUSABLE_REASONS,
   KAFUO_TEACHER_GUIDE_ANSWER_TYPES,
+  KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS,
   KAFUO_TEACHER_GUIDE_STATUSES,
 } from '@/lib/types/teaching-package';
 import type {
   KafuoTeacherGuide,
   KafuoTeacherGuideAnswer,
   KafuoTeacherGuideAnswerType,
+  KafuoTeacherGuideFigureImage,
   KafuoTeacherGuideItem,
+  KafuoTeacherGuideModelAnswer,
+  KafuoTeacherGuideModelAnswerKind,
   KafuoTeacherGuideStatus,
   GenerationExecutionInput,
   KafuoContentResource,
@@ -944,19 +949,28 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
     payload.bookStructure = request.bookStructure;
   }
   // g5.v11: the guide answers decide what the writers are told, so they are covered
-  // (mirrored by the Backend's `semantic_payload`); absent stays absent.
+  // (mirrored by the Backend's `semantic_payload`); absent stays absent. A record's
+  // `modelAnswer` (17 Nov 2026) is covered only when sent: a block without one
+  // digests byte-identically to before. A figure's presigned `image.url` is never
+  // covered (as `contentResource.url`): a re-minted URL is the same semantic request.
   if (request.teacherGuide !== undefined) {
-    payload.teacherGuide = request.teacherGuide;
+    payload.teacherGuide = teacherGuideSnapshotFacts(request.teacherGuide);
   }
   return payload;
 }
 
-/** Bounds of the g5.v11 `teacherGuide` block (records only, a few KB per lesson). */
+/**
+ * Bounds of the g5.v11 `teacherGuide` block: records, plus a reference item's model answer
+ * (owner, 17 Nov 2026). The block has no byte cap of its own; the item count and the
+ * per-field limits bound it.
+ */
 const TEACHER_GUIDE_MAX_ITEMS = 2_000;
 const TEACHER_GUIDE_ID_MAX = 200;
 const TEACHER_GUIDE_LABEL_MAX = 64;
 const TEACHER_GUIDE_TEXT_MAX = 200;
 const TEACHER_GUIDE_UNIT_MAX = 40;
+/** A model answer's text, in characters (code points, as the Backend's `len`). */
+const TEACHER_GUIDE_MODEL_ANSWER_MAX = 4_000;
 /** A book option letter: A–D, or أ/ا/ب/ج/د. */
 const TEACHER_GUIDE_CHOICE = /^(?:[A-Da-d]|[أابجد])$/u;
 /** The statuses whose items may carry an answer; only these are ever given to a writer. */
@@ -967,7 +981,8 @@ const TEACHER_GUIDE_KEYED_STATUSES: ReadonlySet<string> = new Set(['approved', '
  * key by key, so the digest covers exactly the shape the Backend hashes: optional
  * keys are present only when sent. An answer is required on an `approved` item,
  * allowed on a `settled` one, and refused on any other status: a doubtful, changed,
- * reference or missing answer must never reach the Teaching Engine.
+ * reference or missing answer must never reach the Teaching Engine. A model answer
+ * (owner, 17 Nov 2026) is allowed on a `reference` item only, and is never a key.
  */
 function parseTeacherGuide(raw: unknown): KafuoTeacherGuide | undefined {
   if (raw === undefined) return undefined;
@@ -1021,6 +1036,11 @@ function parseTeacherGuide(raw: unknown): KafuoTeacherGuide | undefined {
     if (item.answer === undefined && status === 'approved') {
       throw invalid(`${path}.answer is required on an approved item`);
     }
+    // D-20 style: `modelAnswer: null` is the Backend's "absent" — read (and digested) as absent.
+    const modelAnswerRaw = item.modelAnswer === null ? undefined : item.modelAnswer;
+    if (modelAnswerRaw !== undefined && status !== 'reference') {
+      throw invalid(`${path}.modelAnswer is allowed only on a reference item`);
+    }
     return {
       contentUnitId: item.contentUnitId,
       label: item.label,
@@ -1028,9 +1048,131 @@ function parseTeacherGuide(raw: unknown): KafuoTeacherGuide | undefined {
       ...(item.answer !== undefined
         ? { answer: parseTeacherGuideAnswer(item.answer, `${path}.answer`, invalid) }
         : {}),
+      ...(modelAnswerRaw !== undefined
+        ? {
+            modelAnswer: parseTeacherGuideModelAnswer(
+              modelAnswerRaw,
+              `${path}.modelAnswer`,
+              invalid,
+            ),
+          }
+        : {}),
     };
   });
   return { guideId, items };
+}
+
+/**
+ * A reference item's model answer, rebuilt key by key (other keys dropped): `{ kind, text }`
+ * for a proof or a possible answer, `{ kind: 'figure', image, text? }` for a drawing. The
+ * text is kept exactly as sent (the digest covers it): 1..4000 characters, not blank. D-20
+ * style, a `null` optional key is the Backend's "absent".
+ */
+function parseTeacherGuideModelAnswer(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideModelAnswer {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid(`${path} must be an object`);
+  }
+  const modelAnswer = raw as Record<string, unknown>;
+  const kind = modelAnswer.kind;
+  if (
+    typeof kind !== 'string' ||
+    !(KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS as readonly string[]).includes(kind)
+  ) {
+    throw invalid(
+      `${path}.kind must be one of ${KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS.join(', ')}`,
+    );
+  }
+  const textRaw = modelAnswer.text === null ? undefined : modelAnswer.text;
+  const imageRaw = modelAnswer.image === null ? undefined : modelAnswer.image;
+  const text = (): string => {
+    if (
+      typeof textRaw !== 'string' ||
+      textRaw.trim() === '' ||
+      [...textRaw].length > TEACHER_GUIDE_MODEL_ANSWER_MAX
+    ) {
+      throw invalid(
+        `${path}.text must be a non-empty string of at most ${TEACHER_GUIDE_MODEL_ANSWER_MAX} characters`,
+      );
+    }
+    return textRaw;
+  };
+  if (kind !== 'figure') {
+    if (imageRaw !== undefined) throw invalid(`${path}.image is allowed only on a figure`);
+    return { kind: kind as Exclude<KafuoTeacherGuideModelAnswerKind, 'figure'>, text: text() };
+  }
+  return {
+    kind: 'figure',
+    image: parseTeacherGuideFigureImage(imageRaw, `${path}.image`, invalid),
+    ...(textRaw !== undefined ? { text: text() } : {}),
+  };
+}
+
+/** The size bound of a guide answer drawing, in bytes (the Backend's limit). */
+export const TEACHER_GUIDE_FIGURE_MAX_BYTES = 5_000_000;
+
+/**
+ * A figure's image, rebuilt key by key: a PNG, its lowercase SHA-256 and size, and the
+ * transient presigned `url` (required on the wire, https as `contentResource.url`; never
+ * digested, never persisted, never echoed in an error).
+ */
+function parseTeacherGuideFigureImage(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideFigureImage {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid(`${path} must be an object`);
+  }
+  const image = raw as Record<string, unknown>;
+  const { checksumSha256, mimeType, sizeBytes, url } = image;
+  if (typeof checksumSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(checksumSha256)) {
+    throw invalid(`${path}.checksumSha256 must be 64 lowercase hex characters`);
+  }
+  if (mimeType !== 'image/png') throw invalid(`${path}.mimeType must be image/png`);
+  if (
+    typeof sizeBytes !== 'number' ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 1 ||
+    sizeBytes > TEACHER_GUIDE_FIGURE_MAX_BYTES
+  ) {
+    throw invalid(
+      `${path}.sizeBytes must be an integer from 1 to ${TEACHER_GUIDE_FIGURE_MAX_BYTES}`,
+    );
+  }
+  if (typeof url !== 'string' || url.trim() === '') throw invalid(`${path}.url is required`);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalid(`${path}.url is invalid`);
+  }
+  if (parsed.protocol !== 'https:' && !allowInsecureResourceUrl()) {
+    throw invalid(`${path}.url must use https`);
+  }
+  return { checksumSha256, mimeType, sizeBytes, url };
+}
+
+/**
+ * The guide block without any figure's transient `url` (owner, 17 Nov 2026): what the
+ * digest covers and what the attempt snapshot keeps, as `normalizedContentResourceSnapshotFacts`
+ * for the normalized package. A block with no figure is returned AS IS (the same object),
+ * so its digest and snapshot are byte-identical to before.
+ */
+export function teacherGuideSnapshotFacts(guide: KafuoTeacherGuide): KafuoTeacherGuide {
+  if (!guide.items.some((item) => item.modelAnswer?.kind === 'figure')) return guide;
+  return {
+    guideId: guide.guideId,
+    items: guide.items.map((item) => {
+      const modelAnswer = item.modelAnswer;
+      if (modelAnswer?.kind !== 'figure') return item;
+      const { url: _url, ...image } = modelAnswer.image;
+      return { ...item, modelAnswer: { ...modelAnswer, image } };
+    }),
+  };
 }
 
 function parseTeacherGuideAnswer(
@@ -1326,7 +1468,11 @@ export interface KafuoGenerationContext {
   ttsRoute?: StageTtsRoute | null;
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
-  /** g5.v11 only: the guide items (absent on every other Teaching Model, even when sent). */
+  /**
+   * g5.v11 only: the guide items (absent on every other Teaching Model, even when sent).
+   * The ONE place a figure's presigned `image.url` lives (in memory only, as
+   * `contentResource.url`): the runner fetches the drawing from it.
+   */
   teacherGuide?: KafuoTeacherGuide;
 }
 
@@ -1375,7 +1521,8 @@ export function buildKafuoStartRequest(
       skillPolicyDigest: computeSkillPolicyDigest(request.teachingModel.flow),
       teachingFlow: request.teachingModel.flow,
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
-      ...(teacherGuide ? { teacherGuide } : {}),
+      // The snapshot never keeps a figure's presigned URL (owner, 17 Nov 2026).
+      ...(teacherGuide ? { teacherGuide: teacherGuideSnapshotFacts(teacherGuide) } : {}),
       contentResource: contentResourceSnapshotFacts(request.contentResource),
       ...(request.normalizedContentResource
         ? {

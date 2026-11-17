@@ -608,6 +608,171 @@
         "actorRef": "42"
       },
       "digest": "2b0cca86085e3a6c1016208637ffe6890036822b95a11e369619543e6a4574ee"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-v11-model-answers",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "209",
+          "title": "البرهان الجبري",
+          "unit": {
+            "id": "12",
+            "title": "Unit 1"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Math 10"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7002",
+            "snapshot": {
+              "statement": "Write two-column proofs."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v11",
+          "flow": [
+            {
+              "stage": "lesson_opener",
+              "instructions": "Open the lesson."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-78",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson-209.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "teacherGuide": {
+          "guideId": "tg-1",
+          "items": [
+            {
+              "contentUnitId": "6247",
+              "label": "1",
+              "status": "approved",
+              "answer": {
+                "type": "number",
+                "value": 180,
+                "unit": "°"
+              }
+            },
+            {
+              "contentUnitId": "6250",
+              "label": "12",
+              "status": "reference",
+              "modelAnswer": {
+                "kind": "proof",
+                "text": "المعطيات: ∠1 و∠2 متكاملتان، و∠2 و∠3 متكاملتان.\nالمطلوب: ∠1 ≅ ∠3.\nالبرهان: م∠1 + م∠2 = 180° و م∠2 + م∠3 = 180° (تعريف الزاويتين المتكاملتين)، إذن م∠1 = م∠3 (خاصية التعويض ثم الطرح)."
+              }
+            },
+            {
+              "contentUnitId": "6251",
+              "label": "13",
+              "status": "reference",
+              "modelAnswer": {
+                "kind": "possible",
+                "text": "2، 4، 8، 16، … كل حد ضعف الحد الذي قبله."
+              }
+            },
+            {
+              "contentUnitId": "6252",
+              "label": "14",
+              "status": "reference"
+            }
+          ]
+        },
+        "actorRef": "42"
+      },
+      "digest": "97e254778bd6306e9a27f4d383926e29f06bcf1798952131be4cc01b3019c4ed"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-v11-figure-answer",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "210",
+          "title": "تمثيل الدوال الخطية بيانيًا",
+          "unit": {
+            "id": "12",
+            "title": "Unit 1"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Math 10"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7003",
+            "snapshot": {
+              "statement": "Graph linear functions."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v11",
+          "flow": [
+            {
+              "stage": "lesson_opener",
+              "instructions": "Open the lesson."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-79",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson-210.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "teacherGuide": {
+          "guideId": "tg-2",
+          "items": [
+            {
+              "contentUnitId": "6260",
+              "label": "15",
+              "status": "reference",
+              "modelAnswer": {
+                "kind": "figure",
+                "image": {
+                  "checksumSha256": "78a3094922d8dd3d9466f106f1cb57d1b98def276d645af6667c874a74beabc6",
+                  "mimeType": "image/png",
+                  "sizeBytes": 48213,
+                  "url": "https://r2.example.test/teacher-guides/tg-2/answer-15.png?X-Amz-Signature=fig"
+                }
+              }
+            }
+          ]
+        },
+        "actorRef": "42"
+      },
+      "digest": "3c4d5a253d92ab9fb684de56ca351cab48a95d560d85db2472922bcebf947f89"
     }
   ]
 }

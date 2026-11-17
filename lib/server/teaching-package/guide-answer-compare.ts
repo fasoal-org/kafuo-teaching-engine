@@ -61,8 +61,12 @@ const VULGAR_FRACTIONS: Readonly<Record<string, string>> = {
   '⅒': '1/10',
 };
 const VULGAR_FRACTION = new RegExp(`[${Object.keys(VULGAR_FRACTIONS).join('')}]`, 'gu');
-/** `\frac{a}{b}`, `\dfrac`, `\tfrac` with plain numbers: «a/b» after a space. */
-const LATEX_FRACTION = /\\[dt]?frac\s*\{\s*(-?\d+(?:\.\d+)?)\s*\}\s*\{\s*(\d+(?:\.\d+)?)\s*\}/g;
+/**
+ * `\frac{a}{b}`, `\dfrac`, `\tfrac` with plain numbers: «a/b» after a space. Lesson 2-5
+ * (17 Nov 2026): LaTeX's one-digit shorthand too — `\frac35`, `\frac{26}5`, `\frac3{5}`.
+ */
+const LATEX_FRACTION =
+  /\\[dt]?frac\s*(?:\{\s*(-?\d+(?:\.\d+)?)\s*\}|(\d))\s*(?:\{\s*(\d+(?:\.\d+)?)\s*\}|(\d))/g;
 
 /** Western digits, fractions as «a/b», «−» as «-», «٬» thousands out (no «,» decided). */
 function digitForms(text: string): string {
@@ -71,7 +75,16 @@ function digitForms(text: string): string {
     .replace(/[۰-۹]/g, (digit) => String(EASTERN_INDIC.indexOf(digit)))
     .replace(VULGAR_FRACTION, (fraction) => ` ${VULGAR_FRACTIONS[fraction]}`)
     .replace(/⁄/g, '/')
-    .replace(LATEX_FRACTION, ' $1/$2')
+    .replace(
+      LATEX_FRACTION,
+      (
+        _all,
+        braced: string | undefined,
+        digit: string | undefined,
+        over: string | undefined,
+        overDigit: string | undefined,
+      ) => ` ${braced ?? digit}/${over ?? overDigit}`,
+    )
     .replace(/[−‒–]/g, '-')
     .replace(/(\d)٬(?=\d{3}(?!\d))/g, '$1');
 }
@@ -511,6 +524,241 @@ function containsWords(haystack: string, needle: string): boolean {
   return ` ${haystack} `.includes(` ${needle} `);
 }
 
+// ── Equations (lesson 2-5, 17 Nov 2026) ───────────────────────────────────────────────
+//
+// A text answer that is an equation or an expression («y = ³⁄₅ x + ²⁶⁄₅», «x = −3»,
+// «y = 150, y = 10x + 100») is compared in ONE canonical notation, whatever the writer
+// used: LaTeX (`\boxed{\frac35x+\frac{26}5}`, `\left(…\right)`), the quiz's Arabic
+// variables («ص = (3/5)س + 26/5»), Unicode minus and super/subscript fractions, and any
+// spacing. A written chain «y = A = B» states y = B. Prose answers keep the word rules.
+
+const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+const SUBSCRIPT = '₀₁₂₃₄₅₆₇₈₉';
+
+/** One LaTeX argument at `at`: a braced group or one character (`\frac35`). */
+function latexArgument(text: string, at: number): { value: string; end: number } | null {
+  let index = at;
+  while (index < text.length && /\s/u.test(text[index]!)) index += 1;
+  if (index >= text.length) return null;
+  if (text[index] !== '{') {
+    const command = /^\\[A-Za-z]+/u.exec(text.slice(index));
+    if (command) return { value: command[0], end: index + command[0].length };
+    return { value: text[index]!, end: index + 1 };
+  }
+  let depth = 0;
+  for (let end = index; end < text.length; end += 1) {
+    if (text[end] === '{') depth += 1;
+    else if (text[end] === '}') {
+      depth -= 1;
+      if (depth === 0) return { value: text.slice(index + 1, end), end: end + 1 };
+    }
+  }
+  return null;
+}
+
+/** Every `\frac`, `\dfrac`, `\tfrac` (nested, braced or not) as «(a)/(b)». */
+function latexFractions(text: string): string {
+  let out = text;
+  for (let step = 0; step < 32; step += 1) {
+    const match = /\\[dt]?frac(?![A-Za-z])/u.exec(out);
+    if (!match) break;
+    const numerator = latexArgument(out, match.index + match[0].length);
+    const denominator = numerator ? latexArgument(out, numerator.end) : null;
+    if (!numerator || !denominator) break;
+    out = `${out.slice(0, match.index)}(${latexFractions(numerator.value)})/(${latexFractions(
+      denominator.value,
+    )})${out.slice(denominator.end)}`;
+  }
+  return out;
+}
+
+/** The Arabic letters a lesson writes as variables: «ص» = y, «س» = x, «م» = m, «ب» = b. */
+const ARABIC_VARIABLE: Readonly<Record<string, string>> = { ص: 'y', س: 'x', م: 'm', ب: 'b' };
+
+/** A term without the brackets that wrap ALL of it («(⅗x+26/5)» from `\boxed{…}`). */
+function unwrapWhole(term: string): string {
+  let out = term;
+  while (out.startsWith('(') && out.endsWith(')')) {
+    let depth = 0;
+    let wraps = true;
+    for (let index = 0; index < out.length; index += 1) {
+      if (out[index] === '(') depth += 1;
+      else if (out[index] === ')') depth -= 1;
+      if (depth === 0 && index < out.length - 1) {
+        wraps = false;
+        break;
+      }
+    }
+    if (!wraps) break;
+    out = out.slice(1, -1);
+  }
+  return out;
+}
+
+/**
+ * The canonical notation of an equation text: no spaces, Western digits, «-» minus,
+ * fractions «a/b», no LaTeX wrappers, Latin variables. Arabic words (and «:») become
+ * «,», so the equations around them stay apart. `arabicWords` reports whether any Arabic
+ * word was there (a prose answer is never an equation).
+ */
+function equationCanonical(text: string): { canonical: string; arabicWords: boolean } {
+  let out = latexFractions(text)
+    .replace(/[٠-٩]/gu, (digit) => String(ARABIC_INDIC.indexOf(digit)))
+    .replace(/[۰-۹]/gu, (digit) => String(EASTERN_INDIC.indexOf(digit)))
+    .replace(/(\d)٫(?=\d)/gu, '$1.')
+    .replace(/(\d)٬(?=\d{3}(?!\d))/gu, '$1')
+    .replace(
+      new RegExp(`([${SUPERSCRIPT}]+)\\s*[⁄/]\\s*([${SUBSCRIPT}]+)`, 'gu'),
+      (_all, top: string, bottom: string) =>
+        ` (${[...top].map((digit) => SUPERSCRIPT.indexOf(digit)).join('')})/(${[...bottom]
+          .map((digit) => SUBSCRIPT.indexOf(digit))
+          .join('')})`,
+    )
+    .replace(VULGAR_FRACTION, (fraction) => ` (${VULGAR_FRACTIONS[fraction]!.replace('/', ')/(')})`)
+    .replace(
+      new RegExp(`[${SUPERSCRIPT}]+`, 'gu'),
+      (digits) => `^${[...digits].map((digit) => SUPERSCRIPT.indexOf(digit)).join('')}`,
+    )
+    .replace(new RegExp(`[${SUBSCRIPT}]`, 'gu'), (digit) => String(SUBSCRIPT.indexOf(digit)))
+    .replace(/⁄/gu, '/')
+    .replace(/[−‒–—]/gu, '-')
+    .replace(/[×·]/gu, '*')
+    .replace(/÷/gu, '/')
+    .replace(/\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}/gu, ' $1 ')
+    .replace(/\\(?:cdot|times|ast)(?![A-Za-z])/gu, '*')
+    .replace(/\\div(?![A-Za-z])/gu, '/')
+    .replace(/\\(?:quad|qquad)(?![A-Za-z])/gu, ' , ')
+    .replace(/\\[,;:! ]/gu, ' ')
+    .replace(/\\(?:left|right|big|Big|bigg|Bigg|displaystyle|boxed|textstyle)(?![A-Za-z])/gu, ' ')
+    .replace(/\\[A-Za-z]+/gu, ' ')
+    .replace(/[_$~]/gu, '')
+    .replace(DIACRITICS, '');
+  // An Arabic variable stands alone (never inside a word); «و» between two terms joins
+  // a list («y = 150 و y = 10x + 100»); any other Arabic word separates.
+  out = out.replace(/(?<![ء-ي])([صسمب])(?![ء-ي])/gu, (letter) => ARABIC_VARIABLE[letter]!);
+  let arabicWords = false;
+  out = out.replace(/[ء-يٱ-ۓ]+/gu, () => {
+    arabicWords = true;
+    return ' , ';
+  });
+  out = out
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[[{]/gu, '(')
+    .replace(/[\]}]/gu, ')')
+    .replace(/[:؛;،]/gu, ',')
+    .replace(/\s+/gu, '');
+  // Brackets left by `\boxed{…}` or braces around a whole term: «(y=3x)» stays a chain.
+  for (let step = 0; step < 8; step += 1) {
+    const next = out
+      .replace(/\((-?\d+(?:\.\d+)?|[a-z])\)/gu, '$1')
+      .replace(/\((-?\d+(?:\.\d+)?\/\d+(?:\.\d+)?)\)(?![\^])/gu, '$1')
+      .replace(/\*(?=[a-z(])/gu, '')
+      .replace(/(?<=\))\*/gu, '')
+      .replace(/\+-|-\+/gu, '-')
+      .replace(/--/gu, '+')
+      .replace(/(^|[=,(])\+/gu, '$1')
+      .replace(/(^|[=+\-(,])1(?=[a-z])/gu, '$1')
+      .replace(/,{2,}/gu, ',')
+      .replace(/^[,.]+|[,.]+$/gu, '');
+    if (next === out) break;
+    out = next;
+  }
+  return { canonical: out, arabicWords };
+}
+
+/** The top-level parts of a canonical text, split at «,» outside brackets. */
+function equationParts(canonical: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index <= canonical.length; index += 1) {
+    const char = canonical[index];
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    if (index === canonical.length || (char === ',' && depth === 0)) {
+      // An equation whose «(…)» wrapper was a `\boxed{y=3x}` keeps its chain.
+      const part = unwrapWhole(canonical.slice(start, index));
+      if (part !== '') parts.push(part);
+      start = index + 1;
+    }
+  }
+  return parts;
+}
+
+/** A text answer that is an equation or expression (no Arabic word, an «=» or a digit). */
+export function isEquationAnswer(text: string): boolean {
+  const { canonical, arabicWords } = equationCanonical(text);
+  if (arabicWords || canonical === '') return false;
+  if (!/^[0-9a-z.+\-*/=()^,<>|]+$/u.test(canonical)) return false;
+  return canonical.includes('=') || /\d/u.test(canonical);
+}
+
+/** The equation chains a written text states («y=A=B» → [y, A, B]), in its canonical notation. */
+function writtenChains(text: string): string[][] {
+  return equationParts(equationCanonical(text).canonical).map((part) =>
+    part.split('=').map(unwrapWhole),
+  );
+}
+
+/**
+ * Lesson 2-5: does the written text state the equation answer? Each of its parts
+ * («y = 150, y = 10x + 100» has two) is stated by one chain of the written text: every
+ * side of it is a member of that chain, so «y = ⅗x + 6/5 + 20/5 = ⅗x + 26/5» states
+ * «y = ⅗x + 26/5». Only for {@link isEquationAnswer} answers.
+ */
+export function statesEquation(answer: string, written: string | readonly string[]): boolean {
+  const wanted = equationParts(equationCanonical(answer).canonical);
+  if (wanted.length === 0) return false;
+  const chains = (typeof written === 'string' ? [written] : written).flatMap(writtenChains);
+  return wanted.every((part) => {
+    const sides = part.split('=').map(unwrapWhole);
+    if (sides.some((side) => side === '')) return false;
+    return chains.some((chain) => sides.every((side) => chain.includes(side)));
+  });
+}
+
+/** A canonical chain member that is one number («15/4», «-8», «2.5»), or null. */
+function memberNumber(member: string): number | null {
+  const match = /^(-?\d+(?:\.\d+)?)(?:\/(\d+(?:\.\d+)?))?$/u.exec(member);
+  if (!match) return null;
+  const denominator = match[2] !== undefined ? Number(match[2]) : 1;
+  return denominator === 0 ? null : Number(match[1]) / denominator;
+}
+
+/**
+ * Lesson 2-5 (17 Nov 2026): whether a solution slide's canvas lines SHOW the approved
+ * answer although no «الإجابة (…): …» final line holds it — every element that can carry
+ * it is read (text, LaTeX, tables, shapes: `canvasLines`), in the comparator's notation.
+ * - an equation text answer: {@link statesEquation} over the lines;
+ * - a prose text answer: one line holds its normalized words;
+ * - a number: one line's equation chain ENDS on it («b = 6 − 9/4 = 15/4»), within the
+ *   comparator's tolerance;
+ * - a choice or a truth value is never read off a canvas (only its final line counts).
+ */
+export function guideAnswerShown(
+  answer: KafuoTeacherGuideAnswer,
+  lines: readonly string[],
+): boolean {
+  switch (answer.type) {
+    case 'text': {
+      if (isEquationAnswer(answer.value)) return statesEquation(answer.value, lines);
+      const expected = normalizeGuideText(answer.value);
+      return lines.some((line) => containsWords(normalizeGuideText(line), expected));
+    }
+    case 'number':
+      return lines.some((line) =>
+        writtenChains(line).some((chain) => {
+          if (chain.length < 2) return false;
+          const value = memberNumber(chain[chain.length - 1]!);
+          return value !== null && numbersAgree(answer.value, value, tolerance(answer));
+        }),
+      );
+    default:
+      return false;
+  }
+}
+
 export interface GuideComparison {
   match: boolean;
   /**
@@ -588,9 +836,12 @@ export function compareGuideAnswer(
     case 'text': {
       const expected = normalizeGuideText(answer.value);
       const got = normalizeGuideText(written);
-      return got === expected || containsWords(got, expected)
-        ? { match: true }
-        : { match: false, reason: `«${written.trim()}» is not «${answer.value}»` };
+      if (got === expected || containsWords(got, expected)) return { match: true };
+      // Lesson 2-5 (17 Nov 2026): an equation answer is read in one canonical notation.
+      if (isEquationAnswer(answer.value) && statesEquation(answer.value, written)) {
+        return { match: true };
+      }
+      return { match: false, reason: `«${written.trim()}» is not «${answer.value}»` };
     }
   }
 }

@@ -304,6 +304,37 @@ export type KafuoTeacherGuideAnswer =
   | { type: 'bool'; value: boolean; unit?: string }
   | { type: 'text'; value: string; unit?: string };
 
+/**
+ * The kinds of a guide model answer (`modelAnswer.kind`): a proof, an open «إجابة ممكنة»,
+ * or a drawing («مثّل بيانيًا», «ارسم …»).
+ */
+export const KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS = ['proof', 'possible', 'figure'] as const;
+export type KafuoTeacherGuideModelAnswerKind =
+  (typeof KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS)[number];
+
+/**
+ * The guide's answer drawing (owner, 17 Nov 2026): a PNG of at most 5,000,000 bytes.
+ * `url` is the transient presigned GET URL the Backend mints at send time: on the wire
+ * only, never in the digest, the attempt snapshot, logs or responses (like
+ * `contentResource.url`). Every record read after the run has no `url`.
+ */
+export interface KafuoTeacherGuideFigureImage {
+  checksumSha256: string;
+  mimeType: 'image/png';
+  sizeBytes: number;
+  url?: string;
+}
+
+/**
+ * Owner decision (17 Nov 2026): the guide's model answer of a proof or an open «إجابة ممكنة»
+ * question (1..4000 characters), or its answer drawing (an image, with an optional note).
+ * Never a key: it reaches the solution slides' writers only, so the worked proof or
+ * solution follows it and the drawing is shown on that slide.
+ */
+export type KafuoTeacherGuideModelAnswer =
+  | { kind: 'proof' | 'possible'; text: string }
+  | { kind: 'figure'; image: KafuoTeacherGuideFigureImage; text?: string };
+
 /** One guide item, keyed by OUR content unit and OUR item label («1A», «11», «11b»). */
 export interface KafuoTeacherGuideItem {
   contentUnitId: string;
@@ -311,9 +342,14 @@ export interface KafuoTeacherGuideItem {
   status: KafuoTeacherGuideStatus;
   /** Required on `approved`; allowed on `settled`; never on any other status. */
   answer?: KafuoTeacherGuideAnswer;
+  /** Allowed on `reference` only (owner, 17 Nov 2026); never on any other status. */
+  modelAnswer?: KafuoTeacherGuideModelAnswer;
 }
 
-/** g5.v11 only: the `teacherGuide` block of a generation request (records only, no page text). */
+/**
+ * g5.v11 only: the `teacherGuide` block of a generation request (records only, no page
+ * text; a `reference` record may carry its model answer, owner 17 Nov 2026).
+ */
 export interface KafuoTeacherGuide {
   guideId: string;
   items: KafuoTeacherGuideItem[];
@@ -327,11 +363,17 @@ export interface GuideAnswerSettlementRecord {
     | 'items_removed'
     | 'unverified'
     | 'narration_replaced'
-    | 'attempt_dropped';
+    | 'attempt_dropped'
+    | 'final_line_written'
+    | 'key_rewritten';
   /** The outline ids that left the lesson: only an attempt left with no question. */
   dropped: string[];
   removedQuestions: number[];
-  items: Array<{ contentUnitId: string; label: string; outcome: 'removed' | 'unverified' }>;
+  items: Array<{
+    contentUnitId: string;
+    label: string;
+    outcome: 'removed' | 'unverified' | 'written';
+  }>;
   findings: Array<{ code: string; contentUnitId: string; label: string; where: string }>;
   generationRun: number;
 }
@@ -634,7 +676,14 @@ export interface GenerationCheckpointSourceRefs {
     }
   >;
   /** Content Unit choices for a person (id, order, title, role) — no text. */
-  contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
+  contentUnits: Array<{
+    id: string;
+    order: number;
+    title: string | null;
+    role: string;
+    /** Lesson 2-5 (17 Nov 2026): the normalized subtype (absent on older checkpoints). */
+    subtype?: string | null;
+  }>;
   /** Screening verdicts reused on resume instead of screening again. */
   visualVerdicts: {
     approved: Array<{ id: string; sha256: string }>;

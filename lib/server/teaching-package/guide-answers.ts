@@ -16,6 +16,26 @@
  *   (the quiz stem is written from those), and cut off before its narration writer
  *   ({@link withoutHiddenAnswerKey});
  * - NEVER the try-it slide (check_understanding), its narration, or the attempt stem.
+ *
+ * Owner decision (17 Nov 2026): a `reference` item's MODEL ANSWER (a proof, or an open
+ * «إجابة ممكنة») is resolved the same way but is never a key: it is listed apart
+ * (`modelAnswers`), never in `keyed` or `answer`, never compared, and reaches ONLY the
+ * solution slide's writer instruction (description), so its worked proof or solution
+ * follows the guide. Never a key point, an attempt, a try-it slide or a check's slide
+ * before its try: no code can tell a paraphrased proof, so it goes only after the try.
+ * Owner decision (17 Nov 2026, later the same day) reverses "never compared / never an
+ * attempt" for ONE purpose: a proof or «إجابة ممكنة» item the lesson solves gets a
+ * WRITTEN attempt question (`guide-written-attempts.ts`: the book's own question, never
+ * the guide text), graded by the Backend after submission against the model answer read
+ * from the package's PINNED snapshot (`quiz-grades` → `gradingContext`). The model answer
+ * itself still reaches no attempt, key, stem, explanation or learner payload.
+ *
+ * Owner decision (17 Nov 2026): a `figure` model answer is the guide's answer DRAWING
+ * («مثّل بيانيًا», «ارسم …»). It goes exactly where the other model answers go — the
+ * solution slide that solves its question, after the try — as that outline's selected
+ * image (`suggestedImageIds` + an `imagePlans` note, id `src-guide-<n>`), beside the writer
+ * note. Only a drawing the run fetched, verified and stored is listed
+ * (`attachedFigureIds`); any other figure is as if never sent.
  */
 import {
   ATTEMPT_OUTLINE_SUFFIX,
@@ -35,11 +55,13 @@ import {
   type BookUnitFacts,
 } from '@/lib/server/teaching-package/hidden-step-types';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { ImagePlan } from '@openmaic/generation';
 import type {
   KafuoBookStructure,
   KafuoTeacherGuide,
   KafuoTeacherGuideAnswer,
   KafuoTeacherGuideItem,
+  KafuoTeacherGuideModelAnswer,
 } from '@/lib/types/teaching-package';
 
 /** A guide item resolved to one of OUR book items. */
@@ -61,10 +83,34 @@ export interface KeyedGuideItem extends ResolvedGuideItem {
   answer: KafuoTeacherGuideAnswer;
 }
 
+/** A resolved `reference` item carrying the guide's model answer (owner, 17 Nov 2026). */
+export interface ModelAnswerGuideItem extends ResolvedGuideItem {
+  modelAnswer: KafuoTeacherGuideModelAnswer;
+  /** A `figure` only: the stored drawing's image id (`src-guide-<n>`). Never on another kind. */
+  figureImageId?: string;
+}
+
+/**
+ * The image id of the drawing of the guide's item at `itemIndex` (0-based, in the order
+ * Kafuo sent the items): TE-minted and stable for one guide, so a resumed run and a
+ * regeneration name the same drawing. It keeps the source-visual `src-` prefix, the one
+ * the slide generator resolves onto a stored image's serving path.
+ */
+export function guideFigureImageId(itemIndex: number): string {
+  return `src-guide-${itemIndex + 1}`;
+}
+
+/** An image id the engine minted for a guide answer drawing. */
+export function isGuideFigureImageId(id: unknown): boolean {
+  return typeof id === 'string' && /^src-guide-\d+$/.test(id);
+}
+
 export interface ResolvedTeacherGuide {
   guideId: string;
   /** Keyed items in book order (book unit order, then item order). */
   keyed: KeyedGuideItem[];
+  /** Reference items with a model answer, in book order. Never keys, never compared. */
+  modelAnswers: ModelAnswerGuideItem[];
   /** The exercise selection marks (`selectExercises`). */
   exerciseStatuses: ExerciseGuideStatuses;
   /** Items that match no item of our book: they get no answer and are logged. */
@@ -105,6 +151,13 @@ export function isKeyedGuideItem(
   return KEYED_STATUSES.has(item.status) && item.answer !== undefined;
 }
 
+/** A reference item carrying its model answer (owner, 17 Nov 2026): never keyed. */
+export function hasGuideModelAnswer(
+  item: KafuoTeacherGuideItem,
+): item is KafuoTeacherGuideItem & { modelAnswer: KafuoTeacherGuideModelAnswer } {
+  return item.status === 'reference' && item.modelAnswer !== undefined;
+}
+
 /** A doubtful or changed item, or a settled one without an answer (a person excluded it). */
 function isHeld(item: KafuoTeacherGuideItem): boolean {
   return (
@@ -121,28 +174,48 @@ function itemKey(number: number, letter: string | null): string {
 /**
  * Resolve the guide against the book map and the pinned unit facts. An item on a unit
  * that is not a check or an exercise, or whose label is not one of that unit's items,
- * is unresolved: it gets no answer (today's behaviour) and is reported.
+ * is unresolved: it gets no answer (today's behaviour) and is reported. A `figure` model
+ * answer is listed only when its drawing is in `attachedFigureIds` (owner, 17 Nov 2026:
+ * fetched, verified and stored by the run); without the option no figure is listed.
  */
 export function resolveTeacherGuide(
   guide: KafuoTeacherGuide,
   book: Pick<KafuoBookStructure, 'units'>,
   facts: Readonly<Record<string, BookUnitFacts>> | null | undefined,
+  options: { attachedFigureIds?: ReadonlySet<string> } = {},
 ): ResolvedTeacherGuide {
   const units = new Map(book.units.map((unit, index) => [unit.contentUnitId, { unit, index }]));
-  const resolved: Array<{ item: ResolvedGuideItem; source: KafuoTeacherGuideItem; rank: number }> =
-    [];
+  const resolved: Array<{
+    item: ResolvedGuideItem;
+    source: KafuoTeacherGuideItem;
+    rank: number;
+    /** The item's position in the guide as sent (its drawing's id). */
+    at: number;
+  }> = [];
   const unresolved: ResolvedTeacherGuide['unresolved'] = [];
   const perUnitCount = new Map<string, number>();
   for (const source of guide.items) {
     perUnitCount.set(source.contentUnitId, (perUnitCount.get(source.contentUnitId) ?? 0) + 1);
   }
-  for (const source of guide.items) {
+  for (const [at, source] of guide.items.entries()) {
     const reject = (reason: string) =>
       unresolved.push({ contentUnitId: source.contentUnitId, label: source.label, reason });
     const entry = units.get(source.contentUnitId);
     const element = entry?.unit.element;
     if (!entry || (element !== 'try_it' && element !== 'exercise')) {
-      reject('not a check or exercise unit of this lesson');
+      // Lesson 2-5 (17 Nov 2026): the reason says what the book map did with the unit
+      // («not a check or exercise unit of this lesson» was logged for the lesson's own
+      // «تأكد» and practice units, which the map had left untyped).
+      const kind = entry?.unit.kind ?? 'unit';
+      reject(
+        !entry
+          ? 'the unit is not in this lesson’s book map'
+          : element === 'ignore'
+            ? `the book map leaves this ${kind} out of the lesson (element ignore)`
+            : element === null || element === undefined
+              ? `the book map gives this ${kind} no element`
+              : `a ${element} unit, not a check or exercise`,
+      );
       continue;
     }
     const unitFacts = facts?.[source.contentUnitId];
@@ -166,6 +239,7 @@ export function resolveTeacherGuide(
       }
       resolved.push({
         source,
+        at,
         rank: entry.index * 10_000 + Math.max(position, 0),
         item: {
           contentUnitId: source.contentUnitId,
@@ -191,6 +265,7 @@ export function resolveTeacherGuide(
     const questionNumber = multi ? number : null;
     resolved.push({
       source,
+      at,
       rank:
         entry.index * 10_000 +
         (questionNumber ?? 0) * 10 +
@@ -226,6 +301,16 @@ export function resolveTeacherGuide(
     keyed: resolved.flatMap(({ item, source }) =>
       isKeyedGuideItem(source) ? [{ ...item, answer: source.answer }] : [],
     ),
+    modelAnswers: resolved.flatMap(({ item, source, at }): ModelAnswerGuideItem[] => {
+      if (!hasGuideModelAnswer(source)) return [];
+      if (source.modelAnswer.kind !== 'figure')
+        return [{ ...item, modelAnswer: source.modelAnswer }];
+      // A drawing the run did not store is as if never sent (fail-soft).
+      const figureImageId = guideFigureImageId(at);
+      return options.attachedFigureIds?.has(figureImageId)
+        ? [{ ...item, modelAnswer: source.modelAnswer, figureImageId }]
+        : [];
+    }),
     exerciseStatuses: statuses,
     unresolved,
   };
@@ -258,6 +343,46 @@ interface LabelMark {
 /** A check item's own text: from its label to the next item's label, the label out. */
 function checkItemText(text: string, number: number, letter: string | null): string | null {
   const normalized = normalizeBookText(text, false);
+  const bounds = checkItemBounds(normalized, number, letter);
+  return bounds ? normalized.slice(bounds.start, bounds.end).trim() : null;
+}
+
+/** The marks `normalizeBookText` deletes (tashkeel, superscript alef, tatweel). */
+const BOOK_MARK = /[ً-ٰٟـ]/u;
+
+/**
+ * `normalizeBookText(text, false)` with, for each normalized character, the index of the
+ * raw character it came from — so a span found on the normalized text is cut from the
+ * RAW text (owner, 17 Nov 2026: a learner never reads the folded «ه»/«ي»/«ا» forms).
+ */
+function normalizedWithOffsets(text: string): { normalized: string; offsets: number[] } {
+  let normalized = '';
+  const offsets: number[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (BOOK_MARK.test(char)) continue;
+    normalized += normalizeBookText(char, false);
+    offsets.push(index);
+  }
+  return { normalized, offsets };
+}
+
+/** A check item's own text as the BOOK prints it (diacritics and letters kept). */
+function checkItemRawText(text: string, number: number, letter: string | null): string | null {
+  const { normalized, offsets } = normalizedWithOffsets(text);
+  const bounds = checkItemBounds(normalized, number, letter);
+  if (!bounds) return null;
+  const rawStart = bounds.start < offsets.length ? offsets[bounds.start]! : text.length;
+  const rawEnd = bounds.end < offsets.length ? offsets[bounds.end]! : text.length;
+  return text.slice(rawStart, rawEnd).trim();
+}
+
+/** The span of a check item's own text on the normalized unit text (its label out). */
+function checkItemBounds(
+  normalized: string,
+  number: number,
+  letter: string | null,
+): { start: number; end: number } | null {
   let marks: LabelMark[] = [...normalized.matchAll(CHECK_LABEL)].map((match) => {
     const raw = match[2] ?? match[4]!;
     return {
@@ -278,7 +403,7 @@ function checkItemText(text: string, number: number, letter: string | null): str
   const found = at >= 0 ? at : marks.findIndex((mark) => wanted.includes(mark.key));
   if (found < 0) return null;
   const next = marks.find((mark, index) => index > found && mark.key !== marks[found]!.key);
-  return normalized.slice(marks[found]!.end, next ? next.start : undefined).trim();
+  return { start: marks[found]!.end, end: next ? next.start : normalized.length };
 }
 
 /** A unit's text with every item label and question number taken out. */
@@ -303,13 +428,35 @@ export function guideItemQuestionText(
   item: Pick<ResolvedGuideItem, 'element' | 'number' | 'letter'>,
 ): string {
   if (item.number !== null) {
+    // Lesson 2-5: a question sharing its book line («(13 … (14 …») is its own.
     const own =
       item.element === 'exercise'
-        ? exerciseQuestionText(text, item.number, item.letter)
+        ? exerciseQuestionText(text, item.number, item.letter, true)
         : checkItemText(text, item.number, item.letter);
     if (own !== null) return own;
   }
   return withoutItemLabels(text);
+}
+
+/**
+ * Owner decision (17 Nov 2026): the item's OWN book question as the book prints it, for
+ * the learner's written attempt — never normalized, never the guide's text. An exercise
+ * question is read like `guideItemQuestionText`; a check item is cut from the raw text at
+ * the same span; an item with no number (a one-item check, an exercise unit solved
+ * whole) is its unit's whole text. Null when the unit does not print the item.
+ */
+export function guideItemOwnText(
+  text: string,
+  item: Pick<ResolvedGuideItem, 'element' | 'number' | 'letter'>,
+): string | null {
+  const own =
+    item.number === null
+      ? text
+      : item.element === 'exercise'
+        ? exerciseQuestionText(text, item.number, item.letter, true)
+        : checkItemRawText(text, item.number, item.letter);
+  const trimmed = own?.trim() ?? '';
+  return trimmed === '' ? null : trimmed;
 }
 
 // ── The writers' text ─────────────────────────────────────────────────────────────────
@@ -353,6 +500,62 @@ function solutionNote(items: readonly KeyedGuideItem[]): string {
     ...items.map((item) => `- ${finalAnswerLine(item)}`),
     'Never write «المعتمدة», «دليل المعلم» or «الدليل» on the canvas or in the narration.',
   ].join('\n');
+}
+
+/** The marker of the model-answer instruction (owner, 17 Nov 2026). */
+const MODEL_ANSWER_MARKER = 'GUIDE MODEL ANSWERS (g5.v11)';
+
+const MODEL_ANSWER_KIND: Readonly<Record<KafuoTeacherGuideModelAnswer['kind'], string>> = {
+  proof: 'proof',
+  possible: 'one possible answer; other correct answers exist',
+  figure: 'a drawing',
+};
+
+/** The writer's rule for the attached answer drawings (owner, 17 Nov 2026). */
+const FIGURE_RULE = [
+  "Each attached drawing is the guide's drawing of that item's correct answer: show it on the",
+  "canvas (by its image id) beside that item's solution, after the working, and keep every value,",
+  'point and label you write in line with it; never draw a different answer.',
+].join('\n');
+
+/**
+ * The solution writer's model answers. Each line of a text is indented, so no text can
+ * start a block of its own (`plannedDescription` cuts at a marker after a blank line). A
+ * drawing is named by its image id (the outline selects it), with its note when sent.
+ */
+function modelAnswerNote(items: readonly ModelAnswerGuideItem[]): string {
+  const text = (item: ModelAnswerGuideItem): string[] => {
+    const sent = (item.modelAnswer.text ?? '').trim();
+    return sent === '' ? [] : sent.split(/\r?\n/u).map((line) => `  ${line.trim()}`);
+  };
+  return [
+    `${MODEL_ANSWER_MARKER}: the checked model answer of each item below that this slide solves`,
+    '(a proof, or one possible answer of an open question). Write its proof or solution in line',
+    "with it: the same givens, claims, reasons and conclusion, step by step, in the lesson's own",
+    "words and notation and with the book's method. It is a reference, not text to copy: never",
+    'copy a line addressed to the teacher. Present a possible answer as one correct answer, never',
+    'as the only one.',
+    ...items.flatMap((item) => {
+      const lines = text(item);
+      return [
+        item.figureImageId !== undefined
+          ? `- item ${item.display} (${MODEL_ANSWER_KIND.figure}: image ${item.figureImageId}, attached to this slide; رسمة الإجابة في دليل المعلم مرفقة)${lines.length > 0 ? ':' : ''}`
+          : `- item ${item.display} (${MODEL_ANSWER_KIND[item.modelAnswer.kind]}):`,
+        ...lines,
+      ];
+    }),
+    ...(items.some((item) => item.figureImageId !== undefined) ? [FIGURE_RULE] : []),
+    'Never write «دليل المعلم» or «الدليل» on the canvas or in the narration.',
+  ].join('\n');
+}
+
+/** The image note of an attached drawing (`imagePlans`: what narration knows of it). */
+function figureImagePlan(item: ModelAnswerGuideItem & { figureImageId: string }): ImagePlan {
+  return {
+    imageId: item.figureImageId,
+    shows: `the finished drawing that answers item ${item.display} (its graph or figure)`,
+    teachingPoint: `how this drawing answers item ${item.display}, after the item's working`,
+  };
 }
 
 function attemptKey(items: readonly KeyedGuideItem[]): string {
@@ -401,6 +604,11 @@ export interface GuideOutlinePlan {
   questionOf?: Readonly<Record<string, number | null>>;
   /** Attempts: the question count the quiz was planned with. */
   questionCount?: number;
+  /**
+   * Solutions only (owner, 17 Nov 2026): the model answers of the items the slide solves
+   * after their try, for its writer. Never keys: the comparator never reads them.
+   */
+  modelAnswers?: ModelAnswerGuideItem[];
 }
 
 function citedUnits(outline: SceneOutline, element: 'try_it' | 'exercise', book: BookUnits) {
@@ -431,6 +639,8 @@ export function guideOutlinePlans(
     book.units.map((unit) => [unit.contentUnitId, unit.element] as const),
   );
   const keyedOf = (unitId: string) => guide.keyed.filter((item) => item.contentUnitId === unitId);
+  const modelAnswersOf = (unitId: string) =>
+    guide.modelAnswers.filter((item) => item.contentUnitId === unitId);
   const plans = new Map<string, GuideOutlinePlan>();
   const checkLabels = (unitId: string) => options.facts?.[unitId]?.itemLabels ?? [];
 
@@ -464,14 +674,19 @@ export function guideOutlinePlans(
       slideQuestionsOf.set(outline.id, questions);
       const tried = checks.filter((unitId) => (firstTry.get(unitId) ?? Infinity) < index);
       const beforeTry = checks.filter((unitId) => !tried.includes(unitId)).flatMap(keyedOf);
+      const onSlide = (unitId: string) => (item: ResolvedGuideItem) => {
+        const listed = questions?.[unitId];
+        return !listed || (item.number !== null && listed.includes(item.number));
+      };
       const items = [
         ...tried.flatMap(keyedOf),
-        ...exercises.flatMap((unitId) =>
-          keyedOf(unitId).filter((item) => {
-            const listed = questions?.[unitId];
-            return !listed || (item.number !== null && listed.includes(item.number));
-          }),
-        ),
+        ...exercises.flatMap((unitId) => keyedOf(unitId).filter(onSlide(unitId))),
+      ];
+      // Owner, 17 Nov 2026: the model answers of the same items (a check's only after
+      // its try; an exercise's only on the slide that solves that question).
+      const modelAnswers = [
+        ...tried.flatMap(modelAnswersOf),
+        ...exercises.flatMap((unitId) => modelAnswersOf(unitId).filter(onSlide(unitId))),
       ];
       const order = exercises.flatMap(
         (unitId): Array<{ unitId: string; number: number | null }> => {
@@ -483,7 +698,9 @@ export function guideOutlinePlans(
         },
       );
       asked.set(outline.id, order);
-      if (items.length === 0) {
+      // A slide with no keyed item stays exactly as before when it guards a check before
+      // its try (a try-side plan: its model answers are dropped, never a role change).
+      if (items.length === 0 && (modelAnswers.length === 0 || beforeTry.length > 0)) {
         if (beforeTry.length > 0) plans.set(outline.id, { role: 'try', items: beforeTry });
         continue;
       }
@@ -496,6 +713,7 @@ export function guideOutlinePlans(
         items,
         solves: order.length + checkItems,
         ...(beforeTry.length > 0 ? { beforeTry } : {}),
+        ...(modelAnswers.length > 0 ? { modelAnswers } : {}),
       });
       continue;
     }
@@ -550,7 +768,8 @@ export function guideOutlinePlans(
       const statements = options.unitTexts
         ? exerciseAttemptQuestions(
             exercises,
-            { unitTexts: options.unitTexts, facts: options.facts ?? null },
+            // Lesson 2-5: the attempt's statements as the g5.v11 run split them.
+            { unitTexts: options.unitTexts, facts: options.facts ?? null, inlineQuestions: true },
             slideQuestionsOf.get(baseId) as Record<string, number[]> | undefined,
           ).slice(0, count)
         : [];
@@ -608,18 +827,46 @@ function sameStrings(a: readonly string[] | undefined, b: readonly string[] | un
   return a.every((value, index) => value === b[index]);
 }
 
+function samePlans(a: readonly ImagePlan[] | undefined, b: readonly ImagePlan[] | undefined) {
+  return a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * The outline without the engine's guide answer drawings (owner, 17 Nov 2026): their ids
+ * out of `suggestedImageIds` and their `imagePlans` notes. The SAME object without any.
+ */
+function withoutGuideFigures(outline: SceneOutline): SceneOutline {
+  const carries =
+    outline.suggestedImageIds?.some(isGuideFigureImageId) ||
+    outline.imagePlans?.some((plan) => isGuideFigureImageId(plan.imageId));
+  if (!carries) return outline;
+  const { suggestedImageIds, imagePlans, ...rest } = outline;
+  const ids = (suggestedImageIds ?? []).filter((id) => !isGuideFigureImageId(id));
+  const plans = (imagePlans ?? []).filter((plan) => !isGuideFigureImageId(plan.imageId));
+  return {
+    ...rest,
+    ...(ids.length > 0 ? { suggestedImageIds: ids } : {}),
+    ...(plans.length > 0 ? { imagePlans: plans } : {}),
+  };
+}
+
 /**
  * Re-review finding 2: the outline without ANY of the engine's g5.v11 blocks (the
- * description's appended blocks and the solution key points), whichever role put them
- * there. The SAME object when it carries none.
+ * description's appended blocks, the solution key points and the answer drawings),
+ * whichever role put them there. The SAME object when it carries none.
  */
 function withoutGuideBlocks(outline: SceneOutline): SceneOutline {
   const description = plannedDescription(outline.description);
   const keyPoints = outline.keyPoints?.filter((point) => !isSolutionKeyPoint(point));
-  if (description === outline.description && sameStrings(keyPoints, outline.keyPoints)) {
+  const base = withoutGuideFigures(outline);
+  if (
+    base === outline &&
+    description === outline.description &&
+    sameStrings(keyPoints, outline.keyPoints)
+  ) {
     return outline;
   }
-  return { ...outline, description, ...(keyPoints ? { keyPoints } : {}) };
+  return { ...base, description, ...(keyPoints ? { keyPoints } : {}) };
 }
 
 /**
@@ -638,12 +885,18 @@ export function withoutGuideAnswers(outlines: SceneOutline[]): SceneOutline[] {
   return changed ? result : outlines;
 }
 
-/** A clean outline with the blocks of its role: `keep` keyed, `leaveOut` left out. */
+/**
+ * A clean outline with the blocks of its role: `keep` keyed, `leaveOut` left out, and (a
+ * solution only) `modelAnswers` for its writer — never one of a question that left the
+ * slide (D-19). An attached answer drawing (owner, 17 Nov 2026) is selected on the same
+ * solution outline only; a figure without a stored drawing adds nothing.
+ */
 function withBlocks(
   base: SceneOutline,
   role: GuideOutlineRole,
   keep: readonly KeyedGuideItem[],
   leaveOut: readonly KeyedGuideItem[],
+  modelAnswers: readonly ModelAnswerGuideItem[] = [],
 ): SceneOutline {
   if (role === 'try') return base;
   if (role === 'attempt') {
@@ -651,15 +904,36 @@ function withBlocks(
       ? { ...base, description: `${base.description}\n\n${attemptKey(keep)}` }
       : base;
   }
+  const gone = new Set(leaveOut.map(questionOf));
+  const models = modelAnswers.filter(
+    (item) =>
+      !gone.has(questionOf(item)) &&
+      (item.modelAnswer.kind !== 'figure' || item.figureImageId !== undefined),
+  );
+  const figures = models.filter(
+    (item): item is ModelAnswerGuideItem & { figureImageId: string } =>
+      item.figureImageId !== undefined,
+  );
   const blocks = [
     ...(keep.length > 0 ? [solutionNote(keep)] : []),
+    ...(models.length > 0 ? [modelAnswerNote(models)] : []),
     ...(leaveOut.length > 0 ? [leaveOutNote(leaveOut)] : []),
   ];
   if (blocks.length === 0) return base;
+  const figureIds = [...new Set(figures.map((item) => item.figureImageId))];
   return {
     ...base,
     keyPoints: [...(base.keyPoints ?? []), ...keep.map(solutionKeyPoint)],
     description: [base.description, ...blocks].join('\n\n'),
+    ...(figureIds.length > 0
+      ? {
+          suggestedImageIds: [...(base.suggestedImageIds ?? []), ...figureIds],
+          imagePlans: [
+            ...(base.imagePlans ?? []),
+            ...figureIds.map((id) => figureImagePlan(figures.find((f) => f.figureImageId === id)!)),
+          ],
+        }
+      : {}),
   };
 }
 
@@ -682,10 +956,18 @@ export function injectGuideAnswers(
     const plan = plans.get(outline.id);
     const leaveOut = plan?.role === 'try' ? [] : (leftOut.get(outline.id) ?? []);
     const role: GuideOutlineRole = plan?.role ?? (leaveOut.length > 0 ? 'solution' : 'try');
-    const next = withBlocks(withoutGuideBlocks(outline), role, plan?.items ?? [], leaveOut);
+    const next = withBlocks(
+      withoutGuideBlocks(outline),
+      role,
+      plan?.items ?? [],
+      leaveOut,
+      plan?.modelAnswers,
+    );
     if (
       next.description === outline.description &&
-      sameStrings(next.keyPoints, outline.keyPoints)
+      sameStrings(next.keyPoints, outline.keyPoints) &&
+      sameStrings(next.suggestedImageIds, outline.suggestedImageIds) &&
+      samePlans(next.imagePlans, outline.imagePlans)
     ) {
       return outline;
     }
@@ -747,9 +1029,14 @@ function leaveOutNote(items: readonly KeyedGuideItem[]): string {
   ].join('\n');
 }
 
+/** One question of the lesson: its unit and number (a unit solved whole: `*`). */
+function questionOf(item: Pick<ResolvedGuideItem, 'contentUnitId' | 'number'>): string {
+  return `${item.contentUnitId}|${item.number ?? '*'}`;
+}
+
 /** The description without the engine's g5.v11 blocks (always appended last). */
 function plannedDescription(description: string): string {
-  const cuts = [SOLUTION_NOTE_MARKER, ATTEMPT_KEY_MARKER, LEAVE_OUT_MARKER]
+  const cuts = [SOLUTION_NOTE_MARKER, MODEL_ANSWER_MARKER, ATTEMPT_KEY_MARKER, LEAVE_OUT_MARKER]
     .map((marker) => description.indexOf(`\n\n${marker}`))
     .filter((at) => at >= 0);
   return cuts.length > 0 ? description.slice(0, Math.min(...cuts)) : description;
@@ -770,5 +1057,5 @@ export function withGuideItems(
   const base = withoutGuideBlocks(outline);
   if (plan.role === 'try') return base;
   // Always a new outline: the caller records it as the settled one.
-  return { ...withBlocks(base, plan.role, keep, leaveOut) };
+  return { ...withBlocks(base, plan.role, keep, leaveOut, plan.modelAnswers) };
 }

@@ -18,8 +18,77 @@ import {
   normalizeGuideDigits,
   normalizeGuideText,
   normalizeGuideUnit,
+  guideAnswerShown,
+  isEquationAnswer,
+  statesEquation,
 } from '@/lib/server/teaching-package/guide-answer-compare';
 import type { KafuoTeacherGuideAnswer } from '@/lib/types/teaching-package';
+
+describe('equation answers (lesson 2-5, 17 Nov 2026)', () => {
+  const text = (value: string): KafuoTeacherGuideAnswer => ({ type: 'text', value });
+
+  it('tells an equation answer from a prose one', () => {
+    expect(isEquationAnswer('y = ³⁄₅ x + ²⁶⁄₅')).toBe(true);
+    expect(isEquationAnswer('x = −3')).toBe(true);
+    expect(isEquationAnswer('y = 150, y = 10x + 100')).toBe(true);
+    expect(isEquationAnswer('يتساوى العرضان عند 5 زيارات؛ يكون Y أفضل لأقل من 5')).toBe(false);
+    expect(isEquationAnswer('شوال')).toBe(false);
+    expect(isEquationAnswer('n أو p أو r')).toBe(false);
+  });
+
+  it.each([
+    // The guide's notation against the slide's LaTeX (checks 3A, 3B, 4 and 5 of the run).
+    ['y = ³⁄₅ x + ²⁶⁄₅', 'y=\\frac35x+\\frac65+\\frac{20}5=\\boxed{\\frac35x+\\frac{26}5}'],
+    ['y = 3x', '\\boxed{y=3x}'],
+    ['y = 0', 'y=0'],
+    ['y = −3/4 x + 15/4', 'y=-\\frac{3}{4}x+\\frac{15}{4}'],
+    // The quiz's Arabic variables and bracketed coefficients.
+    ['y = ³⁄₅ x + ²⁶⁄₅', 'ص = (3/5)س + 26/5'],
+    ['y = 3x', 'ص = 3س'],
+    ['y = −3/4 x + 15/4', 'y = -3/4 x + 15/4'],
+    // Point-slope form, a vulgar fraction, a final line's value, a dfrac.
+    ['y − 5 = −¾(x + 2)', 'y-5=-\\frac{3}{4}(x+2)'],
+    ['y + 6 = 4(x + 3)', 'الإجابة: y+6=4(x+3)'],
+    ['y = 5/2 x − 1', 'y=\\dfrac{5}{2}x-1'],
+    ['x = −3', '\\left(x=-3\\right)'],
+  ])('«%s» matches «%s»', (answer, written) => {
+    expect(compareGuideAnswer(text(answer), written).match).toBe(true);
+  });
+
+  it.each([
+    ['y = ³⁄₅ x + ²⁶⁄₅', 'ص = (5/3)س + 26/5'],
+    ['y = ³⁄₅ x + ²⁶⁄₅', 'y-4=\\frac35x+\\frac65'],
+    ['y = −3/4 x + 15/4', 'y = 3/4 x + 33/4'],
+    ['y = 0', 'y-0=0(x-3)'],
+    ['x = 2', 'لا يمكن كتابة معادلته بصيغة الميل والمقطع'],
+    ['y = 3x', 'y = 13x'],
+  ])('«%s» does not match «%s»', (answer, written) => {
+    expect(compareGuideAnswer(text(answer), written).match).toBe(false);
+  });
+
+  it('needs every equation of a two-equation answer', () => {
+    expect(statesEquation('y = 150, y = 10x + 100', ['y=150', 'y=10x+100'])).toBe(true);
+    expect(statesEquation('y = 150, y = 10x + 100', ['y=150'])).toBe(false);
+  });
+
+  it('reads an answer shown on the canvas without a final line, never a given', () => {
+    const lines = ['تحقق 5', 'y=-\\frac{3}{4}x+3', 'المعادلة:', 'y=-\\frac{3}{4}x+\\frac{15}{4}'];
+    expect(guideAnswerShown(text('y = −3/4 x + 15/4'), lines)).toBe(true);
+    expect(guideAnswerShown(text('y = −3/4 x + 15/4'), lines.slice(0, 3))).toBe(false);
+    // A number ends an equation chain; a bare number in prose is no answer.
+    expect(
+      guideAnswerShown({ type: 'number', value: 3.75 }, ['b=6-\\frac{9}{4}=\\frac{15}{4}']),
+    ).toBe(true);
+    expect(guideAnswerShown({ type: 'number', value: 12 }, ['نضيف 3 فيكون 12'])).toBe(false);
+    // A choice or truth value is read only from its final line.
+    expect(guideAnswerShown({ type: 'choice', value: 'B' }, ['B'])).toBe(false);
+  });
+
+  it('reads the LaTeX one-digit fraction shorthand as a number', () => {
+    expect(compareGuideAnswer({ type: 'number', value: 3.75 }, '\\frac{15}4').match).toBe(true);
+    expect(compareGuideAnswer({ type: 'number', value: 0.6 }, '\\frac35').match).toBe(true);
+  });
+});
 
 const VECTORS = JSON.parse(
   readFileSync(path.join(__dirname, '..', 'fixtures', 'guide-answer-compare.v1.json'), 'utf8'),

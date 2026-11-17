@@ -22,7 +22,10 @@
  */
 import type { SceneOutline } from '@/lib/types/generation';
 import type { KafuoBookStructure } from '@/lib/types/teaching-package';
-import type { BookUnitFacts } from '@/lib/server/teaching-package/hidden-step-types';
+import {
+  splitInlineQuestions,
+  type BookUnitFacts,
+} from '@/lib/server/teaching-package/hidden-step-types';
 
 /** The attempt quiz of slide `x` has the outline id `x-attempt`. */
 export const ATTEMPT_OUTLINE_SUFFIX = '-attempt';
@@ -69,6 +72,11 @@ export interface AttemptQuizContext {
    * question, pinned on the attempt), so a resumed run never inserts them again.
    */
   skipAttemptIds?: ReadonlySet<string>;
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11 only): questions sharing a book line («(13 … (14 …»)
+   * are one statement each (`splitInlineQuestions`). Off for every earlier model.
+   */
+  inlineQuestions?: boolean;
 }
 
 function unitsOf(book: Book, element: string): Set<string> {
@@ -165,11 +173,14 @@ interface QuestionGroup {
  * after a section title, or from a task line up to the next question are the shared task
  * of the questions that follow (a section title ends it).
  */
-function questionGroups(text: string): QuestionGroup[] {
+function questionGroups(text: string, inlineQuestions = false): QuestionGroup[] {
   const groups: QuestionGroup[] = [];
   let task: string[] = [];
   let readingTask = true;
-  for (const raw of text.split('\n')) {
+  // Lesson 2-5 (17 Nov 2026, g5.v11): questions sharing a book line («(13 … (14 … (15 …»)
+  // are one group each, so each gets its own statement and attempt question.
+  const lines = (inlineQuestions ? splitInlineQuestions(text) : text).split('\n');
+  for (const raw of lines) {
     const line = raw.trim();
     if (line === '') continue;
     const body = line.replace(MARGIN_PREFIX, '');
@@ -255,7 +266,10 @@ function exerciseStatementEntries(
   for (const id of cited) {
     const allowed = questions?.[id];
     // Quality plan follow-up (item 208 Q11, 15 Nov 2026): table rows and «a) b)» lines stay.
-    const groups = questionGroups(context.unitTexts?.get(id) ?? '');
+    const groups = questionGroups(
+      context.unitTexts?.get(id) ?? '',
+      context.inlineQuestions === true,
+    );
     const present = new Set(groups.map((group) => group.number));
     groups.forEach((group, index) => {
       if (!group.hasText || (allowed && !allowed.includes(group.number))) return;
@@ -317,8 +331,10 @@ export function exerciseQuestionText(
   text: string,
   number: number,
   letter?: string | null,
+  /** Lesson 2-5 (g5.v11, the only caller): a question sharing its book line is its own. */
+  inlineQuestions = false,
 ): string | null {
-  const groups = questionGroups(text);
+  const groups = questionGroups(text, inlineQuestions);
   const index = groups.findIndex((group) => group.number === number);
   if (index < 0) return null;
   const present = new Set(groups.map((group) => group.number));

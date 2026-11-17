@@ -163,7 +163,9 @@ describe('g5.v11 registration', () => {
   it('marks a g5.v11 coverage book learner-first and teacher-parity, like g5.v10', () => {
     const v10 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v10' });
     const v11 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v11' });
-    expect(v11).toEqual(v10);
+    // Lesson 2-5 (17 Nov 2026): g5.v11 also keeps every book example's own slide.
+    expect(v11).toEqual({ ...v10, examplesKept: true });
+    expect(v10).not.toHaveProperty('examplesKept');
     expect(v11).toMatchObject({ teacherParity: true, learnerFirst: true });
   });
 });

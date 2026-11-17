@@ -56,8 +56,11 @@ import {
 import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
   REVIEW_GUIDE_ANSWER_PREFIX,
+  REVIEW_GUIDE_FIGURE_VISUAL,
+  REVIEW_MODEL_ANSWER_PREFIX,
   reviewedSceneDigest,
   reviewSlidesOf,
+  slideVisuals,
   withGuideAnswers,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -172,6 +175,143 @@ describe('package-review input on g5.v11', () => {
     expect(v11).toContain('إجابة دليل المعلم (1A): 12');
     expect(v2).not.toContain('إجابة دليل المعلم');
     expect(withGuideAnswers(slides, undefined)).toEqual(slides);
+  });
+});
+
+describe('package-review input: the guide model answers (owner, 17 Nov 2026)', () => {
+  const PROOF = 'نفرض أن الحد التالي 7؛\nإذن الفرق ثابت 2.';
+  const POSSIBLE = 'إجابة ممكنة: 71.9 تقريبًا';
+  const withModels = resolveTeacherGuide(
+    {
+      ...GUIDE,
+      items: [
+        ...GUIDE.items,
+        {
+          contentUnitId: '6249',
+          label: '12',
+          status: 'reference',
+          modelAnswer: { kind: 'proof', text: PROOF },
+        },
+        {
+          contentUnitId: '6249',
+          label: '11b',
+          status: 'reference',
+          modelAnswer: { kind: 'possible', text: POSSIBLE },
+        },
+      ],
+    },
+    BOOK,
+    bookUnitFactsOf(
+      BOOK,
+      UNITS.map((unit) => ({ id: unit.unitId, text: unit.normalizedText })),
+    ),
+  );
+  const slides = [
+    slide('sol', { citedUnitIds: ['6249'] }),
+    slide('try', { contentRole: 'check_understanding', citedUnitIds: ['6249'] }),
+    slide('quiz', { sceneType: 'quiz', contentRole: null, citedUnitIds: ['6249'] }),
+  ];
+
+  it('adds them to the solution slides only, after the keyed lines, never to a quiz', () => {
+    const reviewed = withGuideAnswers(slides, withModels);
+    expect(reviewed[0]!.guideAnswers).toEqual([
+      `${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`,
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س11b، إجابة ممكنة): ${POSSIBLE}`,
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س12، برهان): ${PROOF}`,
+    ]);
+    expect(reviewed[1]!.guideAnswers).toBeUndefined();
+    expect(reviewed[2]!.guideAnswers).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`]);
+    // The keyed lines alone are what the guide without model answers gives.
+    expect(withGuideAnswers(slides, RESOLVED)[0]!.guideAnswers).toEqual([
+      `${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`,
+    ]);
+    expect(renderSlidesBlock(reviewed, undefined, { learnerFirst: true })).toContain(
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س12، برهان): نفرض أن الحد التالي 7؛\nإذن الفرق ثابت 2.`,
+    );
+  });
+
+  it('leaves out the model answers of a question the run removed from the lesson', () => {
+    const reviewed = withGuideAnswers(slides, withModels, new Set(['6249|11']));
+    expect(reviewed[0]!.guideAnswers).toEqual([
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س12، برهان): ${PROOF}`,
+    ]);
+  });
+
+  it('tells the reviewer to check the proof against it, flag only, never copy it', () => {
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
+      "«الإجابة النموذجية في دليل المعلم (<item>، برهان|إجابة ممكنة): <text>» lines are the teacher guide's model answer",
+    );
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain('A different correct proof');
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain('never copies the model answer whole');
+    expect(PACKAGE_REVIEW_SYSTEM_V2).not.toContain('الإجابة النموذجية');
+  });
+});
+
+describe('package-review input: the guide answer drawings (owner, 17 Nov 2026)', () => {
+  const IMAGE = { checksumSha256: 'c'.repeat(64), mimeType: 'image/png' as const, sizeBytes: 900 };
+  const NOTE = 'المستقيم يمر بالنقطتين (0، 1) و(2، 5).';
+  const facts = bookUnitFactsOf(
+    BOOK,
+    UNITS.map((unit) => ({ id: unit.unitId, text: unit.normalizedText })),
+  );
+  const guide: KafuoTeacherGuide = {
+    ...GUIDE,
+    items: [
+      ...GUIDE.items,
+      {
+        contentUnitId: '6249',
+        label: '12',
+        status: 'reference',
+        modelAnswer: { kind: 'figure', image: IMAGE, text: NOTE },
+      },
+      {
+        contentUnitId: '6249',
+        label: '11b',
+        status: 'reference',
+        modelAnswer: { kind: 'figure', image: IMAGE },
+      },
+    ],
+  };
+  const at = GUIDE.items.length;
+  const slides = [
+    slide('sol', { citedUnitIds: ['6249'] }),
+    slide('try', { contentRole: 'check_understanding', citedUnitIds: ['6249'] }),
+    slide('quiz', { sceneType: 'quiz', contentRole: null, citedUnitIds: ['6249'] }),
+  ];
+
+  it('names a drawing on its solution slide only, with its note when sent', () => {
+    const resolved = resolveTeacherGuide(guide, BOOK, facts, {
+      attachedFigureIds: new Set([`src-guide-${at + 1}`, `src-guide-${at + 2}`]),
+    });
+    const reviewed = withGuideAnswers(slides, resolved);
+    expect(reviewed[0]!.guideAnswers).toEqual([
+      `${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`,
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س11b، رسمة)`,
+      `${REVIEW_MODEL_ANSWER_PREFIX} (س12، رسمة): ${NOTE}`,
+    ]);
+    expect(reviewed[1]!.guideAnswers).toBeUndefined();
+    expect(reviewed[2]!.guideAnswers).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`]);
+    // Read from the attempt snapshot (no stored drawing named), it adds nothing.
+    expect(
+      withGuideAnswers(slides, resolveTeacherGuide(guide, BOOK, facts))[0]!.guideAnswers,
+    ).toEqual([`${REVIEW_GUIDE_ANSWER_PREFIX} (س11): 71.9 ألف`]);
+  });
+
+  it('shows a stored drawing on the canvas as the guide’s answer drawing, never a book image', () => {
+    expect(
+      slideVisuals([
+        { type: 'image', src: '/api/classroom-media/stage-1/media/guide_3_0a1b2c3d.png' },
+        { type: 'image', src: '/api/classroom-media/stage-1/media/src_4_0a1b2c3d.png' },
+      ] as never),
+    ).toEqual([REVIEW_GUIDE_FIGURE_VISUAL, '[صورة من الكتاب معروضة: src_4]']);
+  });
+
+  it('tells the reviewer it is there on purpose, never to copy it before the try', () => {
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(`«${REVIEW_GUIDE_FIGURE_VISUAL}»`);
+    expect(PACKAGE_REVIEW_SYSTEM_V11).toContain(
+      'never ask to add, copy or describe it on a check_understanding slide or in a quiz',
+    );
+    expect(PACKAGE_REVIEW_SYSTEM_V2).not.toContain(REVIEW_GUIDE_FIGURE_VISUAL);
   });
 });
 

@@ -275,28 +275,33 @@ describe('the try-it leak guard', () => {
   });
 });
 
-describe('D-19 settlement', () => {
-  it('generates a check item’s solution once more WITHOUT its guide answer, and keeps it', () => {
+describe('settlement (owner, 17 Nov 2026: the approved answer is the truth, nothing is dropped)', () => {
+  it('writes the approved final line into a check item’s solution and keeps it, key and all', () => {
     const { instance, settled } = guard({ sol: SOLUTION });
     const sol = outline('sol', 'slide', {
       keyPoints: ['نجمع 3', 'الإجابة الصحيحة المعتمدة (1A): 12'],
       description: 'plan\n\nAPPROVED FINAL ANSWERS (g5.v11): …\n- الإجابة (1A): 12',
     });
-    const findings = instance.checkContent(sol, slide('الإجابة (1A): 13'));
-    const decision = instance.settle(sol, slide('الإجابة (1A): 13'), findings);
-    expect(decision.kind).toBe('regenerate');
-    const rebuilt = (decision as { outline: SceneOutline }).outline;
-    expect(rebuilt.keyPoints).toEqual(['نجمع 3']);
-    expect(rebuilt.description).toBe('plan');
+    const wrong = {
+      elements: [{ id: 't0', type: 'text', content: '<p><strong>الإجابة (1A):</strong> 13</p>' }],
+    };
+    const findings = instance.checkContent(sol, wrong);
+    const decision = instance.settle(sol, wrong, findings);
+    expect(decision.kind).toBe('keep');
+    const kept = (decision as { content: unknown }).content;
+    // The wrong value is replaced in place, inside the slide's own markup.
+    expect(canvasLines(kept)).toEqual(['الإجابة (1A): 12']);
+    expect(JSON.stringify(kept)).toContain('<p><strong>الإجابة (1A): 12</strong></p>');
+    expect(instance.checkContent(sol, kept)).toEqual([]);
     expect(settled.at(-1)).toMatchObject({
-      action: 'unverified',
-      items: [{ contentUnitId: '6234', label: '1A', outcome: 'unverified' }],
+      action: 'final_line_written',
+      items: [{ contentUnitId: '6234', label: '1A', outcome: 'written' }],
     });
-    // The kept slide is no longer compared with an answer it was never given.
-    expect(instance.planOf('sol')).toBeUndefined();
+    // The item keeps its guide answer (no unverified key, no regeneration without it).
+    expect(instance.planOf('sol')!.items).toEqual([ITEM]);
   });
 
-  it('leaves an exercise out of its slide and removes its attempt question', () => {
+  it('never drops an exercise: its missing final line is added and its attempt question stays', () => {
     const { instance, settled } = guard({
       ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
       'ex-attempt': {
@@ -307,57 +312,86 @@ describe('D-19 settlement', () => {
       },
     });
     const ex = outline('ex');
-    const findings = instance.checkContent(ex, slide('الإجابة (س11): 24', 'الإجابة (س12): 71.9'));
-    const decision = instance.settle(ex, null, findings);
-    expect(decision.kind).toBe('regenerate');
-    const rebuilt = (decision as { outline: SceneOutline }).outline;
-    expect(rebuilt.description).toContain('LEFT OUT QUESTIONS (g5.v11)');
-    expect(rebuilt.description).toContain('- س11');
-    expect(rebuilt.description).toContain('- الإجابة (س12): 71.9');
-    expect(rebuilt.description).not.toContain('(س11): 32');
-    expect(settled.at(-1)).toMatchObject({
-      action: 'items_removed',
-      items: [{ label: '11', outcome: 'removed' }],
+    const canvas = {
+      elements: [
+        {
+          id: 'h',
+          type: 'text',
+          left: 60,
+          top: 40,
+          width: 880,
+          height: 60,
+          content: '<p style="font-size:32px;">حل</p>',
+          defaultColor: '#123456',
+          defaultFontName: 'Font',
+        },
+        {
+          id: 'w',
+          type: 'text',
+          left: 60,
+          top: 120,
+          width: 880,
+          height: 50,
+          content: '<p style="font-size:20px;">تمرين 1 (س11 في كتابك): نضاعف</p>',
+          defaultColor: '#654321',
+          defaultFontName: 'Font',
+        },
+        {
+          id: 'f',
+          type: 'text',
+          left: 60,
+          top: 180,
+          width: 880,
+          height: 50,
+          content: '<p>الإجابة (س12): 71.9</p>',
+        },
+      ],
+    };
+    const findings = instance.checkContent(ex, canvas);
+    expect(findings.map((finding) => [finding.code, finding.item.label])).toEqual([
+      ['GUIDE_ANSWER_MISSING', '11'],
+    ]);
+    const decision = instance.settle(ex, canvas, findings);
+    expect(decision.kind).toBe('keep');
+    const kept = (decision as { content: { elements: Array<Record<string, unknown>> } }).content;
+    expect(canvasLines(kept)).toContain('الإجابة (س11): 32');
+    const added = kept.elements.at(-1)!;
+    // Under the lowest element, in the style of the slide's last text.
+    expect(added).toMatchObject({
+      type: 'text',
+      top: 234,
+      defaultColor: '#654321',
+      defaultFontName: 'Font',
     });
-    // The attempt (before its slide in the lesson) loses that question only.
+    expect(String(added.content)).toContain('font-size:20px');
+    expect(instance.checkContent(ex, kept)).toEqual([]);
+    expect(settled.at(-1)).toMatchObject({
+      action: 'final_line_written',
+      items: [{ label: '11', outcome: 'written' }],
+    });
+    // Nothing left the lesson: the attempt keeps both questions, the slide both items.
     const attemptQuiz = quiz(
       { question: 'أسعار؟', options: ['24', '32'], answer: 'B' },
       { question: 'إنتاج؟', options: ['71.9', '51.8'], answer: 'A' },
     );
-    const pruned = instance.pruneAttempt(outline('ex-attempt', 'quiz'), attemptQuiz);
-    expect(
-      'content' in pruned && (pruned.content as { questions: unknown[] }).questions,
-    ).toHaveLength(1);
-    expect(instance.solutionsOf('ex-attempt')).toEqual(['ex']);
-  });
-
-  it('never empties a slide: its only exercise loses its guide answer instead', () => {
-    const { instance, settled } = guard({ ex: { role: 'solution', items: [EX11], solves: 1 } });
-    const findings = instance.checkContent(outline('ex'), slide('الإجابة (س11): 24'));
-    const decision = instance.settle(outline('ex'), null, findings);
-    expect(decision.kind).toBe('regenerate');
-    expect(settled.at(-1)).toMatchObject({ action: 'unverified' });
-  });
-
-  it('keeps an exercise whose attempt question cannot be told, without its guide answer', () => {
-    const { instance, settled } = guard({
-      ex: { role: 'solution', items: [EX11, EX12], solves: 2 },
-      'ex-attempt': {
-        role: 'attempt',
-        items: [EX11],
-        questionOf: { '6249|11': null },
-        questionCount: 1,
-      },
+    expect(instance.pruneAttempt(outline('ex-attempt', 'quiz'), attemptQuiz)).toEqual({
+      content: attemptQuiz,
     });
-    const findings = instance.checkContent(
-      outline('ex'),
-      slide('الإجابة (س11): 24', 'الإجابة (س12): 71.9'),
-    );
-    instance.settle(outline('ex'), null, findings);
-    expect(settled.at(-1)).toMatchObject({ action: 'unverified', items: [{ label: '11' }] });
+    expect(instance.planOf('ex')!.items).toHaveLength(2);
+    expect(instance.leftOut().size).toBe(0);
   });
 
-  it('removes an attempt’s own faulty question, and drops an attempt left with none', () => {
+  it('a final line written inside a formula leaves it, and the approved line is written as text', () => {
+    const { instance } = guard({ ex: { role: 'solution', items: [EX11], solves: 1 } });
+    const canvas = {
+      elements: [{ id: 'l', type: 'latex', latex: 'الإجابة (س11): 24', top: 100, height: 40 }],
+    };
+    const findings = instance.checkContent(outline('ex'), canvas);
+    const kept = (instance.settle(outline('ex'), canvas, findings) as { content: unknown }).content;
+    expect(canvasLines(kept)).toEqual(['الإجابة (س11): 32']);
+  });
+
+  it('keys an attempt’s own question to the approved answer and never removes it', () => {
     const plan: GuideOutlinePlan = {
       role: 'attempt',
       items: [EX11],
@@ -369,9 +403,85 @@ describe('D-19 settlement', () => {
     const content = quiz({ question: 'أسعار؟', options: ['24', '32'], answer: 'A' });
     const findings = instance.checkContent(attempt, content);
     expect(findings).toMatchObject([{ questions: [0] }]);
-    expect(instance.settle(attempt, content, findings)).toEqual({ kind: 'keep', content });
-    expect(instance.pruneAttempt(attempt, content)).toEqual({ drop: true });
-    expect(settled.map((entry) => entry.action)).toEqual(['questions_removed', 'attempt_dropped']);
+    const decision = instance.settle(attempt, content, findings);
+    expect(decision.kind).toBe('keep');
+    const kept = (decision as { content: { questions: Array<Record<string, unknown>> } }).content;
+    expect(kept.questions[0]).toMatchObject({ answer: ['B'], analysis: 'الإجابة الصحيحة: 32.' });
+    expect(instance.checkContent(attempt, kept)).toEqual([]);
+    expect(instance.pruneAttempt(attempt, kept)).toEqual({ content: kept });
+    expect(settled.map((entry) => entry.action)).toEqual(['key_rewritten']);
+  });
+
+  it('writes the approved answer into the keyed option when no option states it', () => {
+    const plan: GuideOutlinePlan = {
+      role: 'attempt',
+      items: [EX11],
+      questionOf: { '6249|11': 0 },
+      questionCount: 1,
+    };
+    const { instance } = guard({ 'ex-attempt': plan });
+    const attempt = outline('ex-attempt', 'quiz');
+    const content = quiz({ question: 'أسعار؟', options: ['24', '30'], answer: 'B' });
+    const findings = instance.checkContent(attempt, content);
+    const kept = (instance.settle(attempt, content, findings) as { content: unknown }).content as {
+      questions: Array<{ options: Array<{ label: string }>; answer: string[] }>;
+    };
+    expect(kept.questions[0]!.options.map((option) => option.label)).toEqual(['24', '32']);
+    expect(kept.questions[0]!.answer).toEqual(['B']);
+  });
+
+  it('writes it in the options’ own variables (ص/س), never one odd «y/x» option', () => {
+    const EX26: KeyedGuideItem = {
+      ...EX11,
+      label: '26',
+      number: 26,
+      display: 'س26',
+      answer: { type: 'text', value: 'x = 2' },
+    };
+    const { instance } = guard({
+      'ex-attempt': {
+        role: 'attempt',
+        items: [EX26],
+        questionOf: { '6249|26': 0 },
+        questionCount: 1,
+      },
+    });
+    const attempt = outline('ex-attempt', 'quiz');
+    const content = quiz({
+      question: 'ما معادلة المستقيم المار بالنقطتين (2، -1) و(2، 6)؟',
+      options: ['ص = 2', 'لا يمكن كتابة معادلته', 'ص = س + 2'],
+      answer: 'B',
+    });
+    const findings = instance.checkContent(attempt, content);
+    const kept = (instance.settle(attempt, content, findings) as { content: unknown }).content as {
+      questions: Array<{ options: Array<{ label: string }>; answer: string[] }>;
+    };
+    expect(kept.questions[0]!.options.map((option) => option.label)).toEqual([
+      'ص = 2',
+      'س = 2',
+      'ص = س + 2',
+    ]);
+    expect(instance.checkContent(attempt, kept)).toEqual([]);
+  });
+
+  it('a stem that still states the answer after its plain regeneration loses that question', () => {
+    const plan: GuideOutlinePlan = {
+      role: 'attempt',
+      items: [EX11],
+      questionOf: { '6249|11': 0 },
+      questionCount: 2,
+    };
+    const { instance } = guard({ 'ex-attempt': plan });
+    const attempt = outline('ex-attempt', 'quiz');
+    const content = quiz(
+      { question: 'الجواب 32، ما العدد التالي؟', options: ['24', '32'], answer: 'B' },
+      { question: 'سؤال آخر؟', options: ['1', '2'], answer: 'A' },
+    );
+    const findings = instance.checkContent(attempt, content);
+    expect(instance.settle(attempt, content, findings).kind).toBe('regenerate');
+    instance.accept(attempt, findings);
+    const pruned = instance.pruneAttempt(attempt, content) as { content: { questions: unknown[] } };
+    expect(pruned.content.questions).toHaveLength(1);
   });
 
   it('gives an attempt a model-free narration when it still states the answer', () => {
@@ -434,20 +544,20 @@ describe('pinned settlements (review finding 9)', () => {
 });
 
 describe('guardedSceneContent', () => {
-  it('regenerates once with the correction, then once more from the settled outline', async () => {
+  it('regenerates once with the correction, then writes the approved final line (no third call)', async () => {
     const { instance } = guard({ sol: SOLUTION });
     const corrections: Array<string | undefined> = [];
     const generate = vi.fn(async (_outline: SceneOutline, correction?: string) => {
       corrections.push(correction);
-      return slide('الإجابة (1A): 13');
+      return slide('نضيف 3', 'الإجابة (1A): 13');
     });
     const sol = outline('sol');
     const result = await guardedSceneContent(instance, sol, slide('الإجابة (1A): 13'), generate);
-    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenCalledTimes(1);
     expect(corrections[0]).toContain('CORRECTION');
-    expect(corrections[1]).toBeUndefined();
-    expect(result.outline).not.toBe(sol);
-    expect(canvasLines(result.content)).toEqual(['الإجابة (1A): 13']);
+    expect(result.outline).toBe(sol);
+    expect(canvasLines(result.content)).toEqual(['نضيف 3', 'الإجابة (1A): 12']);
+    expect(result.leaks).toEqual([]);
   });
 
   it('returns the first content untouched when it agrees', async () => {
@@ -543,9 +653,15 @@ describe('re-review fixes', () => {
     // Nothing settled yet: the attempt keeps its key.
     expect(instance.rekeyAttempt(attempt)).toBeUndefined();
     const sol = outline('sol');
+    // Owner (17 Nov 2026): a wrong final line is written over, so the attempt keeps its key.
     const findings = instance.checkContent(sol, slide('الإجابة (1A): 13'));
-    expect(instance.settle(sol, slide('الإجابة (1A): 13'), findings).kind).toBe('regenerate');
-    // The attempt is generated once more without that key, and plans without it.
+    expect(instance.settle(sol, slide('الإجابة (1A): 13'), findings).kind).toBe('keep');
+    expect(instance.rekeyAttempt(attempt)).toBeUndefined();
+    // A paused run's slide settled unverified (a slide that solves another item) still
+    // takes the key out of its attempt.
+    instance.restore([
+      { outlineId: 'sol', items: [{ contentUnitId: '6234', label: '1A', outcome: 'unverified' }] },
+    ]);
     const rekeyed = instance.rekeyAttempt(attempt)!;
     expect(rekeyed.description).toBe('Try.');
     expect(instance.planOf('try-attempt')).toBeUndefined();
@@ -555,6 +671,18 @@ describe('re-review fixes', () => {
       items: [{ label: '1A', outcome: 'unverified' }],
     });
     expect(instance.rekeyAttempt(rekeyed)).toBeUndefined();
+  });
+
+  it('restores a written item with its key (owner, 17 Nov 2026)', () => {
+    const { instance } = guard({
+      'try-attempt': { role: 'attempt', items: [ITEM] },
+      sol: SOLUTION,
+    });
+    instance.restore([
+      { outlineId: 'sol', items: [{ contentUnitId: '6234', label: '1A', outcome: 'written' }] },
+    ]);
+    expect(instance.planOf('sol')!.items).toEqual([ITEM]);
+    expect(instance.planOf('try-attempt')!.items).toEqual([ITEM]);
   });
 
   it('finding 6: a resumed run’s attempt is planned without a key its solution was settled without', () => {
@@ -838,5 +966,132 @@ describe('lesson 1-1: a final line on a slide that solves another item', () => {
       '(س٧ من كتابك)',
       ...finals,
     ]);
+  });
+});
+
+/**
+ * Lesson 2-5 run tpa-O26Zt1Zlhcnl (17 Nov 2026): checks 3A, 3B, 4 and 5 were solved right
+ * and showed the guide's answer, but were logged GUIDE_ANSWER_MISSING / unverified — each
+ * slide ends on «المعادلة:» or a boxed formula, never a «الإجابة (…):» line. The canvases
+ * below are the run's own elements (slides 15, 19 and 26), in canvas order.
+ */
+describe('lesson 2-5: the run’s four false "unverified" flags', () => {
+  const check = (unit: string, label: string, value: string): KeyedGuideItem => ({
+    contentUnitId: unit,
+    label,
+    element: 'try_it',
+    number: Number.parseInt(label, 10),
+    letter: /[A-H]$/.test(label) ? label.slice(-1) : null,
+    display: label,
+    answer: { type: 'text', value },
+  });
+  const C3A = check('6409', '3A', 'y = ³⁄₅ x + ²⁶⁄₅');
+  const C3B = check('6409', '3B', 'y = 3x');
+  const C4 = check('6411', '4', 'y = 0');
+  const C5 = check('6415', '5', 'y = −3/4 x + 15/4');
+  const canvas = (...elements: Array<['text' | 'latex', string]>) => ({
+    elements: elements.map(([type, value], index) =>
+      type === 'text'
+        ? { id: `t${index}`, type, content: `<p style="font-size:18px;">${value}</p>` }
+        : { id: `l${index}`, type, latex: value },
+    ),
+  });
+  const SLIDE_15 = canvas(
+    ['text', 'حل تحقق من فهمك 3'],
+    ['text', 'أوجد معادلة المستقيم المار بالنقطتين في كل بند.'],
+    ['text', '3B: النقطتان'],
+    ['latex', '(0,0),\\ (2,6)'],
+    ['text', 'الميل: فرق الصادات على فرق السينات'],
+    ['latex', 'm=\\frac{6-0}{2-0}=3'],
+    ['text', 'المقطع الصادي صفر؛ إذن المعادلة:'],
+    ['latex', '\\boxed{y=3x}'],
+    ['latex', '(0,0)'],
+    ['latex', '(2,6)'],
+    ['latex', 'x'],
+    ['latex', 'y'],
+    ['text', '3A: النقطتان'],
+    ['latex', '(-2,4),\\ (8,10)'],
+    ['text', 'نحسب الميل من فرق الإحداثيات:'],
+    ['latex', 'm=\\frac{10-4}{8-(-2)}=\\frac{6}{10}=\\frac35'],
+    ['text', 'نعوّض بالميل والنقطة في صيغة الميل والنقطة:'],
+    ['latex', 'y-4=\\frac35[x-(-2)]=\\frac35(x+2)'],
+    ['latex', 'y-4=\\frac35x+\\frac65'],
+    ['latex', 'y=\\frac35x+\\frac65+\\frac{20}5=\\boxed{\\frac35x+\\frac{26}5}'],
+    ['latex', '(-2,4)'],
+    ['latex', '(8,10)'],
+    ['text', 'الخلاصة: يُحسب الميل من النقطتين، ثم تُستخدم نقطة لإيجاد المعادلة.'],
+  );
+  const SLIDE_19 = canvas(
+    ['text', 'حل تحقق من فهمك 4'],
+    ['latex', '(3,0),\\quad (5,0)'],
+    ['latex', 'm=\\frac{0-0}{5-3}=\\frac{0}{2}=0'],
+    ['latex', 'y-0=0(x-3)'],
+    ['latex', 'y=0'],
+    ['text', 'المعادلة:'],
+    ['latex', '(3,0)'],
+    ['latex', '(5,0)'],
+    ['latex', 'x'],
+    ['latex', 'y'],
+    ['latex', '0'],
+    ['text', 'المستقيم هو محور السينات'],
+  );
+  const SLIDE_26 = canvas(
+    ['text', 'حل تحقق من فهمك 5'],
+    ['text', '<strong>تحقق 5:</strong> أوجد معادلة المستقيم الموازي لـ'],
+    ['latex', 'y=-\\frac{3}{4}x+3'],
+    ['text', 'والمار بالنقطة'],
+    ['latex', '(-3,6)'],
+    ['latex', 'm=-\\frac{3}{4}'],
+    ['latex', '6=-\\frac{3}{4}(-3)+b=\\frac{9}{4}+b'],
+    ['latex', 'b=6-\\frac{9}{4}=\\frac{24}{4}-\\frac{9}{4}=\\frac{15}{4}'],
+    ['text', '<strong>المعادلة:</strong>'],
+    ['latex', 'y=-\\frac{3}{4}x+\\frac{15}{4}'],
+    ['text', 'الميل مشترك، وقد يختلف المقطع الصادي.'],
+  );
+
+  it('verifies 3A and 3B, each on its own lines of slide 15', () => {
+    const { instance } = guard({ sol: { role: 'solution', items: [C3B, C3A], solves: 2 } });
+    expect(instance.checkContent(outline('sol'), SLIDE_15)).toEqual([]);
+  });
+
+  it('verifies check 4 on slide 19 and check 5 on slide 26', () => {
+    const { instance } = guard({
+      s19: { role: 'solution', items: [C4], solves: 1 },
+      s26: { role: 'solution', items: [C5], solves: 1 },
+    });
+    expect(instance.checkContent(outline('s19'), SLIDE_19)).toEqual([]);
+    expect(instance.checkContent(outline('s26'), SLIDE_26)).toEqual([]);
+  });
+
+  it('still reports an item its own lines do not solve, even when another item’s do', () => {
+    const wrong3A = { ...C3A, answer: { type: 'text' as const, value: 'y = 3x' } };
+    const { instance } = guard({ sol: { role: 'solution', items: [C3B, wrong3A], solves: 2 } });
+    expect(
+      instance.checkContent(outline('sol'), SLIDE_15).map((finding) => finding.item.label),
+    ).toEqual(['3A']);
+  });
+
+  it('keys the run’s check-3 attempt in the quiz’s Arabic variables', () => {
+    const { instance } = guard({
+      att: {
+        role: 'attempt',
+        items: [C3B, C3A],
+        questionOf: { '6409|3B': 0, '6409|3A': 1 },
+        questionCount: 2,
+      },
+    });
+    const run = quiz(
+      {
+        question: 'ما معادلة المستقيم المار بالنقطتين (0، 0) و(2، 6)؟',
+        options: ['ص = 6س', 'ص = 3س + 6', 'ص = 3س', 'ص = (1/3)س'],
+        answer: 'C',
+      },
+      {
+        question: 'ما معادلة المستقيم المار بالنقطتين (-2، 4) و(8، 10)؟',
+        options: ['ص = (3/5)س + 4', 'ص = (3/5)س + 26/5', 'ص = (5/3)س + 26/5', 'ص = (3/5)س + 14/5'],
+        answer: 'B',
+      },
+    );
+    expect(instance.checkContent(outline('att', 'quiz'), run)).toEqual([]);
   });
 });

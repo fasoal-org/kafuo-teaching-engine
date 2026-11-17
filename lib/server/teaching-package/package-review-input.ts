@@ -62,8 +62,9 @@ export interface ReviewSlide {
   visuals?: string[];
   /**
    * g5.v11 (teacher-guide answer referee plan §8.6): one «إجابة دليل المعلم (<item>): …»
-   * line per approved item of the units a solution slide or a quiz cites. Absent on
-   * every other package, and on a slide that solves no keyed item.
+   * line per approved item of the units a solution slide or a quiz cites, then (a
+   * solution slide only, 17 Nov 2026) one model-answer line per reference item with a
+   * model answer. Absent on every other package, and on a slide with neither.
    */
   guideAnswers?: string[];
   /** A bank quiz cannot be regenerated (`BANK_QUIZ_NOT_REGENERABLE`). */
@@ -73,31 +74,70 @@ export interface ReviewSlide {
 /** The reviewer's prefix of a guide answer line. */
 export const REVIEW_GUIDE_ANSWER_PREFIX = 'إجابة دليل المعلم';
 
+/** The reviewer's prefix of a guide model-answer line (owner, 17 Nov 2026). */
+export const REVIEW_MODEL_ANSWER_PREFIX = 'الإجابة النموذجية في دليل المعلم';
+
+const REVIEW_MODEL_ANSWER_KIND = {
+  proof: 'برهان',
+  possible: 'إجابة ممكنة',
+  figure: 'رسمة',
+} as const;
+
+/** How a slide's stored guide answer drawing reads to the reviewer (owner, 17 Nov 2026). */
+export const REVIEW_GUIDE_FIGURE_VISUAL = '[رسمة الإجابة من دليل المعلم معروضة]';
+
 /**
  * g5.v11: each solution slide (contentRole worked_example) and quiz gets the approved or
  * settled guide answers of the units it cites. A try-it slide never does (it shows no
  * answer, so there is nothing to compare). Review finding 10: only the items resolved to
  * OUR book items (`resolveTeacherGuide`), named as the writers were told («1A», «س11»);
  * an unresolved item, and an exercise the run removed from the lesson, add nothing.
+ * Owner, 17 Nov 2026: a solution slide (never a quiz) also gets the guide's model answer
+ * of each reference item of its units («الإجابة النموذجية في دليل المعلم (<item>، برهان):
+ * …»), so the reviewer checks its proof against it; never one of a removed question.
  */
 export function withGuideAnswers(
   slides: readonly ReviewSlide[],
-  guide: Pick<ResolvedTeacherGuide, 'keyed'> | null | undefined,
+  guide:
+    | (Pick<ResolvedTeacherGuide, 'keyed'> & Partial<Pick<ResolvedTeacherGuide, 'modelAnswers'>>)
+    | null
+    | undefined,
   removedItemKeys: ReadonlySet<string> = new Set(),
 ): ReviewSlide[] {
-  const keyed = (guide?.keyed ?? []).filter((item) => !removedItemKeys.has(guideItemKey(item)));
-  if (keyed.length === 0) return [...slides];
+  const allKeyed = guide?.keyed ?? [];
+  const keyed = allKeyed.filter((item) => !removedItemKeys.has(guideItemKey(item)));
+  // A removed exercise leaves whole: its question's model answers leave with it.
+  const question = (item: { contentUnitId: string; number: number | null }) =>
+    `${item.contentUnitId}|${item.number ?? '*'}`;
+  const removedQuestions = new Set(
+    allKeyed.filter((item) => removedItemKeys.has(guideItemKey(item))).map(question),
+  );
+  const modelAnswers = (guide?.modelAnswers ?? []).filter(
+    (item) => !removedQuestions.has(question(item)),
+  );
+  if (keyed.length === 0 && modelAnswers.length === 0) return [...slides];
   return slides.map((slide) => {
-    const solves =
-      slide.sceneType === 'quiz' ||
-      (slide.sceneType === 'slide' && slide.contentRole === 'worked_example');
-    if (!solves) return slide;
-    const lines = keyed
-      .filter((item) => slide.citedUnitIds.includes(item.contentUnitId))
-      .map(
-        (item) =>
-          `${REVIEW_GUIDE_ANSWER_PREFIX} (${item.display}): ${formatGuideAnswer(item.answer)}`,
-      );
+    const solution = slide.sceneType === 'slide' && slide.contentRole === 'worked_example';
+    if (!solution && slide.sceneType !== 'quiz') return slide;
+    const cited = (item: { contentUnitId: string }) =>
+      slide.citedUnitIds.includes(item.contentUnitId);
+    const lines = [
+      ...keyed
+        .filter(cited)
+        .map(
+          (item) =>
+            `${REVIEW_GUIDE_ANSWER_PREFIX} (${item.display}): ${formatGuideAnswer(item.answer)}`,
+        ),
+      ...(solution
+        ? modelAnswers.filter(cited).map((item) => {
+            // A drawing may come with no note: the line then only says it exists.
+            const text = item.modelAnswer.text?.trim() ?? '';
+            return `${REVIEW_MODEL_ANSWER_PREFIX} (${item.display}، ${
+              REVIEW_MODEL_ANSWER_KIND[item.modelAnswer.kind]
+            })${text ? `: ${text}` : ''}`;
+          })
+        : []),
+    ];
     return lines.length > 0 ? { ...slide, guideAnswers: lines } : slide;
   });
 }
@@ -201,7 +241,15 @@ export function slideVisuals(elements: readonly CanvasElement[]): string[] {
     if (element.type === 'image') {
       const src = typeof element.src === 'string' ? element.src : '';
       const id = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i.exec(src)?.[1];
-      visuals.push(id ? `[صورة من الكتاب معروضة: ${id}]` : '[صورة معروضة]');
+      // A guide answer drawing is stored as `guide_<n>_<sha8>.png` (owner, 17 Nov 2026).
+      const guideFigure = /\/guide_\d+_[0-9a-f]{8}\.png$/i.test(src);
+      visuals.push(
+        id
+          ? `[صورة من الكتاب معروضة: ${id}]`
+          : guideFigure
+            ? REVIEW_GUIDE_FIGURE_VISUAL
+            : '[صورة معروضة]',
+      );
     } else if (element.type === 'chart') {
       visuals.push(chartVisual(element));
     } else if (element.type === 'line') {

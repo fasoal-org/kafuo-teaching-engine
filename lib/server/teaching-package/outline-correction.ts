@@ -34,9 +34,11 @@ import {
 import {
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  isGuideAnswerModel,
   learnerFirstVisualsOf,
   requireEssentialUntypedUnits,
   teacherParityBook,
+  withTypedPracticeUnits,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -275,14 +277,19 @@ export function diagnoseCandidateOutlines(
  * teacher-parity mark with the unit facts the run pinned.
  */
 export function correctionCoverageBook(
-  sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'>,
+  sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'> &
+    Partial<Pick<GenerationCheckpointSourceRefs, 'contentUnits'>>,
   bookStructure: KafuoBookStructure | undefined,
   teachingModel: { key: string; version: string } | undefined,
   /** g5.v11: the attempt's pinned guide items, so the re-check selects the run's set. */
   teacherGuide?: KafuoTeacherGuide,
 ): CoverageBookStructure | undefined {
+  // Lesson 2-5 (g5.v11): the run's typed practice units, from the pinned subtypes.
+  const book = isGuideAnswerModel(teachingModel)
+    ? withTypedPracticeUnits(bookStructure, sourceRefs.contentUnits ?? [])
+    : bookStructure;
   return teacherParityBook(
-    requireEssentialUntypedUnits(bookStructure, sourceRefs.essentialContentUnitIds),
+    requireEssentialUntypedUnits(book, sourceRefs.essentialContentUnitIds),
     teachingModel,
     sourceRefs.bookUnitFacts,
     teacherGuide,

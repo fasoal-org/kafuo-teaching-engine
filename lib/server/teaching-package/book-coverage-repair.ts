@@ -27,6 +27,7 @@ import {
   duplicateSolutionSlides,
   findBookCoverageGaps,
   isSacredExerciseElement,
+  missingExampleGaps,
   RECALL_NOT_FIRST,
   recallPlacement,
   SOLUTION_SLIDES_DUPLICATED,
@@ -154,6 +155,14 @@ export function instructionFor(gap: PlacedGap, parity = false): string {
     return (
       `Plan the try-it slide (contentRole check_understanding) that sets the book check in content unit ${id} ` +
       `for the learner, without its answer.`
+    );
+  }
+  if (gap.kind === 'missing_example') {
+    // Lesson 2-5 (17 Nov 2026, g5.v11): the book example a check is tried after.
+    return (
+      `Plan the worked-example slide (contentRole worked_example) that teaches the book's example in content unit ${id} ` +
+      "step by step, every part of it, with the book's own method and numbers, as the book prints it. " +
+      'It comes BEFORE the learner tries the check that follows it: cite only this unit, never a check, and solve no check item.'
     );
   }
   return `Plan the slide (contentRole ${roleFor(gap)}) that teaches content unit ${id} as the book prints it.`;
@@ -316,12 +325,46 @@ const MERGED_SOLUTION_MAX_POINTS = 8;
 export function mergeDuplicateSolutions(
   outlines: readonly SceneOutline[],
   book: CoverageBookStructure,
-): { outlines: SceneOutline[]; merged: number } {
+): { outlines: SceneOutline[]; merged: number; recited: number } {
   let current = [...outlines];
   let merged = 0;
+  let recited = 0;
+  const examples = new Set(
+    book.units
+      .filter((unit) => unit.element === 'worked_example')
+      .map((unit) => String(unit.contentUnitId)),
+  );
   for (;;) {
     const group = duplicateSolutionSlides(current, book)[0];
     if (!group) break;
+    // Lesson 2-5 (17 Nov 2026, g5.v11 `examplesKept`): a slide that teaches ANOTHER book example (not the
+    // check's own paired one) and also cites the check is that example's slide, never a
+    // second solution: it keeps its place and only stops citing the check. Merging it
+    // folded Example 3 into check 2's solution, so check 3 was tried with no example.
+    const paired = book.units.find(
+      (unit) => unit.contentUnitId === group.unitId,
+    )?.pairedExampleUnitId;
+    const teachesOther = (index: number) =>
+      (current[index]!.sourceContentUnitIds ?? []).some(
+        (id) => examples.has(String(id)) && String(id) !== paired,
+      );
+    const exampleSlides = book.examplesKept ? group.indexes.filter(teachesOther) : [];
+    if (exampleSlides.length > 0 && exampleSlides.length < group.indexes.length) {
+      for (const index of exampleSlides) {
+        const slide = current[index]!;
+        current[index] = {
+          ...slide,
+          sourceContentUnitIds: (slide.sourceContentUnitIds ?? []).filter(
+            (id) => String(id) !== group.unitId,
+          ),
+        } as SceneOutline;
+        recited += 1;
+      }
+      log.info(
+        `book coverage repair: ${exampleSlides.length} example slide(s) kept apart from the solution of check ${group.unitId}`,
+      );
+      continue;
+    }
     const [keep, ...rest] = group.indexes;
     const others = rest.map((index) => current[index]!);
     const kept = current[keep!]!;
@@ -361,7 +404,7 @@ export function mergeDuplicateSolutions(
     current = current.filter((_, index) => !removed.has(index));
     merged += rest.length;
   }
-  return { outlines: current, merged };
+  return { outlines: current, merged, recited };
 }
 
 /** The most key points a merged exercise slide keeps. */
@@ -465,6 +508,12 @@ export async function repairBookCoverageGaps(
   blocking: readonly OutlineDiagnostic[],
   aiCall: AICallFn,
   context: BookCoverageRepairContext,
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11): `examples` plans ONLY the book examples with no
+   * slide of their own before their check (`missingExampleGaps`), in ONE round, on a
+   * plan that passed the gates; nothing else is restructured.
+   */
+  options: { examples?: boolean } = {},
 ): Promise<BookCoverageRepairResult> {
   let outlines = [...candidate];
   let open = [...blocking];
@@ -473,6 +522,7 @@ export async function repairBookCoverageGaps(
   // g5.v8: one solution slide per check and recall first are fixed without a
   // model call, before any slide is planned, then the candidate is re-diagnosed.
   if (
+    options.examples !== true &&
     context.book.teacherParity === true &&
     open.some(
       (issue) =>
@@ -498,7 +548,8 @@ export async function repairBookCoverageGaps(
       return true;
     };
     const merged = mergeDuplicateSolutions(outlines, context.book);
-    const mergeKept = merged.merged > 0 && accept(merged.outlines);
+    // Lesson 2-5: an example slide that only stopped citing the check is a change too.
+    const mergeKept = merged.merged + merged.recited > 0 && accept(merged.outlines);
     const moved = moveRecallFirst(outlines, context.book);
     const moveKept = moved.moved && accept(moved.outlines);
     // g5.v10 only (`book.learnerFirst`): one exercise per slide → the engine's groups.
@@ -510,7 +561,9 @@ export async function repairBookCoverageGaps(
       );
     }
     restructured =
-      (mergeKept ? merged.merged : 0) + (moveKept ? 1 : 0) + (groupKept ? grouped.merged : 0);
+      (mergeKept ? merged.merged + merged.recited : 0) +
+      (moveKept ? 1 : 0) +
+      (groupKept ? grouped.merged : 0);
     if (merged.merged > 0 || moved.moved) {
       log.info(
         `book coverage repair: ${mergeKept ? merged.merged : 0} solution slide(s) merged${merged.merged > 0 && !mergeKept ? ' (rolled back)' : ''}, recall ${moveKept ? 'moved first' : moved.moved ? 'move rolled back' : 'unchanged'}, ${open.length} issue(s) open`,
@@ -531,8 +584,18 @@ export async function repairBookCoverageGaps(
     ]),
   );
 
-  for (let round = 1; round <= BOOK_COVERAGE_REPAIR_ROUNDS; round += 1) {
-    const gaps = repairableGaps(outlines, open, context.book, context.flow);
+  const rounds = options.examples === true ? 1 : BOOK_COVERAGE_REPAIR_ROUNDS;
+  for (let round = 1; round <= rounds; round += 1) {
+    const placed =
+      options.examples === true
+        ? missingExampleGaps(outlines, context.book).filter((gap) => gap.anchorIndex !== undefined)
+        : null;
+    const gaps =
+      options.examples === true
+        ? placed!.length > 0
+          ? placed
+          : null
+        : repairableGaps(outlines, open, context.book, context.flow);
     if (!gaps) break;
     // Insert from the last anchor backwards, so earlier anchors keep their index.
     // g5.v8 only: gaps sharing one anchor (a check's items) go in last-first, so

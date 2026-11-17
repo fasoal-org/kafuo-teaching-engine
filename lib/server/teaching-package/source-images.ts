@@ -258,9 +258,15 @@ export interface MaterializeSourceImagesResult {
   manifest: SourceVisualManifestEntry[];
 }
 
-/** Safe, content-addressed filename: `src_<n>_<sha8>.<ext>` — never a provider id. */
+/**
+ * Safe, content-addressed filename: `src_<n>_<sha8>.<ext>` — never a provider id. A
+ * teacher-guide answer drawing (`src-guide-<n>`, owner 17 Nov 2026) is
+ * `guide_<n>_<sha8>.png`, so it is never read as a book image.
+ */
 function safeMediaFileName(image: NormalizedSourceImage): string {
   const ext = MIME_TO_EXTENSION[image.mimeType] ?? 'png';
+  const guide = /^src-guide-(\d+)$/.exec(image.id);
+  if (guide) return `guide_${guide[1]}_${image.sha256.slice(0, 8)}.${ext}`;
   return `src_${image.id.slice('src-'.length)}_${image.sha256.slice(0, 8)}.${ext}`;
 }
 
