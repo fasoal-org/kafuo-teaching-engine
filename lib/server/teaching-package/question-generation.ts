@@ -31,7 +31,7 @@ import {
   executeTeachingCall,
   TeachingModelUnavailableError,
 } from '@/lib/server/teaching-model/execute';
-import { resolveSubjectModelPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import { resolveFrozenGenerationRoute } from '@/lib/server/teaching-model/frozen-generation-route';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { envelopeViolations } from '@/lib/server/teaching-package/question-envelope';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
@@ -183,6 +183,12 @@ export interface QuestionRouteScope {
   questionSetRef: string;
   /** `subjectCode` of the producing attempt's snapshot; undefined ⇒ unrouted. */
   subjectCode: string | undefined;
+  /**
+   * The producing attempt's frozen generation route (`input_snapshot.
+   * generationRoute`, teaching-generation-model-admin-config-plan-2026-11-18
+   * D-6); absent ⇒ today's table.
+   */
+  generationRoute?: unknown;
 }
 
 /**
@@ -245,7 +251,15 @@ async function subjectRoutedModelPort(scope: QuestionRouteScope): Promise<Questi
       { versionId: scope.versionId, attemptId: scope.attemptId },
     );
   }
-  const policy = await resolveSubjectModelPolicy(scope.subjectCode);
+  // The package's frozen route (D-6). One that can no longer run is replaced by
+  // today's table (D-7). This service stores no route description, so the
+  // switch is recorded in the log (and the ledger rows' `policy_version`) only;
+  // the response to Kafuo keeps its shape.
+  const { policy } = await resolveFrozenGenerationRoute({
+    subjectCode: scope.subjectCode,
+    frozenRoute: scope.generationRoute,
+    step: `question generation ${scope.questionSetRef}`,
+  });
   return {
     async generate(system, prompt, accept) {
       const usable = accept ?? ((text: string) => parseJsonResponse(text) !== null);
@@ -638,6 +652,9 @@ export async function generateTeachingQuestionSet(
       learningItem: version.learningItem,
       questionSetRef: request.requestId,
       subjectCode: context.inputSnapshot.subjectCode,
+      ...(context.inputSnapshot.generationRoute !== undefined
+        ? { generationRoute: context.inputSnapshot.generationRoute }
+        : {}),
     }));
   const userPrompt = buildQuestionUserPrompt({
     lessonTitle: document.stage.name ?? '',

@@ -98,6 +98,7 @@ describe('OpenAI provider defaults', () => {
     ['gpt-5.6', 'GPT-5.6 Sol'],
     ['gpt-5.6-terra', 'GPT-5.6 Terra'],
     ['gpt-6-luna', 'GPT-6 Luna'],
+    ['gpt-6.1-terra', 'GPT-6.1 Terra'],
   ])('includes %s as a built-in OpenAI model', (modelId, name) => {
     expect(getModelInfo('openai', modelId)).toMatchObject({
       id: modelId,
@@ -121,7 +122,8 @@ describe('OpenAI provider defaults', () => {
     });
   });
 
-  it.each(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-luna'])(
+  // gpt-6.1-terra (15 Nov 2026): a 400 from Chat Completions until it was routed here.
+  it.each(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'gpt-6.1-terra'])(
     'routes %s through the OpenAI Responses API',
     (modelId) => {
       const { model, modelInfo } = getModel({

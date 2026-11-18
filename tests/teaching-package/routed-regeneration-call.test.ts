@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRegenerationRoute } from '@/lib/server/teaching-package/routed-regeneration-call';
 import {
   TeachingCallAbortedError,
   TeachingModelUnavailableError,
 } from '@/lib/server/teaching-model/execute';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import type { GenerationModelRoute } from '@/lib/types/teaching-package';
+
+const policyMocks = vi.hoisted(() => ({ configured: vi.fn() }));
 
 vi.mock('@/lib/server/teaching-model/resolve-policy', () => ({
   resolveSubjectModelPolicy: async (code: string) => ({
@@ -13,7 +17,26 @@ vi.mock('@/lib/server/teaching-model/resolve-policy', () => ({
     primary: { modelString: 'qwen:primary' },
     fallback: { modelString: 'openai:fallback' },
   }),
+  resolveConfiguredGenerationPolicy: (code: string, route: GenerationModelRoute) =>
+    policyMocks.configured(code, route),
 }));
+
+/** A route frozen on the producing attempt (teaching-generation-model plan D-10). */
+const FROZEN: GenerationModelRoute = {
+  primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+  fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+  settingKey: 'teaching_generation.route.MATH',
+};
+
+beforeEach(() => {
+  policyMocks.configured.mockReset();
+  policyMocks.configured.mockImplementation(async (code: string, route: GenerationModelRoute) => ({
+    subjectCode: code,
+    policyVersion: 'configured-test',
+    primary: { modelString: route.primary.model },
+    fallback: { modelString: route.fallback.model },
+  }));
+});
 
 /**
  * §8 (single-slide-regeneration-plan): the regeneration's provider calls are
@@ -147,6 +170,79 @@ describe('createRegenerationRoute', () => {
     expect(thrown).toBeInstanceOf(TeachingCallAbortedError);
     expect(thrown).not.toHaveProperty('isRetryable');
     expect(() => route.assertAvailable()).not.toThrow();
+  });
+
+  describe('the package’s frozen generation route (teaching-generation-model plan D-6, D-7)', () => {
+    it('runs on the frozen route when the producing attempt recorded one', async () => {
+      const execute = vi.fn(async () => ({ text: 'ok' }));
+      const route = await createRegenerationRoute({
+        ...base,
+        snapshotGenerationRoute: FROZEN,
+        execute: execute as never,
+      });
+      await route.aiCallFor('scene-content:slide')('s', 'u');
+      expect(policyMocks.configured).toHaveBeenCalledWith('MATH', FROZEN);
+      const [policy] = execute.mock.calls[0] as unknown as [{ policyVersion: string }];
+      expect(policy.policyVersion).toBe('configured-test');
+      expect(route.description).toEqual({
+        mode: 'enforced',
+        subjectCode: 'MATH',
+        policyVersion: 'configured-test',
+        primary: 'openai:gpt-6.1-terra',
+        fallback: 'qwen:qwen3.7-flash',
+      });
+    });
+
+    it('D-7: a frozen route that can no longer resolve runs on today’s table, and the switch is recorded', async () => {
+      policyMocks.configured.mockRejectedValue(
+        new TeachingPackageError(
+          'SUBJECT_ROUTE_UNAVAILABLE',
+          'subject MATH: primary model openai:gpt-6.1-terra cannot be resolved (no API key)',
+        ),
+      );
+      const execute = vi.fn(async () => ({ text: 'ok' }));
+      const route = await createRegenerationRoute({
+        ...base,
+        snapshotGenerationRoute: FROZEN,
+        execute: execute as never,
+      });
+      await route.aiCallFor('scene-actions')('s', 'u');
+      const [policy] = execute.mock.calls[0] as unknown as [{ policyVersion: string }];
+      expect(policy.policyVersion).toBe('r1-test');
+      expect(route.description).toEqual({
+        mode: 'enforced',
+        subjectCode: 'MATH',
+        policyVersion: 'r1-test',
+        primary: 'qwen:primary',
+        fallback: 'openai:fallback',
+        routeReplaced: {
+          from: FROZEN,
+          reason:
+            'subject MATH: primary model openai:gpt-6.1-terra cannot be resolved (no API key)',
+        },
+      });
+    });
+
+    it('no frozen route, or a malformed one: today’s table, nothing recorded', async () => {
+      for (const snapshotGenerationRoute of [undefined, { primary: 'openai:gpt-6-sol' }]) {
+        const route = await createRegenerationRoute({ ...base, snapshotGenerationRoute });
+        expect(route.description).toEqual({
+          mode: 'enforced',
+          subjectCode: 'MATH',
+          policyVersion: 'r1-test',
+          primary: 'qwen:primary',
+          fallback: 'openai:fallback',
+        });
+      }
+      expect(policyMocks.configured).not.toHaveBeenCalled();
+    });
+
+    it('any other failure is not replaced', async () => {
+      policyMocks.configured.mockRejectedValue(new Error('registry exploded'));
+      await expect(
+        createRegenerationRoute({ ...base, snapshotGenerationRoute: FROZEN }),
+      ).rejects.toThrow('registry exploded');
+    });
   });
 
   it('routing off uses the stage routes and records no subject', async () => {

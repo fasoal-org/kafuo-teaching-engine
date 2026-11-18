@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
-import { insertVersion } from '@/lib/persistence/teaching-package';
+import { insertAttempt, insertVersion } from '@/lib/persistence/teaching-package';
 import {
   buildEditorGrantPayload,
   grantCookieValueForRedeem,
@@ -277,6 +277,84 @@ describe('slide regeneration routes', () => {
   }
 
   // ------------------------------------------------------------------ AT-A
+
+  it('teaching-generation-model plan D-6/D-7: the producing attempt’s frozen route reaches the model route, and its description (with routeReplaced) is stored on the row', async () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.MATH',
+    };
+    const aggregate = {
+      tenantId: 'tenant-test',
+      learningItem: { type: 'lesson' as const, id: `li-${STAGE}` },
+    };
+    await insertAttempt(pool as never, {
+      id: 'tpa-frozen-route',
+      aggregate,
+      versionId: `tpv-${STAGE}`,
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'kafuo',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      inputSnapshot: {
+        learningItem: aggregate.learningItem,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'p',
+        pdfContentSummary: null,
+        requestedAt: 1,
+        subjectCode: 'MATH',
+        policyVersion: 'configured-2026-11',
+        primaryModel: ROUTE.primary.model,
+        fallbackModel: ROUTE.fallback.model,
+        generationRoute: ROUTE,
+      },
+      now: 1,
+    });
+    await pool.query(
+      `UPDATE teaching_package_versions SET current_attempt_id = 'tpa-frozen-route' WHERE id = $1`,
+      [`tpv-${STAGE}`],
+    );
+    const description = {
+      mode: 'enforced',
+      subjectCode: 'MATH',
+      policyVersion: 'r1-2026-09',
+      primary: 'openai:gpt-6-luna',
+      fallback: 'qwen:qwen3.7-flash',
+      routeReplaced: { from: ROUTE, reason: 'no API key' },
+    };
+    mocks.createRoute.mockResolvedValue({
+      aiCallFor: () => async () => '',
+      assertAvailable: () => {},
+      description,
+    });
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const response = await regenerateSlideScene(
+      {
+        tenantId: 'tenant-test',
+        versionId: `tpv-${STAGE}`,
+        stageId: STAGE,
+        learnerKey: 'system:package-reviewer',
+      },
+      'scene-1',
+      body('key-frozen-route'),
+      { pool: pool as never, actor: { actorRef: 'system:package-reviewer', sessionRef: null } },
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({
+      generationAttemptId: 'tpa-frozen-route',
+      snapshotSubjectCode: 'MATH',
+      snapshotGenerationRoute: ROUTE,
+    });
+    const [row] = await rows();
+    expect(row!.model_route).toEqual(description);
+  });
 
   it('AI reviewer (plan §4.4): a system actor is recorded on the row and the audit events, with no session', async () => {
     const { regenerateSlideScene } =

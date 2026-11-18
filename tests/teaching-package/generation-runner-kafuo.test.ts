@@ -1870,6 +1870,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         fallbackModel: 'qwen:qwen3.7-flash',
       });
       expect(row.input_snapshot.resolvedLlmModel).toBeUndefined();
+      // A table route freezes no configured route (teaching-generation-model plan D-10).
+      expect(row.input_snapshot).not.toHaveProperty('generationRoute');
 
       // Execution input: the policy value + ledger attribution for run 1.
       const execution = mocks.generateClassroom.mock.calls[0]![0];
@@ -1961,6 +1963,103 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
       expect(mocks.acquireContentResource).not.toHaveBeenCalled();
       expect(mocks.generateClassroom).not.toHaveBeenCalled();
+    });
+
+    describe('a superadmin-configured route (teaching-generation-model plan D-10, D-11)', () => {
+      const ROUTE = {
+        primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        fallback: { model: 'qwen:qwen4-max', thinking: 'on' },
+        settingKey: 'teaching_generation.route.MATH',
+      };
+
+      it('resolves the configured pair instead of the table, hands it down, and freezes it on the attempt', async () => {
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        const { readAttemptById, readRetainedVersionContext } =
+          await import('@/lib/persistence/teaching-package');
+        const attempt = (await readAttemptById(qp(), attemptId))!;
+        expect(attempt.status).toBe('succeeded');
+
+        // Exactly the configured pair, still with NO stage.
+        expect(POLICY_CALLS()).toEqual([
+          { modelString: 'openai:gpt-6.1-terra' },
+          { modelString: 'qwen:qwen4-max' },
+        ]);
+
+        const execution = mocks.generateClassroom.mock.calls[0]![0];
+        expect(execution.modelPolicy).toMatchObject({
+          subjectCode: 'MATH',
+          policyVersion: 'configured-2026-11',
+          primary: {
+            modelString: 'openai:gpt-6.1-terra',
+            thinking: { mode: 'enabled', effort: 'medium' },
+            thinkingLabel: 'medium',
+          },
+          fallback: {
+            modelString: 'qwen:qwen4-max',
+            thinking: { mode: 'enabled' },
+            thinkingLabel: 'on',
+          },
+        });
+
+        // Frozen on the snapshot beside the subject route (D-10) ...
+        const row = await snapshotOf(attemptId);
+        expect(row.subject_code).toBe('MATH');
+        expect(row.input_snapshot).toMatchObject({
+          subjectCode: 'MATH',
+          policyVersion: 'configured-2026-11',
+          primaryModel: 'openai:gpt-6.1-terra',
+          fallbackModel: 'qwen:qwen4-max',
+          generationRoute: ROUTE,
+        });
+        // ... and it survives the read paths the later steps use (write → read).
+        expect(attempt.inputSnapshot.generationRoute).toEqual(ROUTE);
+        const retained = await readRetainedVersionContext(qp(), attempt.versionId!, {
+          tenantId: 'tenant-k',
+        });
+        expect(retained?.attemptId).toBe(attemptId);
+        expect(retained?.inputSnapshot.generationRoute).toEqual(ROUTE);
+      });
+
+      it('a stored route of the wrong shape reads as absent with a warning, never a crash', async () => {
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        await pool.query(
+          `UPDATE teaching_package_generation_attempts
+              SET input_snapshot = jsonb_set(input_snapshot, '{generationRoute}', '{"primary":"openai:gpt-6-sol"}'::jsonb)
+            WHERE id = $1`,
+          [attemptId],
+        );
+        mocks.logWarn.mockClear();
+        const { readAttemptById, readRetainedVersionContext } =
+          await import('@/lib/persistence/teaching-package');
+        const attempt = (await readAttemptById(qp(), attemptId))!;
+        expect(attempt.inputSnapshot).not.toHaveProperty('generationRoute');
+        expect(attempt.inputSnapshot.subjectCode).toBe('MATH');
+        const retained = await readRetainedVersionContext(qp(), attempt.versionId!, {
+          tenantId: 'tenant-k',
+        });
+        expect(retained?.inputSnapshot).not.toHaveProperty('generationRoute');
+        expect(mocks.logWarn).toHaveBeenCalledWith(
+          expect.stringContaining('generationRoute is malformed'),
+        );
+      });
+
+      it('a configured target the registry cannot resolve fails the attempt closed — never the table', async () => {
+        mocks.resolveModel.mockImplementation(async (params: { modelString?: string }) => {
+          if (params.modelString === 'openai:gpt-6.1-terra') {
+            throw new Error('openai: no API key configured');
+          }
+          return { model: { id: 'm' }, modelInfo: { capabilities: { vision: true } } };
+        });
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+        const after = (await readAttemptById(qp(), attemptId))!;
+        expect(after.status).toBe('failed');
+        expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
+        expect(POLICY_CALLS().map((call) => call.modelString)).not.toContain('openai:gpt-6-luna');
+        expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+        expect(mocks.generateClassroom).not.toHaveBeenCalled();
+        expect((await snapshotOf(attemptId)).input_snapshot).not.toHaveProperty('generationRoute');
+      });
     });
 
     it('TEACHING_SUBJECT_ROUTING=off keeps today’s behaviour: stage route recorded, no policy handed down', async () => {

@@ -441,6 +441,13 @@ export interface GenerationInputSnapshot {
   /** Canonical `provider:model` strings of the subject's Primary and Fallback. */
   primaryModel?: string;
   fallbackModel?: string;
+  /**
+   * The superadmin-configured route the attempt ran under, frozen by the runner
+   * with the subject route (teaching-generation-model-admin-config-plan-2026-11-18
+   * D-10). Absent ⇒ the code-owned table (`policyVersion` `r1-2026-09`). Slide
+   * regeneration, slide insertion and package questions read it back (D-6, D-7).
+   */
+  generationRoute?: GenerationModelRoute;
   /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
   ledgerIncomplete?: boolean;
   /**
@@ -907,6 +914,12 @@ export interface KafuoGenerationRequest {
    */
   narration?: { ttsRoute: KafuoNarrationTtsRoute };
   /**
+   * The superadmin-configured generation model route for the lesson's subject
+   * (teaching-generation-model-admin-config-plan-2026-11-18 D-9). Absent ⇒ the
+   * code-owned subject table, and the canonical digest is byte-identical to before.
+   */
+  modelRoute?: GenerationModelRoute;
+  /**
    * g5.v7 only: the lesson's book map and Lesson Template. Absent ⇒ every
    * earlier version's planning and digest are unchanged.
    */
@@ -923,6 +936,27 @@ export interface KafuoNarrationTtsRoute {
   providerId: string;
   voiceId: string;
   /** The Kafuo runtime setting key, e.g. `teaching_tts.route.CHEMISTRY` (audit lineage). */
+  settingKey: string;
+}
+
+/**
+ * One target of a configured generation route (plan D-13): a catalogue model
+ * string and one of that model's thinking values (`low`, `on`, …).
+ */
+export interface GenerationRouteTarget {
+  model: string;
+  thinking: string;
+}
+
+/**
+ * `modelRoute` as Kafuo sends it (plan D-9), and as it is frozen on the producing
+ * attempt's `input_snapshot.generationRoute` (D-10). Validated against the TE
+ * catalogue (`lib/server/teaching-model/generation-catalog.ts`).
+ */
+export interface GenerationModelRoute {
+  primary: GenerationRouteTarget;
+  fallback: GenerationRouteTarget;
+  /** The Kafuo runtime setting key, e.g. `teaching_generation.route.MATH` (audit lineage). */
   settingKey: string;
 }
 

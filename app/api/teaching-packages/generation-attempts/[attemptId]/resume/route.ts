@@ -19,6 +19,7 @@ import { getServerPersistenceProvider } from '@/lib/persistence/server-provider'
 import { resumeGenerationAttempt } from '@/lib/server/teaching-package/generation-correction';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
+  assertConfiguredGenerationRouteAvailable,
   assertConfiguredTtsRouteAvailable,
   buildKafuoStartRequest,
   parseKafuoGenerationRequest,
@@ -107,6 +108,11 @@ export async function POST(
     // A configured narration route's provider must still be usable (plan
     // D-7): refused before the attempt's state changes, never a silent lesson.
     assertConfiguredTtsRouteAvailable(kafuo);
+    // The same for a configured generation model route (teaching-generation-
+    // model-admin-config-plan-2026-11-18 D-11): the re-sent request carries the
+    // attempt's own route (its digest must match), and both models must still
+    // be keyed, or the resume is refused before the attempt's state changes.
+    assertConfiguredGenerationRouteAvailable(kafuo);
 
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
     const { attempt, resumed } = await resumeGenerationAttempt(pool, attemptId, {

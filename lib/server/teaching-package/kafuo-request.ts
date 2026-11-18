@@ -19,10 +19,17 @@ import {
   normalizeTeachingLanguage,
   teachingTtsCatalogVoice,
 } from '@/lib/audio/teaching-tts-routing';
+import { createLogger } from '@/lib/logger';
 import {
   routedProviderStatus,
   routedProviderUnavailableMessage,
 } from '@/lib/server/speech/teaching-route';
+import {
+  generationModelAvailability,
+  generationModelUnavailableMessage,
+  parseGenerationModelRoute,
+} from '@/lib/server/teaching-model/generation-catalog';
+import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
@@ -51,6 +58,7 @@ import type {
   KafuoTeacherGuideModelAnswerKind,
   KafuoTeacherGuideStatus,
   GenerationExecutionInput,
+  GenerationModelRoute,
   KafuoContentResource,
   KafuoGenerationRequest,
   KafuoNarrationTtsRoute,
@@ -69,6 +77,8 @@ import type {
 } from '@/lib/types/teaching-package';
 
 type StartGenerationAttemptRequestAlias = StartGenerationAttemptRequest;
+
+const log = createLogger('KafuoGenerationRequest');
 
 /**
  * The Teaching Skills governance contract this TE speaks (Module 2 W6, plan §M).
@@ -627,6 +637,42 @@ export function assertConfiguredTtsRouteAvailable(kafuo: KafuoGenerationContext)
 }
 
 /**
+ * A configured generation route's two models must be registered and keyed on
+ * this server NOW (teaching-generation-model-admin-config-plan-2026-11-18
+ * D-11), or the request is refused with `GENERATION_ROUTE_UNAVAILABLE` (409)
+ * before any attempt starts or resumes — no other model is used. The details
+ * name the env var, never its value. Default routes (no `modelRoute`) keep
+ * today's behaviour. With `TEACHING_SUBJECT_ROUTING=off` there is no subject
+ * policy at all, so the route is ignored (logged once here) and not checked.
+ */
+export function assertConfiguredGenerationRouteAvailable(kafuo: KafuoGenerationContext): void {
+  const route = kafuo.modelRoute;
+  if (!route) return;
+  if (readRoutingMode() === 'off') {
+    log.warn(
+      `configured generation route ${route.settingKey} ignored: TEACHING_SUBJECT_ROUTING=off (stage routes apply)`,
+    );
+    return;
+  }
+  for (const role of ['primary', 'fallback'] as const) {
+    const { model } = route[role];
+    const availability = generationModelAvailability(model);
+    if (availability.available) continue;
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_UNAVAILABLE',
+      generationModelUnavailableMessage(route, role, model, availability),
+      {
+        model,
+        role,
+        reason: availability.unavailableReason,
+        keyEnvVar: availability.keyEnvVar,
+        settingKey: route.settingKey,
+      },
+    );
+  }
+}
+
+/**
  * Parse and validate the structured Kafuo generation request (FRD §9.2).
  * Duplicate stage keys are allowed — identity is `(flowIndex, stage)`.
  * `generation` accepts capability switches ONLY; provider ids, model ids, and
@@ -837,6 +883,15 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
       );
     }
   }
+  // The configured model route is a top-level field (plan D-9), never a
+  // `generation` switch: a misplaced one is refused instead of being dropped
+  // silently onto today's table.
+  if ('modelRoute' in generationRaw) {
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_INVALID',
+      'generation.modelRoute is not accepted: send modelRoute at the top level of the request',
+    );
+  }
   const generation: KafuoGenerationRequest['generation'] = {
     ...(typeof generationRaw.enableWebSearch === 'boolean'
       ? { enableWebSearch: generationRaw.enableWebSearch }
@@ -854,6 +909,13 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   };
 
   const narration = parseNarration(body.narration, item.language);
+  // The optional superadmin-configured generation model route (teaching-
+  // generation-model-admin-config-plan-2026-11-18 D-9). Absent stays absent; a
+  // present one (null included) must be a valid catalogue route, or the request
+  // is refused with GENERATION_ROUTE_INVALID. Availability (the server keys) is
+  // checked by the generate and resume routes, not here.
+  const modelRoute =
+    body.modelRoute === undefined ? undefined : parseGenerationModelRoute(body.modelRoute);
   const bookStructure = parseBookStructure(body.bookStructure);
   // g5.v11 only (D-20, 16 Nov 2026): parsed, digested and kept on a g5.v11 request
   // alone. Every other Teaching Model ignores the block entirely, so a malformed one
@@ -877,6 +939,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     // marker's presence/absence is settled here and carried as a value.
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
     ...(narration ? { narration } : {}),
+    ...(modelRoute ? { modelRoute } : {}),
     ...(bookStructure ? { bookStructure } : {}),
     ...(teacherGuide ? { teacherGuide } : {}),
   };
@@ -884,6 +947,17 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   // this lesson's own. A policy naming none, as on every g5.v1–g5.v8 request, passes
   // untouched.
   assertSubjectTeachingSkillPolicy(teachingModel.flow, subjectCodeOf(request));
+  // A configured route is the lesson's own subject's setting (plan D-8): a key for
+  // another subject would run the wrong choice under a wrong audit lineage.
+  if (modelRoute) {
+    const routeCode = modelRoute.settingKey.slice('teaching_generation.route.'.length);
+    if (routeCode !== subjectCodeOf(request)) {
+      throw new TeachingPackageError(
+        'GENERATION_ROUTE_INVALID',
+        `modelRoute.settingKey ${modelRoute.settingKey} is not the setting of this lesson's subject ${JSON.stringify(subjectCodeOf(request))}`,
+      );
+    }
+  }
   return {
     request,
     aggregate: { tenantId, learningItem: { type: item.type, id: item.id } },
@@ -943,6 +1017,18 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
   if (request.narration !== undefined) {
     const { providerId, voiceId, settingKey } = request.narration.ttsRoute;
     payload.narration = { ttsRoute: { providerId, voiceId, settingKey } };
+  }
+  // The configured generation model route decides which models write the
+  // package (teaching-generation-model-admin-config-plan-2026-11-18 D-9), so it
+  // is covered — mirrored by the Backend's `canonical_request_digest`. Absent
+  // stays absent: every request without it keeps its byte-identical digest.
+  if (request.modelRoute !== undefined) {
+    const { primary, fallback, settingKey } = request.modelRoute;
+    payload.modelRoute = {
+      primary: { model: primary.model, thinking: primary.thinking },
+      fallback: { model: fallback.model, thinking: fallback.thinking },
+      settingKey,
+    };
   }
   // g5.v7: the book map decides what is planned, so it is covered; absent stays absent.
   if (request.bookStructure !== undefined) {
@@ -1466,6 +1552,12 @@ export interface KafuoGenerationContext {
    * routing table.
    */
   ttsRoute?: StageTtsRoute | null;
+  /**
+   * The configured generation model route (`modelRoute`, teaching-generation-
+   * model-admin-config-plan-2026-11-18 D-9), resolved by the runner instead of
+   * the code table and frozen on the attempt (D-10). Absent ⇒ the table.
+   */
+  modelRoute?: GenerationModelRoute;
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
   /**
@@ -1552,6 +1644,7 @@ export function buildKafuoStartRequest(
       subjectCode: subjectCodeOf(request),
       subjectOffering: request.learningItem.subjectOffering ?? null,
       ...(ttsRoute ? { ttsRoute } : {}),
+      ...(request.modelRoute ? { modelRoute: request.modelRoute } : {}),
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
       ...(teacherGuide ? { teacherGuide } : {}),
     },

@@ -844,7 +844,11 @@ export async function insertGeneratedSlide(
   });
   const stage = stageDocument.stage;
   const snapshot = retained?.inputSnapshot as
-    | { subjectCode?: string; speechRegister?: Record<string, unknown> }
+    | {
+        subjectCode?: string;
+        speechRegister?: Record<string, unknown>;
+        generationRoute?: unknown;
+      }
     | undefined;
   const subjectCode = snapshot?.subjectCode ?? undefined;
   const registerPolicy = resolveSpeechRegisterPolicy({
@@ -859,6 +863,11 @@ export async function insertGeneratedSlide(
     generationAttemptId: retained?.attemptId ?? null,
     learningItem: context.version.learningItem,
     snapshotSubjectCode: subjectCode,
+    // The package's frozen generation model route (teaching-generation-model-
+    // admin-config-plan-2026-11-18 D-6); absent → today's table.
+    ...(snapshot?.generationRoute !== undefined
+      ? { snapshotGenerationRoute: snapshot.generationRoute }
+      : {}),
     stageSubjectCode: stage.subjectCode,
     queryable: pool,
     ...(deps.routingMode ? { mode: deps.routingMode } : {}),

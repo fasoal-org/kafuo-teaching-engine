@@ -6,6 +6,7 @@ import {
   RATE_CARD_VERSION,
   selectRate,
 } from '@/lib/server/teaching-model/rate-card';
+import { GENERATION_MODEL_CATALOG } from '@/lib/server/teaching-model/generation-catalog';
 import { policyModelStrings } from '@/lib/server/teaching-model/subject-policy';
 import { computeCost, deriveTokenClasses } from '@/lib/usage/attribute';
 import { normalizeUsage } from '@/lib/usage/normalize';
@@ -70,6 +71,37 @@ describe('rate card', () => {
       cacheWritePerM: null,
       outputPerM: 7.5,
     });
+  });
+
+  it('prices Terra and the Qwen Max generation choices (owner, 18 Nov 2026)', () => {
+    const terra = BASE_RATE_CARD.entries['openai:gpt-6.1-terra']!;
+    expect(terra).toMatchObject({ inputPerM: 1, cachedInputPerM: 0.05, outputPerM: 5 });
+    expect(selectRate(terra, 272_001)).toMatchObject({ inputPerM: 2, outputPerM: 7.5 });
+    expect(BASE_RATE_CARD.entries['qwen:qwen4-max']).toEqual({
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: 1.875,
+      outputPerM: 4.5,
+    });
+    expect(BASE_RATE_CARD.entries['qwen:qwen3.8-max']).toEqual({
+      inputPerM: 2,
+      cachedInputPerM: 0.25,
+      cacheWritePerM: 2.5,
+      outputPerM: 6,
+    });
+    // No published cache price: cached input at the fresh rate (an upper bound).
+    expect(BASE_RATE_CARD.entries['qwen:qwen3.7-max']).toEqual({
+      inputPerM: 2.5,
+      cachedInputPerM: 2.5,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    });
+  });
+
+  it('prices every model the generation picker offers (plan D-14)', () => {
+    for (const { model } of GENERATION_MODEL_CATALOG) {
+      expect(BASE_RATE_CARD.entries[model], model).toBeDefined();
+    }
   });
 
   it('prices both AI reviewer models (ai-reviewer-layer plan §4.9, verified 10 Nov 2026)', () => {

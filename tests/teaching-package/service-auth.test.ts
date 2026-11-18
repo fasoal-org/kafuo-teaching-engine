@@ -260,6 +260,9 @@ describe('teaching package service auth', () => {
       NARRATION_AUDIO_GENERATION_FAILED: 502,
       TTS_ROUTE_INVALID: 400,
       TTS_ROUTE_UNAVAILABLE: 409,
+      // Configured generation model route (teaching-generation-model-admin-config-plan D-11).
+      GENERATION_ROUTE_INVALID: 400,
+      GENERATION_ROUTE_UNAVAILABLE: 409,
       SACRED_TEXT_ALTERED: 502,
       SACRED_TEXT_CANONICAL_MISMATCH: 422,
     };

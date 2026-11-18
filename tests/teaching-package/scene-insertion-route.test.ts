@@ -361,6 +361,8 @@ describe('reviewer-generated slide insertion routes', () => {
       /** F-7: a g5.v8 version and outline overrides. */
       teachingModel?: { key: string; version: string };
       outline?: Partial<ReturnType<typeof makeOutline>>;
+      /** A configured route frozen on the attempt (teaching-generation-model plan D-10). */
+      generationRoute?: Record<string, unknown>;
     } = {},
   ): Promise<Seed> {
     const governed = options.governed ?? false;
@@ -409,6 +411,7 @@ describe('reviewer-generated slide insertion routes', () => {
         requestedAt: 1,
         subjectCode: 'PHYS',
         teachingFlow: flowFor(governed),
+        ...(options.generationRoute ? { generationRoute: options.generationRoute as never } : {}),
       },
       now: 1,
     });
@@ -653,6 +656,31 @@ describe('reviewer-generated slide insertion routes', () => {
     expect(mocks.prompts[0]).not.toContain('UNIT-ONE-TEXT');
     expect(mocks.prompts[0]).toContain('<<<INSTRUCTION');
     expect(JSON.stringify(mocks.insert.mock.calls[0]![0])).not.toContain('REASON-MARK');
+  });
+
+  it('teaching-generation-model plan D-6: the producing attempt’s frozen route reaches the model route (absent → not passed)', async () => {
+    const ROUTE = {
+      primary: { model: 'anthropic:claude-sonnet-5-5', thinking: 'high' },
+      fallback: { model: 'qwen:qwen4-max', thinking: 'on' },
+      settingKey: 'teaching_generation.route.PHYSICS',
+    };
+    // The mocked route survives `vi.resetModules`: start this test's count at zero.
+    const { createInsertionRoute } =
+      await import('@/lib/server/teaching-package/routed-insertion-call');
+    vi.mocked(createInsertionRoute).mockClear();
+    const routed = await seed({ generationRoute: ROUTE });
+    expect((await post(routed, body({ idempotencyKey: 'key-frozen-1' }))).status).toBe(200);
+    const plain = await seed();
+    expect((await post(plain, body({ idempotencyKey: 'key-frozen-2' }))).status).toBe(200);
+    const calls = vi.mocked(createInsertionRoute).mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![0]).toMatchObject({
+      snapshotSubjectCode: 'PHYS',
+      snapshotGenerationRoute: ROUTE,
+    });
+    expect(calls[1]![0]).not.toHaveProperty('snapshotGenerationRoute');
   });
 
   it('replays a lost success BEFORE the new-run checks (the units are covered by then)', async () => {

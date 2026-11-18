@@ -277,6 +277,8 @@ const openaiGpt56Effort: ThinkingCapability = {
 const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
   [getModelMetadataKey('openai', 'gpt-6-luna')]: openaiGpt56Effort,
   [getModelMetadataKey('openai', 'gpt-6-sol')]: openaiGpt56Effort,
+  // OpenAI model page, 15 Nov 2026: none, low, medium (default), high, xhigh, max.
+  [getModelMetadataKey('openai', 'gpt-6.1-terra')]: openaiGpt56Effort,
   [getModelMetadataKey('openai', 'gpt-5.6')]: openaiGpt56Effort,
   [getModelMetadataKey('openai', 'gpt-5.6-terra')]: openaiGpt56Effort,
   [getModelMetadataKey('openai', 'gpt-5.5')]: effortCapability(
@@ -393,6 +395,9 @@ const THINKING_CAPABILITIES: Record<string, ThinkingCapability> = {
 
   [getModelMetadataKey('qwen', 'qwen3.7-plus')]: qwenBudgetEnabled,
   [getModelMetadataKey('qwen', 'qwen3.7-max')]: qwenBudgetEnabled,
+  // Alibaba, 18 Nov 2026: hybrid thinking, on by default, `enable_thinking: false` off.
+  [getModelMetadataKey('qwen', 'qwen4-max')]: qwenBudgetEnabled,
+  [getModelMetadataKey('qwen', 'qwen3.8-max')]: qwenBudgetEnabled,
   // Kafuo R1 primary: thinking off by default (`enable_thinking: false`).
   [getModelMetadataKey('qwen', 'qwen3.7-flash')]: qwenBudgetDisabled,
   [getModelMetadataKey('qwen', 'qwen3.6-max-preview')]: qwenBudgetDisabled,

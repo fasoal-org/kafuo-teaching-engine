@@ -38,6 +38,16 @@
  *    cache write charge.
  *  - gemini-4-hydrogen (owner, 16 Nov 2026): the same page: 1.50 input, 0.075
  *    cached, 7.50 output per 1M tokens; implicit caching only, no write charge.
+ *  - gpt-6.1-terra (a generation choice, owner 15 and 18 Nov 2026): OpenAI model
+ *    page, 15 Nov 2026: 1 input, 0.05 cached input, 1.25 cache write (30 minutes),
+ *    5 output per 1M tokens; past 272K input tokens 2x input and cache, 1.5x output.
+ *  - Qwen Max generation choices (owner, 18 Nov 2026), Alibaba Model Studio
+ *    pricing page, International (Singapore), 18 Nov 2026, one tier up to 1M:
+ *    - qwen4-max: 1.5 input, 0.075 cache hit, 1.875 cache write (5 minutes), 4.5 output;
+ *    - qwen3.8-max: 2 input, 0.25 implicit cache (the upper bound over the 0.17
+ *      explicit cache read), 2.5 explicit cache write, 6 output;
+ *    - qwen3.7-max: 2.5 input, 7.5 output; no cache price is published, so cached
+ *      input is priced at the fresh rate (an upper bound) and the write is unpriced.
  *
  * The reviewer and new-model entries are additive: no existing model is
  * re-priced, so the version string is unchanged.
@@ -109,6 +119,24 @@ const SOL_TIERS: RateTier[] = [
   },
 ];
 
+/** GPT-6.1 Terra: Standard rates, and the long-context rates past 272K input tokens. */
+const TERRA_61_TIERS: RateTier[] = [
+  {
+    maxInputTokens: 272_000,
+    inputPerM: 1,
+    cachedInputPerM: 0.05,
+    cacheWritePerM: 1.25,
+    outputPerM: 5,
+  },
+  {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    inputPerM: 2,
+    cachedInputPerM: 0.1,
+    cacheWritePerM: 2.5,
+    outputPerM: 7.5,
+  },
+];
+
 export const BASE_RATE_CARD: RateCard = Object.freeze({
   version: RATE_CARD_VERSION,
   entries: Object.freeze({
@@ -159,6 +187,28 @@ export const BASE_RATE_CARD: RateCard = Object.freeze({
     'google:gemini-4-hydrogen': {
       inputPerM: 1.5,
       cachedInputPerM: 0.075,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    },
+    'openai:gpt-6.1-terra': {
+      ...TERRA_61_TIERS[0]!,
+      tiers: TERRA_61_TIERS,
+    },
+    'qwen:qwen4-max': {
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: 1.875,
+      outputPerM: 4.5,
+    },
+    'qwen:qwen3.8-max': {
+      inputPerM: 2,
+      cachedInputPerM: 0.25,
+      cacheWritePerM: 2.5,
+      outputPerM: 6,
+    },
+    'qwen:qwen3.7-max': {
+      inputPerM: 2.5,
+      cachedInputPerM: 2.5,
       cacheWritePerM: null,
       outputPerM: 7.5,
     },

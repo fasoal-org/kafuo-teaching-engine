@@ -34,12 +34,15 @@
  */
 import { splitSqlStatements, type Queryable } from '@openmaic/storage/document/pg';
 
+import { createLogger } from '@/lib/logger';
 import { LEGACY_TENANT_ID } from '@/lib/types/teaching-package';
 import type {
   GenerationAttempt,
   GenerationAttemptKind,
   GenerationAttemptStatus,
   GenerationInputSnapshot,
+  GenerationModelRoute,
+  GenerationRouteTarget,
   LearningItemRef,
   ReviewEvent,
   ReviewEventType,
@@ -50,6 +53,8 @@ import type {
 } from '@/lib/types/teaching-package';
 
 const TENANT_CHECK = `tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0)`;
+
+const log = createLogger('TeachingPackagePersistence');
 
 /**
  * The review-event vocabulary. The `scene_regeneration_*` values record the
@@ -1275,6 +1280,55 @@ const ATTEMPT_COLUMNS = `id,
   started_at,
   completed_at`;
 
+function isStoredRouteTarget(value: unknown): value is GenerationRouteTarget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { model, thinking } = value as Record<string, unknown>;
+  return (
+    typeof model === 'string' && model !== '' && typeof thinking === 'string' && thinking !== ''
+  );
+}
+
+/**
+ * The generation route frozen on a stored snapshot (`input_snapshot.
+ * generationRoute`, teaching-generation-model-admin-config-plan-2026-11-18
+ * D-10), shape-checked on read: exactly `{ primary:{model,thinking},
+ * fallback:{model,thinking}, settingKey }`. Absent → `null`. A malformed stored
+ * value is treated as absent with a warning, never a crash: the later steps then
+ * keep today's table. Catalogue membership is checked when it is resolved.
+ */
+export function storedGenerationRouteOf(raw: unknown): GenerationModelRoute | null {
+  if (raw === undefined) return null;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const { primary, fallback, settingKey } = raw as Record<string, unknown>;
+    if (
+      isStoredRouteTarget(primary) &&
+      isStoredRouteTarget(fallback) &&
+      typeof settingKey === 'string' &&
+      settingKey !== ''
+    ) {
+      return {
+        primary: { model: primary.model, thinking: primary.thinking },
+        fallback: { model: fallback.model, thinking: fallback.thinking },
+        settingKey,
+      };
+    }
+  }
+  log.warn(
+    'input_snapshot.generationRoute is malformed and is treated as absent (the code table applies)',
+  );
+  return null;
+}
+
+/** The snapshot with its frozen `generationRoute` shape-checked (dropped when malformed). */
+function withStoredGenerationRoute(snapshot: GenerationInputSnapshot): GenerationInputSnapshot {
+  if (!snapshot || typeof snapshot !== 'object' || !('generationRoute' in snapshot)) {
+    return snapshot;
+  }
+  const { generationRoute: raw, ...rest } = snapshot;
+  const route = storedGenerationRouteOf(raw);
+  return route ? { ...rest, generationRoute: route } : (rest as GenerationInputSnapshot);
+}
+
 /**
  * The attempt record's snapshot WITHOUT the diagnosis-only
  * `outlineAnswerDiagnostics` (lesson 306, F-1): the raw model text stays on the
@@ -1282,7 +1336,7 @@ const ATTEMPT_COLUMNS = `id,
  * read and the generate replay return it to the backend).
  */
 function attemptSnapshotOf(raw: unknown): GenerationInputSnapshot {
-  const snapshot = raw as GenerationInputSnapshot;
+  const snapshot = withStoredGenerationRoute(raw as GenerationInputSnapshot);
   if (!snapshot || typeof snapshot !== 'object' || !('outlineAnswerDiagnostics' in snapshot)) {
     return snapshot;
   }
@@ -2181,7 +2235,9 @@ export async function readRetainedVersionContext(
       if (!hit) return null;
       return {
         attemptId: String(hit.id),
-        inputSnapshot: hit.input_snapshot as GenerationInputSnapshot,
+        // The frozen generation route is shape-checked here too: slide
+        // regeneration, slide insertion and package questions read it (D-6).
+        inputSnapshot: withStoredGenerationRoute(hit.input_snapshot as GenerationInputSnapshot),
         sourceText: typeof hit.source_text === 'string' ? hit.source_text : null,
         sourceTruncated: hit.source_truncated === true,
       };

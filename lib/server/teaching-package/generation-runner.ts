@@ -64,7 +64,7 @@ import {
 } from '@/lib/server/teaching-package/kafuo-request';
 import { acquireGuideAnswerFigures } from '@/lib/server/teaching-package/guide-answer-figures';
 import {
-  resolveSubjectModelPolicy,
+  resolveGenerationRoute,
   type ResolvedSubjectPolicy,
 } from '@/lib/server/teaching-model/resolve-policy';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
@@ -233,6 +233,12 @@ async function compensateRun(pool: ConnectableQueryable, stageId: string | null)
  * no run, no version, and never a fall-through to `DEFAULT_MODEL` (AMB-04).
  * With routing `off` the attempt runs exactly as before (stage routes,
  * `resolvedLlmModel`), and `null` is returned.
+ *
+ * A superadmin-configured route (`kafuo.modelRoute`, teaching-generation-model-
+ * admin-config-plan-2026-11-18 D-11) replaces the table for this attempt and is
+ * frozen on its snapshot (`generationRoute`, D-10) for the later steps. It
+ * fails closed exactly like the table: no other model, never D-7's replacement
+ * (that is for later steps only).
  */
 async function resolveAttemptSubjectRoute(
   attemptId: string,
@@ -242,7 +248,10 @@ async function resolveAttemptSubjectRoute(
   if (readRoutingMode() === 'off') return { policy: null, failed: false };
   let policy: ResolvedSubjectPolicy;
   try {
-    policy = await resolveSubjectModelPolicy(kafuo.subjectCode);
+    policy = await resolveGenerationRoute({
+      subjectCode: kafuo.subjectCode,
+      route: kafuo.modelRoute,
+    });
   } catch (error) {
     const refusal =
       error instanceof TeachingPackageError && error.code === 'SUBJECT_ROUTE_UNAVAILABLE'
@@ -266,7 +275,14 @@ async function resolveAttemptSubjectRoute(
     policyVersion: policy.policyVersion,
     primaryModel: policy.primary.modelString,
     fallbackModel: policy.fallback.modelString,
+    ...(kafuo.modelRoute ? { generationRoute: kafuo.modelRoute } : {}),
   });
+  if (kafuo.modelRoute) {
+    // D-16: the applied route per attempt — model strings and thinking values only.
+    log.info(
+      `Teaching package attempt ${attemptId} runs the configured route ${kafuo.modelRoute.settingKey}: primary ${kafuo.modelRoute.primary.model} (${kafuo.modelRoute.primary.thinking}), fallback ${kafuo.modelRoute.fallback.model} (${kafuo.modelRoute.fallback.thinking})`,
+    );
+  }
   return { policy, failed: false };
 }
 

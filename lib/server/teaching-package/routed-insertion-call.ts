@@ -27,7 +27,7 @@ import {
   executeTeachingCall,
   TeachingModelUnavailableError,
 } from '@/lib/server/teaching-model/execute';
-import { resolveSubjectModelPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import { resolveFrozenGenerationRoute } from '@/lib/server/teaching-model/frozen-generation-route';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 
@@ -48,6 +48,12 @@ export interface InsertionRouteInput {
   generationAttemptId: string | null;
   learningItem: { type: string; id: string } | null;
   snapshotSubjectCode: string | undefined;
+  /**
+   * The producing attempt's frozen generation route (`input_snapshot.
+   * generationRoute`, teaching-generation-model-admin-config-plan-2026-11-18
+   * D-6). Absent → today's table.
+   */
+  snapshotGenerationRoute?: unknown;
   stageSubjectCode: string | undefined;
   queryable?: Queryable;
   /** Test seams. */
@@ -86,7 +92,13 @@ export async function createInsertionRoute(input: InsertionRouteInput): Promise<
       { versionId: input.versionId },
     );
   }
-  const policy = await resolveSubjectModelPolicy(subject);
+  // The package's frozen route (D-6); one that can no longer run is replaced
+  // by today's table and the switch is recorded on the insertion row (D-7).
+  const { policy, routeReplaced } = await resolveFrozenGenerationRoute({
+    subjectCode: subject,
+    frozenRoute: input.snapshotGenerationRoute,
+    step: `slide insertion ${input.insertionId}`,
+  });
   const execute = input.execute ?? executeTeachingCall;
   let failure: TeachingPackageError | null = null;
   const generationAttemptId = input.generationAttemptId;
@@ -158,6 +170,7 @@ export async function createInsertionRoute(input: InsertionRouteInput): Promise<
       policyVersion: policy.policyVersion,
       primary: policy.primary.modelString,
       fallback: policy.fallback.modelString,
+      ...(routeReplaced ? { routeReplaced } : {}),
     },
   };
 }

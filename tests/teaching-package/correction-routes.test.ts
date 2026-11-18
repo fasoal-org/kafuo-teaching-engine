@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   pool: { query: () => undefined },
   /** Overrides the server provider status for a configured narration route; unset = real. */
   routedStatus: vi.fn(),
+  /** Overrides a generation catalogue model's server availability; unset = real. */
+  modelAvailability: vi.fn(),
 }));
 
 vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
@@ -26,6 +28,16 @@ vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
     ...actual,
     routedProviderStatus: (providerId: string) =>
       mocks.routedStatus(providerId) ?? actual.routedProviderStatus(providerId),
+  };
+});
+
+vi.mock('@/lib/server/teaching-model/generation-catalog', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/server/teaching-model/generation-catalog')>();
+  return {
+    ...actual,
+    generationModelAvailability: (model: string) =>
+      mocks.modelAvailability(model) ?? actual.generationModelAvailability(model),
   };
 });
 
@@ -581,6 +593,31 @@ describe('POST …/resume', () => {
       expectNoServiceCall();
     } finally {
       mocks.routedStatus.mockReset();
+    }
+  });
+
+  it('refuses a configured generation route whose model lost its key, before any state changes (D-11)', async () => {
+    mocks.modelAvailability.mockImplementation((model: string) =>
+      model === 'openai:gpt-6.1-terra'
+        ? { available: false, unavailableReason: 'missing-key', keyEnvVar: 'OPENAI_API_KEY' }
+        : { available: true, unavailableReason: null, keyEnvVar: 'QWEN_API_KEY' },
+    );
+    try {
+      const request = kafuoRequest({
+        modelRoute: {
+          primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+          fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+          settingKey: 'teaching_generation.route.BIOLOGY',
+        },
+      });
+      const response = await send(resumePost, '/resume', 'POST', resumeBody({ request }));
+      expect(response.status).toBe(409);
+      const json = (await response.json()) as { error: { code: string; message: string } };
+      expect(json.error.code).toBe('GENERATION_ROUTE_UNAVAILABLE');
+      expect(json.error.message).toContain('OPENAI_API_KEY');
+      expectNoServiceCall();
+    } finally {
+      mocks.modelAvailability.mockReset();
     }
   });
 

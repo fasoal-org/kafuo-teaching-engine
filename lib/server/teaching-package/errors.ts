@@ -375,6 +375,18 @@ export type TeachingPackageErrorCode =
    * before any attempt exists, so no silent lesson is built (D-7).
    */
   | 'TTS_ROUTE_UNAVAILABLE'
+  // --- Superadmin-configured generation model route (teaching-generation-model-admin-config-plan-2026-11-18 D-11) ---
+  /**
+   * `modelRoute` names a model outside the TE catalogue, a thinking value that
+   * model does not offer, the same model twice, or a malformed `settingKey`.
+   * Refused before any attempt exists; never replaced by another model.
+   */
+  | 'GENERATION_ROUTE_INVALID'
+  /**
+   * A configured route's model has no server key (or is not registered) on this
+   * Teaching Engine. Refused before any attempt exists; no other model is used.
+   */
+  | 'GENERATION_ROUTE_UNAVAILABLE'
   // --- Quran and hadith (quran-text-handling-rules-plan Q-5, Q-14) ---
   /**
    * A regenerated or inserted Scene changed, invented, cut, explained or spoke
@@ -559,6 +571,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NARRATION_AUDIO_GENERATION_FAILED: 502,
   TTS_ROUTE_INVALID: 400,
   TTS_ROUTE_UNAVAILABLE: 409,
+  GENERATION_ROUTE_INVALID: 400,
+  GENERATION_ROUTE_UNAVAILABLE: 409,
   SACRED_TEXT_ALTERED: 502,
   SACRED_TEXT_CANONICAL_MISMATCH: 422,
 };

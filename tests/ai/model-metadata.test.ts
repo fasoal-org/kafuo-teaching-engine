@@ -118,6 +118,24 @@ describe('model metadata thinking capabilities', () => {
     expect(PROVIDERS.google.models[0]?.id).toBe('gemini-3.6-flash');
   });
 
+  it('owner 18 Nov 2026: Terra takes GPT-6 effort; Qwen 4 Max and Qwen3.8 Max think by default', () => {
+    expect(getCatalogThinkingCapability('openai', 'gpt-6.1-terra')).toEqual(
+      getCatalogThinkingCapability('openai', 'gpt-6-luna'),
+    );
+    for (const id of ['qwen4-max', 'qwen3.8-max']) {
+      expect(getCatalogThinkingCapability('qwen', id)).toEqual(
+        getCatalogThinkingCapability('qwen', 'qwen3.7-max'),
+      );
+      expect(getModelInfo('qwen', id)).toMatchObject({
+        contextWindow: 1_000_000,
+        outputWindow: 131_072,
+        capabilities: { vision: true },
+      });
+    }
+    expect(PROVIDERS.openai.models[0]?.id).toBe('gpt-6-luna');
+    expect(PROVIDERS.qwen.models[0]?.id).toBe('qwen3.7-plus');
+  });
+
   it('D-4: the reviewer output bound (64k) sits inside both reviewer models’ real output windows', () => {
     const opus = getModelInfo('anthropic', 'claude-opus-5-5');
     const sol = getModelInfo('openai', 'gpt-6-sol');

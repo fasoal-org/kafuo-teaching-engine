@@ -53,6 +53,7 @@ import type {
   GenerationAttempt,
   GenerationExecutionInput,
   GenerationInputSnapshot,
+  GenerationModelRoute,
   KafuoBookStructure,
   KafuoTeacherGuide,
   LearningItemRef,
@@ -589,6 +590,11 @@ export async function recordResolvedLlmModel(
  * `fallbackModel` and the first-class `subject_code` column, written ONCE by
  * the runner after the policy resolved and before any model call. A routed
  * run records the policy pair instead of `resolvedLlmModel`.
+ *
+ * A superadmin-configured route is frozen with it as `generationRoute`
+ * (teaching-generation-model-admin-config-plan-2026-11-18 D-10): server-written
+ * only, read back by slide regeneration, slide insertion and package questions
+ * (D-6). Absent for a table route, so those steps keep today's table.
  */
 export async function recordSubjectRoute(
   pool: ConnectableQueryable,
@@ -598,14 +604,32 @@ export async function recordSubjectRoute(
     policyVersion: string;
     primaryModel: string;
     fallbackModel: string;
+    generationRoute?: GenerationModelRoute;
   },
 ): Promise<void> {
+  const { generationRoute, ...table } = route;
+  const patch = generationRoute
+    ? {
+        ...table,
+        generationRoute: {
+          primary: {
+            model: generationRoute.primary.model,
+            thinking: generationRoute.primary.thinking,
+          },
+          fallback: {
+            model: generationRoute.fallback.model,
+            thinking: generationRoute.fallback.thinking,
+          },
+          settingKey: generationRoute.settingKey,
+        },
+      }
+    : table;
   await pool.query(
     `UPDATE teaching_package_generation_attempts
         SET input_snapshot = input_snapshot || $2::jsonb,
             subject_code = $3
       WHERE id = $1`,
-    [attemptId, JSON.stringify(route), route.subjectCode],
+    [attemptId, JSON.stringify(patch), route.subjectCode],
   );
 }
 

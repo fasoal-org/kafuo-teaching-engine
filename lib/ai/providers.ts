@@ -248,6 +248,25 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
           },
         },
       },
+      {
+        // A teaching package generation choice (owner, 15 and 18 Nov 2026). Official
+        // id and limits from OpenAI's model page, 15 Nov 2026. Listed last, like
+        // gpt-6-sol: the picker order stays; generation resolves it by model string.
+        id: 'gpt-6.1-terra',
+        name: 'GPT-6.1 Terra',
+        contextWindow: 1050000,
+        outputWindow: 128000,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
     ],
   },
 
@@ -1053,6 +1072,42 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         contextWindow: 262144,
         outputWindow: 32768,
         capabilities: { streaming: true, tools: true, vision: true },
+      },
+      {
+        // Teaching package generation choices (owner, 18 Nov 2026). Alibaba Model
+        // Studio model pages, 18 Nov 2026: 1M context, 131,072 output tokens, text,
+        // image and video input, thinking on by default and switchable
+        // (`enable_thinking`). Listed last so the provider's default stays.
+        id: 'qwen4-max',
+        name: 'Qwen 4 Max',
+        contextWindow: 1000000,
+        outputWindow: 131072,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
+      },
+      {
+        id: 'qwen3.8-max',
+        name: 'Qwen3.8 Max',
+        contextWindow: 1000000,
+        outputWindow: 131072,
+        capabilities: {
+          streaming: true,
+          tools: true,
+          vision: true,
+          thinking: {
+            toggleable: true,
+            budgetAdjustable: true,
+            defaultEnabled: true,
+          },
+        },
       },
     ],
   },
@@ -2009,7 +2064,7 @@ function shouldUseOpenAIResponsesApi(providerId: ProviderId, modelId: string): b
   if (providerId !== 'openai') return false;
 
   return (
-    /^gpt-6(?:-|$)/.test(modelId) ||
+    /^gpt-6(?:\.\d+)?(?:-|$)/.test(modelId) ||
     /^gpt-5\.\d+-pro(?:-|$)/.test(modelId) ||
     /^gpt-5\.6(?:-|$)/.test(modelId) ||
     /^gpt-5\.5(?:-|$)/.test(modelId) ||
@@ -2479,7 +2534,11 @@ export function getModel(config: ModelConfig): ModelWithInfo {
           // reasoning provider option. Inject the normalized effort into the
           // native Responses body at the final request boundary. This can be
           // removed once the SDK recognizes the GPT-6 family itself.
-          if (/^gpt-6(?:-|$)/.test(config.modelId) && init?.body && typeof init.body === 'string') {
+          if (
+            /^gpt-6(?:\.\d+)?(?:-|$)/.test(config.modelId) &&
+            init?.body &&
+            typeof init.body === 'string'
+          ) {
             const thinkingCtx = (globalThis as Record<string, unknown>).__thinkingContext as
               | { getStore?: () => unknown }
               | undefined;

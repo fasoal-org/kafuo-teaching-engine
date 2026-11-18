@@ -132,6 +132,11 @@ export async function enrichBookQuestion(
       learningItem: version.learningItem,
       questionSetRef: request.requestId,
       subjectCode: context.inputSnapshot.subjectCode,
+      // The same frozen route the lesson's questions run on (teaching-generation-
+      // model-admin-config-plan-2026-11-18 D-2, D-6); absent → today's table.
+      ...(context.inputSnapshot.generationRoute !== undefined
+        ? { generationRoute: context.inputSnapshot.generationRoute }
+        : {}),
     }));
   const prompt = buildBookEnrichmentUserPrompt({
     language: request.language,
