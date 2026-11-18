@@ -55,7 +55,9 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
             outline={elementInfo.outline}
           />
           <div
-            className={`text ProseMirror-static relative ${target === 'thumbnail' ? 'pointer-events-none' : ''}`}
+            // Each paragraph takes its direction from its own text: the slide sits in a
+            // `dir="ltr"` frame, so an Arabic line otherwise put its «.» and «•» on the wrong side.
+            className={`text ProseMirror-static relative [&_p]:[unicode-bidi:plaintext] [&_li]:[unicode-bidi:plaintext] ${target === 'thumbnail' ? 'pointer-events-none' : ''}`}
             dangerouslySetInnerHTML={{ __html: elementInfo.content }}
           />
         </div>

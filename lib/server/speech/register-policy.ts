@@ -66,7 +66,10 @@ const SAUDI_DIRECTIVE = (allowLatinWords: boolean) =>
     allowLatinWords
       ? '- English words being taught may appear in Latin script; all other spoken wording is Arabic.'
       : '- Spoken text contains no Latin, Chinese or other non-Arabic script: say every name, symbol and unit in Arabic words.',
-    '- Example: «طيب يا شباب، خلونا الحين نشوف هذي المعادلة: اثنين سين زائد ثلاثة يساوي أحد عشر. أول شي نطرح ثلاثة من الطرفين، وبعدين نقسم على اثنين».',
+    // Owner, 17 Nov 2026: a Latin letter is said by its English name (D-3); this example
+    // said «سين» for x, so the narration check refused it three times on every such slide.
+    '- A Latin letter in a formula is said by its English name in Arabic script («إكس» for x, «واي» for y, «إم» for m, «بي» for b), never by an Arabic letter name («سين»، «صاد»).',
+    '- Example: «طيب يا شباب، خلونا الحين نشوف هذي المعادلة: اثنين إكس زائد ثلاثة يساوي أحد عشر. أول شي نطرح ثلاثة من الطرفين، وبعدين نقسم على اثنين».',
   ].join('\n');
 
 const MSA_DIRECTIVE = [

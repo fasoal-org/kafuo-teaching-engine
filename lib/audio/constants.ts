@@ -938,7 +938,33 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
         language: 'ar',
         gender: 'female',
         description:
-          'Arabic (Gulf) voice: clear, assured, helpful (Cartesia library "Reem - Solution Provider")',
+          'Arabic (Gulf) voice: clear, assured, helpful (Cartesia library "Reem - Solution Provider"). Cartesia retires it on 23 Nov 2026 and serves "Layan" for this id after that.',
+      },
+      // Owner, 18 Nov 2026: Cartesia's replacement for Reem, and two more Arabic voices the
+      // superadmin may pick per subject (Configuration → teaching narration).
+      {
+        id: '64a941ac-07ac-462c-a81c-008e353dd83e',
+        name: 'Layan',
+        language: 'ar',
+        gender: 'female',
+        description:
+          'Arabic voice: composed and precise, for complex details (Cartesia library "Layan - Clarity Provider"; Reem\'s replacement)',
+      },
+      {
+        id: 'dabfb4a8-2b51-49de-a481-4a41dd206018',
+        name: 'Mahmoud',
+        language: 'ar',
+        gender: 'male',
+        description:
+          'Arabic voice: friendly, patient and warm (Cartesia library "Mahmoud - Patient Clarifier")',
+      },
+      {
+        id: '210a5bea-42fb-4542-858f-e451fd5e8957',
+        name: 'Rashid',
+        language: 'ar',
+        gender: 'male',
+        description:
+          'Arabic voice: bright and engaged (Cartesia library "Rashid - Attentive Liaison")',
       },
     ],
     supportedFormats: ['mp3', 'wav'],

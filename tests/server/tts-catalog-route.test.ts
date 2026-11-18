@@ -85,7 +85,27 @@ describe('GET /api/teaching-packages/tts-catalog', () => {
         id: 'cartesia-tts',
         available: true,
         keyEnvVar: 'TTS_CARTESIA_API_KEY',
-        voices: [{ id: REEM, name: 'Reem', language: 'ar', modelId: 'sonic-3.6' }],
+        voices: [
+          { id: REEM, name: 'Reem', language: 'ar', modelId: 'sonic-3.6' },
+          {
+            id: '64a941ac-07ac-462c-a81c-008e353dd83e',
+            name: 'Layan',
+            language: 'ar',
+            modelId: 'sonic-3.6',
+          },
+          {
+            id: 'dabfb4a8-2b51-49de-a481-4a41dd206018',
+            name: 'Mahmoud',
+            language: 'ar',
+            modelId: 'sonic-3.6',
+          },
+          {
+            id: '210a5bea-42fb-4542-858f-e451fd5e8957',
+            name: 'Rashid',
+            language: 'ar',
+            modelId: 'sonic-3.6',
+          },
+        ],
       }),
       expect.objectContaining({
         id: 'qwen-tts',
