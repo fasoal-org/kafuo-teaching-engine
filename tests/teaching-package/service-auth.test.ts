@@ -265,6 +265,10 @@ describe('teaching package service auth', () => {
       GENERATION_ROUTE_UNAVAILABLE: 409,
       SACRED_TEXT_ALTERED: 502,
       SACRED_TEXT_CANONICAL_MISMATCH: 422,
+      // The AI package review's lesson-run actions (errors.ts).
+      PACKAGE_REVIEW_NOT_READY: 409,
+      PACKAGE_REVIEW_IN_PROGRESS: 409,
+      NO_REGENERABLE_SLIDES: 409,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

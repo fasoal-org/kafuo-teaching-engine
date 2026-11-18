@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AICallFn, PPTElement } from '@openmaic/generation';
+import type { PPTElement } from '@openmaic/dsl';
+import type { AICallFn } from '@openmaic/generation';
 import {
   LATIN_LETTER_READINGS,
   canvasKeyPoints,
