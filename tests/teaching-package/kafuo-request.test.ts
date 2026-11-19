@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -6,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildKafuoStartRequest,
   canonicalRequestDigest,
+  canonicalRequestPayload,
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
 
@@ -194,6 +196,170 @@ describe('canonicalRequestDigest', () => {
       const { request } = parseKafuoGenerationRequest(vector.request);
       expect(canonicalRequestDigest(request)).toBe(vector.digest);
     }
+  });
+
+  it('covers the g5.v11 model answers only when sent (vector 7, owner 17 Nov 2026)', () => {
+    const vector = vectors.vectors[6]!;
+    const guide = vector.request.teacherGuide as {
+      items: Array<Record<string, unknown>>;
+    };
+    expect(guide.items.filter((item) => 'modelAnswer' in item)).toHaveLength(2);
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    // Kept exactly as sent (multi-line text included), key by key.
+    expect(request.teacherGuide?.items[1]?.modelAnswer).toEqual(guide.items[1]!.modelAnswer);
+    // The same block without its model answers: another digest, and no `modelAnswer` key.
+    const stripped = parseKafuoGenerationRequest({
+      ...vector.request,
+      teacherGuide: {
+        ...guide,
+        items: guide.items.map(({ modelAnswer: _modelAnswer, ...item }) => item),
+      },
+    }).request;
+    expect(canonicalRequestDigest(stripped)).not.toBe(vector.digest);
+    expect(stripped.teacherGuide?.items.some((item) => 'modelAnswer' in item)).toBe(false);
+    // `modelAnswer: null` is the Backend's "absent" (D-20): digested as never sent.
+    const nulls = parseKafuoGenerationRequest({
+      ...vector.request,
+      teacherGuide: {
+        ...guide,
+        items: guide.items.map(({ modelAnswer: _modelAnswer, ...item }) =>
+          item.status === 'reference' ? { ...item, modelAnswer: null } : item,
+        ),
+      },
+    }).request;
+    expect(canonicalRequestDigest(nulls)).toBe(canonicalRequestDigest(stripped));
+  });
+
+  it('covers a figure model answer without its presigned URL (vector 8, owner 17 Nov 2026)', () => {
+    const vector = vectors.vectors[7]!;
+    const guide = vector.request.teacherGuide as { items: Array<Record<string, unknown>> };
+    const sent = guide.items[0]!.modelAnswer as { image: Record<string, unknown> };
+    expect(typeof sent.image.url).toBe('string');
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    // The request keeps the URL (the runner fetches the drawing from it) ...
+    expect(request.teacherGuide?.items[0]?.modelAnswer).toEqual(sent);
+    // ... the digest covers exactly the three stable image facts.
+    const payload = canonicalRequestPayload(request) as {
+      teacherGuide: { items: Array<{ modelAnswer: { kind: string; image: object } }> };
+    };
+    expect(payload.teacherGuide.items[0]!.modelAnswer).toEqual({
+      kind: 'figure',
+      image: {
+        checksumSha256: sent.image.checksumSha256,
+        mimeType: 'image/png',
+        sizeBytes: sent.image.sizeBytes,
+      },
+    });
+    expect(JSON.stringify(payload)).not.toContain('X-Amz-Signature=fig');
+    // An independent encoding of the shared rules (the Backend's `semantic_payload`: sorted
+    // keys, compact, UTF-8; the figure's `url` left out) gives the pinned digest.
+    const raw = vector.request as Record<string, Record<string, unknown>> & {
+      learningObjectives: Array<{ objectiveRef: string; snapshot: { statement: string } }>;
+    };
+    const { url: _url, ...stableImage } = sent.image;
+    const semantic = {
+      tenantContext: raw.tenantContext,
+      learningItem: raw.learningItem,
+      learningObjectives: raw.learningObjectives.map((objective) => ({
+        objectiveRef: objective.objectiveRef,
+        snapshot: { statement: objective.snapshot.statement },
+      })),
+      teachingModel: raw.teachingModel,
+      contentResource: { id: raw.contentResource.id, mimeType: raw.contentResource.mimeType },
+      generation: raw.generation,
+      teacherGuide: {
+        guideId: raw.teacherGuide.guideId,
+        items: [{ ...guide.items[0], modelAnswer: { kind: 'figure', image: stableImage } }],
+      },
+    };
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(sorted)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((key) => [key, sorted((value as Record<string, unknown>)[key])]),
+            )
+          : value;
+    expect(
+      createHash('sha256')
+        .update(JSON.stringify(sorted(semantic)), 'utf8')
+        .digest('hex'),
+    ).toBe(vector.digest);
+    const withImage = (image: Record<string, unknown>) =>
+      parseKafuoGenerationRequest({
+        ...vector.request,
+        teacherGuide: {
+          ...guide,
+          items: [
+            { ...guide.items[0], modelAnswer: { ...sent, image: { ...sent.image, ...image } } },
+          ],
+        },
+      }).request;
+    // A re-minted URL (a resumed or re-sent request) is the same semantic request.
+    expect(
+      canonicalRequestDigest(
+        withImage({ url: 'https://r2.example.test/teacher-guides/tg-2/answer-15.png?sig=NEW' }),
+      ),
+    ).toBe(vector.digest);
+    // Another drawing is another request.
+    expect(canonicalRequestDigest(withImage({ checksumSha256: 'f'.repeat(64) }))).not.toBe(
+      vector.digest,
+    );
+    expect(canonicalRequestDigest(withImage({ sizeBytes: 48_214 }))).not.toBe(vector.digest);
+  });
+
+  it('covers the configured generation model route only when sent (vector 9, plan D-9)', () => {
+    // teaching-generation-model-admin-config-plan-2026-11-18 D-9: vector 9 is
+    // vector 1 plus `modelRoute` (requestId is outside the digest). The plan
+    // called it "vector 6"; vectors 6-8 already existed, so it is appended.
+    const vector = vectors.vectors[8]!;
+    const route = vector.request.modelRoute as Record<string, unknown>;
+    expect(route).toEqual({
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'openai:gpt-6-luna', thinking: 'low' },
+      settingKey: 'teaching_generation.route.BIOLOGY',
+    });
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    expect(canonicalRequestDigest(request)).toBe(vector.digest);
+    expect(vector.digest).not.toBe(vectors.vectors[0]!.digest);
+    // Dropping the field gives back vector 1's pinned legacy digest byte for byte.
+    const { modelRoute: _route, ...withoutRoute } = JSON.parse(
+      JSON.stringify(vector.request),
+    ) as Record<string, unknown>;
+    expect(canonicalRequestDigest(parseKafuoGenerationRequest(withoutRoute).request)).toBe(
+      vectors.vectors[0]!.digest,
+    );
+    // An independent encoding of the shared rules (sorted keys, compact, UTF-8;
+    // requestId, actorRef and contentResource.url left out) gives the pinned digest.
+    const raw = vector.request as Record<string, Record<string, unknown>> & {
+      learningObjectives: Array<{ objectiveRef: string; snapshot: { statement: string } }>;
+    };
+    const semantic = {
+      tenantContext: raw.tenantContext,
+      learningItem: raw.learningItem,
+      learningObjectives: raw.learningObjectives,
+      teachingModel: raw.teachingModel,
+      contentResource: { id: raw.contentResource.id, mimeType: raw.contentResource.mimeType },
+      generation: raw.generation,
+      modelRoute: route,
+    };
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(sorted)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((key) => [key, sorted((value as Record<string, unknown>)[key])]),
+            )
+          : value;
+    expect(
+      createHash('sha256')
+        .update(JSON.stringify(sorted(semantic)), 'utf8')
+        .digest('hex'),
+    ).toBe(vector.digest);
   });
 
   it('is independent of the signed retrieval URL', () => {
@@ -402,5 +568,100 @@ describe('narration.ttsRoute (superadmin-configured route, plan §3.2)', () => {
         narration: { ttsRoute: { ...ROUTE, providerId: 'openai-tts', voiceId: 'alloy' } },
       }).request.narration?.ttsRoute.voiceId,
     ).toBe('alloy');
+  });
+});
+
+describe('modelRoute (superadmin-configured generation route, teaching-generation-model plan D-9)', () => {
+  const ROUTE = {
+    primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+    fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+    settingKey: 'teaching_generation.route.MATH',
+  };
+  // A route is a subject's setting, so its request names that subject (MATH).
+  const mathBody = (overrides: Record<string, unknown> = {}) => {
+    const base = body(overrides);
+    return { ...base, learningItem: { ...base.learningItem, subjectOffering: { code: 'MATH' } } };
+  };
+
+  it('absent stays absent: no field on the request, no route on the context, digest unchanged', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(body());
+    expect(request).not.toHaveProperty('modelRoute');
+    expect(canonicalRequestPayload(request)).not.toHaveProperty('modelRoute');
+    expect(buildKafuoStartRequest(request, aggregate).kafuo).not.toHaveProperty('modelRoute');
+  });
+
+  it('parses a catalogue route onto the request and the run context, and covers it in the digest', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(mathBody({ modelRoute: ROUTE }));
+    expect(request.modelRoute).toEqual(ROUTE);
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(kafuo.modelRoute).toEqual(ROUTE);
+    // The persisted start snapshot does not carry it: the runner freezes it (D-10).
+    expect(start).not.toHaveProperty('modelRoute');
+    const payload = canonicalRequestPayload(request);
+    expect(Object.keys(payload.modelRoute as object)).toEqual([
+      'primary',
+      'fallback',
+      'settingKey',
+    ]);
+    expect(payload.modelRoute).toEqual(ROUTE);
+  });
+
+  it('changes the digest with every route field', () => {
+    const digest = (overrides: Record<string, unknown>) =>
+      canonicalRequestDigest(parseKafuoGenerationRequest(mathBody(overrides)).request);
+    const all = [
+      digest({}),
+      digest({ modelRoute: ROUTE }),
+      digest({
+        modelRoute: { ...ROUTE, primary: { model: 'openai:gpt-6-sol', thinking: 'medium' } },
+      }),
+      digest({ modelRoute: { ...ROUTE, primary: { ...ROUTE.primary, thinking: 'high' } } }),
+      digest({ modelRoute: { ...ROUTE, fallback: { model: 'qwen:qwen4-max', thinking: 'on' } } }),
+    ];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it.each([
+    ['null (only an absent field means the default table)', null],
+    ['not an object', 'openai:gpt-6.1-terra'],
+    [
+      'a model outside the catalogue',
+      { ...ROUTE, primary: { model: 'openai:gpt-5-nano', thinking: 'low' } },
+    ],
+    [
+      'a thinking value the model does not offer',
+      { ...ROUTE, primary: { ...ROUTE.primary, thinking: 'on' } },
+    ],
+    [
+      'primary = fallback',
+      { ...ROUTE, fallback: { model: 'openai:gpt-6.1-terra', thinking: 'low' } },
+    ],
+    ['a malformed setting key', { ...ROUTE, settingKey: 'billing.plan' }],
+    [
+      "another subject's setting key",
+      { ...ROUTE, settingKey: 'teaching_generation.route.PHYSICS' },
+    ],
+  ])('refuses %s with GENERATION_ROUTE_INVALID (400)', (_label, modelRoute) => {
+    expect(() => parseKafuoGenerationRequest(mathBody({ modelRoute }))).toThrowError(
+      expect.objectContaining({ code: 'GENERATION_ROUTE_INVALID', status: 400 }),
+    );
+  });
+
+  it('refuses a route sent inside `generation` instead of dropping it', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(body({ generation: { enableTTS: true, modelRoute: ROUTE } })),
+    ).toThrowError(expect.objectContaining({ code: 'GENERATION_ROUTE_INVALID' }));
+  });
+
+  it('parses without reading any server key (availability is the route’s check)', () => {
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('QWEN_API_KEY', '');
+    try {
+      expect(
+        parseKafuoGenerationRequest(mathBody({ modelRoute: ROUTE })).request.modelRoute,
+      ).toEqual(ROUTE);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

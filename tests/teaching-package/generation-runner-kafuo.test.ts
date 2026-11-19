@@ -1870,6 +1870,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         fallbackModel: 'qwen:qwen3.7-flash',
       });
       expect(row.input_snapshot.resolvedLlmModel).toBeUndefined();
+      // A table route freezes no configured route (teaching-generation-model plan D-10).
+      expect(row.input_snapshot).not.toHaveProperty('generationRoute');
 
       // Execution input: the policy value + ledger attribution for run 1.
       const execution = mocks.generateClassroom.mock.calls[0]![0];
@@ -1961,6 +1963,103 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
       expect(mocks.acquireContentResource).not.toHaveBeenCalled();
       expect(mocks.generateClassroom).not.toHaveBeenCalled();
+    });
+
+    describe('a superadmin-configured route (teaching-generation-model plan D-10, D-11)', () => {
+      const ROUTE = {
+        primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        fallback: { model: 'qwen:qwen4-max', thinking: 'on' },
+        settingKey: 'teaching_generation.route.MATH',
+      };
+
+      it('resolves the configured pair instead of the table, hands it down, and freezes it on the attempt', async () => {
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        const { readAttemptById, readRetainedVersionContext } =
+          await import('@/lib/persistence/teaching-package');
+        const attempt = (await readAttemptById(qp(), attemptId))!;
+        expect(attempt.status).toBe('succeeded');
+
+        // Exactly the configured pair, still with NO stage.
+        expect(POLICY_CALLS()).toEqual([
+          { modelString: 'openai:gpt-6.1-terra' },
+          { modelString: 'qwen:qwen4-max' },
+        ]);
+
+        const execution = mocks.generateClassroom.mock.calls[0]![0];
+        expect(execution.modelPolicy).toMatchObject({
+          subjectCode: 'MATH',
+          policyVersion: 'configured-2026-11',
+          primary: {
+            modelString: 'openai:gpt-6.1-terra',
+            thinking: { mode: 'enabled', effort: 'medium' },
+            thinkingLabel: 'medium',
+          },
+          fallback: {
+            modelString: 'qwen:qwen4-max',
+            thinking: { mode: 'enabled' },
+            thinkingLabel: 'on',
+          },
+        });
+
+        // Frozen on the snapshot beside the subject route (D-10) ...
+        const row = await snapshotOf(attemptId);
+        expect(row.subject_code).toBe('MATH');
+        expect(row.input_snapshot).toMatchObject({
+          subjectCode: 'MATH',
+          policyVersion: 'configured-2026-11',
+          primaryModel: 'openai:gpt-6.1-terra',
+          fallbackModel: 'qwen:qwen4-max',
+          generationRoute: ROUTE,
+        });
+        // ... and it survives the read paths the later steps use (write → read).
+        expect(attempt.inputSnapshot.generationRoute).toEqual(ROUTE);
+        const retained = await readRetainedVersionContext(qp(), attempt.versionId!, {
+          tenantId: 'tenant-k',
+        });
+        expect(retained?.attemptId).toBe(attemptId);
+        expect(retained?.inputSnapshot.generationRoute).toEqual(ROUTE);
+      });
+
+      it('a stored route of the wrong shape reads as absent with a warning, never a crash', async () => {
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        await pool.query(
+          `UPDATE teaching_package_generation_attempts
+              SET input_snapshot = jsonb_set(input_snapshot, '{generationRoute}', '{"primary":"openai:gpt-6-sol"}'::jsonb)
+            WHERE id = $1`,
+          [attemptId],
+        );
+        mocks.logWarn.mockClear();
+        const { readAttemptById, readRetainedVersionContext } =
+          await import('@/lib/persistence/teaching-package');
+        const attempt = (await readAttemptById(qp(), attemptId))!;
+        expect(attempt.inputSnapshot).not.toHaveProperty('generationRoute');
+        expect(attempt.inputSnapshot.subjectCode).toBe('MATH');
+        const retained = await readRetainedVersionContext(qp(), attempt.versionId!, {
+          tenantId: 'tenant-k',
+        });
+        expect(retained?.inputSnapshot).not.toHaveProperty('generationRoute');
+        expect(mocks.logWarn).toHaveBeenCalledWith(
+          expect.stringContaining('generationRoute is malformed'),
+        );
+      });
+
+      it('a configured target the registry cannot resolve fails the attempt closed — never the table', async () => {
+        mocks.resolveModel.mockImplementation(async (params: { modelString?: string }) => {
+          if (params.modelString === 'openai:gpt-6.1-terra') {
+            throw new Error('openai: no API key configured');
+          }
+          return { model: { id: 'm' }, modelInfo: { capabilities: { vision: true } } };
+        });
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+        const after = (await readAttemptById(qp(), attemptId))!;
+        expect(after.status).toBe('failed');
+        expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
+        expect(POLICY_CALLS().map((call) => call.modelString)).not.toContain('openai:gpt-6-luna');
+        expect(mocks.acquireContentResource).not.toHaveBeenCalled();
+        expect(mocks.generateClassroom).not.toHaveBeenCalled();
+        expect((await snapshotOf(attemptId)).input_snapshot).not.toHaveProperty('generationRoute');
+      });
     });
 
     it('TEACHING_SUBJECT_ROUTING=off keeps today’s behaviour: stage route recorded, no policy handed down', async () => {
@@ -2250,6 +2349,1496 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(attempt.error).toContain('lesson_learning_game');
       expect(mocks.acquireContentResource).not.toHaveBeenCalled();
       expect(mocks.generateClassroom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('AI package review (ai-reviewer-layer plan §4.6, Phase 2)', () => {
+    const OPUS = 'anthropic:claude-opus-5-5';
+
+    async function queuedReview(attemptId: string) {
+      const rows = await pool.query(
+        `SELECT id, status, version_id, stage_id, subject_code FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      return rows.rows as Array<{
+        id: string;
+        status: string;
+        version_id: string;
+        stage_id: string;
+        subject_code: string;
+      }>;
+    }
+
+    async function events(type: string) {
+      const rows = await pool.query(
+        `SELECT payload FROM teaching_package_webhook_deliveries WHERE event_type = $1 ORDER BY sequence`,
+        [type],
+      );
+      return (rows.rows as Array<{ payload: Record<string, unknown> }>).map((r) => r.payload);
+    }
+
+    function answering(findings: Array<Record<string, unknown>>, summary = 'ملخص') {
+      return vi.fn(async () => ({
+        answer: { summary, findings: findings as never },
+        call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+      }));
+    }
+
+    it('a Kafuo binding queues ONE review in the binding transaction and names it on generation_succeeded', async () => {
+      const attemptId = await startKafuo();
+      const reviews = await queuedReview(attemptId);
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]).toMatchObject({ status: 'queued', subject_code: 'MATH' });
+      const [succeeded] = await events('teaching_package.generation_succeeded');
+      expect(succeeded!.review).toEqual({ id: reviews[0]!.id, status: 'queued' });
+      expect((succeeded!.version as { id: string }).id).toBe(reviews[0]!.version_id);
+    });
+
+    it('L-5: queuing a review for an attempt that already has one returns the stored id, never a new one', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { insertQueuedReview } =
+        await import('@/lib/server/teaching-package/package-review-store');
+      const id = await insertQueuedReview(pool as never, {
+        id: 'tpr-never-stored',
+        aggregate: { tenantId: 'tenant-k', learningItem: { type: 'lesson', id: 'li-x' } },
+        versionId: review!.version_id,
+        attemptId,
+        stageId: review!.stage_id,
+        subjectCode: 'MATH',
+        now: 1,
+      });
+      expect(id).toBe(review!.id);
+      expect(await queuedReview(attemptId)).toHaveLength(1);
+    });
+
+    it('no findings → passed, one review_completed event with counts; a second run claims nothing', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([], 'لا توجد أخطاء.');
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'passed', provider: 'anthropic', model: OPUS });
+      // The reviewer read the slides as text, and the retained book text (PDF fallback) once.
+      const [request] = callReviewer.mock.calls[0] as unknown as [
+        { units: Array<{ text: string }>; slides: Array<{ id: string }> },
+      ];
+      expect(request.units).toEqual([expect.objectContaining({ id: 'book', text: 'pdf text' })]);
+      expect(request.slides.map((slide) => slide.id)).toEqual(['scene-f1', 'scene-f2']);
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed).toEqual({
+        review: expect.objectContaining({
+          id: review!.id,
+          status: 'passed',
+          provider: 'anthropic',
+          model: OPUS,
+          counts: { findings: 0, open: 0, fixed: 0 },
+          openChecks: [],
+          errorCode: null,
+        }),
+      });
+      expect(await runPackageReview(review!.id, { pool: txPool(), callReviewer })).toBeNull();
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+    });
+
+    it('findings → needs_teacher; each open finding names why it waits; the event carries no book text', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S2',
+            severity: 'high',
+            bookEvidence: { quote: 'BOOKQUOTEMARKER requirement', unitId: null },
+            whatIsWrong: 'الناتج خطأ',
+            fixNote: 'صحح الناتج إلى ١٢',
+          },
+          {
+            targetId: '',
+            check: 'S5',
+            severity: 'medium',
+            bookEvidence: { quote: 'تأكد', unitId: null },
+            whatIsWrong: 'جزء ناقص',
+            fixNote: 'أضف الجزء',
+          },
+        ]),
+      });
+      expect(done?.status).toBe('needs_teacher');
+      expect(done?.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+        ['f1', 'S2', 'open', 'NOT_ATTEMPTED'],
+        ['f2', 'S5', 'open', 'S5_TEACHER_ONLY'],
+      ]);
+      expect(done?.findings[0]).toMatchObject({ targetTitle: 'S', targetOrder: 1 });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'needs_teacher',
+        counts: { findings: 2, open: 2, fixed: 0 },
+        openChecks: ['S2', 'S5'],
+      });
+      expect(JSON.stringify(completed)).not.toContain('BOOKQUOTEMARKER');
+    });
+
+    it('reviewer unavailable (both routes failed) → unavailable + the event: the Backend gate never waits forever', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => {
+          throw new TeachingModelUnavailableError('both failed', {
+            attemptIds: [],
+            outcomes: [],
+            retryable: true,
+          });
+        }),
+      });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEWER_UNAVAILABLE' });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'unavailable',
+        errorCode: 'REVIEWER_UNAVAILABLE',
+      });
+    });
+
+    it('Phase 3: the fix loop runs on the stored findings; everything fixed → fixed, with its progress kept', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const fixLoop = vi.fn(async (context: { findings: Array<Record<string, unknown>> }) => ({
+        findings: context.findings.map((f) => ({ ...f, status: 'fixed', teacherReason: null })),
+        fixes: [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed', code: null }],
+      }));
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S3',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ]),
+        fixLoop: fixLoop as never,
+      });
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      expect(done).toMatchObject({ status: 'fixed' });
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({
+        status: 'fixed',
+        counts: { findings: 1, open: 0, fixed: 1 },
+        openChecks: [],
+      });
+    });
+
+    it('the version moved to another Stage → unavailable VERSION_CHANGED, the reviewer is never called', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      await pool.query(
+        `UPDATE teaching_package_reviews SET stage_id = 'stage-elsewhere' WHERE id = $1`,
+        [review!.id],
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'VERSION_CHANGED' });
+      expect(callReviewer).not.toHaveBeenCalled();
+    });
+
+    it('a crashed worker’s review is resumed by the sweep and never pays for the first answer twice', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // A previous worker stored the paid answer, then died holding the lease.
+      await pool.query(
+        `UPDATE teaching_package_reviews
+            SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 1,
+                reviewed_at = 5, summary = 'محفوظ', provider = 'anthropic', model = $2,
+                findings = $3::jsonb
+          WHERE id = $1`,
+        [
+          review!.id,
+          OPUS,
+          JSON.stringify([
+            {
+              id: 'f1',
+              targetId: 'scene-f2',
+              targetTitle: 'S',
+              targetOrder: 2,
+              check: 'S4',
+              severity: 'low',
+              bookEvidence: { quote: 'q', unitId: null },
+              whatIsWrong: 'w',
+              fixNote: 'n',
+              status: 'open',
+              teacherReason: null,
+            },
+          ]),
+        ],
+      );
+      const { sweepPackageReviews } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      // No fix loop here: this case is about the resume (the fix loop has its own file).
+      const started = await sweepPackageReviews({
+        pool: txPool(),
+        callReviewer,
+        fixLoop: undefined,
+      });
+      expect(started).toEqual([review!.id]);
+      await vi.waitFor(async () => {
+        const [row] = await queuedReview(attemptId);
+        expect(row!.status).toBe('needs_teacher');
+      });
+      expect(callReviewer).not.toHaveBeenCalled();
+    });
+
+    /** A reviewer that answers only when the test opens its gate (one per call, in call order). */
+    function gatedReviewer() {
+      const gates: Array<(answer: { summary: string; findings: unknown[] }) => void> = [];
+      const gateOf = new Map<string, (answer: { summary: string; findings: unknown[] }) => void>();
+      const callReviewer = vi.fn(
+        (request: { review: { id: string } }) =>
+          new Promise((resolve) => {
+            const open = (answer: { summary: string; findings: unknown[] }) =>
+              resolve({
+                answer,
+                call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+              });
+            gates.push(open);
+            gateOf.set(request.review.id, open);
+          }),
+      );
+      return {
+        gates,
+        gateOf,
+        callReviewer: callReviewer as unknown as ReturnType<typeof answering>,
+      };
+    }
+
+    async function statusOf(id: string) {
+      const rows = await pool.query(
+        `SELECT status, lease_owner, summary FROM teaching_package_reviews WHERE id = $1`,
+        [id],
+      );
+      return rows.rows[0] as { status: string; lease_owner: string | null; summary: string | null };
+    }
+
+    it('D-6: the sweep runs at most 2 reviews at once; the next one starts only after one ends', async () => {
+      const ids: string[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const [queued] = await queuedReview(await startKafuo());
+        // A fixed creation order: the sweep takes the oldest first.
+        await pool.query(`UPDATE teaching_package_reviews SET created_at = $2 WHERE id = $1`, [
+          queued!.id,
+          index + 1,
+        ]);
+        ids.push(queued!.id);
+      }
+      const { sweepPackageReviews } = await import('@/lib/server/teaching-package/package-review');
+      const { gateOf, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined };
+      expect(await sweepPackageReviews(deps)).toEqual([ids[0], ids[1]]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      // Both slots are taken: nothing else is even listed.
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      gateOf.get(ids[0]!)!({ summary: 'لا توجد أخطاء.', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[0]!)).status).toBe('passed'));
+      await vi.waitFor(async () => expect(await sweepPackageReviews(deps)).toEqual([ids[2]]));
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(3));
+      // One at a time: the test database is a single connection, so two finishing
+      // transactions must not interleave.
+      gateOf.get(ids[1]!)!({ summary: 's', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[1]!)).status).toBe('passed'));
+      gateOf.get(ids[2]!)!({ summary: 's', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(ids[2]!)).status).toBe('passed'));
+    });
+
+    it('M-A: an eviction that lands while the lease renewal is in flight still stops the paid call', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      // The renewal before the first call succeeds in the database, but the
+      // sweep evicts the run while it is in flight.
+      const evictingDuringRenewal = {
+        query: async (text: string, params?: unknown[]) => {
+          const result = await pool.query(text, params);
+          if (text.includes('SET lease_until')) controller.abort();
+          return result;
+        },
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const callReviewer = answering([]);
+      expect(
+        await runPackageReview(review!.id, {
+          pool: evictingDuringRenewal,
+          callReviewer,
+          signal: controller.signal,
+        }),
+      ).toBeNull();
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('M-A / LOW-5: an eviction during a fix-loop renewal stops the regeneration, or the TTS after it; the lease is then released', async () => {
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { createPackageReviewFixLoop } =
+        await import('@/lib/server/teaching-package/package-review-fix-loop');
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      /** Aborts the run while its Nth lease renewal is in flight (1 = before the first call). */
+      const run = async (abortOnRenewal: number) => {
+        const [review] = await queuedReview(await startKafuo());
+        const controller = new AbortController();
+        let renewals = 0;
+        const pooled = {
+          query: async (text: string, params?: unknown[]) => {
+            const result = await pool.query(text, params);
+            if (text.includes('SET lease_until')) {
+              renewals += 1;
+              if (renewals === abortOnRenewal) controller.abort();
+            }
+            return result;
+          },
+          connect: () => pool.connect(),
+        } as unknown as ConnectableQueryable;
+        const regenerated = {
+          id: 'scene-f1',
+          order: 1,
+          title: 'S',
+          content: { type: 'slide', canvas: { elements: [] } },
+          actions: [],
+        };
+        const regenerate = vi.fn(async () => ({
+          status: 200,
+          body: {
+            regenerationId: 'tsr-x',
+            status: 'succeeded',
+            replayed: false,
+            sceneId: 'scene-f1',
+            scene: regenerated,
+            resultSceneRev: 2,
+            current: { rev: 2, scene: regenerated },
+          },
+        }));
+        const regenerateAudio = vi.fn(async () => ({
+          sceneId: 'scene-f1',
+          scene: regenerated,
+          rev: 3,
+          generated: 1,
+          missing: 0,
+        }));
+        const done = await runPackageReview(review!.id, {
+          pool: pooled,
+          signal: controller.signal,
+          callReviewer: answering([finding]),
+          fixLoop: createPackageReviewFixLoop({
+            regenerate: regenerate as never,
+            regenerateAudio: regenerateAudio as never,
+          }),
+        });
+        return { review: review!, done, regenerate, regenerateAudio };
+      };
+
+      // The renewal right before the paid regeneration (the 2nd) is evicted.
+      const beforeRegeneration = await run(2);
+      expect(beforeRegeneration.done).toBeNull();
+      expect(beforeRegeneration.regenerate).not.toHaveBeenCalled();
+      expect(beforeRegeneration.regenerateAudio).not.toHaveBeenCalled();
+      await vi.waitFor(async () =>
+        expect((await statusOf(beforeRegeneration.review.id)).lease_owner).toBeNull(),
+      );
+
+      // The renewal right before the TTS (the 3rd) is evicted.
+      const beforeTts = await run(3);
+      expect(beforeTts.done).toBeNull();
+      expect(beforeTts.regenerate).toHaveBeenCalledTimes(1);
+      expect(beforeTts.regenerateAudio).not.toHaveBeenCalled();
+      await vi.waitFor(async () =>
+        expect((await statusOf(beforeTts.review.id)).lease_owner).toBeNull(),
+      );
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('LOW-5: an eviction during the finalize ledger read (the 2nd check in end) finalizes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      const evictingDuringFinalizeRead = {
+        query: async (text: string, params?: unknown[]) => {
+          const result = await pool.query(text, params);
+          if (text.includes('review_id = $3')) controller.abort();
+          return result;
+        },
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const callReviewer = answering([]);
+      expect(
+        await runPackageReview(review!.id, {
+          pool: evictingDuringFinalizeRead,
+          signal: controller.signal,
+          callReviewer,
+        }),
+      ).toBeNull();
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      // The first answer was stored before the abort; the review is not finalized.
+      expect(await statusOf(review!.id)).toMatchObject({ status: 'running' });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+    });
+
+    it('L-A: an eviction that lands during the spend read skips the usage and failed-spend writes', async () => {
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const evictingDuringSpendRead = (controller: AbortController) =>
+        ({
+          query: async (text: string, params?: unknown[]) => {
+            const result = await pool.query(text, params);
+            if (text.includes('FROM teaching_model_attempts')) controller.abort();
+            return result;
+          },
+          connect: () => pool.connect(),
+        }) as unknown as ConnectableQueryable;
+
+      // recordUsage: the first answer is not stored.
+      const [answered] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-la-1', OPUS, { input: 100, output: 10, cost: 0.01 });
+      const first = new AbortController();
+      const answeredCall = vi.fn(async () => ({
+        answer: { summary: 'جديد', findings: [] },
+        call: {
+          provider: 'anthropic',
+          modelString: OPUS,
+          usage: null,
+          attemptIds: ['tma-la-1'],
+        },
+      }));
+      expect(
+        await runPackageReview(answered!.id, {
+          pool: evictingDuringSpendRead(first),
+          signal: first.signal,
+          callReviewer: answeredCall as never,
+        }),
+      ).toBeNull();
+      // LOW-5: the call did run; only its write after the abort was skipped.
+      expect(answeredCall).toHaveBeenCalledTimes(1);
+      const kept = await pool.query(
+        `SELECT summary, reviewed_at, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [answered!.id],
+      );
+      expect(kept.rows[0]).toMatchObject({ summary: null, reviewed_at: null, input_tokens: null });
+
+      // recordFailedSpend: a failed call's spend is not added.
+      const [failed] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-la-2', OPUS, { input: 400, output: 0, cost: 0.1 });
+      const second = new AbortController();
+      const failing = vi.fn(async () => {
+        throw new TeachingModelUnavailableError('both failed', {
+          attemptIds: ['tma-la-2'],
+          outcomes: [],
+          retryable: true,
+        });
+      });
+      expect(
+        await runPackageReview(failed!.id, {
+          pool: evictingDuringSpendRead(second),
+          signal: second.signal,
+          callReviewer: failing,
+        }),
+      ).toBeNull();
+      expect(failing).toHaveBeenCalledTimes(1);
+      const spent = await pool.query(
+        `SELECT status, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [failed!.id],
+      );
+      expect(spent.rows[0]).toMatchObject({ status: 'running', input_tokens: null });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('L-D / item 5: with no revoke, an answer after the abort is dropped and the run gives its own lease up at once', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { listClaimableReviewIds } =
+        await import('@/lib/server/teaching-package/package-review-store');
+      const controller = new AbortController();
+      const t = Date.now();
+      // The sweep's revoke never ran (or failed): only the run itself can let go.
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        now: () => t,
+        callReviewer: vi.fn(async () => {
+          controller.abort();
+          return {
+            answer: {
+              summary: 'قديم',
+              findings: [
+                {
+                  targetId: 'scene-f1',
+                  check: 'S1',
+                  severity: 'high',
+                  bookEvidence: { quote: 'q', unitId: null },
+                  whatIsWrong: 'w',
+                  fixNote: 'n',
+                },
+              ],
+            },
+            call: { provider: 'anthropic', modelString: OPUS, usage: null },
+          };
+        }) as never,
+      });
+      expect(done).toBeNull();
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+      expect(await statusOf(review!.id)).toMatchObject({ status: 'running', summary: null });
+      // Claimable at once, not 40 minutes later.
+      expect(await listClaimableReviewIds(pool as never, t)).toEqual([review!.id]);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('HIGH-1: a run stalled BEFORE its first call whose lease moved on never pays and writes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      let release!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // The reads before the call hang (no pool timeout) …
+      const loadScenes = vi.fn(async () => {
+        await stalled;
+        return [
+          {
+            id: 'scene-f1',
+            order: 1,
+            title: 'S',
+            content: { type: 'slide', canvas: { elements: [] } },
+            actions: [],
+          },
+        ] as never;
+      });
+      const callReviewer = answering([]);
+      const running = runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer,
+        loadScenes,
+        workerId: 'stale-worker',
+      });
+      await vi.waitFor(() => expect(loadScenes).toHaveBeenCalledTimes(1));
+      // … meanwhile the lease lapsed and another worker claimed the review.
+      await pool.query(
+        `UPDATE teaching_package_reviews SET lease_owner = 'other-worker' WHERE id = $1`,
+        [review!.id],
+      );
+      release();
+      expect(await running).toBeNull();
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: 'other-worker',
+        summary: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('L-10: a run that stops keeping its lease is evicted and resumed; the stale run writes nothing', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { gates, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      const firstOwner = (await statusOf(review!.id)).lease_owner;
+      // Inside the lease: the run is alive, nothing is started twice.
+      t += REVIEW_LEASE_MS - 1_000;
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      // A whole lease without a renewal: hung → evicted → resumed under a new owner.
+      t += 2_000;
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      // HIGH-1 (c): the evicted run's reviewer call is aborted; the new run's is not.
+      const signals = callReviewer.mock.calls.map(
+        (args) => (args as unknown as [{ signal?: AbortSignal }])[0].signal,
+      );
+      expect(signals[0]?.aborted).toBe(true);
+      expect(signals[1]?.aborted).toBe(false);
+      const secondOwner = (await statusOf(review!.id)).lease_owner;
+      expect(secondOwner).not.toBeNull();
+      expect(secondOwner).not.toBe(firstOwner);
+      // The stale run wakes up with an answer: every write is refused by the lease guard.
+      gates[0]!({
+        summary: 'قديم',
+        findings: [
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: secondOwner,
+        summary: null,
+      });
+      gates[1]!({ summary: 'جديد', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).status).toBe('passed'));
+      expect((await statusOf(review!.id)).summary).toBe('جديد');
+      expect(await events('teaching_package.review_completed')).toHaveLength(1);
+    });
+
+    it('HIGH-1: eviction revokes the lease even when no run resumes the review in that sweep', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { gates, callReviewer } = gatedReviewer();
+      const deps = { pool: txPool(), callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      // The evicting sweep cannot list what to start (the listing query fails).
+      const listingDown = {
+        query: (text: string, params?: unknown[]) =>
+          text.includes('FROM teaching_package_reviews') && text.includes('LIMIT')
+            ? Promise.reject(new Error('listing down'))
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      t += REVIEW_LEASE_MS + 1_000;
+      expect(await sweepPackageReviews({ ...deps, pool: listingDown })).toEqual([]);
+      // L-2: the revoke is not awaited by the sweep.
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+      // The evicted run wakes up with an answer: nothing it writes lands.
+      gates[0]!({
+        summary: 'قديم',
+        findings: [
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'q', unitId: null },
+            whatIsWrong: 'w',
+            fixNote: 'n',
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await statusOf(review!.id)).toMatchObject({
+        status: 'running',
+        lease_owner: null,
+        summary: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      // A normal sweep then resumes the review.
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+      gates[1]!({ summary: 'جديد', findings: [] });
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).status).toBe('passed'));
+      expect(await events('teaching_package.review_completed')).toHaveLength(1);
+    });
+
+    it('L-2: a revoke that hangs never holds up the sweep', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      const { callReviewer } = gatedReviewer();
+      let hangRevoke = false;
+      const hanging = {
+        query: (text: string, params?: unknown[]) =>
+          hangRevoke && text.includes('SET lease_owner = NULL')
+            ? new Promise(() => {})
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const deps = { pool: hanging, callReviewer, fixLoop: undefined, now: () => t };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(1));
+      t += REVIEW_LEASE_MS + 1_000;
+      hangRevoke = true;
+      // The sweep returns (and resumes the review) although the revoke never settles.
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(callReviewer).toHaveBeenCalledTimes(2));
+    });
+
+    it('HIGH-1: when the revoke of an evicted lease fails, the evicted run still never renews nor finalizes', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      const { sweepPackageReviews, REVIEW_LEASE_MS } =
+        await import('@/lib/server/teaching-package/package-review');
+      let t = Date.now();
+      // The fix loop stalls (a long TTS, say), then tries to keep its lease.
+      let release!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const kept: boolean[] = [];
+      const fixLoop = vi.fn(
+        async (context: {
+          findings: Array<Record<string, unknown>>;
+          heartbeat: () => Promise<boolean>;
+        }) => {
+          await stalled;
+          kept.push(await context.heartbeat());
+          return { findings: context.findings, fixes: [] };
+        },
+      );
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      // The revoke and (in the evicting sweep) the listing both fail.
+      let listingDown = false;
+      const flaky = {
+        query: (text: string, params?: unknown[]) =>
+          text.includes('SET lease_owner = NULL') ||
+          (listingDown && text.includes('FROM teaching_package_reviews') && text.includes('LIMIT'))
+            ? Promise.reject(new Error('database blip'))
+            : pool.query(text, params),
+        connect: () => pool.connect(),
+      } as unknown as ConnectableQueryable;
+      const deps = {
+        pool: flaky,
+        callReviewer: answering([finding]),
+        fixLoop: fixLoop as never,
+        now: () => t,
+      };
+      expect(await sweepPackageReviews(deps)).toEqual([review!.id]);
+      await vi.waitFor(() => expect(fixLoop).toHaveBeenCalledTimes(1));
+      const staleOwner = (await statusOf(review!.id)).lease_owner;
+      t += REVIEW_LEASE_MS + 1_000;
+      listingDown = true;
+      expect(await sweepPackageReviews(deps)).toEqual([]);
+      listingDown = false;
+      // The revoke failed: the row still names the evicted run.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect((await statusOf(review!.id)).lease_owner).toBe(staleOwner);
+      release();
+      await vi.waitFor(() => expect(kept).toEqual([false]));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Not renewed, not finalized, no event: the review is left to be resumed.
+      const row = await pool.query(
+        `SELECT status, lease_owner, lease_until FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect(row.rows[0]).toMatchObject({ status: 'running', lease_owner: staleOwner });
+      expect(Number((row.rows[0] as { lease_until: number }).lease_until)).toBeLessThan(t);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    /** One paid reviewer attempt in the ledger (the authority the row totals read). */
+    async function ledgerAttempt(
+      id: string,
+      modelString: string,
+      spend: { input: number; output: number; cost: number },
+      tenantId = 'tenant-k',
+      link: { reviewId?: string; generationAttemptId?: string } = {},
+    ) {
+      await pool.query(
+        `INSERT INTO teaching_model_attempts
+           (id, tenant_id, capability, subject_code, policy_version, stage, provider_id, model_id,
+            model_string, role, attempt_index, accounting_status, origin, generation_attempt_id,
+            worker_id, created_at, started_at, input_tokens_total, output_tokens_total, cost_usd,
+            review_id)
+         VALUES ($1, $8, 'package_review', 'MATH', 'reviewer-2026-11', 'package-review',
+                 $2, $3, $4, 'primary', 1, 'complete', 'openmaic_runtime', $9, 'w', 1, 1,
+                 $5, $6, $7, $10)`,
+        [
+          id,
+          modelString.split(':')[0],
+          modelString.split(':')[1],
+          modelString,
+          spend.input,
+          spend.output,
+          spend.cost,
+          tenantId,
+          link.generationAttemptId ?? 'ga-l4',
+          link.reviewId ?? null,
+        ],
+      );
+    }
+
+    it('item 5: an aborted call that throws (like the executor) ends nothing and adds no spend', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-ab-1', OPUS, { input: 300, output: 0, cost: 0.05 });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingCallAbortedError } = await import('@/lib/server/teaching-model/execute');
+      const controller = new AbortController();
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        callReviewer: vi.fn(async () => {
+          controller.abort(); // the sweep evicts the run mid-call
+          throw new TeachingCallAbortedError(['tma-ab-1']);
+        }),
+      });
+      expect(done).toBeNull();
+      // Not `unavailable` / REVIEW_FAILED, no spend written (recordFailedSpend skipped), no event.
+      const row = await pool.query(
+        `SELECT status, error_code, input_tokens FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect(row.rows[0]).toMatchObject({
+        status: 'running',
+        error_code: null,
+        input_tokens: null,
+      });
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+      await vi.waitFor(async () => expect((await statusOf(review!.id)).lease_owner).toBeNull());
+    });
+
+    it('item 5 / LOW-3: with its lease still held (failed revoke), an aborted run makes no re-review call and writes no progress', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await ledgerAttempt('tma-skip-first', OPUS, { input: 100, output: 10, cost: 0.01 });
+      await ledgerAttempt('tma-skip-rereview', OPUS, { input: 50, output: 5, cost: 0.005 });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const controller = new AbortController();
+      let rereviewRefusal: unknown = null;
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S1',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      const callReviewer = vi
+        .fn()
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [finding] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-skip-first'],
+          },
+        })
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-skip-rereview'],
+          },
+        });
+      const fixLoop = vi.fn(
+        async (context: {
+          review: unknown;
+          units: unknown;
+          slides: unknown;
+          findings: Array<Record<string, unknown>>;
+          callReviewer: (request: unknown) => Promise<unknown>;
+          recordProgress: (findings: unknown[], fixes: unknown[]) => Promise<void>;
+        }) => {
+          controller.abort(); // evicted while fixing; the revoke never landed
+          // LOW-3: the re-review is refused before any paid call.
+          try {
+            await context.callReviewer({
+              review: context.review,
+              units: context.units,
+              slides: context.slides,
+              focusIds: new Set(['scene-f1']),
+            });
+          } catch (error) {
+            rereviewRefusal = error;
+          }
+          const fixed = context.findings.map((f) => ({
+            ...f,
+            status: 'fixed',
+            teacherReason: null,
+          }));
+          const fixes = [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed', code: null }];
+          await context.recordProgress(fixed, fixes);
+          return { findings: fixed, fixes };
+        },
+      );
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        workerId: 'w-evicted',
+        signal: controller.signal,
+        callReviewer: callReviewer as never,
+        fixLoop: fixLoop as never,
+      });
+      expect(done).toBeNull();
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      // Only the first review reached the reviewer; the re-review after the abort never did.
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      expect(rereviewRefusal).toMatchObject({ name: 'TeachingCallAbortedError' });
+      const row = await pool.query(
+        `SELECT status, input_tokens, findings, fixes FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      const stored = row.rows[0] as {
+        status: string;
+        input_tokens: string | number;
+        findings: Array<{ status: string }>;
+        fixes: unknown[];
+      };
+      // Only the first answer (before the abort) is on the row.
+      expect(stored.status).toBe('running');
+      expect(Number(stored.input_tokens)).toBe(100);
+      expect(stored.findings.map((f) => f.status)).toEqual(['open']);
+      expect(stored.fixes).toEqual([]);
+      expect(await events('teaching_package.review_completed')).toEqual([]);
+    });
+
+    it('L-B: at the end the row totals are the ledger’s for the review id — an evicted run’s paid attempt included', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
+      // An evicted run paid for a call it never recorded on the row …
+      await ledgerAttempt(
+        'tma-lb-evicted',
+        OPUS,
+        { input: 500, output: 100, cost: 0.3 },
+        'tenant-k',
+        link,
+      );
+      // … the resumed run's own call …
+      await ledgerAttempt(
+        'tma-lb-served',
+        OPUS,
+        { input: 200, output: 50, cost: 0.1 },
+        'tenant-k',
+        link,
+      );
+      // … and neither another tenant's row nor another review's row counts.
+      await ledgerAttempt(
+        'tma-lb-foreign',
+        OPUS,
+        { input: 9_000, output: 9_000, cost: 9 },
+        'tenant-other',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-lb-other',
+        OPUS,
+        { input: 7_000, output: 7_000, cost: 7 },
+        'tenant-k',
+        {
+          reviewId: 'tpr-other',
+          generationAttemptId: attemptId,
+        },
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => ({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-lb-served'],
+          },
+        })) as never,
+      });
+      expect(done).toMatchObject({ status: 'passed' });
+      expect(done!.inputTokens).toBe(700);
+      expect(done!.outputTokens).toBe(150);
+      expect(done!.costUsd).toBeCloseTo(0.4, 8);
+    });
+
+    it('L-4: the row sums every paid attempt (a failed one too); provider and model stay the first review’s', async () => {
+      const SOL = 'openai:gpt-6-sol';
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // LOW-5: real ledger rows of this review (review_id set), as the executor writes them.
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
+      // First review: Opus answered truncated (paid), then Sol served.
+      await ledgerAttempt(
+        'tma-l4-opus',
+        OPUS,
+        { input: 1000, output: 500, cost: 0.5 },
+        'tenant-k',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-l4-sol',
+        SOL,
+        { input: 800, output: 300, cost: 0.2 },
+        'tenant-k',
+        link,
+      );
+      // The re-review was served by Opus.
+      await ledgerAttempt(
+        'tma-l4-rereview',
+        OPUS,
+        { input: 100, output: 50, cost: 0.05 },
+        'tenant-k',
+        link,
+      );
+      const finding = {
+        targetId: 'scene-f1',
+        check: 'S3',
+        severity: 'high',
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+      };
+      const callReviewer = vi
+        .fn()
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [finding] },
+          call: {
+            provider: 'openai',
+            modelString: SOL,
+            usage: null,
+            attemptIds: ['tma-l4-opus', 'tma-l4-sol'],
+          },
+        })
+        .mockResolvedValueOnce({
+          answer: { summary: 's', findings: [] },
+          call: {
+            provider: 'anthropic',
+            modelString: OPUS,
+            usage: null,
+            attemptIds: ['tma-l4-rereview'],
+          },
+        });
+      const fixLoop = vi.fn(
+        async (context: {
+          findings: Array<Record<string, unknown>>;
+          callReviewer: (request: unknown) => Promise<unknown>;
+          review: unknown;
+          units: unknown;
+          slides: unknown;
+        }) => {
+          await context.callReviewer({
+            review: context.review,
+            units: context.units,
+            slides: context.slides,
+            focusIds: new Set(['scene-f1']),
+          });
+          return {
+            findings: context.findings.map((f) => ({ ...f, status: 'fixed', teacherReason: null })),
+            fixes: [],
+          };
+        },
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: callReviewer as never,
+        fixLoop: fixLoop as never,
+      });
+      expect(done).toMatchObject({ status: 'fixed', provider: 'openai', model: SOL });
+      expect(done!.inputTokens).toBe(1900);
+      expect(done!.outputTokens).toBe(850);
+      expect(done!.costUsd).toBeCloseTo(0.75, 8);
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({ provider: 'openai', model: SOL });
+    });
+
+    it('L-4: a reviewer call that failed after paying still adds its spend to the unavailable row', async () => {
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      // LOW-5: real ledger rows of this review (review_id set), as the executor writes them.
+      const link = { reviewId: review!.id, generationAttemptId: attemptId };
+      await ledgerAttempt(
+        'tma-l4-down-1',
+        OPUS,
+        { input: 400, output: 0, cost: 0.1 },
+        'tenant-k',
+        link,
+      );
+      await ledgerAttempt(
+        'tma-l4-down-2',
+        'openai:gpt-6-sol',
+        { input: 300, output: 0, cost: 0.05 },
+        'tenant-k',
+        link,
+      );
+      // LOW-3: an attempt id of ANOTHER tenant never counts on this tenant's row.
+      await ledgerAttempt(
+        'tma-l4-foreign',
+        OPUS,
+        { input: 9_000, output: 9_000, cost: 9 },
+        'tenant-other',
+        link,
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const done = await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: vi.fn(async () => {
+          throw new TeachingModelUnavailableError('both failed', {
+            attemptIds: ['tma-l4-down-1', 'tma-l4-down-2', 'tma-l4-foreign'],
+            outcomes: [],
+            retryable: true,
+          });
+        }),
+      });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEWER_UNAVAILABLE' });
+      expect(done!.inputTokens).toBe(700);
+      expect(done!.costUsd).toBeCloseTo(0.15, 8);
+    });
+
+    it('a review claimed more than 3 times ends unavailable REVIEW_ATTEMPTS_EXHAUSTED without a call', async () => {
+      const [review] = await queuedReview(await startKafuo());
+      await pool.query(
+        `UPDATE teaching_package_reviews
+            SET status = 'running', lease_owner = 'dead', lease_until = 1, run_attempts = 3
+          WHERE id = $1`,
+        [review!.id],
+      );
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'unavailable', errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+      expect(callReviewer).not.toHaveBeenCalled();
+      const [completed] = await events('teaching_package.review_completed');
+      expect(completed!.review).toMatchObject({ errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED' });
+    });
+
+    it('the signed GET routes return the review text to the Backend, scoped to the tenant', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      await runPackageReview(review!.id, {
+        pool: txPool(),
+        callReviewer: answering([
+          {
+            targetId: 'scene-f1',
+            check: 'S1',
+            severity: 'high',
+            bookEvidence: { quote: 'نص الكتاب', unitId: null },
+            whatIsWrong: 'يخالف الكتاب',
+            fixNote: 'التزم بنص الكتاب',
+          },
+        ]),
+      });
+      const { NextRequest } = await import('next/server');
+      const one = await import('@/app/api/teaching-packages/[id]/reviews/[reviewId]/route');
+      const list = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const auth = { headers: { authorization: 'Bearer review-route-key' } };
+      const base = `http://localhost/api/teaching-packages/${review!.version_id}/reviews`;
+      const ok = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(ok.status).toBe(200);
+      const body = (await ok.json()) as { review: Record<string, unknown> };
+      expect(body.review).toMatchObject({
+        id: review!.id,
+        status: 'needs_teacher',
+        summary: 'ملخص',
+        bookTruncated: false,
+        counts: { findings: 1, open: 1, fixed: 0 },
+        findings: [
+          expect.objectContaining({
+            check: 'S1',
+            bookEvidence: { quote: 'نص الكتاب', unitId: null },
+          }),
+        ],
+      });
+      const other = await one.GET(
+        new NextRequest(`${base}/${review!.id}?tenantId=tenant-other`, auth),
+        {
+          params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+        },
+      );
+      expect(other.status).toBe(404);
+      const unsigned = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(unsigned.status).toBe(401);
+      const listed = await list.GET(new NextRequest(`${base}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id }),
+      });
+      expect(((await listed.json()) as { reviews: unknown[] }).reviews).toHaveLength(1);
+    });
+
+    it('D-8: a book cut to fit the review is recorded (bookTruncated) on the row, the GET and the list, and the reviewer is told', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const attemptId = await startKafuo();
+      const [review] = await queuedReview(attemptId);
+      await pool.query(
+        `UPDATE teaching_package_source_contexts SET text = repeat('ك', 120001) WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const { runPackageReview, callPackageReviewer } =
+        await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const done = await runPackageReview(review!.id, { pool: txPool(), callReviewer });
+      expect(done).toMatchObject({ status: 'passed', bookTruncated: true });
+      const [request] = callReviewer.mock.calls[0] as unknown as [{ bookTruncated?: boolean }];
+      expect(request.bookTruncated).toBe(true);
+      const row = await pool.query(
+        `SELECT book_truncated FROM teaching_package_reviews WHERE id = $1`,
+        [review!.id],
+      );
+      expect((row.rows[0] as { book_truncated: boolean }).book_truncated).toBe(true);
+      // The production call puts the one sentence in the book block it sends.
+      const { BOOK_TRUNCATED_NOTE } =
+        await import('@/lib/server/teaching-package/package-review-prompt');
+      const reviewerCall = await import('@/lib/server/teaching-model/reviewer-call');
+      const run = vi.spyOn(reviewerCall, 'runReviewerCall').mockResolvedValue({
+        parsed: { summary: 's', findings: [] },
+        provider: 'anthropic',
+        modelString: OPUS,
+        attemptIds: [],
+        usage: null,
+        switched: null,
+      });
+      const controller = new AbortController();
+      await callPackageReviewer({
+        review: done!,
+        units: [{ id: 'book', title: null, role: null, text: 'x' }],
+        slides: [],
+        bookTruncated: true,
+        signal: controller.signal,
+        pool: txPool(),
+      });
+      expect(run.mock.calls[0]![0].stablePrompt).toContain(BOOK_TRUNCATED_NOTE);
+      // L-5: the run's abort signal reaches the reviewer call (eviction stops it).
+      expect(run.mock.calls[0]![0].signal).toBe(controller.signal);
+      run.mockRestore();
+      const { NextRequest } = await import('next/server');
+      const one = await import('@/app/api/teaching-packages/[id]/reviews/[reviewId]/route');
+      const list = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const auth = { headers: { authorization: 'Bearer review-route-key' } };
+      const base = `http://localhost/api/teaching-packages/${review!.version_id}/reviews`;
+      const ok = await one.GET(new NextRequest(`${base}/${review!.id}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id, reviewId: review!.id }),
+      });
+      expect(
+        ((await ok.json()) as { review: { bookTruncated: boolean } }).review.bookTruncated,
+      ).toBe(true);
+      const listed = await list.GET(new NextRequest(`${base}?tenantId=tenant-k`, auth), {
+        params: Promise.resolve({ id: review!.version_id }),
+      });
+      expect(
+        ((await listed.json()) as { reviews: Array<{ bookTruncated: boolean }> }).reviews[0]!
+          .bookTruncated,
+      ).toBe(true);
+    });
+  });
+
+  describe('Regenerate only the flagged slides (owner, 15 Nov 2026)', () => {
+    const OPUS = 'anthropic:claude-opus-5-5';
+    const S2_ON_F1 = {
+      targetId: 'scene-f1',
+      check: 'S2',
+      severity: 'high',
+      bookEvidence: { quote: 'q', unitId: null },
+      whatIsWrong: 'الناتج خطأ',
+      fixNote: 'صحح الناتج إلى ١٢',
+    };
+    const S5_MISSING = {
+      targetId: '',
+      check: 'S5',
+      severity: 'medium',
+      bookEvidence: { quote: 'تأكد', unitId: null },
+      whatIsWrong: 'جزء ناقص',
+      fixNote: 'أضف الجزء',
+    };
+
+    function answering(findings: Array<Record<string, unknown>>) {
+      return vi.fn(async () => ({
+        answer: { summary: 'ملخص', findings: findings as never },
+        call: { provider: 'anthropic' as const, modelString: OPUS, usage: null },
+      }));
+    }
+
+    /** A Kafuo draft whose first review finished (no fix loop: every open finding waits). */
+    async function reviewed(findings: Array<Record<string, unknown>>) {
+      const attemptId = await startKafuo();
+      const rows = await pool.query(
+        `SELECT id, version_id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const row = rows.rows[0] as { id: string; version_id: string };
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const done = await runPackageReview(row.id, {
+        pool: txPool(),
+        callReviewer: answering(findings),
+      });
+      return { attemptId, done: done!, versionId: row.version_id };
+    }
+
+    /** The Admin's real key shape (colons included), forwarded as it is by Kafuo. */
+    const adminKey = (n: number) => `learning_item_tp_command:208:regeneration:stamp:${n}:k3j9x2`;
+    const REQUEUED_AT = 1_894_715_466_674;
+
+    async function refix(versionId: string, idempotencyKey = adminKey(1)) {
+      const { queueFlaggedSlideRefix } =
+        await import('@/lib/server/teaching-package/package-review-refix');
+      return queueFlaggedSlideRefix(
+        txPool(),
+        { tenantId: 'tenant-k', versionId, idempotencyKey },
+        { now: () => REQUEUED_AT },
+      );
+    }
+
+    it('re-queues the finished review under a new id, resetting only what a regeneration may fix', async () => {
+      const { attemptId, done, versionId } = await reviewed([S2_ON_F1, S5_MISSING]);
+      expect(done.findings.map((f) => f.teacherReason)).toEqual([
+        'NOT_ATTEMPTED',
+        'S5_TEACHER_ONLY',
+      ]);
+      // A finished review keeps each slide finding's slide as it saw it.
+      expect(done.findings[0]!.sceneDigest).toEqual(expect.any(String));
+      expect(done.findings[1]!.sceneDigest).toBeUndefined();
+      const queued = await refix(versionId);
+      expect(queued).toMatchObject({
+        previousReviewId: done.id,
+        sceneIds: ['scene-f1'],
+        replayed: false,
+      });
+      expect(queued.review.id).not.toBe(done.id);
+      expect(queued.review).toMatchObject({
+        status: 'queued',
+        attemptId,
+        fixes: [],
+        reviewedAt: done.reviewedAt,
+        summary: done.summary,
+        completedAt: null,
+        // Kafuo's stuck-review guard counts from this (`queued_at`): it must be the re-queue.
+        createdAt: REQUEUED_AT,
+      });
+      expect(queued.review.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+        ['f1', 'open', null],
+        ['f2', 'open', 'S5_TEACHER_ONLY'],
+      ]);
+      // Still one review per attempt: the row was re-queued, not copied.
+      const rows = await pool.query(
+        `SELECT id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      expect(rows.rows).toEqual([{ id: queued.review.id }]);
+    });
+
+    it('never pays for a whole-package review again: the run goes straight to the fix loop under the new id', async () => {
+      const { versionId } = await reviewed([S2_ON_F1, S5_MISSING]);
+      const queued = await refix(versionId);
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([]);
+      const fixLoop = vi.fn(async (context: { findings: Array<Record<string, unknown>> }) => ({
+        findings: context.findings.map((f) =>
+          f.id === 'f1' ? { ...f, status: 'fixed', teacherReason: null } : f,
+        ) as never,
+        fixes: [{ sceneId: 'scene-f1', findingIds: ['f1'], outcome: 'fixed' as const, code: null }],
+      }));
+      const finished = await runPackageReview(queued.review.id, {
+        pool: txPool(),
+        callReviewer,
+        fixLoop: fixLoop as never,
+      });
+      expect(callReviewer).not.toHaveBeenCalled();
+      expect(fixLoop).toHaveBeenCalledTimes(1);
+      const [context] = fixLoop.mock.calls[0]! as unknown as [
+        { review: { id: string }; findings: Array<{ id: string; teacherReason: string | null }> },
+      ];
+      expect(context.review.id).toBe(queued.review.id);
+      expect(context.findings.find((f) => f.id === 'f1')!.teacherReason).toBeNull();
+      expect(finished).toMatchObject({ id: queued.review.id, status: 'needs_teacher' });
+      const completed = await pool.query(
+        `SELECT payload FROM teaching_package_webhook_deliveries
+          WHERE event_type = 'teaching_package.review_completed' ORDER BY sequence`,
+      );
+      const last = (completed.rows.at(-1) as { payload: { review: Record<string, unknown> } })
+        .payload.review;
+      expect(last).toMatchObject({
+        id: queued.review.id,
+        counts: { findings: 2, open: 1, fixed: 1 },
+        openChecks: ['S5'],
+      });
+    });
+
+    it('a retry with the same key returns the review it queued; another press while it runs is refused', async () => {
+      const { versionId } = await reviewed([S2_ON_F1]);
+      const queued = await refix(versionId, adminKey(1));
+      const again = await refix(versionId, adminKey(1));
+      expect(again).toMatchObject({ replayed: true, previousReviewId: null });
+      expect(again.review.id).toBe(queued.review.id);
+      await expect(refix(versionId, adminKey(2))).rejects.toMatchObject({
+        code: 'PACKAGE_REVIEW_IN_PROGRESS',
+      });
+      await expect(refix(versionId, 'has space')).rejects.toMatchObject({
+        code: 'INVALID_REQUEST',
+      });
+    });
+
+    it('a slide the teacher edited after the review is never regenerated over their edit', async () => {
+      const { done, versionId } = await reviewed([S2_ON_F1]);
+      await pool.query(
+        `UPDATE document_scenes SET data = jsonb_set(data, '{title}', '"عدّله المعلم"')
+          WHERE id = 'scene-f1'`,
+      );
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+      const rows = await pool.query(`SELECT id, status FROM teaching_package_reviews`);
+      expect(rows.rows).toEqual([{ id: done.id, status: 'needs_teacher' }]);
+    });
+
+    it('only teacher-only issues left: NO_REGENERABLE_SLIDES, and the review is left as it was', async () => {
+      const { done, versionId } = await reviewed([S5_MISSING]);
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+      const rows = await pool.query(`SELECT id, status FROM teaching_package_reviews`);
+      expect(rows.rows).toEqual([{ id: done.id, status: 'needs_teacher' }]);
+    });
+
+    it('refuses before the first review finished, and on a version that is not a draft', async () => {
+      const attemptId = await startKafuo();
+      const rows = await pool.query(
+        `SELECT version_id FROM teaching_package_reviews WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const versionId = (rows.rows[0] as { version_id: string }).version_id;
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_NOT_READY' });
+      await pool.query(`UPDATE teaching_package_versions SET status = 'in_review' WHERE id = $1`, [
+        versionId,
+      ]);
+      await expect(refix(versionId)).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+    });
+
+    it('the signed POST route: 202 with the queued review; a refusal keeps its code', async () => {
+      vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', 'review-route-key');
+      const { done, versionId } = await reviewed([S2_ON_F1]);
+      const { NextRequest } = await import('next/server');
+      const route = await import('@/app/api/teaching-packages/[id]/reviews/route');
+      const post = (idempotencyKey: string) =>
+        route.POST(
+          new NextRequest(`http://localhost/api/teaching-packages/${versionId}/reviews`, {
+            method: 'POST',
+            headers: {
+              authorization: 'Bearer review-route-key',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ tenantContext: { tenantId: 'tenant-k' }, idempotencyKey }),
+          }),
+          { params: Promise.resolve({ id: versionId }) },
+        );
+      const accepted = await post(adminKey(1));
+      expect(accepted.status).toBe(202);
+      expect(await accepted.json()).toMatchObject({
+        review: { status: 'queued', versionId },
+        previousReviewId: done.id,
+        sceneIds: ['scene-f1'],
+        replayed: false,
+      });
+      const refused = await post(adminKey(2));
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: { code: 'PACKAGE_REVIEW_IN_PROGRESS' } });
     });
   });
 });

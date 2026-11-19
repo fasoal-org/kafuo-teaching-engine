@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TeachingModelUnavailableError } from '@/lib/server/teaching-model/execute';
+import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   createInsertionRoute,
   INSERTION_PLANNER_STAGE,
 } from '@/lib/server/teaching-package/routed-insertion-call';
+import type { GenerationModelRoute } from '@/lib/types/teaching-package';
+
+const policyMocks = vi.hoisted(() => ({ configured: vi.fn() }));
 
 vi.mock('@/lib/server/teaching-model/resolve-policy', () => ({
   resolveSubjectModelPolicy: async (code: string) => ({
@@ -13,7 +17,26 @@ vi.mock('@/lib/server/teaching-model/resolve-policy', () => ({
     primary: { modelString: 'qwen:primary' },
     fallback: { modelString: 'openai:fallback' },
   }),
+  resolveConfiguredGenerationPolicy: (code: string, route: GenerationModelRoute) =>
+    policyMocks.configured(code, route),
 }));
+
+/** A route frozen on the producing attempt (teaching-generation-model plan D-10). */
+const FROZEN: GenerationModelRoute = {
+  primary: { model: 'anthropic:claude-sonnet-5-5', thinking: 'high' },
+  fallback: { model: 'qwen:qwen4-max', thinking: 'on' },
+  settingKey: 'teaching_generation.route.MATH',
+};
+
+beforeEach(() => {
+  policyMocks.configured.mockReset();
+  policyMocks.configured.mockImplementation(async (code: string, route: GenerationModelRoute) => ({
+    subjectCode: code,
+    policyVersion: 'configured-test',
+    primary: { modelString: route.primary.model },
+    fallback: { modelString: route.fallback.model },
+  }));
+});
 
 /**
  * Reviewer-generated slide plan §14.2 (R9): every provider call of an
@@ -103,5 +126,55 @@ describe('createInsertionRoute', () => {
     expect(() => route.assertAvailable()).toThrow(
       expect.objectContaining({ code: 'TEACHING_MODEL_UNAVAILABLE' }),
     );
+  });
+
+  describe('the package’s frozen generation route (teaching-generation-model plan D-6, D-7)', () => {
+    it('runs on the frozen route when the producing attempt recorded one', async () => {
+      const execute = vi.fn(async () => ({ text: 'ok' }));
+      const route = await createInsertionRoute({
+        ...base,
+        snapshotGenerationRoute: FROZEN,
+        execute: execute as never,
+      });
+      await route.aiCallFor(INSERTION_PLANNER_STAGE)('s', 'u');
+      expect(policyMocks.configured).toHaveBeenCalledWith('MATH', FROZEN);
+      const [policy] = execute.mock.calls[0] as unknown as [{ policyVersion: string }];
+      expect(policy.policyVersion).toBe('configured-test');
+      expect(route.description).toEqual({
+        mode: 'enforced',
+        subjectCode: 'MATH',
+        policyVersion: 'configured-test',
+        primary: 'anthropic:claude-sonnet-5-5',
+        fallback: 'qwen:qwen4-max',
+      });
+    });
+
+    it('D-7: a frozen route that can no longer resolve runs on today’s table, and the switch is recorded', async () => {
+      policyMocks.configured.mockRejectedValue(
+        new TeachingPackageError(
+          'SUBJECT_ROUTE_UNAVAILABLE',
+          'subject MATH: fallback model qwen:qwen4-max cannot be resolved (no API key)',
+        ),
+      );
+      const route = await createInsertionRoute({ ...base, snapshotGenerationRoute: FROZEN });
+      expect(route.description).toEqual({
+        mode: 'enforced',
+        subjectCode: 'MATH',
+        policyVersion: 'r1-test',
+        primary: 'qwen:primary',
+        fallback: 'openai:fallback',
+        routeReplaced: {
+          from: FROZEN,
+          reason: 'subject MATH: fallback model qwen:qwen4-max cannot be resolved (no API key)',
+        },
+      });
+    });
+
+    it('no frozen route: today’s table, nothing recorded', async () => {
+      const route = await createInsertionRoute(base);
+      expect(route.description).not.toHaveProperty('routeReplaced');
+      expect(route.description).toMatchObject({ policyVersion: 'r1-test' });
+      expect(policyMocks.configured).not.toHaveBeenCalled();
+    });
   });
 });

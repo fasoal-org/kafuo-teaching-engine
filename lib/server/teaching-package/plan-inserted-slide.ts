@@ -106,6 +106,17 @@ export interface PlanInsertedSlideInput {
    * quotes or an ARABIC subject, `short` (one line) otherwise.
    */
   sacredMode?: SacredPolicyMode;
+  /**
+   * A re-planned existing slide (a moved lesson part, owner 14 Nov 2026): the
+   * slide's own classification, fixed. The planner is told it, and the plan
+   * carries it in place of the planner's own choice, so a guess the slide never
+   * uses cannot fail the plan. Absent (an insertion) → exactly as before.
+   */
+  fixedClassification?: {
+    slideType?: string;
+    contentRole?: string;
+    contentKind?: string;
+  };
 }
 
 export type PlanInsertedSlideResult =
@@ -203,6 +214,7 @@ function userPrompt(input: PlanInsertedSlideInput): string {
     ...(policy ? [`Position policy: ${describeScenePolicy(policy)}`] : []),
     `Previous slide title: ${input.previousTitle ?? '(none — this is the first slide)'}`,
     `Next slide title: ${input.nextTitle ?? '(none — this is the last slide)'}`,
+    ...fixedClassificationLines(input.fixedClassification),
     '',
   ];
   if (input.allowedSkills) {
@@ -238,6 +250,21 @@ function userPrompt(input: PlanInsertedSlideInput): string {
   return lines.join('\n');
 }
 
+/** The prompt lines that fix an existing slide's classification (none for an insertion). */
+function fixedClassificationLines(fixed: PlanInsertedSlideInput['fixedClassification']): string[] {
+  if (!fixed) return [];
+  const parts = [
+    fixed.slideType ? `slideType "${fixed.slideType}"` : '',
+    fixed.contentRole ? `contentRole "${fixed.contentRole}"` : '',
+    fixed.contentKind ? `contentKind "${fixed.contentKind}"` : '',
+  ].filter(Boolean);
+  if (parts.length === 0) return [];
+  return [
+    `This is an existing slide; its classification is fixed: ${parts.join(', ')}.`,
+    'Plan its content for that classification; any value you return for a fixed field is ignored.',
+  ];
+}
+
 function correctionPrompt(input: PlanInsertedSlideInput, messages: readonly string[]): string {
   return [
     userPrompt(input),
@@ -249,6 +276,29 @@ function correctionPrompt(input: PlanInsertedSlideInput, messages: readonly stri
 
 function normalizedText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The plan's classification: each fixed field when given, else the planner's
+ * own (a legacy slide may store none). The content kind follows its role: a
+ * fixed role brings its own kind (or none), never the planner's.
+ */
+function classificationOf(
+  raw: RawPlan,
+  fixed: PlanInsertedSlideInput['fixedClassification'],
+): Record<string, unknown> {
+  const slideType = fixed?.slideType ?? raw.slideType;
+  const role =
+    fixed?.contentRole !== undefined
+      ? { contentRole: fixed.contentRole, contentKind: fixed.contentKind }
+      : { contentRole: raw.contentRole, contentKind: raw.contentKind };
+  return {
+    ...(slideType !== undefined ? { slideType } : {}),
+    ...(role.contentRole !== undefined ? { contentRole: role.contentRole } : {}),
+    ...(role.contentKind !== undefined && role.contentKind !== null
+      ? { contentKind: role.contentKind }
+      : {}),
+  };
 }
 
 /** Shape the model's answer into an outline, filling the server-owned fields. */
@@ -302,11 +352,7 @@ function shapePlan(
     title,
     keyPoints,
     description,
-    ...(raw.slideType !== undefined ? { slideType: raw.slideType } : {}),
-    ...(raw.contentRole !== undefined ? { contentRole: raw.contentRole } : {}),
-    ...(raw.contentKind !== undefined && raw.contentKind !== null
-      ? { contentKind: raw.contentKind }
-      : {}),
+    ...classificationOf(raw, input.fixedClassification),
     ...(raw.visualPlan !== undefined && raw.visualPlan !== null
       ? { visualPlan: raw.visualPlan }
       : {}),

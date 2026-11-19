@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
-import { insertVersion } from '@/lib/persistence/teaching-package';
+import { insertAttempt, insertVersion } from '@/lib/persistence/teaching-package';
+import { guideWrittenQuestionId } from '@/lib/server/teaching-package/guide-written-attempts';
 import {
   buildEditorGrantPayload,
   grantCookieValueForRedeem,
@@ -25,6 +26,7 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { AppScene, QuizQuestion } from '@/lib/types/stage';
+import type { KafuoTeacherGuide } from '@/lib/types/teaching-package';
 import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 class PGlitePool {
@@ -97,6 +99,73 @@ const QUESTIONS: QuizQuestion[] = [
   },
 ];
 
+// Owner decision (17 Nov 2026): the pinned teacher guide behind the written questions.
+const GUIDE_ID = 'tg-quiz';
+const MODEL_PROOF = 'MODEL-PROOF الفرق ثابت ويساوي 3';
+const MODEL_POSSIBLE = 'MODEL-POSSIBLE مثال مضاد هو 2';
+const MODEL_FIGURE_NOTE = 'MODEL-FIGURE-NOTE';
+const MODEL_LONG = 'MODEL-LONG برهان';
+const PINNED_GUIDE: KafuoTeacherGuide = {
+  guideId: GUIDE_ID,
+  items: [
+    {
+      contentUnitId: '6234',
+      label: '1B',
+      status: 'reference',
+      modelAnswer: { kind: 'proof', text: MODEL_PROOF },
+    },
+    {
+      contentUnitId: '6249',
+      label: '12',
+      status: 'reference',
+      modelAnswer: { kind: 'possible', text: MODEL_POSSIBLE },
+    },
+    {
+      contentUnitId: '6249',
+      label: '13',
+      status: 'reference',
+      modelAnswer: {
+        kind: 'figure',
+        image: { checksumSha256: 'a'.repeat(64), mimeType: 'image/png', sizeBytes: 10 },
+        text: MODEL_FIGURE_NOTE,
+      },
+    },
+    {
+      contentUnitId: '6249',
+      label: '11',
+      status: 'approved',
+      answer: { type: 'number', value: 5 },
+    },
+    {
+      contentUnitId: '6249',
+      label: '14',
+      status: 'reference',
+      modelAnswer: { kind: 'proof', text: MODEL_LONG },
+    },
+  ],
+};
+const writtenId = (contentUnitId: string, label: string) =>
+  guideWrittenQuestionId(GUIDE_ID, { contentUnitId, label });
+const PROOF_STEM = 'اكتب البرهان بنفسك خطوةً بخطوة، مع سبب كل خطوة:\nأثبت أن الفرق ثابت.';
+const POSSIBLE_STEM = 'اكتب إجابتك بنفسك، بكلماتك:\nأعطِ مثالًا مضادًا.';
+const written = (id: string, question: string): QuizQuestion => ({
+  id,
+  type: 'short_answer',
+  question,
+  hasAnswer: false,
+  points: 2,
+});
+const GUIDED_QUESTIONS: QuizQuestion[] = [
+  QUESTIONS[0]!,
+  written(writtenId('6234', '1B'), PROOF_STEM),
+  // An editor's note is never revealed on a written question.
+  { ...written(writtenId('6249', '12'), POSSIBLE_STEM), analysis: SECRET_EXPLANATION },
+  written(writtenId('6249', '13'), 'ارسم التمثيل.'),
+  written(writtenId('6249', '11'), 'اكتب الناتج.'),
+  written(writtenId('6249', '14'), 'س'.repeat(4_001)),
+  QUESTIONS[3]!,
+];
+
 function quizScene(stageId: string, questions: QuizQuestion[] = QUESTIONS): AppScene {
   const base = makeSlideScene('scene-quiz', stageId, 2, 'Quiz');
   return { ...base, type: 'quiz', content: { type: 'quiz', questions } } as AppScene;
@@ -107,7 +176,13 @@ const FORBIDDEN_KEYS = new Set(['answer', 'analysis', 'commentPrompt', 'hasAnswe
 /** Every forbidden key or secret literal anywhere in [value]. */
 function leaks(value: unknown, path = '$'): string[] {
   if (typeof value === 'string') {
-    return [SECRET_SHORT_ANSWER, SECRET_EXPLANATION, SECRET_RUBRIC].some((s) => value.includes(s))
+    return [
+      SECRET_SHORT_ANSWER,
+      SECRET_EXPLANATION,
+      SECRET_RUBRIC,
+      // Owner (17 Nov 2026): a guide model answer, anywhere.
+      'MODEL-',
+    ].some((s) => value.includes(s))
       ? [path]
       : [];
   }
@@ -157,6 +232,20 @@ describe('sanitizeLearnerDelivery', () => {
     ]);
     const delivered = sanitizeLearnerDelivery(scene) as AppScene;
     expect(JSON.stringify(delivered)).not.toContain('future secret');
+  });
+
+  it('withholds any guide reference, on a question or beside the questions (owner, 17 Nov 2026)', () => {
+    const scene = quizScene(STAGE, [
+      { ...QUESTIONS[3]!, guideRef: { contentUnitId: '6234', label: '1B' } } as QuizQuestion,
+    ]);
+    const stamped = {
+      ...scene,
+      content: { ...scene.content, guideRefs: { 'q-short-open': { label: '1B' } } },
+    };
+    const delivered = JSON.stringify(sanitizeLearnerDelivery(stamped));
+    expect(delivered).not.toContain('guideRef');
+    expect(delivered).not.toContain('6234');
+    expect(delivered).not.toContain('1B');
   });
 });
 
@@ -246,6 +335,25 @@ describe('gradeQuizQuestions', () => {
     expect(shown.results[1]).toMatchObject({ correctAnswer: ['A', 'C'] });
   });
 
+  it('never reveals anything on a guide written question, even when asked', () => {
+    const written: QuizQuestion = {
+      id: guideWrittenQuestionId('tg-quiz', { contentUnitId: '6234', label: '1B' }),
+      type: 'short_answer',
+      question: 'اكتب البرهان بنفسك',
+      answer: [MODEL_PROOF],
+      analysis: MODEL_PROOF,
+      points: 2,
+    };
+    const shown = gradeQuizQuestions([written], { [written.id]: ['x'] }, true);
+    expect(shown.results[0]).toEqual({
+      questionId: written.id,
+      status: 'incorrect',
+      earned: 0,
+      possible: 2,
+    });
+    expect(JSON.stringify(shown)).not.toContain(MODEL_PROOF);
+  });
+
   it('refuses question ids that are not in the scene', () => {
     expect(() => grade({ 'q-forged': ['A'] })).toThrow(
       expect.objectContaining({ code: 'QUIZ_QUESTION_NOT_IN_SCENE' }),
@@ -332,6 +440,59 @@ describe('learner quiz over HTTP', () => {
       teachingModel: { key: 'g5', version: 'g5.v3' },
       now: 1,
     });
+
+    // Owner (17 Nov 2026): a g5.v11 package whose attempt pinned a teacher guide, and its
+    // review-edit successor (no attempt of its own: the pin is its predecessor's).
+    const guided = { tenantId: TENANT, learningItem: { type: 'lesson' as const, id: 'li-guided' } };
+    const v11 = { key: 'g5', version: 'g5.v11' };
+    for (const stageId of ['stage-guided', 'stage-guided-v2']) {
+      await store.saveDocument(
+        makeDocument(stageId, 'Guided lesson', [quizScene(stageId, GUIDED_QUESTIONS)]),
+      );
+    }
+    await insertAttempt(qp(), {
+      id: 'tpa-guided',
+      aggregate: guided,
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'kafuo',
+      teachingModel: v11,
+      inputSnapshot: {
+        learningItem: guided.learningItem,
+        teachingModel: v11,
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'p',
+        pdfContentSummary: null,
+        requestedAt: 1,
+        teacherGuide: PINNED_GUIDE,
+      } as never,
+      now: 1,
+    });
+    await insertVersion(qp(), {
+      id: 'tpv-guided',
+      aggregate: guided,
+      version: 1,
+      status: 'superseded',
+      currentStageId: 'stage-guided',
+      currentAttemptId: 'tpa-guided',
+      teachingModel: v11,
+      now: 1,
+    });
+    await insertVersion(qp(), {
+      id: 'tpv-guided-v2',
+      aggregate: guided,
+      version: 2,
+      status: 'approved',
+      currentStageId: 'stage-guided-v2',
+      predecessorVersionId: 'tpv-guided',
+      teachingModel: v11,
+      now: 2,
+    });
   });
 
   afterEach(async () => {
@@ -340,16 +501,21 @@ describe('learner quiz over HTTP', () => {
     vi.unstubAllEnvs();
   });
 
-  function grantCookie(purpose: 'learner' | 'preview' | 'edit', capability: 'read' | 'write') {
+  function grantCookie(
+    purpose: 'learner' | 'preview' | 'edit',
+    capability: 'read' | 'write',
+    versionId = 'tpv-quiz-v1',
+    stageId = STAGE,
+  ) {
     const { token } = buildEditorGrantPayload({
       tenantId: TENANT,
-      versionId: 'tpv-quiz-v1',
-      stageId: STAGE,
+      versionId,
+      stageId,
       capability,
       purpose,
     });
     return `teaching_package_grant=${encodeURIComponent(
-      grantCookieValueForRedeem(new Headers(), token, STAGE),
+      grantCookieValueForRedeem(new Headers(), token, stageId),
     )}`;
   }
 
@@ -461,6 +627,105 @@ describe('learner quiz over HTTP', () => {
       await codes(await gradeRoute('tpv-quiz-v1', { ...base, answers: { 'q-forged': ['A'] } })),
     ).toEqual([422, 'QUIZ_QUESTION_NOT_IN_SCENE']);
     expect((await gradeRoute('tpv-quiz-v1', base, 'wrong-key')).status).toBe(401);
+  });
+
+  describe('teacher-guide written answers (owner, 17 Nov 2026)', () => {
+    const answers = {
+      'q-single': ['B'],
+      [writtenId('6234', '1B')]: ['البرهان: الفرق 3 في كل مرة'],
+      [writtenId('6249', '12')]: ['2'],
+      [writtenId('6249', '13')]: ['رسمت'],
+      [writtenId('6249', '11')]: ['5'],
+      [writtenId('6249', '14')]: ['برهاني'],
+      'q-short-open': ['because'],
+    };
+    const grade = async (versionId: string, reveal: boolean) => {
+      const response = await gradeRoute(versionId, {
+        tenantContext: { tenantId: TENANT },
+        sceneId: 'scene-quiz',
+        answers,
+        reveal,
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+
+    it('gives a pending written answer its context from the PINNED guide, scores untouched', async () => {
+      for (const versionId of ['tpv-guided', 'tpv-guided-v2']) {
+        const result = await grade(versionId, true);
+        const byId = new Map(
+          (result.results as Array<Record<string, unknown>>).map((r) => [r.questionId, r]),
+        );
+        expect(byId.get(writtenId('6234', '1B'))).toEqual({
+          questionId: writtenId('6234', '1B'),
+          status: 'pending_review',
+          earned: 0,
+          possible: 2,
+          gradingContext: { questionText: PROOF_STEM, modelAnswer: MODEL_PROOF, kind: 'proof' },
+        });
+        // Never a revealed answer or explanation, even under `reveal`.
+        expect(byId.get(writtenId('6249', '12'))).toEqual({
+          questionId: writtenId('6249', '12'),
+          status: 'pending_review',
+          earned: 0,
+          possible: 2,
+          gradingContext: {
+            questionText: POSSIBLE_STEM,
+            modelAnswer: MODEL_POSSIBLE,
+            kind: 'possible',
+          },
+        });
+        // A figure, a keyed item, an over-long stem and a plain short answer: no context.
+        for (const id of [
+          writtenId('6249', '13'),
+          writtenId('6249', '11'),
+          writtenId('6249', '14'),
+          'q-short-open',
+        ]) {
+          expect(byId.get(id)).toMatchObject({ status: 'pending_review', earned: 0 });
+          expect(byId.get(id)).not.toHaveProperty('gradingContext');
+          expect(byId.get(id)).not.toHaveProperty('correctAnswer');
+        }
+        expect(result).toMatchObject({ earned: 2, possible: 2, pendingPossible: 14 });
+        // The model answers appear ONLY as the two contexts' `modelAnswer`.
+        const withoutContexts = {
+          ...result,
+          results: (result.results as Array<Record<string, unknown>>).map(
+            ({ gradingContext: _context, ...rest }) => rest,
+          ),
+        };
+        // (`reveal` shows the choice question's own explanation, never a model answer.)
+        expect(JSON.stringify(withoutContexts)).not.toContain('MODEL-');
+        expect(byId.get('q-single')).toMatchObject({ explanation: SECRET_EXPLANATION });
+        expect(JSON.stringify(result)).not.toContain(MODEL_FIGURE_NOTE);
+        expect(JSON.stringify(result)).not.toContain(MODEL_LONG);
+      }
+    });
+
+    it('reads no guide for a package without one, and never serves a learner the model answer', async () => {
+      const plain = await gradeRoute('tpv-quiz-v1', {
+        tenantContext: { tenantId: TENANT },
+        sceneId: 'scene-quiz',
+        answers: { 'q-short-open': ['because'] },
+        reveal: true,
+      });
+      const body = await plain.json();
+      expect(JSON.stringify(body)).not.toContain('gradingContext');
+
+      const cookie = grantCookie('learner', 'read', 'tpv-guided-v2', 'stage-guided-v2');
+      const document = await read('/documents/stage-guided-v2', cookie);
+      expect(leaks(document)).toEqual([]);
+      const delivered = JSON.stringify(document);
+      expect(delivered).not.toContain('gradingContext');
+      expect(delivered).not.toContain('guideRef');
+      const quiz = (document as { scenes: AppScene[] }).scenes[0]!;
+      expect((quiz.content as { questions: Array<{ id: string }> }).questions[1]).toEqual({
+        id: writtenId('6234', '1B'),
+        type: 'short_answer',
+        question: PROOF_STEM,
+        points: 2,
+      });
+    });
   });
 });
 

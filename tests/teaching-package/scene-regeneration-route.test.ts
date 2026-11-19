@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createOwnerBoundDocumentStore } from '@/lib/persistence/owner-bound-document-store';
-import { insertVersion } from '@/lib/persistence/teaching-package';
+import { insertAttempt, insertVersion } from '@/lib/persistence/teaching-package';
 import {
   buildEditorGrantPayload,
   grantCookieValueForRedeem,
@@ -277,6 +277,482 @@ describe('slide regeneration routes', () => {
   }
 
   // ------------------------------------------------------------------ AT-A
+
+  it('teaching-generation-model plan D-6/D-7: the producing attempt’s frozen route reaches the model route, and its description (with routeReplaced) is stored on the row', async () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.MATH',
+    };
+    const aggregate = {
+      tenantId: 'tenant-test',
+      learningItem: { type: 'lesson' as const, id: `li-${STAGE}` },
+    };
+    await insertAttempt(pool as never, {
+      id: 'tpa-frozen-route',
+      aggregate,
+      versionId: `tpv-${STAGE}`,
+      kind: 'initial',
+      status: 'succeeded',
+      requestedByActorRef: 'kafuo',
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      inputSnapshot: {
+        learningItem: aggregate.learningItem,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        learningObjectives: [],
+        contentUnitRefs: [],
+        sourceRefs: [],
+        generationContext: {},
+        generationOptions: {},
+        requirementDigest: '0'.repeat(64),
+        requirementPreview: 'p',
+        pdfContentSummary: null,
+        requestedAt: 1,
+        subjectCode: 'MATH',
+        policyVersion: 'configured-2026-11',
+        primaryModel: ROUTE.primary.model,
+        fallbackModel: ROUTE.fallback.model,
+        generationRoute: ROUTE,
+      },
+      now: 1,
+    });
+    await pool.query(
+      `UPDATE teaching_package_versions SET current_attempt_id = 'tpa-frozen-route' WHERE id = $1`,
+      [`tpv-${STAGE}`],
+    );
+    const description = {
+      mode: 'enforced',
+      subjectCode: 'MATH',
+      policyVersion: 'r1-2026-09',
+      primary: 'openai:gpt-6-luna',
+      fallback: 'qwen:qwen3.7-flash',
+      routeReplaced: { from: ROUTE, reason: 'no API key' },
+    };
+    mocks.createRoute.mockResolvedValue({
+      aiCallFor: () => async () => '',
+      assertAvailable: () => {},
+      description,
+    });
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const response = await regenerateSlideScene(
+      {
+        tenantId: 'tenant-test',
+        versionId: `tpv-${STAGE}`,
+        stageId: STAGE,
+        learnerKey: 'system:package-reviewer',
+      },
+      'scene-1',
+      body('key-frozen-route'),
+      { pool: pool as never, actor: { actorRef: 'system:package-reviewer', sessionRef: null } },
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({
+      generationAttemptId: 'tpa-frozen-route',
+      snapshotSubjectCode: 'MATH',
+      snapshotGenerationRoute: ROUTE,
+    });
+    const [row] = await rows();
+    expect(row!.model_route).toEqual(description);
+  });
+
+  it('AI reviewer (plan §4.4): a system actor is recorded on the row and the audit events, with no session', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: 'system:package-reviewer',
+    };
+    const response = await regenerateSlideScene(grant, 'scene-1', body('key-reviewer-1'), {
+      pool: pool as never,
+      actor: { actorRef: 'system:package-reviewer', sessionRef: null },
+    });
+    expect(response.status).toBe(200);
+    const [row] = await rows();
+    expect(row).toMatchObject({
+      status: 'succeeded',
+      actor_ref: 'system:package-reviewer',
+      session_ref: null,
+    });
+    const audit = await events();
+    expect(audit.map((event) => event.actor_ref)).toEqual(
+      audit.map(() => 'system:package-reviewer'),
+    );
+    expect(audit.length).toBeGreaterThan(0);
+  });
+
+  const reviewerGrant = {
+    tenantId: 'tenant-test',
+    versionId: `tpv-${STAGE}`,
+    stageId: STAGE,
+    learnerKey: 'system:package-reviewer',
+  };
+  const reviewerActor = { actorRef: 'system:package-reviewer', sessionRef: null };
+
+  it('MEDIUM-1 (D-13): the signal reaches the model route, and an abort AFTER the paid model calls still commits the slide', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const before = await sceneState('scene-1');
+    const controller = new AbortController();
+    // The review run is evicted once the (paid) slide is written by the model.
+    mocks.duringGeneration = async () => controller.abort();
+    const response = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body('key-reviewer-late-abort'),
+      { pool: pool as never, actor: reviewerActor, signal: controller.signal },
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).toMatchObject({ signal: controller.signal });
+    const [row] = await rows();
+    expect(row).toMatchObject({ status: 'succeeded' });
+    expect((await sceneState('scene-1'))!.rev).toBe(before!.rev + 1);
+  });
+
+  it('LOW-3: an already-aborted reviewer run starts no regeneration — no row, no burnt key', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      regenerateSlideScene(reviewerGrant, 'scene-1', body('key-reviewer-pre-abort'), {
+        pool: pool as never,
+        actor: reviewerActor,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(await rows()).toEqual([]);
+    expect(mocks.regenerate).not.toHaveBeenCalled();
+    // The same key is still free for the run that resumes the review.
+    const response = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body('key-reviewer-pre-abort'),
+      { pool: pool as never, actor: reviewerActor },
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('MEDIUM (default leases): a resume after the evicted run’s regeneration outlived its lease fixes the slide under K-r; a later resume replays K-r for free', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const {
+      createPackageReviewFixLoop,
+      fixIdempotencyKey,
+      fixInstruction,
+      fixRetryIdempotencyKey,
+      PACKAGE_REVIEWER_ACTOR,
+    } = await import('@/lib/server/teaching-package/package-review-fix-loop');
+    const { reviewSlidesOf } = await import('@/lib/server/teaching-package/package-review-input');
+    const review = {
+      id: 'tpr-resume',
+      tenantId: 'tenant-test',
+      learningItem: { type: 'lesson', id: `li-${STAGE}` },
+      versionId: `tpv-${STAGE}`,
+      attemptId: 'tpa-x',
+      stageId: STAGE,
+      subjectCode: 'MATH',
+      status: 'running',
+      provider: 'anthropic',
+      model: 'anthropic:claude-opus-5-5',
+      summary: 's',
+      findings: [],
+      fixes: [],
+      errorCode: null,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+      bookTruncated: false,
+      runAttempts: 2,
+      leaseOwner: 'w',
+      leaseUntil: 1,
+      reviewedAt: 1,
+      createdAt: 1,
+      startedAt: 1,
+      completedAt: null,
+    } as never;
+    const findings = () => [
+      {
+        id: 'f1',
+        targetId: 'scene-1',
+        targetTitle: '',
+        targetOrder: 1,
+        check: 'S1' as const,
+        severity: 'high' as const,
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'خطأ',
+        fixNote: 'صحح الشريحة',
+        status: 'open' as const,
+        teacherReason: null,
+      },
+    ];
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: PACKAGE_REVIEWER_ACTOR,
+    };
+    const K = fixIdempotencyKey('tpr-resume', 'scene-1');
+    const Kr = fixRetryIdempotencyKey('tpr-resume', 'scene-1');
+    // The resumed review: the real fix loop over the real regeneration service.
+    const resume = async () => {
+      const live = (await sceneState('scene-1'))!;
+      const loop = createPackageReviewFixLoop({
+        regenerateAudio: vi.fn(async (_grant: unknown, sceneId: string) => ({
+          sceneId,
+          scene: (await sceneState(sceneId))!.scene,
+          rev: 0,
+          generated: 1,
+          missing: 0,
+        })) as never,
+      });
+      return loop({
+        pool: pool as never,
+        review,
+        units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+        slides: reviewSlidesOf([live.scene]),
+        scenes: [live.scene],
+        findings: findings(),
+        heartbeat: async () => true,
+        callReviewer: vi.fn(async () => ({
+          answer: { summary: 's', findings: [] },
+          call: { provider: 'anthropic', modelString: 'anthropic:claude-opus-5-5', usage: null },
+        })) as never,
+        recordProgress: vi.fn(async () => {}),
+        now: Date.now,
+      });
+    };
+    const before = (await sceneState('scene-1'))!;
+    const controller = new AbortController();
+    let resumed: Awaited<ReturnType<typeof resume>> | null = null;
+    // The evicted run's regeneration under K: its model call outlives the
+    // regeneration lease; the review is evicted (abort) and resumed meanwhile.
+    mocks.regenerate.mockImplementationOnce(async (input: RegenerateOneSceneInput) => {
+      controller.abort();
+      resumed = await resume();
+      return { ok: true, scene: generatedFrom(input.scene, 'stale') };
+    });
+    const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+    await expect(
+      regenerateSlideScene(
+        grant,
+        'scene-1',
+        {
+          instruction: fixInstruction(findings()),
+          reason: `مراجعة الذكاء الاصطناعي tpr-resume: S1`,
+          idempotencyKey: K,
+        },
+        {
+          pool: pool as never,
+          actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null },
+          signal: controller.signal,
+          now: () => tenMinutesAgo,
+          leaseSeconds: 60, // its lease ran out nine minutes ago
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'REGENERATION_LEASE_LOST' });
+    // The resume found K reclaimed (LEASE_EXPIRED) and fixed the slide under K-r, once.
+    expect(resumed!.findings[0]).toMatchObject({ status: 'fixed', teacherReason: null });
+    expect(resumed!.fixes[0]).toMatchObject({ outcome: 'fixed' });
+    const fixed = (await sceneState('scene-1'))!;
+    expect(fixed.rev).toBe(before.rev + 1);
+    expect((await rows()).map((row) => [row.idempotency_key, row.status, row.error_code])).toEqual([
+      [K, 'failed', 'LEASE_EXPIRED'],
+      [Kr, 'succeeded', null],
+    ]);
+    // A later resume replays K (refused) then K-r (succeeded): no model call, no new commit.
+    const modelRuns = mocks.regenerate.mock.calls.length;
+    const again = await resume();
+    expect(mocks.regenerate.mock.calls.length).toBe(modelRuns);
+    expect(again.findings[0]).toMatchObject({ status: 'fixed' });
+    expect((await sceneState('scene-1'))!.rev).toBe(fixed.rev);
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it('LOW-2: the evicted run’s T2 on the real clock after its lease ran out (no reclaim yet) fails REGENERATION_LEASE_LOST; the resume fixes the slide under K-r with one model call', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const {
+      createPackageReviewFixLoop,
+      fixIdempotencyKey,
+      fixInstruction,
+      fixRetryIdempotencyKey,
+      PACKAGE_REVIEWER_ACTOR,
+    } = await import('@/lib/server/teaching-package/package-review-fix-loop');
+    const { reviewSlidesOf } = await import('@/lib/server/teaching-package/package-review-input');
+    const findings = () => [
+      {
+        id: 'f1',
+        targetId: 'scene-1',
+        targetTitle: '',
+        targetOrder: 1,
+        check: 'S1' as const,
+        severity: 'high' as const,
+        bookEvidence: { quote: 'q', unitId: null },
+        whatIsWrong: 'خطأ',
+        fixNote: 'صحح الشريحة',
+        status: 'open' as const,
+        teacherReason: null,
+      },
+    ];
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: PACKAGE_REVIEWER_ACTOR,
+    };
+    const K = fixIdempotencyKey('tpr-late-t2', 'scene-1');
+    const Kr = fixRetryIdempotencyKey('tpr-late-t2', 'scene-1');
+    const before = (await sceneState('scene-1'))!;
+
+    // The evicted run: T1 ten minutes ago with a 60 s lease; its model call
+    // returns now, and its T2 runs on the real clock — before anything
+    // reclaimed the row.
+    let clock = Date.now() - 10 * 60 * 1000;
+    mocks.regenerate.mockImplementationOnce(async (input: RegenerateOneSceneInput) => {
+      clock = Date.now();
+      return { ok: true, scene: generatedFrom(input.scene, 'stale') };
+    });
+    await expect(
+      regenerateSlideScene(
+        grant,
+        'scene-1',
+        {
+          instruction: fixInstruction(findings()),
+          reason: 'مراجعة الذكاء الاصطناعي tpr-late-t2: S1',
+          idempotencyKey: K,
+        },
+        {
+          pool: pool as never,
+          actor: { actorRef: PACKAGE_REVIEWER_ACTOR, sessionRef: null },
+          now: () => clock,
+          leaseSeconds: 60,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'REGENERATION_LEASE_LOST' });
+    expect((await rows()).map((row) => [row.status, row.error_code])).toEqual([
+      ['failed', 'REGENERATION_LEASE_LOST'],
+    ]);
+    expect((await sceneState('scene-1'))!.rev).toBe(before.rev);
+
+    // The resumed review: the real fix loop over the real service.
+    const modelRuns = mocks.regenerate.mock.calls.length;
+    const live = (await sceneState('scene-1'))!;
+    const result = await createPackageReviewFixLoop({
+      regenerateAudio: vi.fn(async (_grant: unknown, sceneId: string) => ({
+        sceneId,
+        scene: (await sceneState(sceneId))!.scene,
+        rev: 0,
+        generated: 1,
+        missing: 0,
+      })) as never,
+    })({
+      pool: pool as never,
+      review: {
+        id: 'tpr-late-t2',
+        tenantId: 'tenant-test',
+        learningItem: { type: 'lesson', id: `li-${STAGE}` },
+        versionId: `tpv-${STAGE}`,
+        attemptId: 'tpa-x',
+        stageId: STAGE,
+        subjectCode: 'MATH',
+        status: 'running',
+        provider: 'anthropic',
+        model: 'anthropic:claude-opus-5-5',
+        summary: 's',
+        findings: [],
+        fixes: [],
+        errorCode: null,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: null,
+        bookTruncated: false,
+        runAttempts: 2,
+        leaseOwner: 'w',
+        leaseUntil: 1,
+        reviewedAt: 1,
+        createdAt: 1,
+        startedAt: 1,
+        completedAt: null,
+      } as never,
+      units: [{ id: 'book', title: null, role: null, text: 'نص الكتاب' }],
+      slides: reviewSlidesOf([live.scene]),
+      scenes: [live.scene],
+      findings: findings(),
+      heartbeat: async () => true,
+      callReviewer: vi.fn(async () => ({
+        answer: { summary: 's', findings: [] },
+        call: { provider: 'anthropic', modelString: 'anthropic:claude-opus-5-5', usage: null },
+      })) as never,
+      recordProgress: vi.fn(async () => {}),
+      now: Date.now,
+    });
+    expect(result.findings[0]).toMatchObject({ status: 'fixed', teacherReason: null });
+    expect(mocks.regenerate.mock.calls.length).toBe(modelRuns + 1);
+    expect((await rows()).map((row) => [row.idempotency_key, row.status, row.error_code])).toEqual([
+      [K, 'failed', 'REGENERATION_LEASE_LOST'],
+      [Kr, 'succeeded', null],
+    ]);
+    expect((await sceneState('scene-1'))!.rev).toBe(before.rev + 1);
+  });
+
+  it('LOW-1 / MEDIUM-1: a mid-call abort is stored as ABORTED and replays as ABORTED; the derived key regenerates once', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const { TeachingPackageError } = await import('@/lib/server/teaching-package/errors');
+    const { fixIdempotencyKey, fixRetryIdempotencyKey } =
+      await import('@/lib/server/teaching-package/package-review-fix-loop');
+    const key = fixIdempotencyKey('tpr-abort', 'scene-1');
+    // The evicted run's model call was aborted mid-call (the route raises ABORTED).
+    mocks.regenerate.mockImplementationOnce(async () => {
+      throw new TeachingPackageError('ABORTED', 'the regeneration was stopped');
+    });
+    await expect(
+      regenerateSlideScene(reviewerGrant, 'scene-1', body(key), {
+        pool: pool as never,
+        actor: reviewerActor,
+      }),
+    ).rejects.toMatchObject({ code: 'ABORTED' });
+    expect((await rows())[0]).toMatchObject({ status: 'failed', error_code: 'ABORTED' });
+    // The resumed run's replay of the same key reports ABORTED (not a persistence failure).
+    await expect(
+      regenerateSlideScene(reviewerGrant, 'scene-1', body(key), {
+        pool: pool as never,
+        actor: reviewerActor,
+      }),
+    ).rejects.toMatchObject({
+      code: 'ABORTED',
+      details: { replayed: true, failureCode: 'ABORTED' },
+    });
+    // The derived key regenerates the slide once (nothing was committed before).
+    const before = await sceneState('scene-1');
+    const retried = await regenerateSlideScene(
+      reviewerGrant,
+      'scene-1',
+      body(fixRetryIdempotencyKey('tpr-abort', 'scene-1')),
+      { pool: pool as never, actor: reviewerActor },
+    );
+    expect(retried.status).toBe(200);
+    expect((await sceneState('scene-1'))!.rev).toBe(before!.rev + 1);
+  });
+
+  it('LOW-1: without a signal (the editor) the route gets none and the regeneration runs as before', async () => {
+    const { regenerateSlideScene } =
+      await import('@/lib/server/teaching-package/scene-regeneration');
+    const grant = {
+      tenantId: 'tenant-test',
+      versionId: `tpv-${STAGE}`,
+      stageId: STAGE,
+      learnerKey: 'system:package-reviewer',
+    };
+    const response = await regenerateSlideScene(grant, 'scene-1', body('key-editor-plain'), {
+      pool: pool as never,
+    });
+    expect(response.status).toBe(200);
+    expect(mocks.createRoute.mock.calls[0]![0]).not.toHaveProperty('signal');
+  });
 
   it('AT-A: a write grant on a draft regenerates exactly the one slide, atomically with its audit', async () => {
     const before1 = await sceneState('scene-1');

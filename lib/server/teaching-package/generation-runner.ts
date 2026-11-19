@@ -58,9 +58,13 @@ import {
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { retainableContentUnits } from '@/lib/server/teaching-package/content-units';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
-import type { KafuoGenerationContext } from '@/lib/server/teaching-package/kafuo-request';
 import {
-  resolveSubjectModelPolicy,
+  teacherGuideSnapshotFacts,
+  type KafuoGenerationContext,
+} from '@/lib/server/teaching-package/kafuo-request';
+import { acquireGuideAnswerFigures } from '@/lib/server/teaching-package/guide-answer-figures';
+import {
+  resolveGenerationRoute,
   type ResolvedSubjectPolicy,
 } from '@/lib/server/teaching-model/resolve-policy';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
@@ -74,7 +78,10 @@ import {
   requireCompleteFlowPolicies,
   resolveFlowSkillPolicies,
 } from '@/lib/server/teaching-package/skill-policy';
-import { materializeSourceImages } from '@/lib/server/teaching-package/source-images';
+import {
+  materializeSourceImages,
+  toVisionPdfImages,
+} from '@/lib/server/teaching-package/source-images';
 import { createTeachingPackagePersistenceSink } from '@/lib/server/teaching-package/stage-persistence-sink';
 import { readCheckpointByAttemptId } from '@/lib/persistence/generation-checkpoint';
 import { readAttemptById } from '@/lib/persistence/teaching-package';
@@ -89,13 +96,45 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   exerciseBlockRequirement,
+  isGuideAnswerModel,
+  isLearnerFirstModel,
   isSacredExerciseElement,
   isTeacherParityModel,
+  learnerFirstVisualsOf,
+  BOOK_COVERAGE_INCOMPLETE,
+  missingExampleGaps,
   plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
   teacherParityBook,
+  withTypedPracticeUnits,
 } from '@/lib/server/teaching-package/book-coverage';
-import { repairBookCoverageGaps } from '@/lib/server/teaching-package/book-coverage-repair';
+import {
+  repairBookCoverageGaps,
+  type BookCoverageRepairContext,
+} from '@/lib/server/teaching-package/book-coverage-repair';
+import {
+  providerSafeImageDescription,
+  stripProviderImageDescriptions,
+} from '@/lib/server/teaching-package/learner-first-source';
+import { insertAttemptQuizzes } from '@/lib/server/teaching-package/attempt-quizzes';
+import {
+  guideOutlinePlans,
+  injectGuideAnswers,
+  isGuideFigureImageId,
+  resolveTeacherGuide,
+  withoutGuideAnswers,
+} from '@/lib/server/teaching-package/guide-answers';
+import {
+  createGuideAnswerGuard,
+  type GuideAnswerGuard,
+  type GuideAnswerSettlement,
+} from '@/lib/server/teaching-package/guide-answer-guard';
+import { guideWrittenAttempts } from '@/lib/server/teaching-package/guide-written-attempts';
+import {
+  droppedGuideOutlineIds,
+  mergeGuideSettlements,
+} from '@/lib/server/teaching-package/guide-answer-context';
+import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { stripContentUnitIdLabels } from '@/lib/server/teaching-package/outline-unit-labels';
 import {
   detectSacredQuotes,
@@ -131,6 +170,7 @@ import type { AICallFn, OutlineDiagnostic } from '@openmaic/generation';
 import type {
   GenerationCheckpoint,
   GenerationCheckpointSourceRefs,
+  GuideAnswerSettlementRecord,
   SourceVisualManifestEntry,
 } from '@/lib/types/teaching-package';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -193,6 +233,12 @@ async function compensateRun(pool: ConnectableQueryable, stageId: string | null)
  * no run, no version, and never a fall-through to `DEFAULT_MODEL` (AMB-04).
  * With routing `off` the attempt runs exactly as before (stage routes,
  * `resolvedLlmModel`), and `null` is returned.
+ *
+ * A superadmin-configured route (`kafuo.modelRoute`, teaching-generation-model-
+ * admin-config-plan-2026-11-18 D-11) replaces the table for this attempt and is
+ * frozen on its snapshot (`generationRoute`, D-10) for the later steps. It
+ * fails closed exactly like the table: no other model, never D-7's replacement
+ * (that is for later steps only).
  */
 async function resolveAttemptSubjectRoute(
   attemptId: string,
@@ -202,7 +248,10 @@ async function resolveAttemptSubjectRoute(
   if (readRoutingMode() === 'off') return { policy: null, failed: false };
   let policy: ResolvedSubjectPolicy;
   try {
-    policy = await resolveSubjectModelPolicy(kafuo.subjectCode);
+    policy = await resolveGenerationRoute({
+      subjectCode: kafuo.subjectCode,
+      route: kafuo.modelRoute,
+    });
   } catch (error) {
     const refusal =
       error instanceof TeachingPackageError && error.code === 'SUBJECT_ROUTE_UNAVAILABLE'
@@ -226,7 +275,14 @@ async function resolveAttemptSubjectRoute(
     policyVersion: policy.policyVersion,
     primaryModel: policy.primary.modelString,
     fallbackModel: policy.fallback.modelString,
+    ...(kafuo.modelRoute ? { generationRoute: kafuo.modelRoute } : {}),
   });
+  if (kafuo.modelRoute) {
+    // D-16: the applied route per attempt — model strings and thinking values only.
+    log.info(
+      `Teaching package attempt ${attemptId} runs the configured route ${kafuo.modelRoute.settingKey}: primary ${kafuo.modelRoute.primary.model} (${kafuo.modelRoute.primary.thinking}), fallback ${kafuo.modelRoute.fallback.model} (${kafuo.modelRoute.fallback.thinking})`,
+    );
+  }
   return { policy, failed: false };
 }
 
@@ -387,6 +443,23 @@ async function runKafuoAttempt(
   const normalizedSource = kafuo.normalizedContentResource
     ? (source as import('@/lib/server/teaching-package/normalized-content-resource').AcquiredNormalizedSource)
     : null;
+  // Lesson 2-5 (17 Nov 2026, g5.v11 only): a practice unit the book map left untyped
+  // («تأكد», a «تدرب» part without its title) is read as the exercise its normalized
+  // subtype prints, so its guide answers resolve and the engine may select it. Every
+  // reader of the book map below (facts, coverage, selection, attempts, guide) sees it.
+  if (isGuideAnswerModel(kafuo.teachingModel) && kafuo.bookStructure && normalizedSource) {
+    kafuo = {
+      ...kafuo,
+      bookStructure: withTypedPracticeUnits(
+        kafuo.bookStructure,
+        normalizedSource.manifest.contentUnits.map((unit) => ({
+          id: String(unit.id),
+          role: unit.role,
+          subtype: unit.subtype ?? null,
+        })),
+      ),
+    };
+  }
   if (resume) {
     if (source.measuredSha256 !== resume.sourceRefs.measuredSha256) {
       await failGenerationAttempt(
@@ -467,9 +540,17 @@ async function runKafuoAttempt(
     screenedVisuals = await screenSourceImages(source.normalizedImages);
   }
   const approvedVisualIds = new Set(screenedVisuals.approved.map((image) => image.id));
-  const approvedVisionImages = source.visionImages.filter((image) =>
-    approvedVisualIds.has(image.id),
-  );
+  // g5.v10 (learner-first plan, an explicit Teaching Model check): the source
+  // fixes of `learner-first-source.ts` — the parser's English figure
+  // descriptions never reach a prompt (D-6 A). Off for every earlier version.
+  const learnerFirst = isLearnerFirstModel(kafuo.teachingModel);
+  const approvedVisionImages = source.visionImages
+    .filter((image) => approvedVisualIds.has(image.id))
+    .map((image) =>
+      learnerFirst && image.description !== undefined
+        ? { ...image, description: providerSafeImageDescription(image.description, kafuo.language) }
+        : image,
+    );
   const withheldVisualsNote = withheldSourceVisualsNote(screenedVisuals.withheld);
 
   // The W6-derived governance mode, consumed as a VALUE (§B.13): the
@@ -503,13 +584,69 @@ async function runKafuoAttempt(
             retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
               (unit) => ({ id: unit.unitId, text: unit.normalizedText }),
             ),
+            // Lesson 2-5 (g5.v11 only): questions sharing a book line are counted each.
+            { inlineQuestions: isGuideAnswerModel(kafuo.teachingModel) },
           )
         : null;
   const coverageBook = teacherParityBook(
     requireEssentialUntypedUnits(kafuo.bookStructure, essentialUnitIds),
     kafuo.teachingModel,
     bookFacts,
+    // g5.v11 (teacher-guide plan §8.1): the guide marks steer the exercise selection.
+    kafuo.teacherGuide,
   );
+  // g5.v11 only (an explicit Teaching Model check): the approved guide answers, resolved
+  // against OUR book items. Null for every other model, and without a book map or guide.
+  const guideModel =
+    isGuideAnswerModel(kafuo.teachingModel) && kafuo.teacherGuide && kafuo.bookStructure
+      ? { guide: kafuo.teacherGuide, book: kafuo.bookStructure }
+      : null;
+  // Owner, 17 Nov 2026: the guide's answer drawings of this lesson's check and exercise
+  // units, fetched through the FRESH presigned URLs of the request this run was started
+  // or resumed with (never persisted), verified, then screened like the book's images.
+  // Fail-soft: a drawing that fails any step is as if never sent; the run goes on. Only a
+  // normalized source places guide answers (the guard needs its units), so only it fetches.
+  let guideFigures: NormalizedSourceImage[] = [];
+  if (guideModel && normalizedSource) {
+    const fetched = await acquireGuideAnswerFigures(guideModel.guide, {
+      unitIds: new Set(
+        guideModel.book.units
+          .filter((unit) => unit.element === 'try_it' || unit.element === 'exercise')
+          .map((unit) => String(unit.contentUnitId)),
+      ),
+    });
+    if (fetched.length > 0) {
+      try {
+        guideFigures = (await screenSourceImages(fetched)).approved;
+      } catch {
+        log.warn(
+          `Teaching package attempt ${attemptId}: the guide's answer drawings could not be screened; left out`,
+        );
+      }
+    }
+  }
+  const guideAnswers = guideModel
+    ? resolveTeacherGuide(
+        // The URL-free records: nothing resolved from them can carry a presigned URL.
+        teacherGuideSnapshotFacts(guideModel.guide),
+        guideModel.book,
+        bookFacts,
+        { attachedFigureIds: new Set(guideFigures.map((figure) => figure.id)) },
+      )
+    : null;
+  // Only the drawings a resolved item selects ever reach a slide.
+  const guideFigureImages = toVisionPdfImages(
+    guideFigures.filter((figure) =>
+      guideAnswers?.modelAnswers.some((item) => item.figureImageId === figure.id),
+    ),
+  );
+  if (guideAnswers && guideAnswers.unresolved.length > 0) {
+    log.warn(
+      `Teaching package attempt ${attemptId}: ${guideAnswers.unresolved.length} teacher-guide item(s) match no book item and get no answer: ${guideAnswers.unresolved
+        .map((item) => `${item.contentUnitId}/${item.label} (${item.reason})`)
+        .join('; ')}`,
+    );
+  }
   // Essential sections the plan left untaught. They do NOT pause the run: the
   // package finishes as a draft and Submit refuses it until each one has a
   // slide generated for it (`assertEssentialSectionsCovered`). Sticky across a
@@ -549,6 +686,8 @@ async function runKafuoAttempt(
           order: unit.orderIndex,
           title: unit.title ?? null,
           role: unit.role,
+          // Lesson 2-5: a correction re-check types the same practice units.
+          subtype: unit.subtype ?? null,
         }))
       : [],
     visualVerdicts: {
@@ -628,13 +767,96 @@ async function runKafuoAttempt(
           .map((unit) => String(unit.contentUnitId))
       : [],
   );
+  /** A retained unit's prompt text: sacred exercise items out (g5.v8), figure descriptions out (g5.v10). */
+  const promptUnitText = (unit: { unitId: unknown; normalizedText: string }): string => {
+    const text = sacredExerciseUnitIds.has(String(unit.unitId))
+      ? withoutSacredItems(unit.normalizedText)
+      : unit.normalizedText;
+    return learnerFirst ? stripProviderImageDescriptions(text, kafuo.language) : text;
+  };
+  /** The book-coverage repair's context (g5.v7 gaps; lesson 2-5's missing examples). */
+  const coverageRepairContext = (): BookCoverageRepairContext => ({
+    book: coverageBook!,
+    flow: kafuo.teachingFlow,
+    units: retainableContentUnits({
+      contentUnits: normalizedSource!.manifest.contentUnits,
+    }).map((unit) => ({
+      id: unit.unitId,
+      order: unit.orderIndex,
+      role: unit.role,
+      subtype: unit.subtype ?? null,
+      title: unit.title ?? null,
+      // M-3 (4 Nov 2026 rule): the repair planner and the fallback try-it never carry
+      // a verse or hadith item (nor, on g5.v10, a parser figure description).
+      text: promptUnitText(unit),
+    })),
+    skillOptions: governedByTeachingSkills
+      ? (entry) => plannerSkillOptions(entry, kafuo.teachingFlow)
+      : null,
+    language: kafuo.language ?? 'ar-SA',
+    languageDirective: speechRegister?.directive ?? '',
+    visuals: approvedVisionImages,
+    diagnose: (candidate) => {
+      const diagnosed = diagnoseCandidateOutlines(candidate, diagnosisContext);
+      recordCoverageGaps(diagnosed.outlines);
+      return { outlines: diagnosed.outlines, blocking: diagnosed.blocking };
+    },
+  });
+  // g5.v11 (teacher-guide plan §8.3–8.5): the code check of the approved answers, one
+  // guard per run (a re-rolled run starts clean). Its settlements are pinned on the
+  // attempt, merged, before any pause (review finding 9), and a resumed run restores them.
+  const guideSettlements: GuideAnswerSettlement[] = [];
+  // The leak guard's givens and the attempts' question order: the units' prompt text.
+  const guideUnitTexts =
+    guideAnswers && normalizedSource
+      ? new Map(
+          retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+            (unit) => [String(unit.unitId), promptUnitText(unit)] as const,
+          ),
+        )
+      : null;
+  const pinnedGuideSettlements = resume
+    ? (attemptRow?.inputSnapshot.guideAnswerSettlements ?? [])
+    : [];
+  const createRunGuideGuard = (run: number): GuideAnswerGuard | null => {
+    if (!guideUnitTexts) return null;
+    const guard = createGuideAnswerGuard({
+      unitTexts: guideUnitTexts,
+      onSettled: (settlement) => {
+        guideSettlements.push(settlement);
+        log.warn(
+          `Teaching package attempt ${attemptId}: outline ${settlement.outlineId} still failed its checked answers (${[
+            ...new Set(settlement.findings.map((finding) => finding.code)),
+          ].join(', ')}); ${settlement.action}${
+            settlement.dropped.length > 0 ? ` ${settlement.dropped.join(', ')}` : ''
+          }${
+            settlement.removedQuestions.length > 0
+              ? ` question(s) ${settlement.removedQuestions.join(', ')}`
+              : ''
+          }${
+            settlement.items.length > 0
+              ? ` item(s) ${settlement.items.map((item) => `${item.contentUnitId}/${item.label} ${item.outcome}`).join(', ')}`
+              : ''
+          }`,
+        );
+      },
+    });
+    // A resumed run continues its own settlements (a removed exercise stays removed).
+    if (resume)
+      guard.restore(pinnedGuideSettlements.filter((record) => record.generationRun === run));
+    return guard;
+  };
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
       : `${kafuo.requirement}${exerciseBlock}${withheldVisualsNote}`,
     pdfContent: {
       // g5.v7: markers carry each unit's book kind and part; unchanged otherwise.
-      text: annotateBookMarkers(source.text, kafuo.bookStructure),
+      // g5.v10 (D-6 A): the parser's figure descriptions are left out first.
+      text: annotateBookMarkers(
+        learnerFirst ? stripProviderImageDescriptions(source.text, kafuo.language) : source.text,
+        kafuo.bookStructure,
+      ),
       images: source.images,
       // Only screened-and-approved source visuals are ever offered.
       pdfImages: approvedVisionImages,
@@ -681,9 +903,8 @@ async function runKafuoAttempt(
             title: unit.title,
             // g5.v8 (4 Nov 2026): an exercise or check slide never sets or
             // solves a verse or hadith item, so its unit text drops them.
-            text: sacredExerciseUnitIds.has(String(unit.unitId))
-              ? withoutSacredItems(unit.normalizedText)
-              : unit.normalizedText,
+            // g5.v10: and never carries the parser's figure descriptions.
+            text: promptUnitText(unit),
           })),
         }
       : {}),
@@ -693,6 +914,12 @@ async function runKafuoAttempt(
     ...(teacherParity
       ? { visibleWorkingSteps: true, findDuplicateSourceVisuals: findSplitUnitDuplicateImages }
       : {}),
+    // g5.v10 (learner-first plan W2/W3): canvas and narration rules, the
+    // narration check and the digit style. Absent for every earlier version.
+    ...(learnerFirst ? { learnerFirst: true } : {}),
+    // Quality plan W4: the learner-first visual rules, with the book's exercise units.
+    ...(learnerFirst ? { learnerFirstVisuals: learnerFirstVisualsOf(kafuo.bookStructure) } : {}),
+    // g5.v11 only: the approved answers' code check is added per run (`runExecution`).
     // Module 3/4 W1: the governed authority travels as ONE value built here,
     // from the marker alone — `input.governed !== undefined` is the pipeline's
     // single governed-mode predicate (plan §7.1.1). The outline contract
@@ -736,6 +963,13 @@ async function runKafuoAttempt(
   for (let run = firstRun; run <= lastRun; run += 1) {
     // A fresh run plans afresh: a discarded run's gaps are not this plan's.
     if (!resume) coverageGaps.clear();
+    // g5.v11: a discarded run's settlements are not this run's either.
+    guideSettlements.length = 0;
+    const guideGuard = createRunGuideGuard(run);
+    // Review finding 9: the attempts this run dropped before a pause stay out.
+    const droppedGuideIds = resume
+      ? droppedGuideOutlineIds(pinnedGuideSettlements, run)
+      : new Set<string>();
     if (!resume) await incrementGenerationRuns(pool, attemptId);
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
     const sink = createTeachingPackagePersistenceSink(attemptId);
@@ -761,9 +995,19 @@ async function runKafuoAttempt(
         scenesGenerated: 0,
       });
 
-      const runExecution: GenerationExecutionInput = execution.attribution
+      const attributed: GenerationExecutionInput = execution.attribution
         ? { ...execution, attribution: { ...execution.attribution, generationRun: run } }
         : execution;
+      // g5.v11 only: the approved answers' code check (absent for every other model).
+      // Owner, 17 Nov 2026: with it, the guide's answer drawings for the solution slides
+      // (in memory only; never offered to the planner).
+      const runExecution: GenerationExecutionInput = guideGuard
+        ? {
+            ...attributed,
+            guideAnswerGuard: guideGuard,
+            ...(guideFigureImages.length > 0 ? { guideAnswerFigures: guideFigureImages } : {}),
+          }
+        : attributed;
       const result = await generateClassroom(runExecution, {
         baseUrl: '',
         persistence: trackingSink,
@@ -823,11 +1067,62 @@ async function runKafuoAttempt(
           // before any Scene is generated (staging lesson 426, 4 Nov 2026).
           ...(normalizedSource
             ? {
-                finalizeOutlines: (outlines: SceneOutline[]) =>
-                  stripContentUnitIdLabels(
+                finalizeOutlines: (outlines: SceneOutline[]) => {
+                  const final = stripContentUnitIdLabels(
                     outlines,
                     normalizedSource.manifest.contentUnits.map((unit) => unit.id),
-                  ),
+                  );
+                  // g5.v10 (learner-first plan W1, D-11): the learner's attempt
+                  // before every solution, placed by the engine after the gates.
+                  // Idempotent, so a resumed outline gets nothing twice.
+                  if (!learnerFirst) return final;
+                  const slideQuestions = coverageBook?.teacherParity
+                    ? selectExercises(coverageBook, coverageBook.unitFacts)?.slideQuestions
+                    : undefined;
+                  // g5.v11 (re-review finding 2): a resumed outline's guide blocks are
+                  // taken out first, so an attempt never copies a key its slide carried
+                  // under an earlier role; they are rebuilt below for the current roles.
+                  const planned = guideAnswers && guideGuard ? withoutGuideAnswers(final) : final;
+                  const withAttempts = insertAttemptQuizzes(planned, kafuo.bookStructure, {
+                    facts: bookFacts,
+                    // An exercise attempt asks the book's own question lines (no answers).
+                    unitTexts: new Map(
+                      retainableContentUnits({
+                        contentUnits: normalizedSource.manifest.contentUnits,
+                      }).map((unit) => [String(unit.unitId), promptUnitText(unit)] as const),
+                    ),
+                    ...(coverageBook?.teacherParity
+                      ? { exerciseSlideQuestions: slideQuestions }
+                      : {}),
+                    ...(droppedGuideIds.size > 0 ? { skipAttemptIds: droppedGuideIds } : {}),
+                    // Lesson 2-5 (g5.v11 only): ex 14 on the line of ex 13 gets its own try.
+                    ...(isGuideAnswerModel(kafuo.teachingModel) ? { inlineQuestions: true } : {}),
+                  });
+                  // g5.v11 (plan §8): the approved answers go to the solution slides and
+                  // the attempts' hidden keys, never to a try-it slide. Rebuilt on every
+                  // outline from the current plans (re-review finding 2); a resumed run's
+                  // settled items (D-19) stay without them, its removed ones left out.
+                  if (!guideAnswers || !kafuo.bookStructure || !guideGuard) return withAttempts;
+                  const plans = guideOutlinePlans(withAttempts, kafuo.bookStructure, guideAnswers, {
+                    ...(slideQuestions ? { slideQuestions } : {}),
+                    facts: bookFacts,
+                    ...(guideUnitTexts ? { unitTexts: guideUnitTexts } : {}),
+                  });
+                  guideGuard.usePlans(plans);
+                  // Owner (17 Nov 2026): a proof or «إجابة ممكنة» item a solution slide
+                  // solves gets a written attempt question before it (engine-written).
+                  guideGuard.useWrittenAttempts(
+                    guideWrittenAttempts(withAttempts, plans, {
+                      guideId: guideAnswers.guideId,
+                      unitTexts: guideUnitTexts ?? new Map(),
+                    }),
+                  );
+                  return injectGuideAnswers(
+                    withAttempts,
+                    guideGuard.effectivePlans(),
+                    guideGuard.leftOut(),
+                  );
+                },
               }
             : {}),
           collectOutlineIssues: (outlines: SceneOutline[]) => {
@@ -838,6 +1133,52 @@ async function runKafuoAttempt(
           // g5.v7 (P-6): a slide the book-coverage gate found missing is
           // re-planned before the run pauses for a person; anything still
           // open after two rounds pauses exactly as before.
+          // Lesson 2-5 (17 Nov 2026, g5.v11): a book example with no slide of its own
+          // before its check (only a check's slides cite it) is planned once, after the
+          // gates passed; one the plan cannot place is logged — never a pause.
+          ...(coverageBook?.examplesKept && normalizedSource
+            ? {
+                refineOutlines: async (outlines: SceneOutline[], aiCall: AICallFn) => {
+                  const missing = missingExampleGaps(outlines, coverageBook);
+                  if (missing.length === 0) return null;
+                  const repaired = await repairBookCoverageGaps(
+                    outlines,
+                    [
+                      {
+                        code: BOOK_COVERAGE_INCOMPLETE,
+                        disposition: 'admin_correctable',
+                        field: 'sourceContentUnitIds',
+                        message: missing.map((gap) => gap.message).join('; '),
+                      },
+                    ],
+                    aiCall,
+                    coverageRepairContext(),
+                    { examples: true },
+                  );
+                  // A new slide that makes the plan fail a gate is rolled back.
+                  const kept = repaired.inserted > 0 && repaired.blocking.length === 0;
+                  const left = missingExampleGaps(
+                    kept ? repaired.outlines : outlines,
+                    coverageBook,
+                  );
+                  if (left.length > 0) {
+                    log.warn(
+                      `Teaching package attempt ${attemptId}: ${left.length} book example(s) still have no slide of their own before their check${
+                        repaired.inserted > 0 && !kept
+                          ? ' (the inserted slide failed a gate and was rolled back)'
+                          : ''
+                      }: ${left.map((gap) => gap.unit.contentUnitId).join(', ')}`,
+                    );
+                  }
+                  if (kept) {
+                    log.info(
+                      `Teaching package attempt ${attemptId}: ${repaired.inserted} book example slide(s) planned before their check`,
+                    );
+                  }
+                  return kept ? repaired.outlines : null;
+                },
+              }
+            : {}),
           ...(coverageBook && normalizedSource
             ? {
                 repairOutlines: async (
@@ -845,35 +1186,12 @@ async function runKafuoAttempt(
                   blocking: OutlineDiagnostic[],
                   aiCall: AICallFn,
                 ) => {
-                  const repaired = await repairBookCoverageGaps(outlines, blocking, aiCall, {
-                    book: coverageBook!,
-                    flow: kafuo.teachingFlow,
-                    units: retainableContentUnits({
-                      contentUnits: normalizedSource.manifest.contentUnits,
-                    }).map((unit) => ({
-                      id: unit.unitId,
-                      order: unit.orderIndex,
-                      role: unit.role,
-                      subtype: unit.subtype ?? null,
-                      title: unit.title ?? null,
-                      // M-3 (4 Nov 2026 rule): the repair planner and the
-                      // fallback try-it never carry a verse or hadith item.
-                      text: sacredExerciseUnitIds.has(String(unit.unitId))
-                        ? withoutSacredItems(unit.normalizedText)
-                        : unit.normalizedText,
-                    })),
-                    skillOptions: governedByTeachingSkills
-                      ? (entry) => plannerSkillOptions(entry, kafuo.teachingFlow)
-                      : null,
-                    language: kafuo.language ?? 'ar-SA',
-                    languageDirective: speechRegister?.directive ?? '',
-                    visuals: approvedVisionImages,
-                    diagnose: (candidate) => {
-                      const diagnosed = diagnoseCandidateOutlines(candidate, diagnosisContext);
-                      recordCoverageGaps(diagnosed.outlines);
-                      return { outlines: diagnosed.outlines, blocking: diagnosed.blocking };
-                    },
-                  });
+                  const repaired = await repairBookCoverageGaps(
+                    outlines,
+                    blocking,
+                    aiCall,
+                    coverageRepairContext(),
+                  );
                   // g5.v8: a merge or a recall move changes the plan without an insert.
                   return repaired.inserted + repaired.restructured > 0
                     ? { outlines: repaired.outlines, blocking: repaired.blocking }
@@ -895,26 +1213,45 @@ async function runKafuoAttempt(
         sourceVisuals: {
           images: approvedVisionImages,
           materialize: async (stageId, selected) => {
-            const selectedNormalized = screenedVisuals.approved.filter((image) =>
-              selected.some((pdfImage) => pdfImage.id === image.id),
+            // The guide's answer drawings are stored the same way (owner, 17 Nov 2026),
+            // in a call of their own that leaves the book's visual summary as it is.
+            const selectedNormalized = [...screenedVisuals.approved, ...guideFigures].filter(
+              (image) => selected.some((pdfImage) => pdfImage.id === image.id),
             );
             const { servingMapping, manifest } = await materializeSourceImages(
               selectedNormalized,
               stageId,
               kafuo.contentResource.id,
             );
-            await patchSnapshot(pool, attemptId, (snapshot) => ({
-              ...snapshot,
-              sourceVisualSummary: {
-                available: source.normalizedImages.length,
-                selected: selected.length,
-                materialized: manifest.length,
-              },
-            }));
+            if (selected.some((pdfImage) => !isGuideFigureImageId(pdfImage.id))) {
+              await patchSnapshot(pool, attemptId, (snapshot) => ({
+                ...snapshot,
+                sourceVisualSummary: {
+                  available: source.normalizedImages.length,
+                  selected: selected.length,
+                  materialized: manifest.length,
+                },
+              }));
+            }
             return { servingMapping, manifest, failedIds: [] };
           },
         },
       });
+
+      // g5.v11 (plan §8.3–8.5, review finding 9): what the code check settled is pinned
+      // on the attempt BEFORE any gate below can pause the run — merged with what this
+      // run pinned before an earlier pause, never overwritten — so a resumed run never
+      // re-inserts a dropped attempt. Labels and codes only, never an answer value.
+      if (guideGuard) {
+        await patchSnapshot(pool, attemptId, (snapshot) => ({
+          ...snapshot,
+          guideAnswerSettlements: mergeGuideSettlements(
+            snapshot.guideAnswerSettlements as GuideAnswerSettlementRecord[] | undefined,
+            guideSettlements,
+            run,
+          ),
+        }));
+      }
 
       const flowCheck = validateExactTeachingFlow(
         result.scenes,
@@ -1161,8 +1498,13 @@ async function runKafuoAttempt(
         }));
       }
 
-      // Valid Stage → the ONLY binding path.
-      await completeGenerationAttempt(pool, attemptId, result.id);
+      // Valid Stage → the ONLY binding path. AI reviewer layer (plan §4.1): the
+      // binding queues the package review in the same transaction; the
+      // in-process review sweep runs it after this attempt is done, so the
+      // review never holds a generation slot or races the stale reclaim.
+      await completeGenerationAttempt(pool, attemptId, result.id, {
+        review: { subjectCode: kafuo.subjectCode ?? null },
+      });
       return;
     } catch (error) {
       if (isGenerationCorrectionRequired(error)) {

@@ -110,6 +110,25 @@ describe('Teaching Engine narration catalogue (superadmin routes, plan §3.1)', 
   it('offers Arabic and English voices only, each with the model the table uses', () => {
     expect(teachingTtsCatalogVoices('cartesia-tts')).toEqual([
       { id: CARTESIA.voiceId, name: 'Reem', language: 'ar', modelId: 'sonic-3.6' },
+      // Owner, 18 Nov 2026: Reem's replacement and two more Arabic voices.
+      {
+        id: '64a941ac-07ac-462c-a81c-008e353dd83e',
+        name: 'Layan',
+        language: 'ar',
+        modelId: 'sonic-3.6',
+      },
+      {
+        id: 'dabfb4a8-2b51-49de-a481-4a41dd206018',
+        name: 'Mahmoud',
+        language: 'ar',
+        modelId: 'sonic-3.6',
+      },
+      {
+        id: '210a5bea-42fb-4542-858f-e451fd5e8957',
+        name: 'Rashid',
+        language: 'ar',
+        modelId: 'sonic-3.6',
+      },
     ]);
     // Qwen's Mandarin/Cantonese and other-language presets are never offered.
     expect(teachingTtsCatalogVoices('qwen-tts')).toEqual([

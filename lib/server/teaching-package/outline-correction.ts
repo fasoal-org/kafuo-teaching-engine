@@ -34,8 +34,11 @@ import {
 import {
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  isGuideAnswerModel,
+  learnerFirstVisualsOf,
   requireEssentialUntypedUnits,
   teacherParityBook,
+  withTypedPracticeUnits,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -49,6 +52,7 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
 import { findOutlineSkillSelectionIssues } from '@/lib/server/teaching-package/skill-policy';
+import { validateSceneClassifications } from '@/lib/server/teaching-package/skill-validators';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationAttempt,
@@ -57,6 +61,7 @@ import type {
   GenerationCheckpointPhase,
   GenerationCheckpointSourceRefs,
   KafuoBookStructure,
+  KafuoTeacherGuide,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
 
@@ -203,6 +208,27 @@ export function appOutlineDiagnostics(
         });
       }
     }
+    // The submit gate's classification check, per outline (5 Nov 2026): a
+    // model answer once put a Skill id ("feynman-learning") here, and the
+    // package could then never be submitted nor take a new slide. The value is
+    // never guessed (BR-TS-054): a person picks it in the correction editor.
+    // Only a value that is PRESENT and wrong is reported here; an absent one
+    // keeps its earlier behaviour (the submit gate still refuses it).
+    outlines.forEach((outline, outlineIndex) => {
+      if (outline.teachingSkills?.classification === undefined) return;
+      const failure = validateSceneClassifications([outline]);
+      if (!failure) return;
+      diagnostics.push({
+        code: failure.code,
+        disposition: 'admin_correctable',
+        outlineIndex,
+        ...(outline.id ? { outlineId: outline.id } : {}),
+        field: 'teachingSkills',
+        message: failure.message,
+        allowedValues: ['instructional', 'non-instructional'],
+        ...positionLabel(context.flow, outline),
+      });
+    });
   }
   // g5.v7: a required book element without its slide (P-6). Here, in the one
   // app-authority diagnosis, so a correction edit re-checks it like the runner.
@@ -229,6 +255,10 @@ export function diagnoseCandidateOutlines(
     prohibitedWidgetTypes: KAFUO_DEFERRED_WIDGET_TYPES,
     // Restored after the W6 review: a non-check Kafuo quiz still needs gradable keys.
     keyedQuizzesOnly: true,
+    // Quality plan W4: a g5.v10 plan is checked with the rules it was planned under.
+    ...(context.bookStructure?.learnerFirst
+      ? { learnerFirstVisuals: learnerFirstVisualsOf(context.bookStructure) }
+      : {}),
   });
   const normalized = analysis.outlines.map((outline, index) => ({ ...outline, order: index + 1 }));
   return {
@@ -247,14 +277,22 @@ export function diagnoseCandidateOutlines(
  * teacher-parity mark with the unit facts the run pinned.
  */
 export function correctionCoverageBook(
-  sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'>,
+  sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'> &
+    Partial<Pick<GenerationCheckpointSourceRefs, 'contentUnits'>>,
   bookStructure: KafuoBookStructure | undefined,
   teachingModel: { key: string; version: string } | undefined,
+  /** g5.v11: the attempt's pinned guide items, so the re-check selects the run's set. */
+  teacherGuide?: KafuoTeacherGuide,
 ): CoverageBookStructure | undefined {
+  // Lesson 2-5 (g5.v11): the run's typed practice units, from the pinned subtypes.
+  const book = isGuideAnswerModel(teachingModel)
+    ? withTypedPracticeUnits(bookStructure, sourceRefs.contentUnits ?? [])
+    : bookStructure;
   return teacherParityBook(
-    requireEssentialUntypedUnits(bookStructure, sourceRefs.essentialContentUnitIds),
+    requireEssentialUntypedUnits(book, sourceRefs.essentialContentUnitIds),
     teachingModel,
     sourceRefs.bookUnitFacts,
+    teacherGuide,
   );
 }
 
@@ -265,8 +303,14 @@ export function diagnosisContextFromCheckpoint(
   governed: boolean,
   bookStructure?: KafuoBookStructure,
   teachingModel?: { key: string; version: string },
+  teacherGuide?: KafuoTeacherGuide,
 ): OutlineDiagnosisContext {
-  const coverageBook = correctionCoverageBook(checkpoint.sourceRefs, bookStructure, teachingModel);
+  const coverageBook = correctionCoverageBook(
+    checkpoint.sourceRefs,
+    bookStructure,
+    teachingModel,
+    teacherGuide,
+  );
   return {
     ...(coverageBook ? { bookStructure: coverageBook } : {}),
     flow,
@@ -1059,6 +1103,7 @@ export function buildCorrectionView(
               checkpoint.sourceRefs,
               attempt.inputSnapshot.bookStructure,
               attempt.teachingModel,
+              attempt.inputSnapshot.teacherGuide,
             ),
             flow,
           ).map((gap) => {

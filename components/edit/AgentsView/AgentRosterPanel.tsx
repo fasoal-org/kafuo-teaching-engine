@@ -563,7 +563,7 @@ export function AgentRosterPanel({ flushRef, headerTrailing }: AgentRosterPanelP
           aria-label={t('edit.undo')}
           disabled={!history.canUndo}
           onClick={history.undo}
-          className="ml-1 grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+          className="ms-1 grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         >
           <Undo2 className="size-3.5" />
         </button>

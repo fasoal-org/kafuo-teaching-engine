@@ -7,7 +7,8 @@
  * and is pinned by the mirrored vector file `tests/fixtures/kafuo-digest-vectors.json`.
  * It covers the authoritative generation inputs and deliberately excludes
  * `contentResource.url` — a regenerated presigned URL for the same resource id
- * with the same integrity metadata is the same semantic request.
+ * with the same integrity metadata is the same semantic request. The same holds for
+ * `normalizedContentResource.url` and a teacher-guide figure's `image.url`.
  */
 import { createHash } from 'node:crypto';
 
@@ -18,22 +19,46 @@ import {
   normalizeTeachingLanguage,
   teachingTtsCatalogVoice,
 } from '@/lib/audio/teaching-tts-routing';
+import { createLogger } from '@/lib/logger';
 import {
   routedProviderStatus,
   routedProviderUnavailableMessage,
 } from '@/lib/server/speech/teaching-route';
+import {
+  generationModelAvailability,
+  generationModelUnavailableMessage,
+  parseGenerationModelRoute,
+} from '@/lib/server/teaching-model/generation-catalog';
+import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
   bookStructureRequirement,
+  isGuideAnswerModel,
+  isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
+import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
 import type { StageTtsRoute } from '@/lib/types/stage';
-import { KAFUO_EXERCISE_UNUSABLE_REASONS } from '@/lib/types/teaching-package';
+import {
+  KAFUO_EXERCISE_UNUSABLE_REASONS,
+  KAFUO_TEACHER_GUIDE_ANSWER_TYPES,
+  KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS,
+  KAFUO_TEACHER_GUIDE_STATUSES,
+} from '@/lib/types/teaching-package';
 import type {
+  KafuoTeacherGuide,
+  KafuoTeacherGuideAnswer,
+  KafuoTeacherGuideAnswerType,
+  KafuoTeacherGuideFigureImage,
+  KafuoTeacherGuideItem,
+  KafuoTeacherGuideModelAnswer,
+  KafuoTeacherGuideModelAnswerKind,
+  KafuoTeacherGuideStatus,
   GenerationExecutionInput,
+  GenerationModelRoute,
   KafuoContentResource,
   KafuoGenerationRequest,
   KafuoNarrationTtsRoute,
@@ -52,6 +77,8 @@ import type {
 } from '@/lib/types/teaching-package';
 
 type StartGenerationAttemptRequestAlias = StartGenerationAttemptRequest;
+
+const log = createLogger('KafuoGenerationRequest');
 
 /**
  * The Teaching Skills governance contract this TE speaks (Module 2 W6, plan §M).
@@ -610,6 +637,42 @@ export function assertConfiguredTtsRouteAvailable(kafuo: KafuoGenerationContext)
 }
 
 /**
+ * A configured generation route's two models must be registered and keyed on
+ * this server NOW (teaching-generation-model-admin-config-plan-2026-11-18
+ * D-11), or the request is refused with `GENERATION_ROUTE_UNAVAILABLE` (409)
+ * before any attempt starts or resumes — no other model is used. The details
+ * name the env var, never its value. Default routes (no `modelRoute`) keep
+ * today's behaviour. With `TEACHING_SUBJECT_ROUTING=off` there is no subject
+ * policy at all, so the route is ignored (logged once here) and not checked.
+ */
+export function assertConfiguredGenerationRouteAvailable(kafuo: KafuoGenerationContext): void {
+  const route = kafuo.modelRoute;
+  if (!route) return;
+  if (readRoutingMode() === 'off') {
+    log.warn(
+      `configured generation route ${route.settingKey} ignored: TEACHING_SUBJECT_ROUTING=off (stage routes apply)`,
+    );
+    return;
+  }
+  for (const role of ['primary', 'fallback'] as const) {
+    const { model } = route[role];
+    const availability = generationModelAvailability(model);
+    if (availability.available) continue;
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_UNAVAILABLE',
+      generationModelUnavailableMessage(route, role, model, availability),
+      {
+        model,
+        role,
+        reason: availability.unavailableReason,
+        keyEnvVar: availability.keyEnvVar,
+        settingKey: route.settingKey,
+      },
+    );
+  }
+}
+
+/**
  * Parse and validate the structured Kafuo generation request (FRD §9.2).
  * Duplicate stage keys are allowed — identity is `(flowIndex, stage)`.
  * `generation` accepts capability switches ONLY; provider ids, model ids, and
@@ -820,6 +883,15 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
       );
     }
   }
+  // The configured model route is a top-level field (plan D-9), never a
+  // `generation` switch: a misplaced one is refused instead of being dropped
+  // silently onto today's table.
+  if ('modelRoute' in generationRaw) {
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_INVALID',
+      'generation.modelRoute is not accepted: send modelRoute at the top level of the request',
+    );
+  }
   const generation: KafuoGenerationRequest['generation'] = {
     ...(typeof generationRaw.enableWebSearch === 'boolean'
       ? { enableWebSearch: generationRaw.enableWebSearch }
@@ -837,7 +909,20 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   };
 
   const narration = parseNarration(body.narration, item.language);
+  // The optional superadmin-configured generation model route (teaching-
+  // generation-model-admin-config-plan-2026-11-18 D-9). Absent stays absent; a
+  // present one (null included) must be a valid catalogue route, or the request
+  // is refused with GENERATION_ROUTE_INVALID. Availability (the server keys) is
+  // checked by the generate and resume routes, not here.
+  const modelRoute =
+    body.modelRoute === undefined ? undefined : parseGenerationModelRoute(body.modelRoute);
   const bookStructure = parseBookStructure(body.bookStructure);
+  // g5.v11 only (D-20, 16 Nov 2026): parsed, digested and kept on a g5.v11 request
+  // alone. Every other Teaching Model ignores the block entirely, so a malformed one
+  // never fails a g5.v8–g5.v10 request and their digests stay byte-identical.
+  const teacherGuide = isGuideAnswerModel(teachingModel)
+    ? parseTeacherGuide(body.teacherGuide)
+    : undefined;
 
   const request: KafuoGenerationRequest = {
     requestId,
@@ -854,8 +939,25 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     // marker's presence/absence is settled here and carried as a value.
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
     ...(narration ? { narration } : {}),
+    ...(modelRoute ? { modelRoute } : {}),
     ...(bookStructure ? { bookStructure } : {}),
+    ...(teacherGuide ? { teacherGuide } : {}),
   };
+  // Subject Teaching Skills V1: a policy that names a subject Teaching Skill must name
+  // this lesson's own. A policy naming none, as on every g5.v1–g5.v8 request, passes
+  // untouched.
+  assertSubjectTeachingSkillPolicy(teachingModel.flow, subjectCodeOf(request));
+  // A configured route is the lesson's own subject's setting (plan D-8): a key for
+  // another subject would run the wrong choice under a wrong audit lineage.
+  if (modelRoute) {
+    const routeCode = modelRoute.settingKey.slice('teaching_generation.route.'.length);
+    if (routeCode !== subjectCodeOf(request)) {
+      throw new TeachingPackageError(
+        'GENERATION_ROUTE_INVALID',
+        `modelRoute.settingKey ${modelRoute.settingKey} is not the setting of this lesson's subject ${JSON.stringify(subjectCodeOf(request))}`,
+      );
+    }
+  }
   return {
     request,
     aggregate: { tenantId, learningItem: { type: item.type, id: item.id } },
@@ -916,11 +1018,312 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
     const { providerId, voiceId, settingKey } = request.narration.ttsRoute;
     payload.narration = { ttsRoute: { providerId, voiceId, settingKey } };
   }
+  // The configured generation model route decides which models write the
+  // package (teaching-generation-model-admin-config-plan-2026-11-18 D-9), so it
+  // is covered — mirrored by the Backend's `canonical_request_digest`. Absent
+  // stays absent: every request without it keeps its byte-identical digest.
+  if (request.modelRoute !== undefined) {
+    const { primary, fallback, settingKey } = request.modelRoute;
+    payload.modelRoute = {
+      primary: { model: primary.model, thinking: primary.thinking },
+      fallback: { model: fallback.model, thinking: fallback.thinking },
+      settingKey,
+    };
+  }
   // g5.v7: the book map decides what is planned, so it is covered; absent stays absent.
   if (request.bookStructure !== undefined) {
     payload.bookStructure = request.bookStructure;
   }
+  // g5.v11: the guide answers decide what the writers are told, so they are covered
+  // (mirrored by the Backend's `semantic_payload`); absent stays absent. A record's
+  // `modelAnswer` (17 Nov 2026) is covered only when sent: a block without one
+  // digests byte-identically to before. A figure's presigned `image.url` is never
+  // covered (as `contentResource.url`): a re-minted URL is the same semantic request.
+  if (request.teacherGuide !== undefined) {
+    payload.teacherGuide = teacherGuideSnapshotFacts(request.teacherGuide);
+  }
   return payload;
+}
+
+/**
+ * Bounds of the g5.v11 `teacherGuide` block: records, plus a reference item's model answer
+ * (owner, 17 Nov 2026). The block has no byte cap of its own; the item count and the
+ * per-field limits bound it.
+ */
+const TEACHER_GUIDE_MAX_ITEMS = 2_000;
+const TEACHER_GUIDE_ID_MAX = 200;
+const TEACHER_GUIDE_LABEL_MAX = 64;
+const TEACHER_GUIDE_TEXT_MAX = 200;
+const TEACHER_GUIDE_UNIT_MAX = 40;
+/** A model answer's text, in characters (code points, as the Backend's `len`). */
+const TEACHER_GUIDE_MODEL_ANSWER_MAX = 4_000;
+/** A book option letter: A–D, or أ/ا/ب/ج/د. */
+const TEACHER_GUIDE_CHOICE = /^(?:[A-Da-d]|[أابجد])$/u;
+/** The statuses whose items may carry an answer; only these are ever given to a writer. */
+const TEACHER_GUIDE_KEYED_STATUSES: ReadonlySet<string> = new Set(['approved', 'settled']);
+
+/**
+ * The optional g5.v11 `teacherGuide` block (plan §7). Parsed strictly and rebuilt
+ * key by key, so the digest covers exactly the shape the Backend hashes: optional
+ * keys are present only when sent. An answer is required on an `approved` item,
+ * allowed on a `settled` one, and refused on any other status: a doubtful, changed,
+ * reference or missing answer must never reach the Teaching Engine. A model answer
+ * (owner, 17 Nov 2026) is allowed on a `reference` item only, and is never a key.
+ */
+function parseTeacherGuide(raw: unknown): KafuoTeacherGuide | undefined {
+  if (raw === undefined) return undefined;
+  const invalid = (detail: string) =>
+    new TeachingPackageError('INVALID_REQUEST', `teacherGuide ${detail}`);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('must be an object');
+  const record = raw as Record<string, unknown>;
+  const guideId = record.guideId;
+  if (
+    typeof guideId !== 'string' ||
+    guideId.trim() === '' ||
+    guideId.length > TEACHER_GUIDE_ID_MAX
+  ) {
+    throw invalid('requires guideId');
+  }
+  if (!Array.isArray(record.items)) throw invalid('requires an items array');
+  if (record.items.length > TEACHER_GUIDE_MAX_ITEMS) {
+    throw invalid(`items must hold at most ${TEACHER_GUIDE_MAX_ITEMS} entries`);
+  }
+  const seen = new Set<string>();
+  const items = record.items.map((entry, index): KafuoTeacherGuideItem => {
+    const path = `items[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw invalid(`${path} must be an object`);
+    }
+    const item = entry as Record<string, unknown>;
+    if (typeof item.contentUnitId !== 'string' || item.contentUnitId.trim() === '') {
+      throw invalid(`${path}.contentUnitId is required`);
+    }
+    if (
+      typeof item.label !== 'string' ||
+      item.label.trim() === '' ||
+      item.label.length > TEACHER_GUIDE_LABEL_MAX
+    ) {
+      throw invalid(`${path}.label is required`);
+    }
+    if (
+      typeof item.status !== 'string' ||
+      !(KAFUO_TEACHER_GUIDE_STATUSES as readonly string[]).includes(item.status)
+    ) {
+      throw invalid(`${path}.status must be one of ${KAFUO_TEACHER_GUIDE_STATUSES.join(', ')}`);
+    }
+    const status = item.status as KafuoTeacherGuideStatus;
+    const key = `${item.contentUnitId}\u0000${item.label}`;
+    if (seen.has(key))
+      throw invalid(`${path} repeats contentUnitId ${item.contentUnitId} label ${item.label}`);
+    seen.add(key);
+    if (item.answer !== undefined && !TEACHER_GUIDE_KEYED_STATUSES.has(status)) {
+      throw invalid(`${path}.answer is allowed only on an approved or settled item`);
+    }
+    if (item.answer === undefined && status === 'approved') {
+      throw invalid(`${path}.answer is required on an approved item`);
+    }
+    // D-20 style: `modelAnswer: null` is the Backend's "absent" — read (and digested) as absent.
+    const modelAnswerRaw = item.modelAnswer === null ? undefined : item.modelAnswer;
+    if (modelAnswerRaw !== undefined && status !== 'reference') {
+      throw invalid(`${path}.modelAnswer is allowed only on a reference item`);
+    }
+    return {
+      contentUnitId: item.contentUnitId,
+      label: item.label,
+      status,
+      ...(item.answer !== undefined
+        ? { answer: parseTeacherGuideAnswer(item.answer, `${path}.answer`, invalid) }
+        : {}),
+      ...(modelAnswerRaw !== undefined
+        ? {
+            modelAnswer: parseTeacherGuideModelAnswer(
+              modelAnswerRaw,
+              `${path}.modelAnswer`,
+              invalid,
+            ),
+          }
+        : {}),
+    };
+  });
+  return { guideId, items };
+}
+
+/**
+ * A reference item's model answer, rebuilt key by key (other keys dropped): `{ kind, text }`
+ * for a proof or a possible answer, `{ kind: 'figure', image, text? }` for a drawing. The
+ * text is kept exactly as sent (the digest covers it): 1..4000 characters, not blank. D-20
+ * style, a `null` optional key is the Backend's "absent".
+ */
+function parseTeacherGuideModelAnswer(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideModelAnswer {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid(`${path} must be an object`);
+  }
+  const modelAnswer = raw as Record<string, unknown>;
+  const kind = modelAnswer.kind;
+  if (
+    typeof kind !== 'string' ||
+    !(KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS as readonly string[]).includes(kind)
+  ) {
+    throw invalid(
+      `${path}.kind must be one of ${KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS.join(', ')}`,
+    );
+  }
+  const textRaw = modelAnswer.text === null ? undefined : modelAnswer.text;
+  const imageRaw = modelAnswer.image === null ? undefined : modelAnswer.image;
+  const text = (): string => {
+    if (
+      typeof textRaw !== 'string' ||
+      textRaw.trim() === '' ||
+      [...textRaw].length > TEACHER_GUIDE_MODEL_ANSWER_MAX
+    ) {
+      throw invalid(
+        `${path}.text must be a non-empty string of at most ${TEACHER_GUIDE_MODEL_ANSWER_MAX} characters`,
+      );
+    }
+    return textRaw;
+  };
+  if (kind !== 'figure') {
+    if (imageRaw !== undefined) throw invalid(`${path}.image is allowed only on a figure`);
+    return { kind: kind as Exclude<KafuoTeacherGuideModelAnswerKind, 'figure'>, text: text() };
+  }
+  return {
+    kind: 'figure',
+    image: parseTeacherGuideFigureImage(imageRaw, `${path}.image`, invalid),
+    ...(textRaw !== undefined ? { text: text() } : {}),
+  };
+}
+
+/** The size bound of a guide answer drawing, in bytes (the Backend's limit). */
+export const TEACHER_GUIDE_FIGURE_MAX_BYTES = 5_000_000;
+
+/**
+ * A figure's image, rebuilt key by key: a PNG, its lowercase SHA-256 and size, and the
+ * transient presigned `url` (required on the wire, https as `contentResource.url`; never
+ * digested, never persisted, never echoed in an error).
+ */
+function parseTeacherGuideFigureImage(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideFigureImage {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid(`${path} must be an object`);
+  }
+  const image = raw as Record<string, unknown>;
+  const { checksumSha256, mimeType, sizeBytes, url } = image;
+  if (typeof checksumSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(checksumSha256)) {
+    throw invalid(`${path}.checksumSha256 must be 64 lowercase hex characters`);
+  }
+  if (mimeType !== 'image/png') throw invalid(`${path}.mimeType must be image/png`);
+  if (
+    typeof sizeBytes !== 'number' ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 1 ||
+    sizeBytes > TEACHER_GUIDE_FIGURE_MAX_BYTES
+  ) {
+    throw invalid(
+      `${path}.sizeBytes must be an integer from 1 to ${TEACHER_GUIDE_FIGURE_MAX_BYTES}`,
+    );
+  }
+  if (typeof url !== 'string' || url.trim() === '') throw invalid(`${path}.url is required`);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalid(`${path}.url is invalid`);
+  }
+  if (parsed.protocol !== 'https:' && !allowInsecureResourceUrl()) {
+    throw invalid(`${path}.url must use https`);
+  }
+  return { checksumSha256, mimeType, sizeBytes, url };
+}
+
+/**
+ * The guide block without any figure's transient `url` (owner, 17 Nov 2026): what the
+ * digest covers and what the attempt snapshot keeps, as `normalizedContentResourceSnapshotFacts`
+ * for the normalized package. A block with no figure is returned AS IS (the same object),
+ * so its digest and snapshot are byte-identical to before.
+ */
+export function teacherGuideSnapshotFacts(guide: KafuoTeacherGuide): KafuoTeacherGuide {
+  if (!guide.items.some((item) => item.modelAnswer?.kind === 'figure')) return guide;
+  return {
+    guideId: guide.guideId,
+    items: guide.items.map((item) => {
+      const modelAnswer = item.modelAnswer;
+      if (modelAnswer?.kind !== 'figure') return item;
+      const { url: _url, ...image } = modelAnswer.image;
+      return { ...item, modelAnswer: { ...modelAnswer, image } };
+    }),
+  };
+}
+
+function parseTeacherGuideAnswer(
+  raw: unknown,
+  path: string,
+  invalid: (detail: string) => TeachingPackageError,
+): KafuoTeacherGuideAnswer {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw invalid(`${path} must be an object`);
+  const answer = raw as Record<string, unknown>;
+  const type = answer.type;
+  if (
+    typeof type !== 'string' ||
+    !(KAFUO_TEACHER_GUIDE_ANSWER_TYPES as readonly string[]).includes(type)
+  ) {
+    throw invalid(`${path}.type must be one of ${KAFUO_TEACHER_GUIDE_ANSWER_TYPES.join(', ')}`);
+  }
+  // D-20: `unit: null` and `approximate: false` are the Backend's "absent" — read as
+  // absent (and digested as absent), never refused.
+  const unitRaw = answer.unit === null ? undefined : answer.unit;
+  if (
+    unitRaw !== undefined &&
+    (typeof unitRaw !== 'string' ||
+      unitRaw.trim() === '' ||
+      unitRaw.length > TEACHER_GUIDE_UNIT_MAX)
+  ) {
+    throw invalid(`${path}.unit must be a short non-empty string when present`);
+  }
+  const unit = unitRaw !== undefined ? { unit: unitRaw as string } : {};
+  const approximate = answer.approximate === false ? undefined : answer.approximate;
+  if (approximate !== undefined && (type !== 'number' || approximate !== true)) {
+    throw invalid(`${path}.approximate is allowed only as true on a number answer`);
+  }
+  const value = answer.value;
+  switch (type as KafuoTeacherGuideAnswerType) {
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw invalid(`${path}.value must be a finite number`);
+      }
+      return {
+        type: 'number',
+        value,
+        ...unit,
+        ...(answer.approximate === true ? { approximate: true as const } : {}),
+      };
+    case 'choice':
+      if (typeof value !== 'string' || !TEACHER_GUIDE_CHOICE.test(value)) {
+        throw invalid(`${path}.value must be one option letter (A–D or أ/ب/ج/د)`);
+      }
+      return { type: 'choice', value, ...unit };
+    case 'bool':
+      if (typeof value !== 'boolean') throw invalid(`${path}.value must be a boolean`);
+      return { type: 'bool', value, ...unit };
+    case 'text':
+      if (
+        typeof value !== 'string' ||
+        value.trim() === '' ||
+        value.length > TEACHER_GUIDE_TEXT_MAX
+      ) {
+        throw invalid(
+          `${path}.value must be a non-empty string of at most ${TEACHER_GUIDE_TEXT_MAX} characters`,
+        );
+      }
+      return { type: 'text', value, ...unit };
+  }
 }
 
 /**
@@ -1149,8 +1552,20 @@ export interface KafuoGenerationContext {
    * routing table.
    */
   ttsRoute?: StageTtsRoute | null;
+  /**
+   * The configured generation model route (`modelRoute`, teaching-generation-
+   * model-admin-config-plan-2026-11-18 D-9), resolved by the runner instead of
+   * the code table and frozen on the attempt (D-10). Absent ⇒ the table.
+   */
+  modelRoute?: GenerationModelRoute;
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v11 only: the guide items (absent on every other Teaching Model, even when sent).
+   * The ONE place a figure's presigned `image.url` lives (in memory only, as
+   * `contentResource.url`): the runner fetches the drawing from it.
+   */
+  teacherGuide?: KafuoTeacherGuide;
 }
 
 /** Assemble the StartGenerationAttemptRequest for a parsed Kafuo request. */
@@ -1162,10 +1577,18 @@ export function buildKafuoStartRequest(
   // g5.v8 (an explicit Teaching Model check) adds the teacher-parity rules instead.
   const book = bookStructureRequirement(request.bookStructure, {
     teacherParity: isTeacherParityModel(request.teachingModel),
+    // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
+    learnerFirst: isLearnerFirstModel(request.teachingModel),
   });
   const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
+  // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B, D-20:
+  // their snapshots, runs and digests stay byte-identical).
+  const teacherGuide =
+    request.teacherGuide && isGuideAnswerModel(request.teachingModel)
+      ? request.teacherGuide
+      : undefined;
   const execution: GenerationExecutionInput = {
     requirement,
     ...request.generation,
@@ -1190,6 +1613,8 @@ export function buildKafuoStartRequest(
       skillPolicyDigest: computeSkillPolicyDigest(request.teachingModel.flow),
       teachingFlow: request.teachingModel.flow,
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
+      // The snapshot never keeps a figure's presigned URL (owner, 17 Nov 2026).
+      ...(teacherGuide ? { teacherGuide: teacherGuideSnapshotFacts(teacherGuide) } : {}),
       contentResource: contentResourceSnapshotFacts(request.contentResource),
       ...(request.normalizedContentResource
         ? {
@@ -1219,7 +1644,9 @@ export function buildKafuoStartRequest(
       subjectCode: subjectCodeOf(request),
       subjectOffering: request.learningItem.subjectOffering ?? null,
       ...(ttsRoute ? { ttsRoute } : {}),
+      ...(request.modelRoute ? { modelRoute: request.modelRoute } : {}),
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
+      ...(teacherGuide ? { teacherGuide } : {}),
     },
   };
 }

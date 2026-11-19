@@ -9,7 +9,9 @@ import { PlaybackScreenCanvas } from './ScreenCanvas';
  */
 export function SlideEditor({ mode }: { readonly mode: StageMode }) {
   return (
-    <div className="flex flex-col h-full">
+    // `dir="ltr"`: slide elements sit at absolute coordinates, which an RTL page must
+    // not mirror.
+    <div dir="ltr" className="flex flex-col h-full">
       <div className="flex-1 overflow-hidden">
         {mode === 'autonomous' ? <Canvas /> : <PlaybackScreenCanvas />}
       </div>

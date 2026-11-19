@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PdfImage, SceneOutline } from '@openmaic/generation';
 
 import type { AppStage } from '@/lib/document-store/persistence-types';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import {
   insertOneScene,
   type InsertOneSceneInput,
@@ -242,5 +243,115 @@ describe('insertOneScene — exercise slide without verse items', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(JSON.stringify(result.scene.content)).toMatch(/﴿/);
+  });
+});
+
+// g5.v11 (re-review finding 5c): an inserted try-it slide still stating a checked answer
+// after its check is kept and marked like the run's, naming the item, never the answer.
+describe('insertOneScene — g5.v11 try-it slide still stating the answer', () => {
+  const guideAnswers = guideAnswerContextOf({
+    teachingModel: { key: 'g5', version: 'g5.v11' },
+    snapshot: {
+      bookStructure: {
+        templateVersionId: '3',
+        rules: [],
+        units: [
+          {
+            contentUnitId: '6234',
+            kind: 'UNDERSTANDING_CHECK',
+            element: 'try_it',
+            required: true,
+            partIndex: 1,
+          },
+        ],
+      },
+      teacherGuide: {
+        guideId: 'tg-1',
+        items: [
+          {
+            contentUnitId: '6234',
+            label: '1A',
+            status: 'approved',
+            answer: { type: 'number', value: 12 },
+          },
+        ],
+      },
+    },
+    units: [{ unitId: '6234', normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟' }],
+    language: 'ar',
+  })!;
+  const tryOutline: SceneOutline = {
+    ...outline,
+    title: 'جرّب',
+    contentRole: 'check_understanding',
+    sourceContentUnitIds: ['6234'],
+  };
+  const line = (text: string) => ({
+    elements: [
+      {
+        id: 'text-1',
+        type: 'text',
+        content: `<p>${text}</p>`,
+        left: 10,
+        top: 10,
+        width: 300,
+        height: 50,
+        rotate: 0,
+        defaultFontName: 'Tajawal',
+        defaultColor: '#111111',
+      },
+    ],
+  });
+  const insertTry = (canvas: string, speech: string, withGuide = true) => {
+    const generateContent = vi.fn(async () => line(canvas));
+    const generateActions = vi.fn(async () => [{ id: 'a1', type: 'speech', text: speech }]);
+    const { input } = run({
+      outline: tryOutline,
+      ...(withGuide ? { guideAnswers } : {}),
+      generateContent: generateContent as never,
+      generateActions: generateActions as never,
+    });
+    return { result: insertOneScene(input), generateContent, generateActions };
+  };
+  const leakIssues = (scene: AppScene) =>
+    (scene.generationIssues ?? []).filter((issue) => issue.code === 'GUIDE_ANSWER_LEAK');
+
+  it('a canvas still stating it after its check is kept with a GUIDE_ANSWER_LEAK issue', async () => {
+    const { result, generateContent } = insertTry('الحد التالي هو 12', 'جرّب بنفسك.');
+    const inserted = await result;
+    expect(inserted.ok).toBe(true);
+    if (!inserted.ok) return;
+    // First, then once with the check's correction (naming no value).
+    expect(generateContent).toHaveBeenCalledTimes(2);
+    const correction = (
+      generateContent.mock.calls[1] as unknown as [unknown, unknown, { correctiveNote?: string }]
+    )[2].correctiveNote;
+    expect(correction).toContain('1A');
+    expect(correction).not.toMatch(/12|١٢/);
+    const issues = leakIssues(inserted.scene);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('item 1A');
+    expect(issues[0]!.message).not.toMatch(/12|١٢/);
+  });
+
+  it('a narration still stating it after its retry marks the slide too', async () => {
+    const { result, generateActions } = insertTry('ما الحد التالي؟', 'الحد التالي هو 12');
+    const inserted = await result;
+    expect(inserted.ok).toBe(true);
+    if (!inserted.ok) return;
+    expect(generateActions).toHaveBeenCalledTimes(2);
+    expect(leakIssues(inserted.scene).map((issue) => issue.message)).toEqual([
+      expect.stringContaining('item 1A'),
+    ]);
+  });
+
+  it('a try-it slide that states no answer, and an insert without the guide, are unmarked', async () => {
+    const clean = await insertTry('ما الحد التالي؟', 'جرّب بنفسك.').result;
+    expect(clean.ok && clean.scene.generationIssues).toBeFalsy();
+    // g5.v10 (no pinned guide): one content call, nothing checked, nothing marked.
+    const plain = insertTry('الحد التالي هو 12', 'الحد التالي هو 12', false);
+    const inserted = await plain.result;
+    expect(plain.generateContent).toHaveBeenCalledTimes(1);
+    expect(inserted.ok && inserted.scene.generationIssues).toBeFalsy();
   });
 });

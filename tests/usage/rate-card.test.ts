@@ -6,6 +6,7 @@ import {
   RATE_CARD_VERSION,
   selectRate,
 } from '@/lib/server/teaching-model/rate-card';
+import { GENERATION_MODEL_CATALOG } from '@/lib/server/teaching-model/generation-catalog';
 import { policyModelStrings } from '@/lib/server/teaching-model/subject-policy';
 import { computeCost, deriveTokenClasses } from '@/lib/usage/attribute';
 import { normalizeUsage } from '@/lib/usage/normalize';
@@ -48,6 +49,98 @@ describe('rate card', () => {
       expect.objectContaining({ maxInputTokens: 32_000, inputPerM: 0.03, outputPerM: 0.13 }),
       expect.objectContaining({ maxInputTokens: 256_000, inputPerM: 0.1, outputPerM: 0.4 }),
     ]);
+  });
+
+  it('prices Sonnet 5.5 and Gemini 4 Carbon/Hydrogen (owner, 16 Nov 2026)', () => {
+    expect(BASE_RATE_CARD.entries['anthropic:claude-sonnet-5-5']).toEqual({
+      inputPerM: 2,
+      cachedInputPerM: 0.1,
+      cacheWritePerM: 2.5,
+      outputPerM: 10,
+    });
+    // Carbon at its 1 Dec 2026 rate: an upper bound through 30 Nov, never a discount.
+    expect(BASE_RATE_CARD.entries['google:gemini-4-carbon']).toEqual({
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: null,
+      outputPerM: 20,
+    });
+    expect(BASE_RATE_CARD.entries['google:gemini-4-hydrogen']).toEqual({
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    });
+  });
+
+  it('prices Terra and the Qwen Max generation choices (owner, 18 Nov 2026)', () => {
+    const terra = BASE_RATE_CARD.entries['openai:gpt-6.1-terra']!;
+    expect(terra).toMatchObject({ inputPerM: 1, cachedInputPerM: 0.05, outputPerM: 5 });
+    expect(selectRate(terra, 272_001)).toMatchObject({ inputPerM: 2, outputPerM: 7.5 });
+    expect(BASE_RATE_CARD.entries['qwen:qwen4-max']).toEqual({
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: 1.875,
+      outputPerM: 4.5,
+    });
+    expect(BASE_RATE_CARD.entries['qwen:qwen3.8-max']).toEqual({
+      inputPerM: 2,
+      cachedInputPerM: 0.25,
+      cacheWritePerM: 2.5,
+      outputPerM: 6,
+    });
+    // No published cache price: cached input at the fresh rate (an upper bound).
+    expect(BASE_RATE_CARD.entries['qwen:qwen3.7-max']).toEqual({
+      inputPerM: 2.5,
+      cachedInputPerM: 2.5,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    });
+  });
+
+  it('prices every model the generation picker offers (plan D-14)', () => {
+    for (const { model } of GENERATION_MODEL_CATALOG) {
+      expect(BASE_RATE_CARD.entries[model], model).toBeDefined();
+    }
+  });
+
+  it('prices both AI reviewer models (ai-reviewer-layer plan §4.9, verified 10 Nov 2026)', () => {
+    expect(BASE_RATE_CARD.entries['anthropic:claude-opus-5-5']).toEqual({
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: 5,
+      outputPerM: 20,
+    });
+    const sol = BASE_RATE_CARD.entries['openai:gpt-6-sol']!;
+    expect(sol).toMatchObject({
+      inputPerM: 2,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: 2.5,
+      outputPerM: 10,
+    });
+    // Long context (> 272K input tokens): 2x input and cache, 1.5x output.
+    expect(selectRate(sol, 272_000)).toMatchObject({ inputPerM: 2, outputPerM: 10 });
+    expect(selectRate(sol, 272_001)).toMatchObject({
+      inputPerM: 4,
+      cachedInputPerM: 0.4,
+      cacheWritePerM: 5,
+      outputPerM: 15,
+    });
+  });
+
+  it('an Opus 5.5 review with a cache hit is priced once per token class', () => {
+    // AI SDK total 1M = 100K fresh + 900K cache read; 10K output.
+    const classes = deriveTokenClasses(
+      normalizeUsage({
+        inputTokens: 1_000_000,
+        outputTokens: 10_000,
+        inputTokenDetails: { cacheReadTokens: 900_000, cacheWriteTokens: 0 },
+      } as never),
+      'anthropic',
+    );
+    const cost = computeCost(classes, BASE_RATE_CARD, 'anthropic:claude-opus-5-5');
+    // 100K × 4 + 900K × 0.20 + 0 + 10K × 20 = 0.40 + 0.18 + 0.20
+    expect(cost).toMatchObject({ costBasis: 'full', costUsd: 0.78 });
   });
 
   it('selectRate picks the Qwen tier by input tokens (last tier covers overflow)', () => {

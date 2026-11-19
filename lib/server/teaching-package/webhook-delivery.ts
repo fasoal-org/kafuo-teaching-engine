@@ -239,6 +239,32 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
   if (reclaimed.length > 0) {
     log.warn(`reclaimed ${reclaimed.length} stale generation attempt(s) via sweep`);
   }
+  // AI reviewer layer (plan §4.6): start queued package reviews and resume any
+  // whose worker died (lapsed lease). Runs them in the background; never blocks
+  // or fails the delivery below. Loaded lazily (full-gate fix): the reviewer
+  // pulls in the fix loop and the whole generation graph, which no route that
+  // merely reaches this module should load at import time. A failing load is
+  // logged like a failing sweep.
+  await import('@/lib/server/teaching-package/package-review')
+    .then(({ sweepPackageReviews }) =>
+      sweepPackageReviews({
+        pool,
+        ...(options?.now ? { now: options.now } : {}),
+      }),
+    )
+    .catch((error) => {
+      log.error('package review sweep failed:', describeErrorSafely(error));
+    });
+  await import('@/lib/server/teaching-package/question-review')
+    .then(({ sweepQuestionReviews }) =>
+      sweepQuestionReviews({
+        pool,
+        ...(options?.now ? { now: options.now } : {}),
+      }),
+    )
+    .catch((error) => {
+      log.error('question review sweep failed:', describeErrorSafely(error));
+    });
   await deliverPendingWebhooks({
     workerId,
     ...(options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

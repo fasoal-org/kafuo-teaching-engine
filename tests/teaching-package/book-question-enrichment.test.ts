@@ -32,8 +32,25 @@ import {
   enrichmentEnvelopeViolations,
   normalizeEnrichmentEnvelope,
 } from '@/lib/server/teaching-package/book-question-enrichment-prompt';
-import type { QuestionModelPort } from '@/lib/server/teaching-package/question-generation';
+import type {
+  QuestionModelPort,
+  QuestionRouteScope,
+} from '@/lib/server/teaching-package/question-generation';
 import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
+
+/** The default port's route scope, captured (teaching-generation-model plan D-2, D-6). */
+const portMocks = vi.hoisted(() => ({
+  scopes: [] as QuestionRouteScope[],
+  text: '',
+}));
+
+vi.mock('@/lib/server/teaching-package/question-generation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/teaching-package/question-generation')>()),
+  defaultModelPort: async (scope: QuestionRouteScope): Promise<QuestionModelPort> => {
+    portMocks.scopes.push(scope);
+    return { generate: async () => ({ text: portMocks.text, model: 'openai:test' }) };
+  },
+}));
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
@@ -78,7 +95,10 @@ describe('book question enrichment from an approved package', () => {
   const generate = vi.fn();
   const port: QuestionModelPort = { generate: (s, p, accept) => generate(s, p, accept) };
 
-  async function seed(status: TeachingPackageStatus = 'approved') {
+  async function seed(
+    status: TeachingPackageStatus = 'approved',
+    snapshotExtra: Record<string, unknown> = {},
+  ) {
     const learningItem = { type: 'lesson' as const, id: unique('li') };
     const aggregate = { tenantId: TENANT, learningItem };
     const attemptId = unique('tpa');
@@ -128,6 +148,7 @@ describe('book question enrichment from an approved package', () => {
           mimeType: 'application/pdf',
           measuredSha256: 'a'.repeat(64),
         },
+        ...snapshotExtra,
       },
       now: 1,
     });
@@ -194,6 +215,24 @@ describe('book question enrichment from an approved package', () => {
     expect(payload.lesson_source_excerpts[0].content).toContain('common denominator');
     expect(payload.wrong_choice_ids).toEqual(['B', 'C']);
     expect(payload.explanation_required).toBe(true);
+  });
+
+  it('runs on the same frozen generation route as the lesson’s questions (absent → not passed)', async () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.MATH',
+    };
+    portMocks.scopes.length = 0;
+    portMocks.text = JSON.stringify(GOOD);
+    const routed = await seed('approved', { subjectCode: 'MATH', generationRoute: ROUTE });
+    await enrichBookQuestion(pool as never, request(routed));
+    const plain = await seed('approved', { subjectCode: 'MATH' });
+    await enrichBookQuestion(pool as never, request(plain));
+    expect(portMocks.scopes).toHaveLength(2);
+    expect(portMocks.scopes[0]).toMatchObject({ subjectCode: 'MATH', generationRoute: ROUTE });
+    expect(portMocks.scopes[1]).toMatchObject({ subjectCode: 'MATH' });
+    expect(portMocks.scopes[1]).not.toHaveProperty('generationRoute');
   });
 
   it('never returns anything but the four enrichment fields', async () => {

@@ -33,7 +33,15 @@ const mocks = vi.hoisted(() => ({
   events: [] as string[],
 }));
 
-vi.mock('@/lib/ai/llm', () => ({ callLLM: mocks.callLLM, streamLLM: mocks.streamLLM }));
+vi.mock('@/lib/ai/llm', () => ({
+  callLLM: mocks.callLLM,
+  streamLLM: mocks.streamLLM,
+  // The real mapping for a mocked model: Anthropic adaptive thinking + effort.
+  resolveThinkingProviderOptions: (model: { provider?: string }, thinking?: { effort?: string }) =>
+    model.provider === 'anthropic' && thinking
+      ? { anthropic: { thinking: { type: 'adaptive' }, effort: thinking.effort } }
+      : undefined,
+}));
 
 vi.mock('@/lib/server/resolve-model', async () => {
   const providers = await import('@/lib/ai/providers');
@@ -279,6 +287,158 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     });
     expect(Number(fallback!.cache_read_tokens)).toBe(0);
     expect(Number(fallback!.cost_usd)).toBeGreaterThan(0);
+  });
+
+  describe('AI reviewer options (ai-reviewer-layer plan §4.2, §4.5, O-3)', () => {
+    const reviewerPolicy = async () => {
+      const { resolveReviewerRoute } = await import('@/lib/server/teaching-model/reviewer-policy');
+      return resolveReviewerRoute('MATH', 'opus');
+    };
+    const reviewCtx = {
+      tenantId: '1',
+      capability: 'package_review' as const,
+      stage: 'package-review',
+      origin: 'openmaic_runtime' as const,
+      association: {
+        kind: 'generation' as const,
+        generationAttemptId: 'ga-1',
+        versionId: 'tpv-1',
+        reviewId: 'tpr-1',
+      },
+    };
+    const SCHEMA = {
+      type: 'object',
+      properties: { ok: { type: 'boolean' } },
+      required: ['ok'],
+      additionalProperties: false,
+    };
+    const jsonOutput = {
+      kind: 'json' as const,
+      validate: (text: string) => JSON.parse(text) as unknown,
+      jsonSchema: SCHEMA,
+    };
+
+    it('result.outcomes lists every attempt with its model; the ledger row carries the review id', async () => {
+      const route = await reviewerPolicy();
+      mocks.callLLM
+        .mockImplementationOnce(async () => {
+          throw apiError(402, {
+            url: 'https://api.anthropic.com/v1/messages',
+            responseBody: JSON.stringify({
+              type: 'error',
+              error: { type: 'billing_error', message: 'billing' },
+            }),
+          });
+        })
+        .mockResolvedValueOnce(ok('{"ok":true}'));
+      const result = await execute.executeTeachingCall(
+        route.policy,
+        reviewCtx,
+        { prompt: 'p', output: jsonOutput },
+        opts(),
+      );
+      expect(result.servedBy).toBe('fallback');
+      expect(result.parsed).toEqual({ ok: true });
+      expect(result.outcomes).toEqual([
+        {
+          role: 'primary',
+          outcome: 'provider_credit_exhausted',
+          modelString: 'anthropic:claude-opus-5-5',
+        },
+        { role: 'fallback', outcome: 'succeeded', modelString: 'openai:gpt-6-sol' },
+      ]);
+      const [primary, fallback] = await rows('tma-1', 'tma-2');
+      expect(primary).toMatchObject({
+        capability: 'package_review',
+        outcome: 'provider_credit_exhausted',
+        fallback_triggered: true,
+        review_id: 'tpr-1',
+        policy_version: 'reviewer-2026-11',
+        model_string: 'anthropic:claude-opus-5-5',
+        thinking_label: 'high',
+      });
+      expect(fallback).toMatchObject({ outcome: 'succeeded', model_string: 'openai:gpt-6-sol' });
+    });
+
+    it('Anthropic target + jsonSchema: native structured output, thinking merged, no forced tool', async () => {
+      const route = await reviewerPolicy();
+      mocks.callLLM.mockResolvedValueOnce(ok('{"ok":true}'));
+      await execute.executeTeachingCall(
+        route.policy,
+        reviewCtx,
+        { prompt: 'p', output: jsonOutput },
+        opts(),
+      );
+      const [params] = mocks.callLLM.mock.calls[0]!;
+      expect(params.providerOptions).toEqual({
+        anthropic: {
+          thinking: { type: 'adaptive' },
+          effort: 'high',
+          structuredOutputMode: 'outputFormat',
+        },
+      });
+      expect(params.output).toBeDefined();
+      expect(params.toolChoice).toBeUndefined();
+      expect(params.tools).toBeUndefined();
+    });
+
+    it('an OpenAI target with the same spec stays in text mode (validate is the authority)', async () => {
+      mocks.callLLM.mockResolvedValueOnce(ok('{"ok":true}'));
+      await execute.executeTeachingCall(
+        policy,
+        generationCtx,
+        { prompt: 'p', output: jsonOutput },
+        opts(),
+      );
+      const [params] = mocks.callLLM.mock.calls[0]!;
+      expect(params.output).toBeUndefined();
+      expect(params.providerOptions).toBeUndefined();
+    });
+
+    it('O-3: fallbackOnRefusal turns a primary refusal into a fallback; without it the refusal is final', async () => {
+      const route = await reviewerPolicy();
+      mocks.callLLM
+        .mockResolvedValueOnce(ok('', { finishReason: 'content-filter' }))
+        .mockResolvedValueOnce(ok('{"ok":true}'));
+      const result = await execute.executeTeachingCall(
+        route.policy,
+        reviewCtx,
+        { prompt: 'p', output: jsonOutput },
+        { ...opts(), fallbackOnRefusal: true },
+      );
+      expect(result.servedBy).toBe('fallback');
+      expect((await rows('tma-1'))[0]).toMatchObject({
+        outcome: 'safety_refused',
+        fallback_triggered: true,
+        fallback_reason: 'safety_refused',
+      });
+
+      mocks.callLLM.mockReset();
+      mocks.callLLM.mockResolvedValueOnce(ok('', { finishReason: 'content-filter' }));
+      await expect(
+        execute.executeTeachingCall(
+          route.policy,
+          reviewCtx,
+          { prompt: 'p', output: jsonOutput },
+          opts(),
+        ),
+      ).rejects.toMatchObject({ code: 'TEACHING_MODEL_UNAVAILABLE', retryable: false });
+      expect(mocks.callLLM).toHaveBeenCalledTimes(1);
+    });
+
+    it('primaryOnly: one target, no fallback attempt', async () => {
+      const route = await reviewerPolicy();
+      mocks.callLLM.mockRejectedValueOnce(apiError(503));
+      await expect(
+        execute.executeTeachingCall(
+          route.policy,
+          reviewCtx,
+          { prompt: 'p', output: jsonOutput },
+          { ...opts(), primaryOnly: true },
+        ),
+      ).rejects.toMatchObject({ code: 'TEACHING_MODEL_UNAVAILABLE' });
+      expect(mocks.callLLM).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('ORDER: started row → provider call → completion, and the completion is awaited before return', async () => {

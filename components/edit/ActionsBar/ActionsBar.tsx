@@ -1280,7 +1280,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
             const slot = discussionPresent ? actions.length - 1 : actions.length;
             setPickerAt({ slot, rect: e.currentTarget.getBoundingClientRect() });
           }}
-          className="ml-1.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
+          className="ms-1.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
         >
           <Plus className="size-3" />
           {t('edit.timeline.addAction')}
@@ -1302,12 +1302,16 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         </button>
       )}
 
-      <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/60">
+      <span className="ms-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/60">
         {t('edit.timeline.counts', { speech: speechCount, cue: cueCount })}
       </span>
-      {/* pan the timeline viewport left/right */}
+      {/* pan the timeline viewport left/right. `dir="ltr"`: the timeline runs left to
+          right in every language, so its pan buttons keep their physical order. */}
       {!lineMode && (
-        <div className="flex shrink-0 items-center border-l border-gray-200/70 pl-1 dark:border-gray-700/60">
+        <div
+          dir="ltr"
+          className="flex shrink-0 items-center border-s border-gray-200/70 ps-1 dark:border-gray-700/60"
+        >
           <button
             type="button"
             onClick={() => panViewport(-1)}
@@ -1333,7 +1337,7 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
         onClick={toggleCollapsed}
         title={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
         aria-label={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
-        className="ml-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+        className="ms-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
       >
         {lineMode ? <UnfoldVertical className="size-4" /> : <FoldVertical className="size-4" />}
       </button>
@@ -1346,7 +1350,9 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
           it holds, and its fold. Geometry unchanged from the standalone bar. */}
       <div className="flex h-10 shrink-0 items-center gap-2 px-6">{header}</div>
       <SpeechReadingModeSetting />
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+      {/* `dir="ltr"`: the timeline is a left-to-right time axis in every language
+          (owner, 14 Nov 2026: RTL applies to the chrome, not to time). */}
+      <div ref={scrollRef} dir="ltr" className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
         <div className="relative h-full min-w-max">
           {/* the timeline axis (top) — nodes hang below it; hidden when empty
                 so the placeholder hint doesn't collide with the line */}

@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   afterCallbacks: [] as Array<() => unknown>,
   /** Overrides the server provider status for a configured narration route; unset = real. */
   routedStatus: vi.fn(),
+  /** Overrides a generation catalogue model's server availability; unset = real. */
+  modelAvailability: vi.fn(),
 }));
 
 vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
@@ -17,6 +19,16 @@ vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
     ...actual,
     routedProviderStatus: (providerId: string) =>
       mocks.routedStatus(providerId) ?? actual.routedProviderStatus(providerId),
+  };
+});
+
+vi.mock('@/lib/server/teaching-model/generation-catalog', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/server/teaching-model/generation-catalog')>();
+  return {
+    ...actual,
+    generationModelAvailability: (model: string) =>
+      mocks.modelAvailability(model) ?? actual.generationModelAvailability(model),
   };
 });
 
@@ -556,6 +568,117 @@ describe('POST /api/teaching-packages/generate', () => {
       expect(response.status).toBe(202);
       mocks.afterCallbacks[0]!();
       expect(mocks.runGenerationAttempt.mock.calls[0]![2]).not.toHaveProperty('ttsRoute');
+    });
+  });
+
+  describe('a superadmin-configured generation model route (teaching-generation-model plan D-11)', () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.BIOLOGY',
+    };
+    const available = { available: true, unavailableReason: null, keyEnvVar: 'X_API_KEY' };
+    const missing = (keyEnvVar: string) => ({
+      available: false,
+      unavailableReason: 'missing-key',
+      keyEnvVar,
+    });
+
+    // The server provider config is read once per module load, so a model's
+    // availability is set through `modelAvailability` rather than env stubs.
+    afterEach(() => mocks.modelAvailability.mockReset());
+
+    it('both models available: accepted, and the route reaches the runner', async () => {
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE }));
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        subjectCode: 'BIOLOGY',
+        modelRoute: ROUTE,
+      });
+    });
+
+    it('a target without a server key → 409 GENERATION_ROUTE_UNAVAILABLE naming the env var, before any attempt', async () => {
+      mocks.modelAvailability.mockImplementation((model: string) =>
+        model === 'qwen:qwen3.7-flash' ? missing('QWEN_API_KEY') : available,
+      );
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE }));
+      expect(response.status).toBe(409);
+      const json = (await response.json()) as {
+        error: { code: string; message: string; details: Record<string, unknown> };
+      };
+      expect(json.error.code).toBe('GENERATION_ROUTE_UNAVAILABLE');
+      expect(json.error.message).toContain('QWEN_API_KEY');
+      expect(json.error.details).toEqual({
+        model: 'qwen:qwen3.7-flash',
+        role: 'fallback',
+        reason: 'missing-key',
+        keyEnvVar: 'QWEN_API_KEY',
+        settingKey: 'teaching_generation.route.BIOLOGY',
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('the primary is checked first', async () => {
+      mocks.modelAvailability.mockReturnValue(missing('OPENAI_API_KEY'));
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'GENERATION_ROUTE_UNAVAILABLE', details: { role: 'primary' } },
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('a route outside the catalogue → 400 GENERATION_ROUTE_INVALID, before any attempt', async () => {
+      mocks.modelAvailability.mockReturnValue(available);
+      for (const modelRoute of [
+        { ...ROUTE, primary: { model: 'openai:gpt-5-nano', thinking: 'low' } },
+        { ...ROUTE, primary: { ...ROUTE.primary, thinking: 'on' } },
+        { ...ROUTE, fallback: ROUTE.primary },
+        { ...ROUTE, settingKey: 'teaching_generation.route.' },
+      ]) {
+        const response = await post(kafuoShapedBody({ modelRoute }));
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: 'GENERATION_ROUTE_INVALID' },
+        });
+      }
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('TEACHING_SUBJECT_ROUTING=off ignores the route: no availability check', async () => {
+      vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'off');
+      mocks.modelAvailability.mockReturnValue(missing('OPENAI_API_KEY'));
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE }));
+      expect(response.status).toBe(202);
+      expect(mocks.modelAvailability).not.toHaveBeenCalled();
+    });
+
+    it('no route: an unavailable model changes nothing (the table keeps today)', async () => {
+      mocks.modelAvailability.mockReturnValue(missing('OPENAI_API_KEY'));
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody());
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).not.toHaveProperty('modelRoute');
+      expect(mocks.modelAvailability).not.toHaveBeenCalled();
     });
   });
 

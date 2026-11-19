@@ -139,6 +139,12 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
   const editable = inspection.editable === true && inspection.capability === 'write';
   const canConfirm = editable && !scene.alignment.aligned;
+  // A stored value outside the closed vocabulary (a generation defect) is shown
+  // as a disabled choice, so picking a valid one is a real change; Primary and
+  // Supporting edits send `instructional` instead of a value the route refuses.
+  const classificationValid =
+    scene.classification === 'instructional' || scene.classification === 'non-instructional';
+  const selectionClassification = classificationValid ? scene.classification : 'instructional';
 
   const mutate = async (body: Record<string, unknown>, endpoint: 'skills' | 'confirm') => {
     if (isStageEditingLocked(stageId)) return;
@@ -181,7 +187,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
     mutate({ assignments: [{ sceneId, teachingSkills }] }, 'skills');
 
   return (
-    <div className="pointer-events-none absolute bottom-full right-3 z-20 mb-1 flex flex-col items-end">
+    <div className="pointer-events-none absolute bottom-full end-3 z-20 mb-1 flex flex-col items-end">
       <button
         type="button"
         data-testid="teaching-skills-toggle"
@@ -223,6 +229,11 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                       })
                     }
                   >
+                    {classificationValid ? null : (
+                      <option value={scene.classification ?? ''} disabled>
+                        {scene.classification ? `${scene.classification} (invalid)` : '— choose —'}
+                      </option>
+                    )}
                     <option value="instructional">instructional</option>
                     <option value="non-instructional">non-instructional</option>
                   </select>
@@ -253,7 +264,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                               ),
                             }
                           : {}),
-                        classification: scene.classification ?? 'instructional',
+                        classification: selectionClassification,
                       });
                     }}
                   >
@@ -274,7 +285,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
             <div className="flex items-start justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Supporting</dt>
-              <dd data-testid="teaching-skills-supporting" className="text-right">
+              <dd data-testid="teaching-skills-supporting" className="text-end">
                 {scene.supporting.length === 0 ? (
                   <span>—</span>
                 ) : (
@@ -285,7 +296,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
 
             <div className="flex items-center justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Policy</dt>
-              <dd data-testid="teaching-skills-policy" className="text-right">
+              <dd data-testid="teaching-skills-policy" className="text-end">
                 <span>
                   {scene.policy.relationship === 'within-policy'
                     ? 'within policy'
@@ -319,7 +330,7 @@ export function TeachingSkillsPanel({ sceneId }: { readonly sceneId: string }) {
                 ride the failures channel below. */}
             <div className="flex items-center justify-between gap-2">
               <dt className="text-zinc-500 dark:text-zinc-400">Actions</dt>
-              <dd data-testid="teaching-skills-actions" className="text-right">
+              <dd data-testid="teaching-skills-actions" className="text-end">
                 <span>{scene.actionCount ?? 0} in the timeline</span>
                 {(scene.actionFindings ?? []).length > 0 ? (
                   <div className="text-red-600 dark:text-red-400">

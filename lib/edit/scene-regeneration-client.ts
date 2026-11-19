@@ -114,7 +114,13 @@ async function errorFrom(response: Response): Promise<SceneRegenerationRequestEr
 export async function postSlideRegeneration(
   stageId: string,
   sceneId: string,
-  body: { instruction: string; reason: string; idempotencyKey: string; mode?: 'narration' },
+  body: {
+    instruction: string;
+    reason: string;
+    idempotencyKey: string;
+    mode?: 'narration';
+    contentUnitChange?: { op: 'add' | 'remove'; unitId: string };
+  },
   options: { fetchImpl?: typeof fetch; transportRetries?: number } = {},
 ): Promise<{ status: 200; result: RegenerationResult } | { status: 202; regenerationId: string }> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -177,6 +183,11 @@ export interface RunSlideRegenerationInput {
   idempotencyKey: string;
   /** `'narration'`: regenerate the slide's narration only; its canvas is kept (D-5 A). */
   mode?: 'narration';
+  /**
+   * Owner, 14 Nov 2026: a lesson part moves onto (`add`) or off (`remove`) this
+   * slide; the whole slide is rewritten and its part list changes. Never with `mode`.
+   */
+  contentUnitChange?: { op: 'add' | 'remove'; unitId: string };
 }
 
 export interface RunSlideRegenerationDeps {
@@ -225,6 +236,7 @@ export async function runSlideRegeneration(
           reason: input.reason,
           idempotencyKey: input.idempotencyKey,
           ...(input.mode ? { mode: input.mode } : {}),
+          ...(input.contentUnitChange ? { contentUnitChange: input.contentUnitChange } : {}),
         },
         { fetchImpl },
       );

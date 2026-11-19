@@ -127,6 +127,8 @@ export {
   narrowDiagnosticsToPositionPolicy,
   normalizeSourceGroundedVisuals,
   dropStructuralSlideRoles,
+  isLearnerFirstFrameSlide,
+  type LearnerFirstVisualOptions,
   STRUCTURAL_CONTENT_ROLE_DROPPED,
   parseTeachingScenePolicy,
   scenePolicyFor,
@@ -199,6 +201,7 @@ export {
   buildSlideNarrationRoleContext,
   buildSlideRoleContext,
   hiddenStepCatalogue,
+  learnerFirstHiddenStepCatalogue,
 } from './slide-role-guidance.js';
 export type {
   SlideRoleContext,
@@ -231,6 +234,12 @@ export {
 } from './slide-assistance.js';
 export type { SlideAssistanceOptions } from './slide-assistance.js';
 export { explanationLeakedOntoCanvas, findInternalLeaks } from './learner-facing.js';
+export {
+  LATIN_LETTER_READINGS,
+  canvasKeyPoints,
+  learnerFirstNarrationRules,
+  learnerFirstSlideRules,
+} from './learner-first.js';
 export { buildMediaRegistry, unauthorizedConcreteSource } from './media-registry.js';
 export {
   NATIVE_VISUAL_DIRECTIVE,

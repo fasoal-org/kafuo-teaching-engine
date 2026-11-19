@@ -39,7 +39,10 @@ import {
   withCarriedAssistance,
 } from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
-import { generateRegisterCompliantActions } from '@/lib/server/classroom-generation';
+import {
+  generateRegisterCompliantActions,
+  learnerFirstNarrationCheck,
+} from '@/lib/server/classroom-generation';
 import {
   resolveSpokenScriptOptions,
   type SpeechRegisterPolicy,
@@ -57,8 +60,35 @@ import {
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
-import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
-import { isTeacherParityModel } from '@/lib/server/teaching-package/book-coverage';
+import { bankQuizActions, isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
+import {
+  guideAnswerGuardFor,
+  type GuideAnswerContext,
+} from '@/lib/server/teaching-package/guide-answer-context';
+import {
+  guardedSceneContent,
+  type GuideAnswerGuard,
+} from '@/lib/server/teaching-package/guide-answer-guard';
+import {
+  injectGuideAnswers,
+  withoutHiddenAnswerKey,
+} from '@/lib/server/teaching-package/guide-answers';
+import {
+  isGuideWrittenQuestionId,
+  withGuideWrittenQuestions,
+} from '@/lib/server/teaching-package/guide-written-attempts';
+import {
+  isGuideAnswerModel,
+  isLearnerFirstModel,
+  isTeacherParityModel,
+} from '@/lib/server/teaching-package/book-coverage';
+import { asksForTry } from '@/lib/server/teaching-package/try-prompt';
+import { retitledExerciseSolution } from '@/lib/server/teaching-package/exercise-slide-title';
+import {
+  normalizeQuizPoints,
+  normalizeSceneDigits,
+  packageDigitStyle,
+} from '@/lib/server/teaching-package/learner-first-source';
 import {
   pinnedQuotesIn,
   readSacredQuotePins,
@@ -75,7 +105,7 @@ import {
 } from '@/lib/server/teaching-package/sacred-text';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
-import type { AppScene, Scene } from '@/lib/types/stage';
+import type { AppScene, QuizQuestion, Scene } from '@/lib/types/stage';
 
 export interface RegenerateOneSceneInput {
   /** The pre-image (a slide Scene). */
@@ -93,6 +123,20 @@ export interface RegenerateOneSceneInput {
    */
   narrationOnly?: boolean;
   /**
+   * Owner, 14 Nov 2026 (a lesson part moved between slides): the slide's new
+   * lesson-part list. The whole slide is rewritten, the candidate carries this
+   * list, and the invariant check expects it instead of the pre-image's. Absent
+   * → the list is kept exactly. A slide only; never with `narrationOnly`.
+   */
+  sourceContentUnitIds?: readonly string[];
+  /**
+   * With `sourceContentUnitIds`: the slide planned again from its new parts'
+   * text (`replan-moved-slide.ts`). The slide is then generated FRESH from this
+   * plan — no old canvas baseline, no old key points — keeping only its own place
+   * and classification. Absent → the edit-mode rewrite of the current slide.
+   */
+  replannedOutline?: SceneOutline;
+  /**
    * The package version's Teaching Model: a g5.v8 (teacher-parity) package
    * regenerates a solving slide under the visible-working rule, as its run did.
    */
@@ -102,6 +146,14 @@ export interface RegenerateOneSceneInput {
    * (with a teacher-parity model) → a slide citing one shows no verse or hadith item.
    */
   sacredExerciseUnitIds?: readonly string[];
+  /**
+   * g5.v11 (review finding 2): the package's pinned guide, read from the producing
+   * attempt's `inputSnapshot.teacherGuide` (`guideAnswerContextOf`). Present → the
+   * regenerated slide or quiz is checked like the run's (one corrected regeneration,
+   * then D-19 without removal: the failing items lose their guide answer), and an
+   * attempt's narration never reads its hidden key. Absent → unchanged.
+   */
+  guideAnswers?: GuideAnswerContext;
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -187,8 +239,16 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-/** The fields a regeneration never changes (plan §7.3.2). */
-export function regenerationInvariantViolations(pre: AppScene, candidate: AppScene): string[] {
+/**
+ * The fields a regeneration never changes (plan §7.3.2). `sourceContentUnitIds`
+ * is the one exception, and only when a lesson part was moved (owner, 14 Nov
+ * 2026): then the candidate must carry exactly `expectedUnitIds`.
+ */
+export function regenerationInvariantViolations(
+  pre: AppScene,
+  candidate: AppScene,
+  expectedUnitIds?: readonly string[],
+): string[] {
   const violations: string[] = [];
   const check = (field: string, before: unknown, after: unknown) => {
     if (!deepEqual(before, after)) violations.push(field);
@@ -208,7 +268,11 @@ export function regenerationInvariantViolations(pre: AppScene, candidate: AppSce
   check('teachingStage', pre.teachingStage, candidate.teachingStage);
   check('teachingSkills', pre.teachingSkills, candidate.teachingSkills);
   check('learningObjectives', pre.learningObjectives, candidate.learningObjectives);
-  check('sourceContentUnitIds', pre.sourceContentUnitIds, candidate.sourceContentUnitIds);
+  check(
+    'sourceContentUnitIds',
+    expectedUnitIds ? [...expectedUnitIds] : pre.sourceContentUnitIds,
+    candidate.sourceContentUnitIds,
+  );
   return violations;
 }
 
@@ -237,6 +301,43 @@ function seededOutline(pre: AppScene, snapshot: AppDocumentOutline | undefined):
 }
 
 /**
+ * The re-plan's content (key points, description, visuals, assistance) with the
+ * slide's own title, place and classification (owner, 14 Nov 2026), so the
+ * regeneration invariants hold and a move renames nothing: title, outline id,
+ * type, order, slide type, content role and kind, teaching stage and Skills
+ * come from the seeded outline.
+ */
+function withSlideIdentity(
+  planned: SceneOutline,
+  seeded: SceneOutline,
+  unitIds: readonly string[] | undefined,
+): SceneOutline {
+  const {
+    mediaGenerations: _media,
+    slideType: _slideType,
+    contentRole: _contentRole,
+    contentKind: _contentKind,
+    teachingStage: _stage,
+    teachingSkills: _skills,
+    sourceContentUnitIds: _units,
+    ...content
+  } = planned as SceneOutline & { mediaGenerations?: unknown };
+  return {
+    ...content,
+    id: seeded.id,
+    type: seeded.type,
+    order: seeded.order,
+    title: seeded.title,
+    ...(seeded.slideType !== undefined ? { slideType: seeded.slideType } : {}),
+    ...(seeded.contentRole !== undefined ? { contentRole: seeded.contentRole } : {}),
+    ...(seeded.contentKind !== undefined ? { contentKind: seeded.contentKind } : {}),
+    ...(seeded.teachingStage !== undefined ? { teachingStage: seeded.teachingStage } : {}),
+    ...(seeded.teachingSkills !== undefined ? { teachingSkills: seeded.teachingSkills } : {}),
+    ...(unitIds ? { sourceContentUnitIds: [...unitIds] } : {}),
+  };
+}
+
+/**
  * A regeneration writes new narration and never synthesizes audio (4 Oct
  * 2026). On a package that uses TTS, its unvoiced lines are marked exactly as
  * the package build marks them, so the reviewer sees "Regenerate audio"
@@ -261,10 +362,83 @@ function codeOf(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/**
+ * g5.v11 (review finding 2): the guard over the package's outline, its run's
+ * settlements restored, and the outline to generate with its guide blocks rebuilt for
+ * its current plan (re-review finding 2) — or null (no guide pinned). `guard` is null
+ * when this outline holds no keyed item. Re-review finding 3: the plans are made with
+ * THIS outline in the package's outline, so a moved lesson part's slide is planned with
+ * its new units, never the stored ones.
+ */
+function guideGuardOf(
+  input: RegenerateOneSceneInput,
+  outline: SceneOutline,
+): {
+  guard: GuideAnswerGuard | null;
+  outline: SceneOutline;
+  /** Owner (17 Nov 2026): the attempt's engine-written questions (keyed or not). */
+  written: QuizQuestion[];
+} | null {
+  if (!input.guideAnswers) return null;
+  // A moved part's slide is planned with the units it will carry.
+  const planned = input.sourceContentUnitIds
+    ? { ...outline, sourceContentUnitIds: [...input.sourceContentUnitIds] }
+    : outline;
+  const stored = (input.outlineSnapshot?.outlines ?? []) as SceneOutline[];
+  const outlines = stored.some((entry) => entry.id === planned.id)
+    ? stored.map((entry) => (entry.id === planned.id ? planned : entry))
+    : [...stored, planned];
+  const guard = guideAnswerGuardFor(input.guideAnswers, outlines);
+  const [rebuilt] = injectGuideAnswers([planned], guard.effectivePlans(), guard.leftOut());
+  return {
+    guard: guard.planOf(outline.id) ? guard : null,
+    written: guard.writtenQuestionsOf(outline.id),
+    // Only the guide blocks change; the generated outline keeps its own fields.
+    outline:
+      rebuilt && rebuilt !== planned
+        ? { ...outline, description: rebuilt.description, keyPoints: rebuilt.keyPoints }
+        : outline,
+  };
+}
+
+/** Re-review finding 5c: a regenerated slide that still states a checked answer is not kept. */
+const GUIDE_LEAK_KEPT_AS_IT_WAS =
+  "the regenerated slide still states a checked answer before the learner's try; the slide was kept as it was";
+
+/**
+ * Lesson 2-5 (17 Nov 2026, item 214 scene 33): a regenerated solution slide that asks the
+ * learner to try on the screen that shows the answer is not kept: the try belongs on a
+ * slide or attempt before it, which no single-slide edit can add.
+ */
+const TRY_ON_SOLUTION_KEPT_AS_IT_WAS =
+  'the regenerated solution slide asks the learner to try on the screen that shows the answer; the slide was kept as it was';
+
+/** g5.v11: whether a regenerated solution slide poses a try (see the note above). */
+function posesTryOnSolution(
+  input: RegenerateOneSceneInput,
+  elements: ReadonlyArray<Record<string, unknown>>,
+  actions?: ReadonlyArray<{ type: string; text?: unknown }>,
+): boolean {
+  const pre = input.scene;
+  if (!isGuideAnswerModel(input.teachingModel)) return false;
+  if (pre.content.type !== 'slide' || pre.content.contentRole !== 'worked_example') return false;
+  if (elements.some((element) => asksForTry(element.content))) return true;
+  return (actions ?? []).some((action) => action.type === 'speech' && asksForTry(action.text));
+}
+
 export async function regenerateOneScene(
   input: RegenerateOneSceneInput,
 ): Promise<RegenerateOneSceneResult> {
   const pre = input.scene;
+  if (
+    input.sourceContentUnitIds &&
+    (input.narrationOnly || pre.type !== 'slide' || pre.content.type !== 'slide')
+  ) {
+    return failure(
+      'SCENE_TYPE_NOT_REGENERABLE',
+      'only a whole slide can take or give up a lesson part',
+    );
+  }
   if (input.narrationOnly && (pre.type !== 'slide' || pre.content.type !== 'slide')) {
     return failure(
       'SCENE_TYPE_NOT_REGENERABLE',
@@ -288,16 +462,27 @@ export async function regenerateOneScene(
   const now = input.now ?? Date.now;
 
   // 1. The outline, seeded from the persisted Scene and its stored plan. No AI
-  //    image generation: planned media generations are stripped.
-  const outline = seededOutline(pre, input.outlineSnapshot);
+  //    image generation: planned media generations are stripped. A moved lesson
+  //    part (owner, 14 Nov 2026) replaces the content fields with the re-plan.
+  const seeded = seededOutline(pre, input.outlineSnapshot);
+  const replanned = input.replannedOutline
+    ? withSlideIdentity(input.replannedOutline, seeded, input.sourceContentUnitIds)
+    : null;
+  // g5.v11: the guard planned with THIS outline (a moved part's new units, re-review
+  // finding 3), and the outline's guide blocks rebuilt for its current plan.
+  const guided = guideGuardOf(input, replanned ?? seeded);
+  const outline = guided?.outline ?? replanned ?? seeded;
   const legacyInPlace =
     outline.slideType === undefined &&
     outline.contentRole === undefined &&
     outline.contentKind === undefined;
 
-  // 2. Book images (§7.4).
+  // 2. Book images (§7.4). A re-planned slide starts from an empty canvas: only the
+  //    visuals its new plan selects are offered, never the old slide's images.
   const lifted = liftSlideImages({
-    canvas: pre.content.canvas,
+    canvas: replanned
+      ? { elements: [], background: pre.content.canvas.background }
+      : pre.content.canvas,
     sourceVisuals: input.outlineSnapshot?.sourceVisuals,
     suggestedImageIds: outline.suggestedImageIds,
     // The app outline type predates the planner field; the stored plan carries it.
@@ -313,23 +498,57 @@ export async function regenerateOneScene(
   const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
-  try {
-    content = await generateContent(outline, input.aiCallFor(sceneContentStage('slide')), {
+  // g5.v11 (review finding 2): the regenerated slide is checked like the run's.
+  const guard = guided?.guard ?? null;
+  let settledOutline = outline;
+  const generateSlide = (fromOutline: SceneOutline, correctiveNote?: string) =>
+    generateContent(fromOutline, input.aiCallFor(sceneContentStage('slide')), {
       agents,
       languageDirective,
       ...(stage.textDirection ? { textDirection: stage.textDirection } : {}),
       allowProceduralSkill: true,
       ...(assignedImages.length > 0 ? { assignedImages } : {}),
       ...(hasImageMapping ? { imageMapping } : {}),
-      editDirective: input.instruction,
-      baselineContent: baseline,
+      // A re-planned slide is generated fresh from its plan, as an inserted slide
+      // is; every other regeneration edits the current slide.
+      ...(replanned ? {} : { editDirective: input.instruction, baselineContent: baseline }),
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
+      // g5.v10 (learner-first plan W4): the same canvas rules as the run.
+      ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
       ...sacredPromptOf(input),
+      ...(correctiveNote ? { correctiveNote } : {}),
       onFailure: (event) => {
         contentFailure = event;
       },
     });
+  try {
+    content = await generateSlide(outline);
+    if (guard && content && 'elements' in content) {
+      assertRoute();
+      const checked = await guardedSceneContent(
+        guard,
+        outline,
+        content,
+        async (fromOutline, correction) => {
+          const next = await generateSlide(fromOutline, correction);
+          assertRoute();
+          return next && 'elements' in next ? next : null;
+        },
+        { removal: false },
+      );
+      // Re-review finding 5c: still stating a checked answer before the try → the slide
+      // stays as it was before this regeneration (nothing is written).
+      if (checked.leaks.length > 0) {
+        return failure(
+          input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+          GUIDE_LEAK_KEPT_AS_IT_WAS,
+          { failure: 'GUIDE_ANSWER_LEAK' },
+        );
+      }
+      content = checked.content;
+      settledOutline = checked.outline;
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -347,19 +566,47 @@ export async function regenerateOneScene(
       contentFailure ? { failure: contentFailure.code } : undefined,
     );
   }
+  // Lesson 2-5 (17 Nov 2026): a try on the screen that shows the answer → kept as it was.
+  if (posesTryOnSolution(input, content.elements as never)) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      TRY_ON_SOLUTION_KEPT_AS_IT_WAS,
+      { failure: 'TRY_ON_SOLUTION_SLIDE' },
+    );
+  }
 
   // 4. Actions under the register policy; fallback defaults refused.
   // Each lifted book image reaches narration with its own planned note.
   const imageNotes = hasImageMapping
     ? buildNarrationImageNotes(outline, assignedImages, imageMapping)
     : undefined;
-  const generatedActions = await slideActions(input, outline, content, { imageNotes });
+  // A moved lesson part (owner, 14 Nov 2026): the narration follows the move too,
+  // so the narration model gets the same directive as the content model.
+  // g5.v10 (learner-first plan W4): EVERY edit's instruction reaches the narration
+  // too (an AI-review fix changed «اليمين» to «اليسار» on the canvas only, item 208
+  // slide 21), and the narration is checked against the new canvas.
+  const learnerFirst = isLearnerFirstModel(input.teachingModel);
+  const narrationDirective =
+    input.sourceContentUnitIds || (learnerFirst && !replanned) ? input.instruction : undefined;
+  const generatedActions = await slideActions(input, settledOutline, content, {
+    imageNotes,
+    ...(narrationDirective ? { directive: narrationDirective } : {}),
+    ...(learnerFirst ? { learnerFirst: true } : {}),
+    ...(guard ? { guard } : {}),
+  });
   if (!generatedActions.ok) return generatedActions;
   const actions = generatedActions.actions;
+  if (posesTryOnSolution(input, content.elements as never, actions as never)) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      TRY_ON_SOLUTION_KEPT_AS_IT_WAS,
+      { failure: 'TRY_ON_SOLUTION_SLIDE' },
+    );
+  }
 
   // 5. Assembly: same id, carried assistance, the pre-image's canvas frame.
   const built = buildCompleteScene(
-    outline,
+    settledOutline,
     withCarriedAssistance(content, pre as Scene),
     actions,
     pre.stageId,
@@ -393,10 +640,26 @@ export async function regenerateOneScene(
     ...(pre.teachingStage !== undefined ? { teachingStage: pre.teachingStage } : {}),
     ...(pre.teachingSkills !== undefined ? { teachingSkills: pre.teachingSkills } : {}),
     ...(pre.learningObjectives !== undefined ? { learningObjectives: pre.learningObjectives } : {}),
-    ...(pre.sourceContentUnitIds !== undefined
-      ? { sourceContentUnitIds: pre.sourceContentUnitIds }
-      : {}),
+    // A moved lesson part (owner, 14 Nov 2026) sets the new list; otherwise kept.
+    ...(input.sourceContentUnitIds
+      ? { sourceContentUnitIds: [...input.sourceContentUnitIds] }
+      : pre.sourceContentUnitIds !== undefined
+        ? { sourceContentUnitIds: pre.sourceContentUnitIds }
+        : {}),
   } as AppScene;
+  candidate = learnerFirstNormalized(input, candidate);
+  // Lesson 2-5 (17 Nov 2026, g5.v11): an exercise solution slide's title names exactly
+  // the exercises its new canvas solves (scene 35: «حل التمارين ٤–٦» over ex 20 alone).
+  if (isGuideAnswerModel(input.teachingModel) && candidate.content.type === 'slide') {
+    const retitled = retitledExerciseSolution(candidate.title ?? '', candidate.content.canvas);
+    if (retitled) {
+      candidate = {
+        ...candidate,
+        title: retitled.title,
+        content: { ...candidate.content, canvas: retitled.content },
+      } as AppScene;
+    }
+  }
   if (input.governed) {
     // A governed regeneration is a fresh generation-origin baseline (W4.4).
     const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
@@ -407,6 +670,21 @@ export async function regenerateOneScene(
   return validatedSlideCandidate(input, candidate);
 }
 
+/**
+ * Quality plan W5 (g5.v10): a regenerated slide or quiz gets the run's digit style and
+ * quiz points, which until now only fresh scenes got — item 208's review fixes came
+ * back in the reviewer's Arabic-Indic digits. A copy; the pre-image is never touched.
+ */
+function learnerFirstNormalized(input: RegenerateOneSceneInput, candidate: AppScene): AppScene {
+  if (!isLearnerFirstModel(input.teachingModel)) return candidate;
+  const others = input.scenes.filter((scene) => scene.id !== input.scene.id);
+  const style = packageDigitStyle(others as never, input.stage.language);
+  const copy = structuredClone(candidate);
+  normalizeSceneDigits(copy as never, style);
+  normalizeQuizPoints(copy as never);
+  return copy;
+}
+
 /** Step 6 of a slide regeneration: invariants, Actions, the write boundary. */
 function validatedSlideCandidate(
   input: RegenerateOneSceneInput,
@@ -415,7 +693,7 @@ function validatedSlideCandidate(
   const pre = input.scene;
   const sacredRefusal = sacredTextRefusal(input, candidate);
   if (sacredRefusal) return sacredRefusal;
-  const violations = regenerationInvariantViolations(pre, candidate);
+  const violations = regenerationInvariantViolations(pre, candidate, input.sourceContentUnitIds);
   if (violations.length > 0) {
     return failure(
       'SCENE_CONTENT_GENERATION_FAILED',
@@ -457,7 +735,18 @@ async function slideActions(
   input: RegenerateOneSceneInput,
   outline: SceneOutline,
   content: GeneratedSlideContent,
-  options: { imageNotes?: Record<string, NarrationImageNote>; directive?: string },
+  options: {
+    imageNotes?: Record<string, NarrationImageNote>;
+    directive?: string;
+    /** g5.v10: learner-first narration rules and the canvas check. */
+    learnerFirst?: boolean;
+    /**
+     * g5.v11: a try-it slide's narration never states a checked answer — one more
+     * narration with a correction naming no value; still stating it, nothing is written
+     * and the slide stays as it was (re-review finding 5c).
+     */
+    guard?: GuideAnswerGuard;
+  },
 ): Promise<SlideActionsResult> {
   const pre = input.scene;
   const assertRoute = input.assertRouteAvailable ?? (() => {});
@@ -467,15 +756,14 @@ async function slideActions(
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
-  const { imageNotes, directive } = options;
-  let actions;
-  try {
+  const { imageNotes, directive, guard } = options;
+  const narrationOf = (narrationDirective: string | undefined) => {
     const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
     const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
+    return generateRegisterCompliantActions(
       async (registerCorrection) => {
         const correctiveContext =
-          [directive, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+          [narrationDirective, registerCorrection].filter(Boolean).join('\n\n') || undefined;
         let fellBack: SceneActionsFallback | undefined;
         const generated = await generateActions(
           outline,
@@ -493,6 +781,7 @@ async function slideActions(
             ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
             ...(imageNotes ? { imageNotes } : {}),
+            ...(options.learnerFirst ? { learnerFirst: true } : {}),
             ...sacredPromptOf(input),
             onFallback: (info) => {
               fellBack = info;
@@ -512,7 +801,29 @@ async function slideActions(
       input.registerPolicy,
       { title: pre.title, outlineId: outline.id },
       { outline, ctx: sceneCtx },
+      undefined,
+      learnerFirstNarrationCheck(options.learnerFirst, content, undefined, outline.contentRole),
     );
+  };
+  let actions;
+  try {
+    actions = await narrationOf(directive);
+    const leaks = guard ? guard.checkNarration(outline, actions) : [];
+    if (guard && leaks.length > 0) {
+      actions = await narrationOf(
+        [directive, guard.correction(outline, leaks)].filter(Boolean).join('\n\n'),
+      );
+      const left = guard.checkNarration(outline, actions);
+      if (left.length > 0) {
+        guard.settleNarration(outline, left);
+        // Re-review finding 5c: the slide stays as it was before this regeneration.
+        throw new TeachingPackageError(
+          fallbackCode,
+          GUIDE_LEAK_KEPT_AS_IT_WAS.replace('regenerated slide', "regenerated slide's narration"),
+          { failure: 'GUIDE_ANSWER_LEAK' },
+        );
+      }
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -569,6 +880,7 @@ async function regenerateSlideNarration(
           Object.fromEntries(shown.map((entry) => [entry.id, entry.servingPath])),
         )
       : {};
+  const narrationGuard = guideGuardOf(input, outline)?.guard ?? null;
   const generated = await slideActions(
     input,
     outline,
@@ -576,6 +888,9 @@ async function regenerateSlideNarration(
     {
       ...(Object.keys(notes).length > 0 ? { imageNotes: notes } : {}),
       directive: `Rewrite only this slide's narration. The slide's canvas is final: describe and point at only the elements listed above, never an image or element that is not listed. The reviewer's requirements:\n${input.instruction}`,
+      ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+      // g5.v11 (review finding 2): a try-it slide's narration is leak-checked here too.
+      ...(narrationGuard ? { guard: narrationGuard } : {}),
     },
   );
   if (!generated.ok) return generated;
@@ -612,25 +927,58 @@ async function regenerateQuizScene(
   const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
 
-  const outline: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
+  const seeded: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
+  // g5.v11: an attempt's hidden key rebuilt for its current plan (re-review finding 2).
+  const guided = guideGuardOf(input, seeded);
+  const outline = guided?.outline ?? seeded;
 
   const stage = input.stage;
   const agents = stage.generatedAgentConfigs;
   const languageDirective = input.registerPolicy?.directive ?? stage.languageDirective ?? '';
-  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(pre.content.questions)}`;
+  // Owner (17 Nov 2026): the engine's written questions are never the model's to rewrite;
+  // they are appended again after the checks, under the same ids.
+  const ownQuestions = pre.content.questions.filter(
+    (question) => !isGuideWrittenQuestionId(question.id),
+  );
+  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(ownQuestions)}`;
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
-  try {
-    content = await generateContent(outline, input.aiCallFor(sceneContentStage('quiz')), {
+  // g5.v11 (review finding 2): an attempt's regenerated key is checked like the run's.
+  const guard = guided?.guard ?? null;
+  let settledOutline = outline;
+  const generateQuiz = (fromOutline: SceneOutline, correction?: string) =>
+    generateContent(fromOutline, input.aiCallFor(sceneContentStage('quiz')), {
       agents,
       languageDirective,
-      editDirective,
+      editDirective: correction ? `${editDirective}\n\n${correction}` : editDirective,
       ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
       ...sacredPromptOf(input),
       onFailure: (event) => {
         contentFailure = event;
       },
     });
+  try {
+    content = await generateQuiz(outline);
+    if (guard && content && 'questions' in content) {
+      assertRoute();
+      const checked = await guardedSceneContent(
+        guard,
+        outline,
+        content,
+        async (fromOutline, correction) => {
+          const next = await generateQuiz(fromOutline, correction);
+          assertRoute();
+          return next && 'questions' in next ? next : null;
+        },
+        { removal: false },
+      );
+      content = checked.content;
+      settledOutline = checked.outline;
+    }
+    // Owner (17 Nov 2026): the written questions after the model's (none of its own kept).
+    if (guided && content && 'questions' in content) {
+      content = withGuideWrittenQuestions(content, guided.written);
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -649,48 +997,66 @@ async function regenerateQuizScene(
   const fallbackCode: TeachingPackageErrorCode = input.governed
     ? 'GOVERNED_ACTION_GENERATION_FAILED'
     : 'SCENE_ACTION_GENERATION_FAILED';
+  // Review finding 1: an attempt's narration writer never reads its hidden key (the
+  // SAME outline when it carries none, as on every other Teaching Model).
+  const narrationOutline = withoutHiddenAnswerKey(settledOutline);
+  const quizContent = content;
   let actions;
   try {
     const sceneCtx = actionContext(input.scenes as Scene[], pre as Scene);
     const spokenScript = resolveSpokenScriptOptions(input.stage.language, input.registerPolicy);
-    actions = await generateRegisterCompliantActions(
-      async (correctiveContext) => {
-        let fellBack: SceneActionsFallback | undefined;
-        const generated = await generateActions(
-          outline,
-          content,
-          input.aiCallFor('scene-actions'),
-          {
-            ctx: sceneCtx,
-            agents,
-            languageDirective,
-            ...(input.registerPolicy
-              ? { spokenLanguagePolicy: input.registerPolicy.directive }
-              : {}),
-            ...(spokenScript ? { spokenScript } : {}),
-            ...(correctiveContext ? { correctiveContext } : {}),
-            ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
-            ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
-            ...sacredPromptOf(input),
-            onFallback: (info) => {
-              fellBack = info;
+    const narrate = (guideNote?: string) =>
+      generateRegisterCompliantActions(
+        async (registerCorrection) => {
+          const correctiveContext =
+            [guideNote, registerCorrection].filter(Boolean).join('\n\n') || undefined;
+          let fellBack: SceneActionsFallback | undefined;
+          const generated = await generateActions(
+            narrationOutline,
+            quizContent,
+            input.aiCallFor('scene-actions'),
+            {
+              ctx: sceneCtx,
+              agents,
+              languageDirective,
+              ...(input.registerPolicy
+                ? { spokenLanguagePolicy: input.registerPolicy.directive }
+                : {}),
+              ...(spokenScript ? { spokenScript } : {}),
+              ...(correctiveContext ? { correctiveContext } : {}),
+              ...(input.governed ? { flowContext: input.governed.flowContext } : {}),
+              ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
+              ...sacredPromptOf(input),
+              onFallback: (info) => {
+                fellBack = info;
+              },
             },
-          },
-        );
-        if (fellBack && input.refuseFallbackActions) {
-          assertRoute();
-          throw new TeachingPackageError(
-            fallbackCode,
-            'the narration could not be generated (the model answer was unusable); nothing was written',
-            { fallback: fellBack.code },
           );
-        }
-        return filterKnownActions(generated);
-      },
-      input.registerPolicy,
-      { title: pre.title, outlineId: outline.id },
-      { outline, ctx: sceneCtx },
-    );
+          if (fellBack && input.refuseFallbackActions) {
+            assertRoute();
+            throw new TeachingPackageError(
+              fallbackCode,
+              'the narration could not be generated (the model answer was unusable); nothing was written',
+              { fallback: fellBack.code },
+            );
+          }
+          return filterKnownActions(generated);
+        },
+        input.registerPolicy,
+        { title: pre.title, outlineId: outline.id },
+        { outline: narrationOutline, ctx: sceneCtx },
+      );
+    actions = await narrate();
+    // g5.v11: an attempt's narration never states a checked answer (D-19: one more
+    // narration with a correction naming no value, then the model-free one).
+    const leaks = guard ? guard.checkNarration(settledOutline, actions) : [];
+    if (guard && leaks.length > 0) {
+      actions = await narrate(guard.correction(settledOutline, leaks));
+      const left = guard.checkNarration(settledOutline, actions);
+      if (left.length > 0 && guard.settleNarration(settledOutline, left) === 'model_free') {
+        actions = bankQuizActions(input.stage.language, input.stage.subjectCode);
+      }
+    }
   } catch (error) {
     assertRoute();
     if (error instanceof TeachingPackageError)
@@ -699,7 +1065,7 @@ async function regenerateQuizScene(
   }
   assertRoute();
 
-  const built = buildCompleteScene(outline, content, actions, pre.stageId, {
+  const built = buildCompleteScene(settledOutline, content, actions, pre.stageId, {
     sceneId: pre.id,
   }) as AppScene | null;
   if (!built || built.content.type !== 'quiz') {
@@ -716,6 +1082,7 @@ async function regenerateQuizScene(
       ? { sourceContentUnitIds: pre.sourceContentUnitIds }
       : {}),
   } as AppScene;
+  candidate = learnerFirstNormalized(input, candidate);
   if (input.governed) {
     const stamped = buildSceneAlignmentBaseline(candidate, { origin: 'generation', now: now() });
     if (stamped) candidate = { ...candidate, alignmentBaseline: stamped };

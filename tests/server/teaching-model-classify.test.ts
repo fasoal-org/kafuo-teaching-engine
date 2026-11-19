@@ -48,7 +48,123 @@ describe('FALLBACK_ELIGIBLE covers every outcome exactly as ROUTE-02 says', () =
       safety_refused: false,
       aborted: false,
       budget_assertion_failed: false,
+      provider_credit_exhausted: true,
     });
+  });
+});
+
+/** Anthropic's error envelope, as `responseBody` (ai-reviewer-layer plan §4.5). */
+function anthropicError(
+  statusCode: number,
+  type: string,
+  message: string,
+  headers: Record<string, string> = {},
+) {
+  return apiError(statusCode, {
+    url: 'https://api.anthropic.com/v1/messages',
+    responseBody: JSON.stringify({ type: 'error', error: { type, message } }),
+    responseHeaders: headers,
+  });
+}
+
+describe('classifyError — provider_credit_exhausted (ai-reviewer-layer plan §4.5)', () => {
+  it('402 billing_error → provider_credit_exhausted (fallback)', () => {
+    expect(
+      classifyError(
+        anthropicError(402, 'billing_error', 'Your account has a billing issue.'),
+        live,
+      ),
+    ).toMatchObject({
+      outcome: 'provider_credit_exhausted',
+      fallbackEligible: true,
+      errorCode: 'credit_exhausted',
+      errorStatus: 402,
+    });
+  });
+
+  it('400 invalid_request_error naming the credit balance or a spend limit → provider_credit_exhausted', () => {
+    for (const message of [
+      'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
+      'This organization has reached its spend limit.',
+      'Workspace spending limit reached.',
+      'You have reached your specified API usage limits. You will regain access on 2026-12-01.',
+    ]) {
+      expect(
+        classifyError(anthropicError(400, 'invalid_request_error', message), live),
+        message,
+      ).toMatchObject({ outcome: 'provider_credit_exhausted', fallbackEligible: true });
+    }
+  });
+
+  it('400 invalid_request_error with any other message stays request_rejected (the narrow check)', () => {
+    expect(
+      classifyError(
+        anthropicError(
+          400,
+          'invalid_request_error',
+          'messages: text content blocks must be non-empty',
+        ),
+        live,
+      ),
+    ).toMatchObject({ outcome: 'request_rejected', fallbackEligible: false });
+  });
+
+  it('429 rate_limit_error with NO retry-after → provider_credit_exhausted (a tier spend cap)', () => {
+    expect(
+      classifyError(
+        anthropicError(429, 'rate_limit_error', 'Spend cap reached for this tier.'),
+        live,
+      ),
+    ).toMatchObject({ outcome: 'provider_credit_exhausted', fallbackEligible: true });
+  });
+
+  it('429 with retry-after does not switch: rate_limited exactly as today', () => {
+    expect(
+      classifyError(
+        anthropicError(
+          429,
+          'rate_limit_error',
+          'Number of request tokens has exceeded your rate limit.',
+          {
+            'retry-after': '12',
+          },
+        ),
+        live,
+      ),
+    ).toMatchObject({ outcome: 'rate_limited', fallbackEligible: true, errorCode: '429' });
+  });
+
+  it('5xx and 529 overloaded_error behave exactly as today', () => {
+    expect(
+      classifyError(anthropicError(529, 'overloaded_error', 'Overloaded'), live),
+    ).toMatchObject({
+      outcome: 'provider_error',
+      errorCode: '529',
+    });
+    expect(classifyError(anthropicError(500, 'api_error', 'Internal error'), live)).toMatchObject({
+      outcome: 'provider_error',
+      errorCode: '500',
+    });
+  });
+
+  it('an OpenAI or Qwen 400/402/429 keeps its classification (no Anthropic error type)', () => {
+    const openai = (status: number, body: Record<string, unknown>) =>
+      apiError(status, { responseBody: JSON.stringify(body) });
+    expect(
+      classifyError(openai(402, { error: { type: 'billing_error', message: 'pay' } }), live),
+    ).toMatchObject({ outcome: 'request_rejected' });
+    expect(
+      classifyError(
+        openai(400, { error: { type: 'invalid_request_error', message: 'spend limit reached' } }),
+        live,
+      ),
+    ).toMatchObject({ outcome: 'request_rejected' });
+    expect(
+      classifyError(
+        openai(429, { error: { type: 'insufficient_quota', code: 'insufficient_quota' } }),
+        live,
+      ),
+    ).toMatchObject({ outcome: 'rate_limited' });
   });
 });
 

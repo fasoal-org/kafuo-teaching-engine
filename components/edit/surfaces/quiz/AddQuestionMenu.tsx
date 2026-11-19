@@ -45,7 +45,7 @@ export function AddQuestionMenu() {
           <button
             type="button"
             onClick={() => addQuizQuestion(type)}
-            className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-start text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
             <span
               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${tint}`}

@@ -316,9 +316,11 @@ const InteractiveWhiteboardCanvas = forwardRef<
   const canvasTransform = `translate(${canvasScreenX}px, ${canvasScreenY}px) scale(${totalScale})`;
 
   return (
-    /* Viewport — fills workspace, handles pointer events, no clipping */
+    /* Viewport — fills workspace, handles pointer events, no clipping.
+       `dir="ltr"`: whiteboard elements sit at absolute coordinates (RTL page safe). */
     <div
       ref={viewportRef}
+      dir="ltr"
       className="w-full h-full relative select-none"
       style={{
         cursor: isPanning ? 'grabbing' : 'grab',

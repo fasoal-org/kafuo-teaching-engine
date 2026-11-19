@@ -103,7 +103,7 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
             }}
           >
             <div
-              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)]"
+              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)] [&_p]:[unicode-bidi:plaintext] [&_li]:[unicode-bidi:plaintext]"
               style={{
                 // @ts-expect-error CSS custom properties
                 '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,

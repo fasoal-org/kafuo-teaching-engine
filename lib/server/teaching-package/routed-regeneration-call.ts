@@ -26,9 +26,10 @@ import type { LlmStage } from '@/lib/server/model-routes';
 import {
   AccountingUnavailableError,
   executeTeachingCall,
+  TeachingCallAbortedError,
   TeachingModelUnavailableError,
 } from '@/lib/server/teaching-model/execute';
-import { resolveSubjectModelPolicy } from '@/lib/server/teaching-model/resolve-policy';
+import { resolveFrozenGenerationRoute } from '@/lib/server/teaching-model/frozen-generation-route';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 
@@ -50,9 +51,21 @@ export interface RegenerationRouteInput {
   learningItem: { type: string; id: string } | null;
   /** The producing attempt's snapshot subject. */
   snapshotSubjectCode: string | undefined;
+  /**
+   * The producing attempt's frozen generation route (`input_snapshot.
+   * generationRoute`, teaching-generation-model-admin-config-plan-2026-11-18
+   * D-6). Absent → today's table.
+   */
+  snapshotGenerationRoute?: unknown;
   /** The Stage's recorded subject, when it records one. */
   stageSubjectCode: string | undefined;
   queryable?: Queryable;
+  /**
+   * The AI reviewer's run signal (review fix LOW-1): every provider call of
+   * this regeneration stops with it. Absent (the editor's regeneration) →
+   * exactly as before. The `off` routing mode has no ledger route and ignores it.
+   */
+  signal?: AbortSignal;
   /** Test seams. */
   mode?: 'enforced' | 'off';
   execute?: typeof executeTeachingCall;
@@ -88,7 +101,13 @@ export async function createRegenerationRoute(
       { versionId: input.versionId },
     );
   }
-  const policy = await resolveSubjectModelPolicy(subject);
+  // The package's frozen route (D-6); one that can no longer run is replaced
+  // by today's table and the switch is recorded on the regeneration row (D-7).
+  const { policy, routeReplaced } = await resolveFrozenGenerationRoute({
+    subjectCode: subject,
+    frozenRoute: input.snapshotGenerationRoute,
+    step: `slide regeneration ${input.regenerationId}`,
+  });
   const execute = input.execute ?? executeTeachingCall;
   let failure: TeachingPackageError | null = null;
   const generationAttemptId = input.generationAttemptId;
@@ -129,11 +148,20 @@ export async function createRegenerationRoute(
           {
             ...(withImages ? { images } : {}),
             ...(input.queryable ? { queryable: input.queryable } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
           },
         );
         return result.text;
       } catch (error) {
-        if (error instanceof TeachingModelUnavailableError) {
+        if (input.signal?.aborted && error instanceof TeachingCallAbortedError) {
+          // The reviewer run was evicted: stop, never retry. LOW-2: only with
+          // a caller signal; without one the editor keeps its old mapping.
+          failure ??= new TeachingPackageError(
+            'ABORTED',
+            'the regeneration was stopped: the review run that asked for it was evicted',
+          );
+          Object.assign(error, { isRetryable: false });
+        } else if (error instanceof TeachingModelUnavailableError) {
           failure ??= new TeachingPackageError('TEACHING_MODEL_UNAVAILABLE', error.message, {
             subjectCode: policy.subjectCode,
             attemptIds: error.attemptIds,
@@ -160,6 +188,7 @@ export async function createRegenerationRoute(
       policyVersion: policy.policyVersion,
       primary: policy.primary.modelString,
       fallback: policy.fallback.modelString,
+      ...(routeReplaced ? { routeReplaced } : {}),
     },
   };
 }

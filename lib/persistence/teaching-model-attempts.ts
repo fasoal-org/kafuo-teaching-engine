@@ -30,7 +30,12 @@ export type TeachingCapability =
   // Reviewer-driven single-slide regeneration (single-slide-regeneration-plan §8.2).
   | 'scene_regeneration'
   // Reviewer-generated slide for a lesson part (reviewer-generated-slide plan §14).
-  | 'scene_insertion';
+  | 'scene_insertion'
+  // The AI reviewer layer (ai-reviewer-layer plan §4.9): its own spend, never
+  // folded into the generation it reviews.
+  | 'package_review'
+  | 'question_review'
+  | 'outline_review';
 export type TeachingOrigin = 'openmaic_runtime' | 'kafuo_backend';
 export type AttemptRole = 'primary' | 'fallback';
 export type AccountingStatus = 'started' | 'complete' | 'incomplete';
@@ -46,7 +51,10 @@ export type AttemptOutcome =
   | 'request_rejected'
   | 'safety_refused'
   | 'aborted'
-  | 'budget_assertion_failed';
+  | 'budget_assertion_failed'
+  // The provider says the account's credit or spend limit is exhausted
+  // (ai-reviewer-layer plan §4.5). Detected on Anthropic's error types only.
+  | 'provider_credit_exhausted';
 export type CostBasis = 'full' | 'no_cache_detail';
 export type CostUnavailableReason = 'usage_missing' | 'rate_card_missing' | 'accounting_incomplete';
 export type BudgetCounterKind = 'exact' | 'proxy';
@@ -63,13 +71,15 @@ export const ATTEMPT_OUTCOMES: readonly AttemptOutcome[] = [
   'safety_refused',
   'aborted',
   'budget_assertion_failed',
+  'provider_credit_exhausted',
 ];
 
 const TEACHING_MODEL_ATTEMPT_TABLES = `
 CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0),
-  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration','scene_insertion')),
+  capability TEXT NOT NULL CHECK (capability IN ('package_generation','question_generation','help','free_chat','scene_regeneration','scene_insertion',
+                                                 'package_review','question_review','outline_review')),
   subject_code TEXT NOT NULL,
   policy_version TEXT NOT NULL,
   stage TEXT NOT NULL,
@@ -82,7 +92,8 @@ CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   accounting_status TEXT NOT NULL CHECK (accounting_status IN ('started','complete','incomplete')),
   incomplete_reason TEXT CHECK (incomplete_reason IN ('completion_write_lost','process_exit_before_completion')),
   outcome TEXT CHECK (outcome IN ('succeeded','empty_output','unusable_output','provider_error','rate_limited','timeout',
-                                  'provider_content_filter','request_rejected','safety_refused','aborted','budget_assertion_failed')),
+                                  'provider_content_filter','request_rejected','safety_refused','aborted','budget_assertion_failed',
+                                  'provider_credit_exhausted')),
   fallback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
   fallback_reason TEXT,
   error_code TEXT,
@@ -129,6 +140,7 @@ CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   legacy_help_link_ref TEXT,
   scene_regeneration_id TEXT,
   scene_insertion_id TEXT,
+  review_id TEXT,
   worker_id TEXT NOT NULL,
   late_completion BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DOUBLE PRECISION NOT NULL,
@@ -216,6 +228,45 @@ BEGIN
   END IF;
 END;
 $$;
+-- The AI reviewer layer (ai-reviewer-layer plan §4.9): a review association
+-- column, the three reviewer capabilities (a superset CHECK guarded on its own
+-- value, after the two blocks above) and the credit-exhausted outcome (the
+-- outcome CHECK's first widening, guarded the same way). Never narrowed.
+ALTER TABLE teaching_model_attempts ADD COLUMN IF NOT EXISTS review_id TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_model_attempts_capability_check'
+       AND pg_get_constraintdef(oid) LIKE '%outline_review%'
+  ) THEN
+    ALTER TABLE teaching_model_attempts
+      DROP CONSTRAINT IF EXISTS teaching_model_attempts_capability_check;
+    ALTER TABLE teaching_model_attempts
+      ADD CONSTRAINT teaching_model_attempts_capability_check
+      CHECK (capability IN ('package_generation','question_generation','help',
+                            'free_chat','scene_regeneration','scene_insertion',
+                            'package_review','question_review','outline_review'));
+  END IF;
+END;
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_model_attempts_outcome_check'
+       AND pg_get_constraintdef(oid) LIKE '%provider_credit_exhausted%'
+  ) THEN
+    ALTER TABLE teaching_model_attempts
+      DROP CONSTRAINT IF EXISTS teaching_model_attempts_outcome_check;
+    ALTER TABLE teaching_model_attempts
+      ADD CONSTRAINT teaching_model_attempts_outcome_check
+      CHECK (outcome IN ('succeeded','empty_output','unusable_output','provider_error','rate_limited',
+                         'timeout','provider_content_filter','request_rejected','safety_refused',
+                         'aborted','budget_assertion_failed','provider_credit_exhausted'));
+  END IF;
+END;
+$$;
 `;
 
 export const TEACHING_MODEL_ATTEMPTS_SCHEMA = `${TEACHING_MODEL_ATTEMPT_TABLES}
@@ -261,6 +312,8 @@ export type AttemptAssociation =
       sceneRegenerationId?: string | null;
       /** A reviewer-generated slide insertion: same rule, its own row id. */
       sceneInsertionId?: string | null;
+      /** An AI review (package, question set or outline): same rule, its own row id. */
+      reviewId?: string | null;
     }
   | {
       kind: 'turn';
@@ -408,6 +461,7 @@ export interface TeachingModelAttemptRow {
   legacy_help_link_ref: string | null;
   scene_regeneration_id?: string | null;
   scene_insertion_id?: string | null;
+  review_id?: string | null;
   worker_id: string;
   late_completion: boolean;
   created_at: number;
@@ -448,7 +502,7 @@ export async function insertStartedAttempt(
        started_at, origin,
        generation_attempt_id, generation_run, version_id, learning_item_type, learning_item_id, question_set_ref,
        conversation_id, turn_id, help_session_id, student_ref, scene_id, legacy_help_link_ref,
-       worker_id, created_at, scene_regeneration_id, scene_insertion_id
+       worker_id, created_at, scene_regeneration_id, scene_insertion_id, review_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10, $11, $12,
@@ -457,7 +511,7 @@ export async function insertStartedAttempt(
        $17, $18,
        $19, $20, $21, $22, $23, $24,
        $25, $26, $27, $28, $29, $30,
-       $31, $17, $32, $33
+       $31, $17, $32, $33, $34
      )`,
     [
       input.id,
@@ -493,6 +547,7 @@ export async function insertStartedAttempt(
       input.workerId,
       generation?.sceneRegenerationId ?? null,
       generation?.sceneInsertionId ?? null,
+      generation?.reviewId ?? null,
     ],
   );
 }
@@ -795,6 +850,73 @@ export async function readAttempt(
     [id],
   );
   return (result.rows[0] as unknown as TeachingModelAttemptRow | undefined) ?? null;
+}
+
+export interface AttemptSpend {
+  /** How many of the asked attempts the ledger holds. */
+  rows: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+}
+
+/**
+ * The summed tokens and cost of some attempts (by primary key), served or not:
+ * a failed but paid attempt counts too, within ONE tenant (an id of another
+ * tenant counts nothing). Used by the AI reviewer's own row totals; the ledger
+ * stays the authority.
+ */
+export async function sumAttemptSpend(
+  queryable: Queryable,
+  attemptIds: readonly string[],
+  scope: { tenantId: string },
+): Promise<AttemptSpend> {
+  if (attemptIds.length === 0) {
+    return { rows: 0, inputTokens: null, outputTokens: null, costUsd: null };
+  }
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT count(*)::int AS attempt_count,
+            sum(input_tokens_total)::bigint AS input_tokens,
+            sum(output_tokens_total)::bigint AS output_tokens,
+            sum(cost_usd)::numeric AS cost_usd
+       FROM teaching_model_attempts
+      WHERE id = ANY($1::text[]) AND tenant_id = $2`,
+    [[...attemptIds], scope.tenantId],
+  );
+  return spendOf(result.rows[0]);
+}
+
+function spendOf(row: Record<string, unknown> | undefined): AttemptSpend {
+  const num = (value: unknown) =>
+    value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+  return {
+    rows: Number(row?.attempt_count ?? 0),
+    inputTokens: num(row?.input_tokens),
+    outputTokens: num(row?.output_tokens),
+    costUsd: num(row?.cost_usd),
+  };
+}
+
+/**
+ * Every paid attempt of ONE AI review (its `review_id`), whichever run made
+ * it — an evicted run's calls included (review fix L-B). Narrowed by the
+ * review's generation attempt, so it reads through `tma_generation_attempt_idx`,
+ * and scoped to the tenant.
+ */
+export async function sumReviewSpend(
+  queryable: Queryable,
+  scope: { tenantId: string; generationAttemptId: string; reviewId: string },
+): Promise<AttemptSpend> {
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT count(*)::int AS attempt_count,
+            sum(input_tokens_total)::bigint AS input_tokens,
+            sum(output_tokens_total)::bigint AS output_tokens,
+            sum(cost_usd)::numeric AS cost_usd
+       FROM teaching_model_attempts
+      WHERE generation_attempt_id = $1 AND tenant_id = $2 AND review_id = $3`,
+    [scope.generationAttemptId, scope.tenantId, scope.reviewId],
+  );
+  return spendOf(result.rows[0]);
 }
 
 export interface IncompleteAttemptSummary {

@@ -18,6 +18,7 @@ import {
   type StartGenerationAttemptRequest,
 } from '@/lib/server/teaching-package/generation';
 import {
+  assertConfiguredGenerationRouteAvailable,
   assertConfiguredTtsRouteAvailable,
   buildKafuoStartRequest,
   parseKafuoGenerationRequest,
@@ -124,6 +125,13 @@ export async function POST(req: NextRequest) {
       // before any attempt row. The parser already refused an unknown
       // provider/voice or a language mismatch (TTS_ROUTE_INVALID).
       assertConfiguredTtsRouteAvailable(kafuo);
+      // A superadmin-configured generation model route (teaching-generation-
+      // model-admin-config-plan-2026-11-18 D-11): both models must be keyed on
+      // this server NOW, or the request is refused before any attempt row. The
+      // parser already refused a model outside the catalogue, a thinking value
+      // it does not offer, primary = fallback, or a bad settingKey
+      // (GENERATION_ROUTE_INVALID).
+      assertConfiguredGenerationRouteAvailable(kafuo);
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay

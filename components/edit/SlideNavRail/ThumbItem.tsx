@@ -174,14 +174,14 @@ function ThumbItemComponent({
             title={issueTitle}
             aria-label={issueTitle}
             data-testid="scene-generation-issue-dot"
-            className="absolute right-1 top-1 z-10 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-white dark:ring-slate-900"
+            className="absolute end-1 top-1 z-10 size-2 rounded-full bg-red-500 shadow-sm ring-2 ring-white dark:ring-slate-900"
           />
         ) : (
           sceneHasIssues(scene) && (
             <span
               title={t('edit.nav.sceneIncomplete')}
               aria-label={t('edit.nav.sceneIncomplete')}
-              className="absolute right-1 top-1 z-10 size-2 rounded-full bg-amber-400 shadow-sm ring-2 ring-white dark:ring-slate-900"
+              className="absolute end-1 top-1 z-10 size-2 rounded-full bg-amber-400 shadow-sm ring-2 ring-white dark:ring-slate-900"
             />
           )
         )}

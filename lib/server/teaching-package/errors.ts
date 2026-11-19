@@ -375,6 +375,18 @@ export type TeachingPackageErrorCode =
    * before any attempt exists, so no silent lesson is built (D-7).
    */
   | 'TTS_ROUTE_UNAVAILABLE'
+  // --- Superadmin-configured generation model route (teaching-generation-model-admin-config-plan-2026-11-18 D-11) ---
+  /**
+   * `modelRoute` names a model outside the TE catalogue, a thinking value that
+   * model does not offer, the same model twice, or a malformed `settingKey`.
+   * Refused before any attempt exists; never replaced by another model.
+   */
+  | 'GENERATION_ROUTE_INVALID'
+  /**
+   * A configured route's model has no server key (or is not registered) on this
+   * Teaching Engine. Refused before any attempt exists; no other model is used.
+   */
+  | 'GENERATION_ROUTE_UNAVAILABLE'
   // --- Quran and hadith (quran-text-handling-rules-plan Q-5, Q-14) ---
   /**
    * A regenerated or inserted Scene changed, invented, cut, explained or spoke
@@ -403,7 +415,14 @@ export type TeachingPackageErrorCode =
    * Kafuo Release 1 defers. Non-retryable: the remedy is the game-free Teaching
    * Model version (or abandoning an attempt started before the deferral).
    */
-  | 'GAME_GENERATION_DEFERRED';
+  | 'GAME_GENERATION_DEFERRED'
+  // --- Regenerate only the flagged slides (owner, 15 Nov 2026) ---
+  /** The version's current Stage has no finished AI review to take the open findings from. */
+  | 'PACKAGE_REVIEW_NOT_READY'
+  /** The version's AI review (or a flagged-slide regeneration) is still queued or running. */
+  | 'PACKAGE_REVIEW_IN_PROGRESS'
+  /** No open finding sits on a slide a regeneration may fix (only teacher-only issues remain). */
+  | 'NO_REGENERABLE_SLIDES';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_NOT_AWAITING: 409,
@@ -412,6 +431,9 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_SOURCE_DRIFT: 409,
   ADMIN_CORRECTION_ABANDONED: 409,
   GAME_GENERATION_DEFERRED: 422,
+  PACKAGE_REVIEW_NOT_READY: 409,
+  PACKAGE_REVIEW_IN_PROGRESS: 409,
+  NO_REGENERABLE_SLIDES: 409,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,
@@ -549,6 +571,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   NARRATION_AUDIO_GENERATION_FAILED: 502,
   TTS_ROUTE_INVALID: 400,
   TTS_ROUTE_UNAVAILABLE: 409,
+  GENERATION_ROUTE_INVALID: 400,
+  GENERATION_ROUTE_UNAVAILABLE: 409,
   SACRED_TEXT_ALTERED: 502,
   SACRED_TEXT_CANONICAL_MISMATCH: 422,
 };

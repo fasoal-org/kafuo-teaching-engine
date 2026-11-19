@@ -16,6 +16,16 @@
  * | stream `error` part                                           | provider_error           | yes      |
  * | caller abort                                                  | aborted                  | no       |
  * | executor budget assertion                                     | budget_assertion_failed  | no       |
+ * | Anthropic credit/spend exhausted (see below)                  | provider_credit_exhausted | yes     |
+ *
+ * `provider_credit_exhausted` (ai-reviewer-layer plan §4.5) is keyed on
+ * Anthropic's error TYPE in the response body, not on the status alone, so a
+ * 400/402/429 from OpenAI or Qwen keeps today's classification:
+ *  - 402 `billing_error`;
+ *  - 400 `invalid_request_error` whose message names a credit balance or a
+ *    spend/usage limit (the one narrow message check, `SPEND_LIMIT_MESSAGE`);
+ *  - 429 `rate_limit_error` with NO `retry-after` header (a tier spend cap).
+ * A 429 with `retry-after`, 5xx and 529 are classified exactly as before.
  *
  * Error detection is duck-typed on the AI SDK's error shapes (`name`,
  * `statusCode`, `isRetryable`, `responseBody`) in addition to `isInstance`,
@@ -49,6 +59,8 @@ export const FALLBACK_ELIGIBLE: Readonly<Record<AttemptOutcome, boolean>> = Obje
   safety_refused: false,
   aborted: false,
   budget_assertion_failed: false,
+  // The other route can still answer this call (plan D-3).
+  provider_credit_exhausted: true,
 });
 
 function classification(
@@ -72,6 +84,7 @@ interface ErrorShape {
   status?: unknown;
   isRetryable?: unknown;
   responseBody?: unknown;
+  responseHeaders?: unknown;
   data?: unknown;
   cause?: unknown;
 }
@@ -125,6 +138,58 @@ export function isDashScopeInspectionFailure(error: unknown): boolean {
     haystack.includes('data_inspection_failed') ||
     haystack.includes('inappropriate content')
   );
+}
+
+/**
+ * The one message check (plan §4.5): Anthropic answers a credit balance too
+ * low, or an organisation/workspace spend limit reached, with HTTP 400
+ * `invalid_request_error`. Pinned by `tests/server/teaching-model-classify.test.ts`.
+ */
+export const SPEND_LIMIT_MESSAGE =
+  /credit balance is too low|spend(?:ing)? limit|api usage limits?/i;
+
+/** Anthropic's error body: `{ "type": "error", "error": { "type", "message" } }`. */
+function anthropicErrorOf(error: unknown): { type: string; message: string } | null {
+  const s = shape(error);
+  const candidates: unknown[] = [s.data];
+  if (typeof s.responseBody === 'string' && s.responseBody.trim().startsWith('{')) {
+    try {
+      candidates.push(JSON.parse(s.responseBody));
+    } catch {
+      /* not JSON */
+    }
+  }
+  for (const candidate of candidates) {
+    const body = shape(candidate) as { type?: unknown; error?: unknown };
+    const inner = shape(body.error) as { type?: unknown; message?: unknown };
+    if (body.type === 'error' && typeof inner.type === 'string') {
+      return { type: inner.type, message: typeof inner.message === 'string' ? inner.message : '' };
+    }
+  }
+  return null;
+}
+
+/** Whether the failed response carried a `retry-after` header (any case). */
+export function hasRetryAfter(error: unknown): boolean {
+  const headers = shape(error).responseHeaders;
+  if (!headers || typeof headers !== 'object') return false;
+  return Object.keys(headers as Record<string, unknown>).some(
+    (key) => key.toLowerCase() === 'retry-after' || key.toLowerCase() === 'retry-after-ms',
+  );
+}
+
+/** Plan §4.5: the credit or spend limit of the provider account is exhausted. */
+export function isCreditExhausted(error: unknown, status: number | null): boolean {
+  const anthropic = anthropicErrorOf(error);
+  if (!anthropic) return false;
+  if (status === 402) return anthropic.type === 'billing_error';
+  if (status === 400) {
+    return (
+      anthropic.type === 'invalid_request_error' && SPEND_LIMIT_MESSAGE.test(anthropic.message)
+    );
+  }
+  if (status === 429) return anthropic.type === 'rate_limit_error' && !hasRetryAfter(error);
+  return false;
 }
 
 const NETWORK_CODES = new Set([
@@ -185,6 +250,13 @@ export function classifyError(error: unknown, context: ClassifyErrorContext): Cl
 
   const status = statusOf(error);
   if (isApiCallError(error) || status !== null) {
+    if (isCreditExhausted(error, status)) {
+      return classification('provider_credit_exhausted', {
+        code: 'credit_exhausted',
+        status,
+        message,
+      });
+    }
     if (status === 429) return classification('rate_limited', { code: '429', status, message });
     if (status === 408 || status === 409 || status === 425 || (status !== null && status >= 500)) {
       return classification('provider_error', { code: String(status), status, message });

@@ -275,6 +275,109 @@ export interface KafuoBookStructure {
   exercisePolicy?: KafuoExercisePolicy;
 }
 
+/**
+ * g5.v11 (teacher-guide answer referee plan §4/§7): the status of one guide item matched
+ * to OUR question. `approved` = same givens and an independent check agrees; `settled` =
+ * a person settled a doubtful item; the others are never given to the model.
+ */
+export const KAFUO_TEACHER_GUIDE_STATUSES = [
+  'approved',
+  'settled',
+  'doubtful',
+  'changed',
+  'reference',
+  'missing',
+] as const;
+export type KafuoTeacherGuideStatus = (typeof KAFUO_TEACHER_GUIDE_STATUSES)[number];
+
+/** The kinds of a normalized guide answer (`answer.type`). */
+export const KAFUO_TEACHER_GUIDE_ANSWER_TYPES = ['number', 'choice', 'bool', 'text'] as const;
+export type KafuoTeacherGuideAnswerType = (typeof KAFUO_TEACHER_GUIDE_ANSWER_TYPES)[number];
+
+/**
+ * A guide answer, normalized by the backend (`answer_value`). `choice` is the book's
+ * option letter (A–D or أ/ب/ج/د); `approximate` marks a «تقريبًا» answer (5% tolerance).
+ */
+export type KafuoTeacherGuideAnswer =
+  | { type: 'number'; value: number; unit?: string; approximate?: true }
+  | { type: 'choice'; value: string; unit?: string }
+  | { type: 'bool'; value: boolean; unit?: string }
+  | { type: 'text'; value: string; unit?: string };
+
+/**
+ * The kinds of a guide model answer (`modelAnswer.kind`): a proof, an open «إجابة ممكنة»,
+ * or a drawing («مثّل بيانيًا», «ارسم …»).
+ */
+export const KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS = ['proof', 'possible', 'figure'] as const;
+export type KafuoTeacherGuideModelAnswerKind =
+  (typeof KAFUO_TEACHER_GUIDE_MODEL_ANSWER_KINDS)[number];
+
+/**
+ * The guide's answer drawing (owner, 17 Nov 2026): a PNG of at most 5,000,000 bytes.
+ * `url` is the transient presigned GET URL the Backend mints at send time: on the wire
+ * only, never in the digest, the attempt snapshot, logs or responses (like
+ * `contentResource.url`). Every record read after the run has no `url`.
+ */
+export interface KafuoTeacherGuideFigureImage {
+  checksumSha256: string;
+  mimeType: 'image/png';
+  sizeBytes: number;
+  url?: string;
+}
+
+/**
+ * Owner decision (17 Nov 2026): the guide's model answer of a proof or an open «إجابة ممكنة»
+ * question (1..4000 characters), or its answer drawing (an image, with an optional note).
+ * Never a key: it reaches the solution slides' writers only, so the worked proof or
+ * solution follows it and the drawing is shown on that slide.
+ */
+export type KafuoTeacherGuideModelAnswer =
+  | { kind: 'proof' | 'possible'; text: string }
+  | { kind: 'figure'; image: KafuoTeacherGuideFigureImage; text?: string };
+
+/** One guide item, keyed by OUR content unit and OUR item label («1A», «11», «11b»). */
+export interface KafuoTeacherGuideItem {
+  contentUnitId: string;
+  label: string;
+  status: KafuoTeacherGuideStatus;
+  /** Required on `approved`; allowed on `settled`; never on any other status. */
+  answer?: KafuoTeacherGuideAnswer;
+  /** Allowed on `reference` only (owner, 17 Nov 2026); never on any other status. */
+  modelAnswer?: KafuoTeacherGuideModelAnswer;
+}
+
+/**
+ * g5.v11 only: the `teacherGuide` block of a generation request (records only, no page
+ * text; a `reference` record may carry its model answer, owner 17 Nov 2026).
+ */
+export interface KafuoTeacherGuide {
+  guideId: string;
+  items: KafuoTeacherGuideItem[];
+}
+
+/** One g5.v11 settlement pinned on the attempt (`GuideAnswerSettlement` plus its run). */
+export interface GuideAnswerSettlementRecord {
+  outlineId: string;
+  action:
+    | 'questions_removed'
+    | 'items_removed'
+    | 'unverified'
+    | 'narration_replaced'
+    | 'attempt_dropped'
+    | 'final_line_written'
+    | 'key_rewritten';
+  /** The outline ids that left the lesson: only an attempt left with no question. */
+  dropped: string[];
+  removedQuestions: number[];
+  items: Array<{
+    contentUnitId: string;
+    label: string;
+    outcome: 'removed' | 'unverified' | 'written';
+  }>;
+  findings: Array<{ code: string; contentUnitId: string; label: string; where: string }>;
+  generationRun: number;
+}
+
 /** Kafuo Learning Objective reference retained on a scene (app-layer field). */
 export interface SceneLearningObjectiveRef {
   objectiveRef: string;
@@ -338,6 +441,13 @@ export interface GenerationInputSnapshot {
   /** Canonical `provider:model` strings of the subject's Primary and Fallback. */
   primaryModel?: string;
   fallbackModel?: string;
+  /**
+   * The superadmin-configured route the attempt ran under, frozen by the runner
+   * with the subject route (teaching-generation-model-admin-config-plan-2026-11-18
+   * D-10). Absent ⇒ the code-owned table (`policyVersion` `r1-2026-09`). Slide
+   * regeneration, slide insertion and package questions read it back (D-6, D-7).
+   */
+  generationRoute?: GenerationModelRoute;
   /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
   ledgerIncomplete?: boolean;
   /**
@@ -359,6 +469,19 @@ export interface GenerationInputSnapshot {
   teachingFlow?: TeachingFlowEntry[];
   /** g5.v7: the book map, pinned so an outline edit re-checks book coverage. */
   bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v11 only: the approved teacher-guide answers, pinned so a correction re-check,
+   * a resume and the AI reviewer read the same records. Absent on every other model.
+   */
+  teacherGuide?: KafuoTeacherGuide;
+  /**
+   * g5.v11: the items whose checked answer still failed after their one regeneration
+   * (D-19): an attempt question removed, an exercise removed from the lesson, an item
+   * kept unverified, an attempt's narration replaced, or an attempt left with no question
+   * dropped. Pinned per run (merged, never overwritten) BEFORE any pause, so a resumed
+   * run never re-inserts a dropped attempt. Labels and codes only, never an answer value.
+   */
+  guideAnswerSettlements?: GuideAnswerSettlementRecord[];
   /**
    * Stable resource identity/integrity lineage. NEVER carries `url` — the
    * signed retrieval URL is a transient credential (FRD §9.2 secrecy rules).
@@ -560,7 +683,14 @@ export interface GenerationCheckpointSourceRefs {
     }
   >;
   /** Content Unit choices for a person (id, order, title, role) — no text. */
-  contentUnits: Array<{ id: string; order: number; title: string | null; role: string }>;
+  contentUnits: Array<{
+    id: string;
+    order: number;
+    title: string | null;
+    role: string;
+    /** Lesson 2-5 (17 Nov 2026): the normalized subtype (absent on older checkpoints). */
+    subtype?: string | null;
+  }>;
   /** Screening verdicts reused on resume instead of screening again. */
   visualVerdicts: {
     approved: Array<{ id: string; sha256: string }>;
@@ -784,10 +914,21 @@ export interface KafuoGenerationRequest {
    */
   narration?: { ttsRoute: KafuoNarrationTtsRoute };
   /**
+   * The superadmin-configured generation model route for the lesson's subject
+   * (teaching-generation-model-admin-config-plan-2026-11-18 D-9). Absent ⇒ the
+   * code-owned subject table, and the canonical digest is byte-identical to before.
+   */
+  modelRoute?: GenerationModelRoute;
+  /**
    * g5.v7 only: the lesson's book map and Lesson Template. Absent ⇒ every
    * earlier version's planning and digest are unchanged.
    */
   bookStructure?: KafuoBookStructure;
+  /**
+   * g5.v11 (teacher-guide answer referee plan §7): the guide items matched to this
+   * lesson's questions. Covered by the digest when sent; used on g5.v11 only.
+   */
+  teacherGuide?: KafuoTeacherGuide;
 }
 
 /** `narration.ttsRoute` as Kafuo sends it; the model and language come from the TE catalogue. */
@@ -795,6 +936,27 @@ export interface KafuoNarrationTtsRoute {
   providerId: string;
   voiceId: string;
   /** The Kafuo runtime setting key, e.g. `teaching_tts.route.CHEMISTRY` (audit lineage). */
+  settingKey: string;
+}
+
+/**
+ * One target of a configured generation route (plan D-13): a catalogue model
+ * string and one of that model's thinking values (`low`, `on`, …).
+ */
+export interface GenerationRouteTarget {
+  model: string;
+  thinking: string;
+}
+
+/**
+ * `modelRoute` as Kafuo sends it (plan D-9), and as it is frozen on the producing
+ * attempt's `input_snapshot.generationRoute` (D-10). Validated against the TE
+ * catalogue (`lib/server/teaching-model/generation-catalog.ts`).
+ */
+export interface GenerationModelRoute {
+  primary: GenerationRouteTarget;
+  fallback: GenerationRouteTarget;
+  /** The Kafuo runtime setting key, e.g. `teaching_generation.route.MATH` (audit lineage). */
   settingKey: string;
 }
 

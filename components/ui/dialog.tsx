@@ -32,7 +32,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs fixed inset-0 isolate z-50',
+        'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-black/30 duration-150 supports-backdrop-filter:backdrop-blur-[2px] fixed inset-0 isolate z-50',
         className,
       )}
       {...props}
@@ -55,7 +55,10 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'bg-background data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-w-3/4 gap-6 rounded-xl p-6 text-sm ring-1 duration-100 fixed top-1/2 left-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2',
+          // Owner, 14 Nov 2026: softer, roomier popups (2xl corners, a real shadow in place
+          // of the hairline ring), start-aligned text, and the close button at the logical
+          // end so it sits top-left in Arabic. Width stays per dialog.
+          'bg-background data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/5 shadow-2xl shadow-black/15 grid max-w-3/4 gap-5 rounded-2xl p-6 text-start text-sm ring-1 duration-150 fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2',
           className,
         )}
         {...ownerProps}
@@ -64,7 +67,11 @@ function DialogContent({
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
-            <Button variant="ghost" className="absolute top-4 right-4" size="icon-sm">
+            <Button
+              variant="ghost"
+              className="absolute top-4 end-4 rounded-full text-muted-foreground hover:text-foreground"
+              size="icon-sm"
+            >
               <XIcon />
               <span className="sr-only">Close</span>
             </Button>
@@ -77,7 +84,12 @@ function DialogContent({
 
 function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
-    <div data-slot="dialog-header" className={cn('gap-2 flex flex-col', className)} {...props} />
+    <div
+      data-slot="dialog-header"
+      // `pe-8` keeps a long title clear of the close button at the logical end.
+      className={cn('gap-1.5 flex flex-col pe-8 text-start', className)}
+      {...props}
+    />
   );
 }
 
@@ -109,7 +121,7 @@ function DialogTitle({ className, ...props }: React.ComponentProps<typeof Dialog
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn('leading-none font-medium', className)}
+      className={cn('text-base leading-snug font-semibold text-foreground', className)}
       {...props}
     />
   );

@@ -34,12 +34,15 @@
  */
 import { splitSqlStatements, type Queryable } from '@openmaic/storage/document/pg';
 
+import { createLogger } from '@/lib/logger';
 import { LEGACY_TENANT_ID } from '@/lib/types/teaching-package';
 import type {
   GenerationAttempt,
   GenerationAttemptKind,
   GenerationAttemptStatus,
   GenerationInputSnapshot,
+  GenerationModelRoute,
+  GenerationRouteTarget,
   LearningItemRef,
   ReviewEvent,
   ReviewEventType,
@@ -50,6 +53,8 @@ import type {
 } from '@/lib/types/teaching-package';
 
 const TENANT_CHECK = `tenant_id TEXT NOT NULL CHECK (length(tenant_id) > 0)`;
+
+const log = createLogger('TeachingPackagePersistence');
 
 /**
  * The review-event vocabulary. The `scene_regeneration_*` values record the
@@ -110,7 +115,17 @@ const WEBHOOK_EVENT_TYPES = [
   'teaching_package.generation_failed',
   'teaching_package.status_changed',
   'teaching_package.generation_awaiting_correction',
+  // The AI reviewer layer (ai-reviewer-layer plan §4.5): the reviewer moved
+  // between Opus and Sol. It rides on the aggregate of the review that
+  // triggered it; Kafuo must accept it (and advance the sequence) first.
+  'teaching_engine.reviewer_provider_switched',
+  // The terminal result of one package review (plan §4.6): ids, status, counts.
+  'teaching_package.review_completed',
+  // The terminal result of one question-set review (plan §4.7): per-question verdicts.
+  'teaching_question_set.review_completed',
 ] as const;
+/** The newest event type: the delivery-table evolution is guarded on it. */
+const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_question_set.review_completed';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
@@ -235,8 +250,10 @@ CREATE INDEX IF NOT EXISTS tpwd_terminal_failed_idx
 `;
 
 /**
- * Widen the inline event-type CHECK of an existing delivery table for the
- * admin-correction pause event. Guarded on the constraint's own text.
+ * Widen the inline event-type CHECK of an existing delivery table to every
+ * type in `WEBHOOK_EVENT_TYPES` (first the admin-correction pause, then the AI
+ * reviewer events). Guarded on the constraint's own text holding the newest
+ * type, so an older ledger widens once and a re-boot is a no-op. Never narrowed.
  */
 const WEBHOOK_DELIVERY_EVOLUTION = `
 DO $$
@@ -244,7 +261,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conname = 'teaching_package_webhook_deliveries_event_type_check'
-       AND pg_get_constraintdef(oid) LIKE '%generation_awaiting_correction%'
+       AND pg_get_constraintdef(oid) LIKE '%${NEWEST_WEBHOOK_EVENT_TYPE}%'
   ) THEN
     ALTER TABLE teaching_package_webhook_deliveries
       DROP CONSTRAINT IF EXISTS teaching_package_webhook_deliveries_event_type_check;
@@ -644,6 +661,111 @@ const OBSOLETE_INDEX_NAMES = [
   'tpa_tenant_single_inflight',
 ] as const;
 
+/**
+ * The AI reviewer layer (ai-reviewer-layer plan §4.5, §4.6).
+ *
+ * `reviewer_provider_state` is ONE global row (the provider accounts are the
+ * TE's, shared by every tenant): which provider the reviewer uses now, when
+ * and why it last switched, and when the O-2 probe may next try Opus. No row
+ * means the normal route (Opus primary). Epoch milliseconds.
+ */
+const REVIEWER_TABLES = `
+CREATE TABLE IF NOT EXISTS reviewer_provider_state (
+  id TEXT PRIMARY KEY CHECK (id = 'reviewer'),
+  active_provider TEXT NOT NULL CHECK (active_provider IN ('anthropic','openai')),
+  switched_at DOUBLE PRECISION,
+  reason TEXT,
+  next_probe_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+-- One AI review per bound Kafuo generation attempt (plan §4.6). Inserted
+-- 'queued' in the binding transaction; run by the in-process sweep under a
+-- lease; a stale 'queued'/'running' row is resumed, never failed. 'reviewed_at'
+-- marks that the paid first review is stored, so a resume never pays twice.
+CREATE TABLE IF NOT EXISTS teaching_package_reviews (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  learning_item_type TEXT NOT NULL CHECK (learning_item_type IN ('lesson','section')),
+  learning_item_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  attempt_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  subject_code TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','passed','fixed','needs_teacher','unavailable')),
+  provider TEXT CHECK (provider IN ('anthropic','openai')),
+  model TEXT,
+  summary TEXT,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  fixes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_code TEXT,
+  input_tokens BIGINT,
+  output_tokens BIGINT,
+  cost_usd NUMERIC(14,8),
+  book_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+  run_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until DOUBLE PRECISION,
+  reviewed_at DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  started_at DOUBLE PRECISION,
+  completed_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+-- Review fixes D-8: the reviewer read a cut book, saved with the first answer
+-- and read by the teacher report as one warning line.
+ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS book_truncated BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
+CREATE INDEX IF NOT EXISTS tpr_version_idx
+  ON teaching_package_reviews (tenant_id, version_id, created_at);
+CREATE INDEX IF NOT EXISTS tpr_open_idx
+  ON teaching_package_reviews (status, lease_until)
+  WHERE status IN ('queued','running');
+
+-- One AI review of one generated question set (plan §4.7): asked for by Kafuo
+-- after it saved the set (202), run by the same in-process sweep under a
+-- lease, answered by 'teaching_question_set.review_completed'. 'request_id' is
+-- Kafuo's dedup key: a replay answers the same row and never pays twice. The
+-- questions are Kafuo's own copy (TE keeps no question bank).
+CREATE TABLE IF NOT EXISTS teaching_question_reviews (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  learning_item_type TEXT NOT NULL CHECK (learning_item_type IN ('lesson','section')),
+  learning_item_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL,
+  language TEXT NOT NULL,
+  objective_ref TEXT NOT NULL,
+  objective_text TEXT,
+  questions JSONB NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','completed','unavailable')),
+  provider TEXT CHECK (provider IN ('anthropic','openai')),
+  model TEXT,
+  results JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_code TEXT,
+  run_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until DOUBLE PRECISION,
+  reviewed_at DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  started_at DOUBLE PRECISION,
+  completed_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+-- Review fixes M-4: the paid answer is stored under the lease before the
+-- terminal write, and reviewed_at marks it, so a resume never pays twice.
+ALTER TABLE teaching_question_reviews ADD COLUMN IF NOT EXISTS reviewed_at DOUBLE PRECISION;
+
+CREATE UNIQUE INDEX IF NOT EXISTS tqr_tenant_request_unique
+  ON teaching_question_reviews (tenant_id, request_id);
+CREATE INDEX IF NOT EXISTS tqr_open_idx
+  ON teaching_question_reviews (status, lease_until)
+  WHERE status IN ('queued','running');
+`;
+
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}
 ${TEACHING_PACKAGE_INDEXES}`;
 
@@ -681,6 +803,9 @@ export async function ensureTeachingPackageSchema(queryable: Queryable): Promise
     await queryable.query(statement);
   }
   for (const statement of splitSqlStatements(GENERATION_CHECKPOINT_TABLES)) {
+    await queryable.query(statement);
+  }
+  for (const statement of splitSqlStatements(REVIEWER_TABLES)) {
     await queryable.query(statement);
   }
   // Verification: the canonical tenant-scoped indexes are the ONLY unique
@@ -1155,6 +1280,55 @@ const ATTEMPT_COLUMNS = `id,
   started_at,
   completed_at`;
 
+function isStoredRouteTarget(value: unknown): value is GenerationRouteTarget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { model, thinking } = value as Record<string, unknown>;
+  return (
+    typeof model === 'string' && model !== '' && typeof thinking === 'string' && thinking !== ''
+  );
+}
+
+/**
+ * The generation route frozen on a stored snapshot (`input_snapshot.
+ * generationRoute`, teaching-generation-model-admin-config-plan-2026-11-18
+ * D-10), shape-checked on read: exactly `{ primary:{model,thinking},
+ * fallback:{model,thinking}, settingKey }`. Absent → `null`. A malformed stored
+ * value is treated as absent with a warning, never a crash: the later steps then
+ * keep today's table. Catalogue membership is checked when it is resolved.
+ */
+export function storedGenerationRouteOf(raw: unknown): GenerationModelRoute | null {
+  if (raw === undefined) return null;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const { primary, fallback, settingKey } = raw as Record<string, unknown>;
+    if (
+      isStoredRouteTarget(primary) &&
+      isStoredRouteTarget(fallback) &&
+      typeof settingKey === 'string' &&
+      settingKey !== ''
+    ) {
+      return {
+        primary: { model: primary.model, thinking: primary.thinking },
+        fallback: { model: fallback.model, thinking: fallback.thinking },
+        settingKey,
+      };
+    }
+  }
+  log.warn(
+    'input_snapshot.generationRoute is malformed and is treated as absent (the code table applies)',
+  );
+  return null;
+}
+
+/** The snapshot with its frozen `generationRoute` shape-checked (dropped when malformed). */
+function withStoredGenerationRoute(snapshot: GenerationInputSnapshot): GenerationInputSnapshot {
+  if (!snapshot || typeof snapshot !== 'object' || !('generationRoute' in snapshot)) {
+    return snapshot;
+  }
+  const { generationRoute: raw, ...rest } = snapshot;
+  const route = storedGenerationRouteOf(raw);
+  return route ? { ...rest, generationRoute: route } : (rest as GenerationInputSnapshot);
+}
+
 /**
  * The attempt record's snapshot WITHOUT the diagnosis-only
  * `outlineAnswerDiagnostics` (lesson 306, F-1): the raw model text stays on the
@@ -1162,7 +1336,7 @@ const ATTEMPT_COLUMNS = `id,
  * read and the generate replay return it to the backend).
  */
 function attemptSnapshotOf(raw: unknown): GenerationInputSnapshot {
-  const snapshot = raw as GenerationInputSnapshot;
+  const snapshot = withStoredGenerationRoute(raw as GenerationInputSnapshot);
   if (!snapshot || typeof snapshot !== 'object' || !('outlineAnswerDiagnostics' in snapshot)) {
     return snapshot;
   }
@@ -2061,7 +2235,9 @@ export async function readRetainedVersionContext(
       if (!hit) return null;
       return {
         attemptId: String(hit.id),
-        inputSnapshot: hit.input_snapshot as GenerationInputSnapshot,
+        // The frozen generation route is shape-checked here too: slide
+        // regeneration, slide insertion and package questions read it (D-6).
+        inputSnapshot: withStoredGenerationRoute(hit.input_snapshot as GenerationInputSnapshot),
         sourceText: typeof hit.source_text === 'string' ? hit.source_text : null,
         sourceTruncated: hit.source_truncated === true,
       };

@@ -278,6 +278,52 @@ describe('regenerateSceneNarrationAudio', () => {
     expect(legacy.mock.calls[0]![0]).not.toHaveProperty('stage.ttsRoute');
   });
 
+  it('LOW-1: a reviewer run signal reaches synthesis; aborted, nothing is written (absent, exactly as before)', async () => {
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const controller = new AbortController();
+    const inner = synthesizer();
+    const synthesize = vi.fn(async (input: Parameters<typeof inner>[0]) => {
+      const summary = await inner(input);
+      controller.abort(); // the review run is evicted while the audio is made
+      return summary;
+    });
+    const { value, writes } = deps({ synthesize: synthesize as never, signal: controller.signal });
+    await expect(regenerateSceneNarrationAudio(GRANT, 'scene-q', value)).rejects.toMatchObject({
+      code: 'ABORTED',
+    });
+    expect(synthesize.mock.calls[0]![0]).toMatchObject({ signal: controller.signal });
+    expect(writes).toHaveLength(0);
+    // The editor's own audio repair passes no signal and writes as before.
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const editor = synthesizer();
+    const plain = deps({ synthesize: editor });
+    await regenerateSceneNarrationAudio(GRANT, 'scene-q', plain.value);
+    expect(editor.mock.calls[0]![0]).not.toHaveProperty('signal');
+    expect(plain.writes).toHaveLength(1);
+  });
+
+  it('LOW-4: synthesis that throws because the run was evicted reports ABORTED, not a generation failure', async () => {
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const controller = new AbortController();
+    const synthesize = vi.fn(async () => {
+      controller.abort();
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    });
+    const { value, writes } = deps({ synthesize, signal: controller.signal });
+    await expect(regenerateSceneNarrationAudio(GRANT, 'scene-q', value)).rejects.toMatchObject({
+      code: 'ABORTED',
+    });
+    expect(writes).toHaveLength(0);
+    // Without a signal, the same throw keeps today's code.
+    storeState.live = { scene: quiz([line('a1')]), rev: 1 };
+    const failing = vi.fn(async () => {
+      throw new Error('timeout');
+    });
+    await expect(
+      regenerateSceneNarrationAudio(GRANT, 'scene-q', deps({ synthesize: failing }).value),
+    ).rejects.toMatchObject({ code: 'NARRATION_AUDIO_GENERATION_FAILED' });
+  });
+
   it('refuses while a regeneration of the same scene is running, before any synthesis', async () => {
     storeState.live = { scene: quiz([line('a1')]), rev: 1 };
     storeState.running = ['scene-q'];

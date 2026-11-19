@@ -22,6 +22,35 @@
  *    contributes nothing to a ledger cost.
  *  - gpt-6-luna: official OpenAI Standard short-context rates: 0.10 fresh input,
  *    0.01 cached input, 0.125 cache write, 0.50 output per 1M tokens.
+ *  - claude-opus-5-5 (the AI reviewer's primary, ai-reviewer-layer plan §4.9):
+ *    Anthropic pricing page, 10 Nov 2026: 4 input, 5 cache write (5 minutes),
+ *    0.20 cache hit, 20 output per 1M tokens; the full 1M window at one rate.
+ *  - gpt-6-sol (the AI reviewer's fallback): OpenAI model page, 10 Nov 2026:
+ *    2 input, 0.20 cached input, 2.50 cache write, 10 output per 1M tokens. A
+ *    request over 272K input tokens is billed at 2x input and cache, 1.5x output.
+ *  - claude-sonnet-5-5 (owner, 16 Nov 2026): Anthropic's model table: 2 input,
+ *    0.10 cache hit, 10 output per 1M tokens; cache write 2.50 (5 minutes, 1.25x
+ *    input, as for Opus 5.5); the full 1M window at one rate.
+ *  - gemini-4-carbon (owner, 16 Nov 2026): Google's pricing page, 16 Nov 2026:
+ *    2 input / 0.10 cached / 10 output through 30 Nov 2026, then 4 / 0.20 / 20
+ *    from 1 Dec. Priced at the 1 Dec rate: an explicit upper bound, never a
+ *    silent discount, and no re-pricing on 1 Dec. Implicit caching only, so no
+ *    cache write charge.
+ *  - gemini-4-hydrogen (owner, 16 Nov 2026): the same page: 1.50 input, 0.075
+ *    cached, 7.50 output per 1M tokens; implicit caching only, no write charge.
+ *  - gpt-6.1-terra (a generation choice, owner 15 and 18 Nov 2026): OpenAI model
+ *    page, 15 Nov 2026: 1 input, 0.05 cached input, 1.25 cache write (30 minutes),
+ *    5 output per 1M tokens; past 272K input tokens 2x input and cache, 1.5x output.
+ *  - Qwen Max generation choices (owner, 18 Nov 2026), Alibaba Model Studio
+ *    pricing page, International (Singapore), 18 Nov 2026, one tier up to 1M:
+ *    - qwen4-max: 1.5 input, 0.075 cache hit, 1.875 cache write (5 minutes), 4.5 output;
+ *    - qwen3.8-max: 2 input, 0.25 implicit cache (the upper bound over the 0.17
+ *      explicit cache read), 2.5 explicit cache write, 6 output;
+ *    - qwen3.7-max: 2.5 input, 7.5 output; no cache price is published, so cached
+ *      input is priced at the fresh rate (an upper bound) and the write is unpriced.
+ *
+ * The reviewer and new-model entries are additive: no existing model is
+ * re-priced, so the version string is unchanged.
  */
 
 export const RATE_CARD_VERSION = 'rc-2026-09-23';
@@ -72,6 +101,42 @@ const QWEN_TIERS: RateTier[] = [
   },
 ];
 
+/** GPT-6 Sol: Standard rates, and the long-context rates past 272K input tokens. */
+const SOL_TIERS: RateTier[] = [
+  {
+    maxInputTokens: 272_000,
+    inputPerM: 2,
+    cachedInputPerM: 0.2,
+    cacheWritePerM: 2.5,
+    outputPerM: 10,
+  },
+  {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    inputPerM: 4,
+    cachedInputPerM: 0.4,
+    cacheWritePerM: 5,
+    outputPerM: 15,
+  },
+];
+
+/** GPT-6.1 Terra: Standard rates, and the long-context rates past 272K input tokens. */
+const TERRA_61_TIERS: RateTier[] = [
+  {
+    maxInputTokens: 272_000,
+    inputPerM: 1,
+    cachedInputPerM: 0.05,
+    cacheWritePerM: 1.25,
+    outputPerM: 5,
+  },
+  {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    inputPerM: 2,
+    cachedInputPerM: 0.1,
+    cacheWritePerM: 2.5,
+    outputPerM: 7.5,
+  },
+];
+
 export const BASE_RATE_CARD: RateCard = Object.freeze({
   version: RATE_CARD_VERSION,
   entries: Object.freeze({
@@ -96,6 +161,56 @@ export const BASE_RATE_CARD: RateCard = Object.freeze({
       cachedInputPerM: 0.01,
       cacheWritePerM: 0.125,
       outputPerM: 0.5,
+    },
+    'anthropic:claude-opus-5-5': {
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: 5,
+      outputPerM: 20,
+    },
+    'openai:gpt-6-sol': {
+      ...SOL_TIERS[0]!,
+      tiers: SOL_TIERS,
+    },
+    'anthropic:claude-sonnet-5-5': {
+      inputPerM: 2,
+      cachedInputPerM: 0.1,
+      cacheWritePerM: 2.5,
+      outputPerM: 10,
+    },
+    'google:gemini-4-carbon': {
+      inputPerM: 4,
+      cachedInputPerM: 0.2,
+      cacheWritePerM: null,
+      outputPerM: 20,
+    },
+    'google:gemini-4-hydrogen': {
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
+    },
+    'openai:gpt-6.1-terra': {
+      ...TERRA_61_TIERS[0]!,
+      tiers: TERRA_61_TIERS,
+    },
+    'qwen:qwen4-max': {
+      inputPerM: 1.5,
+      cachedInputPerM: 0.075,
+      cacheWritePerM: 1.875,
+      outputPerM: 4.5,
+    },
+    'qwen:qwen3.8-max': {
+      inputPerM: 2,
+      cachedInputPerM: 0.25,
+      cacheWritePerM: 2.5,
+      outputPerM: 6,
+    },
+    'qwen:qwen3.7-max': {
+      inputPerM: 2.5,
+      cachedInputPerM: 2.5,
+      cacheWritePerM: null,
+      outputPerM: 7.5,
     },
   }),
 });

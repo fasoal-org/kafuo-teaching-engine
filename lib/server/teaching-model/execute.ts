@@ -32,10 +32,10 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { ModelMessage } from 'ai';
+import { jsonSchema, Output, type JSONValue, type ModelMessage } from 'ai';
 import type { Queryable } from '@openmaic/storage/document/pg';
 
-import { callLLM, streamLLM } from '@/lib/ai/llm';
+import { callLLM, resolveThinkingProviderOptions, streamLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import {
@@ -104,7 +104,18 @@ export interface TeachingCallContext {
   completeAttempt?: (attemptId: string, completion: AttemptCompletionInput) => Promise<void>;
 }
 
-export type StructuredOutputSpec = { kind: 'json'; validate(text: string): unknown };
+export type StructuredOutputSpec = {
+  kind: 'json';
+  validate(text: string): unknown;
+  /**
+   * The JSON schema sent to the provider as native structured output
+   * (ai-reviewer-layer plan §4.2). Anthropic targets only: `@ai-sdk/anthropic`
+   * 3.0.71 does not know `claude-opus-5-5` and would otherwise emulate the
+   * schema with a forced `json` tool, which Opus 5.5 answers with a 400. Other
+   * providers keep text mode; `validate` remains the authority either way.
+   */
+  jsonSchema?: Record<string, unknown>;
+};
 
 export interface TeachingCallParams {
   system?: string;
@@ -119,6 +130,14 @@ export interface TeachingCallOptions {
   signal?: AbortSignal;
   /** Source visuals attached to the call: the target must have vision (AMB-08). */
   images?: ReadonlyArray<unknown>;
+  /**
+   * AI reviewer calls only (ai-reviewer-layer plan O-3): a `safety_refused`
+   * answer from the primary falls back instead of ending the call. Generation
+   * never sets it, so its refusals stay final.
+   */
+  fallbackOnRefusal?: boolean;
+  /** AI reviewer calls only (plan D-3): run the primary alone, no fallback target. */
+  primaryOnly?: boolean;
   // --- dependency seams (tests, or a caller that already holds a client) ---
   queryable?: Queryable;
   now?: () => number;
@@ -137,11 +156,22 @@ export interface TeachingCallTimings {
   primaryFailureMs: number | null;
 }
 
+export interface TeachingCallOutcome {
+  role: AttemptRole;
+  outcome: AttemptOutcome;
+  modelString: string;
+}
+
 export interface TeachingCallResult {
   text: string;
   parsed?: unknown;
   servedBy: AttemptRole;
   attemptIds: string[];
+  /**
+   * Every attempt of this call, in order (the AI reviewer reads the primary's).
+   * Always set by the executor; optional so existing fakes stay valid.
+   */
+  outcomes?: TeachingCallOutcome[];
   usage: AttributedUsage | null;
   timings: TeachingCallTimings;
 }
@@ -166,13 +196,13 @@ export class TeachingModelUnavailableError extends Error {
   readonly status = 503;
   readonly retryable: boolean;
   readonly attemptIds: string[];
-  readonly outcomes: Array<{ role: AttemptRole; outcome: AttemptOutcome }>;
+  readonly outcomes: Array<{ role: AttemptRole; outcome: AttemptOutcome; modelString?: string }>;
 
   constructor(
     message: string,
     options: {
       attemptIds: string[];
-      outcomes: Array<{ role: AttemptRole; outcome: AttemptOutcome }>;
+      outcomes: Array<{ role: AttemptRole; outcome: AttemptOutcome; modelString?: string }>;
       retryable: boolean;
     },
   ) {
@@ -287,8 +317,17 @@ function needsVision(params: TeachingCallParams, opts: TeachingCallOptions): boo
  * see them (AMB-08): then the fallback is chosen deterministically before
  * any call, with `fallback_reason = 'primary_lacks_vision'` on its row.
  */
-function planTargets(policy: ResolvedSubjectPolicy, vision: boolean): PlannedTarget[] {
+function planTargets(
+  policy: ResolvedSubjectPolicy,
+  vision: boolean,
+  primaryOnly = false,
+): PlannedTarget[] {
   const hasVision = (t: ResolvedTarget) => t.modelInfo.capabilities?.vision === true;
+  if (primaryOnly) {
+    return !vision || hasVision(policy.primary)
+      ? [{ target: policy.primary, preCallFallbackReason: null }]
+      : [];
+  }
   if (!vision) {
     return [
       { target: policy.primary, preCallFallbackReason: null },
@@ -437,6 +476,33 @@ interface CallPlan {
 type ProviderCallParams = Parameters<typeof callLLM>[0];
 
 /**
+ * Native structured output for an Anthropic target whose call carries a JSON
+ * schema (`StructuredOutputSpec.jsonSchema`, ai-reviewer-layer plan §4.2).
+ *
+ * `structuredOutputMode: 'outputFormat'` makes the SDK send the schema as
+ * `output_config.format` instead of a forced `json` tool. Setting
+ * `providerOptions` here stops `callLLM` from injecting the thinking options
+ * itself, so the policy's own (adaptive thinking + effort) are merged in.
+ */
+function nativeStructuredOutput(
+  params: TeachingCallParams,
+  target: ResolvedTarget,
+): Record<string, unknown> {
+  const structured = params.output && params.output !== 'text' ? params.output : null;
+  if (!structured?.jsonSchema || target.providerId !== 'anthropic') return {};
+  const thinkingOptions = resolveThinkingProviderOptions(target.model, target.thinking) ?? {};
+  const anthropic = (thinkingOptions as { anthropic?: Record<string, JSONValue | undefined> })
+    .anthropic;
+  return {
+    output: Output.object({ schema: jsonSchema(structured.jsonSchema as never) }),
+    providerOptions: {
+      ...thinkingOptions,
+      anthropic: { ...(anthropic ?? {}), structuredOutputMode: 'outputFormat' },
+    },
+  };
+}
+
+/**
  * The exact provider request: the policy's model, the caller's prompt or
  * messages, the registry's output window, NO SDK retries (the fallback is the
  * retry), and the combined abort signal. The AI SDK's `Prompt` is a union
@@ -450,6 +516,7 @@ function providerParams(plan: CallPlan, abortSignal: AbortSignal): ProviderCallP
     maxOutputTokens: params.maxOutputTokens ?? target.modelInfo.outputWindow,
     maxRetries: 0,
     abortSignal,
+    ...nativeStructuredOutput(params, target),
   };
   return params.messages
     ? { ...settings, messages: params.messages }
@@ -769,7 +836,7 @@ async function execute(
   run: AttemptRunner,
   onRestart?: () => void,
 ): Promise<TeachingCallResult> {
-  const plan = planTargets(policy, needsVision(params, opts));
+  const plan = planTargets(policy, needsVision(params, opts), opts.primaryOnly === true);
   if (plan.length === 0) {
     throw new TeachingModelUnavailableError(
       `subject ${policy.subjectCode}: no route in the policy can see the call's source visuals`,
@@ -779,7 +846,7 @@ async function execute(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const callerSignal = callerSignalOf(ctx, opts);
   const attemptIds: string[] = [];
-  const outcomes: Array<{ role: AttemptRole; outcome: AttemptOutcome }> = [];
+  const outcomes: TeachingCallOutcome[] = [];
   const firstStartedAt = deps.now();
   let primaryFailureMs: number | null = null;
 
@@ -840,7 +907,10 @@ async function execute(
 
     const record = await run({ target, params, timeoutMs, callerSignal, stage: ctx.stage });
     const succeeded = record.classification.outcome === 'succeeded';
-    const willFallBack = !succeeded && record.classification.fallbackEligible && hasNext;
+    const refusalFallsBack =
+      opts.fallbackOnRefusal === true && record.classification.outcome === 'safety_refused';
+    const willFallBack =
+      !succeeded && (record.classification.fallbackEligible || refusalFallsBack) && hasNext;
     const budgetBreach = await verifyBudget(deps, ctx, target, attemptId, budget, record.usage);
     const completedAtMs = deps.now();
 
@@ -856,7 +926,11 @@ async function execute(
         completedAtMs,
       }),
     );
-    outcomes.push({ role: target.role, outcome: record.classification.outcome });
+    outcomes.push({
+      role: target.role,
+      outcome: record.classification.outcome,
+      modelString: target.modelString,
+    });
 
     if (succeeded) {
       return {
@@ -864,6 +938,7 @@ async function execute(
         ...(record.parsed !== undefined ? { parsed: record.parsed } : {}),
         servedBy: target.role,
         attemptIds,
+        outcomes,
         usage: record.usage.classes.usageAvailable ? record.usage : null,
         timings: {
           startedAt: firstStartedAt,

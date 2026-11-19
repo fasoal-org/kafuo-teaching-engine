@@ -48,9 +48,11 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
@@ -597,6 +599,24 @@ interface EligibleVisual {
 }
 
 /**
+ * Owner, 14 Nov 2026 (a lesson part moved between slides): the textbook visuals
+ * the re-planned slide may use — the same compliance-checked set an insertion
+ * offers for these parts — with their bytes for the planner when readable.
+ */
+export async function eligibleVisualsForUnits(
+  pool: ConnectableQueryable,
+  outline: AppDocumentOutline | null | undefined,
+  unitIds: readonly string[],
+): Promise<{
+  visuals: Array<{ entry: SourceVisualManifestEntry; image: PdfImage }>;
+  visionImages: Array<{ id: string; src: string; width?: number; height?: number }>;
+}> {
+  const deps: SceneInsertionDeps = { pool };
+  const visuals = await eligibleVisuals(outline, unitIds, deps);
+  return { visuals, visionImages: await plannerVisionImages(visuals, deps) };
+}
+
+/**
  * The eligible visuals' bytes for the planner (slide image plan D-4), read back
  * from the stage media directory and checked against the manifest checksum. A
  * visual that cannot be read is simply not attached.
@@ -824,7 +844,11 @@ export async function insertGeneratedSlide(
   });
   const stage = stageDocument.stage;
   const snapshot = retained?.inputSnapshot as
-    | { subjectCode?: string; speechRegister?: Record<string, unknown> }
+    | {
+        subjectCode?: string;
+        speechRegister?: Record<string, unknown>;
+        generationRoute?: unknown;
+      }
     | undefined;
   const subjectCode = snapshot?.subjectCode ?? undefined;
   const registerPolicy = resolveSpeechRegisterPolicy({
@@ -839,6 +863,11 @@ export async function insertGeneratedSlide(
     generationAttemptId: retained?.attemptId ?? null,
     learningItem: context.version.learningItem,
     snapshotSubjectCode: subjectCode,
+    // The package's frozen generation model route (teaching-generation-model-
+    // admin-config-plan-2026-11-18 D-6); absent → today's table.
+    ...(snapshot?.generationRoute !== undefined
+      ? { snapshotGenerationRoute: snapshot.generationRoute }
+      : {}),
     stageSubjectCode: stage.subjectCode,
     queryable: pool,
     ...(deps.routingMode ? { mode: deps.routingMode } : {}),
@@ -1022,8 +1051,20 @@ export async function insertGeneratedSlide(
       );
     }
     const exerciseUnitIds = exerciseScope.unitIds;
+    // g5.v11 (review finding 2): the producing attempt's pinned guide, so an inserted
+    // try-it slide is leak-checked like the run's. Read for g5.v11 only.
+    const guideAnswers =
+      retained && isGuideAnswerModel(version.teachingModel)
+        ? guideAnswerContextOf({
+            teachingModel: version.teachingModel,
+            snapshot: retained.inputSnapshot,
+            units: context.units,
+            language: stage.language,
+          })
+        : null;
     const generated = await (deps.insert ?? insertOneScene)({
       outline: planned.outline,
+      ...(guideAnswers ? { guideAnswers } : {}),
       newSceneId,
       scenes: stageDocument.scenes,
       stage,
@@ -1472,10 +1513,16 @@ export async function readContentUnitsForGrant(
     context.gaps,
   );
   const flow = context.flow ?? [];
+  // Owner, 14 Nov 2026: the teacher opens a part in «أجزاء الدرس» to read it in full, so
+  // each unit carries its retained text and subtype. Same editor-grant-only, no-store
+  // response; the teacher already reads this text in the admin's Content Units tab.
+  const rowsById = new Map(context.units.map((row) => [row.unitId, row]));
   return {
     lineageStatus: context.lineageStatus,
     units: coverage.map((unit) => ({
       ...unit,
+      subtype: rowsById.get(unit.id)?.subtype ?? null,
+      text: rowsById.get(unit.id)?.normalizedText ?? null,
       suggestedPosition:
         unit.instructional && !unit.covered
           ? suggestInsertionPosition(unit.id, coverage, document.scenes)

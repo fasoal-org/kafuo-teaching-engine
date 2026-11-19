@@ -10,6 +10,11 @@
  *
  * Body: `{ tenantContext: { tenantId }, sceneId, answers: { [questionId]: string[] },
  *   reveal?: boolean }`
+ * Owner decision (17 Nov 2026): a `pending_review` teacher-guide written question (a
+ * proof or «إجابة ممكنة» item) also carries `gradingContext: { questionText,
+ * modelAnswer, kind: 'proof' | 'possible' }` (each text non-blank, ≤ 4000), from the
+ * version's PINNED guide, for the Backend to grade it; never a `correctAnswer` or an
+ * `explanation`. Service auth only: this route is the one path that returns it.
  * `200 LearnerQuizGrade` · `404 NOT_FOUND | QUIZ_SCENE_NOT_FOUND` ·
  * `409 TEACHING_PACKAGE_NOT_APPROVED` · `422 INVALID_REQUEST |
  * QUIZ_QUESTION_NOT_IN_SCENE | STAGE_NOT_LIVE`.

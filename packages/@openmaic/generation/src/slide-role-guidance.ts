@@ -101,6 +101,29 @@ const SOLVING_ROLES: readonly string[] = ['worked_example'];
 const VISIBLE_WORKING_RULE =
   '**Visible working (mandatory).** Write every hidden step from the plan as a visible line on the canvas: a step the learner cannot see in the question (a numbered set, a time worked in minutes, a recalled property, a labelled figure, the differences of a pattern, an average change) is its own line, never folded into the answer.';
 
+/**
+ * g5.v10 (learner-first plan W3, owner D-2.5): the same rule without an "average
+ * change" — a solution uses only the methods the book uses.
+ */
+const LEARNER_FIRST_VISIBLE_WORKING_RULE =
+  '**Visible working (mandatory).** Write every hidden step from the plan as a visible line on the canvas: a step the learner cannot see in the question (a numbered set, a time worked in minutes, a recalled property, a labelled figure, the differences of a pattern) is its own line, never folded into the answer. Use only the methods the textbook source uses.';
+
+/** The catalogue row g5.v10 rewrites (owner D-2.5, D-2.7). */
+export const AVERAGE_CHANGE_STEP =
+  'Show the average change as a calculation, then the estimate, then whether it can be relied on';
+const LEARNER_FIRST_ESTIMATE_STEP =
+  'State what is expected next, reasoned with the method the book itself uses (never an average-change calculation the book does not use), then why the data support it, then whether it can be relied on';
+
+/** g5.v10: the hidden-step catalogue without the invented average-change method. */
+export function learnerFirstHiddenStepCatalogue(): string {
+  // Never throws in a run: a changed snippet only loses the rewrite, and the tests that
+  // pin AVERAGE_CHANGE_STEP fail instead (the same behaviour as the planner's catalogue).
+  const catalogue = hiddenStepCatalogue();
+  return catalogue.includes(AVERAGE_CHANGE_STEP)
+    ? catalogue.replace(AVERAGE_CHANGE_STEP, LEARNER_FIRST_ESTIMATE_STEP)
+    : catalogue;
+}
+
 /** g5.v8 (lesson 316): a solution never refuses an item the try-it set. */
 export const SOLVE_EVERY_ITEM_RULE =
   '**Solve every item (mandatory).** Every item this check or exercise sets gets its final answer on this slide. An item that leaves the sentence or example to the learner (complete the sentence, write an example) gets one correct model answer you compose, stated as one possible answer; a composed example is never a Quran verse or hadith. An item that is not in the source content was removed on purpose: never mention it. Never say the text is unclear or incomplete, and never send the learner to the book instead of answering.';
@@ -112,6 +135,11 @@ export interface SlideRoleGuidanceOptions {
    * the guidance is byte-identical to before.
    */
   visibleWorkingSteps?: boolean;
+  /**
+   * g5.v10 (learner-first): the visible-working rule and catalogue without an
+   * invented average-change method. Absent → unchanged.
+   */
+  learnerFirst?: boolean;
 }
 
 /** Role guidance for the slide CANVAS generator. */
@@ -138,7 +166,13 @@ export function buildSlideRoleContext(
     input.contentRole === 'explanation' ? EXPLANATION_VISUAL_GROUNDING : undefined;
   const visibleWorking =
     options.visibleWorkingSteps && SOLVING_ROLES.includes(String(input.contentRole ?? ''))
-      ? [VISIBLE_WORKING_RULE, SOLVE_EVERY_ITEM_RULE, hiddenStepCatalogue()]
+      ? options.learnerFirst
+        ? [
+            LEARNER_FIRST_VISIBLE_WORKING_RULE,
+            SOLVE_EVERY_ITEM_RULE,
+            learnerFirstHiddenStepCatalogue(),
+          ]
+        : [VISIBLE_WORKING_RULE, SOLVE_EVERY_ITEM_RULE, hiddenStepCatalogue()]
       : [];
   return {
     hasRoleGuidance: true,
@@ -193,13 +227,27 @@ const NARRATION_RULES: Readonly<Record<string, string>> = {
     'Keep narration brief and orienting; do not add teaching content this slide does not show.',
 };
 
+/**
+ * g5.v10 (learner-first plan W2, owner D-2.1): a solution slide's narration works
+ * EVERY item it shows, not "the problem" (item 208 slides 10 and 13 spoke item أ only).
+ */
+const LEARNER_FIRST_NARRATION_RULES: Readonly<Record<string, string>> = {
+  worked_example:
+    "Work EVERY item this slide shows, in order, each step by step to its final answer, and say each answer clearly. When an item asks to guess, estimate or predict, say what is expected and why the data support it, with the book's own method, and say it is an estimate.",
+};
+
 /** Role guidance for the slide NARRATION (actions) generator. */
-export function buildSlideNarrationRoleContext(input: SlideRoleGuidanceInput): SlideRoleContext {
+export function buildSlideNarrationRoleContext(
+  input: SlideRoleGuidanceInput,
+  options: { learnerFirst?: boolean } = {},
+): SlideRoleContext {
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   // The file's first paragraph is its purpose statement.
   const purpose = loadVariant(file).split('\n\n')[0];
-  const rule = NARRATION_RULES[file];
+  const rule =
+    (options.learnerFirst ? LEARNER_FIRST_NARRATION_RULES[file] : undefined) ??
+    NARRATION_RULES[file];
   const lines = [
     purpose,
     'Narration elaborates what is visible on the slide, in keeping with this purpose. It may explain more than the slide shows, but must stay consistent with the visible content.',

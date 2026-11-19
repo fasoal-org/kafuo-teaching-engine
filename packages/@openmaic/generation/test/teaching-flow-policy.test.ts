@@ -11,6 +11,7 @@ import {
   buildOutlinePrompt,
   describeScenePolicy,
   generateSceneOutlinesFromRequirements,
+  isLearnerFirstFrameSlide,
   parseTeachingScenePolicy,
   scenePolicyFor,
   type SceneOutline,
@@ -419,5 +420,125 @@ describe('collectCorrectableIssues', () => {
       success: false,
       error: expect.stringMatching(/^OUTLINE_SLIDE_SEMANTICS_INVALID/),
     });
+  });
+});
+
+describe('g5.v10 quality plan W4: learner-first visual rules', () => {
+  const v10 = { learnerFirstVisuals: { exerciseUnitIds: ['6247'] } };
+  const codes = (analysis: ReturnType<typeof analyzeOutlines>) =>
+    blockingOutlineDiagnostics(analysis).map((finding) => finding.code);
+
+  test("a unit's book image is required once per lesson (item 208 slides 4 and 5)", () => {
+    // Unit 6230 holds 1a (buses) and 1b (segments) and both their figures.
+    const sourceImages = [
+      { id: 'src-2', src: '', pageNumber: 1, sourceContentUnitIds: ['6230'] },
+      { id: 'src-3', src: '', pageNumber: 1, sourceContentUnitIds: ['6230'] },
+    ];
+    const slide4 = explanationSlide({
+      id: 's4',
+      sourceContentUnitIds: ['6230'],
+      visualPlan: { mode: 'image' },
+      suggestedImageIds: ['src-2'],
+      imagePlans: [{ imageId: 'src-2', shows: 'the figures', teachingPoint: 'count' }],
+    });
+    const slide5 = explanationSlide({ id: 's5', sourceContentUnitIds: ['6230'] });
+    const outlines = [slide4, slide5];
+    expect(codes(analyzeOutlines(outlines, { teachingFlow: v5Flow, sourceImages }))).toContain(
+      'SOURCE_VISUAL_NOT_SELECTED',
+    );
+    const relaxed = analyzeOutlines(outlines, { teachingFlow: v5Flow, sourceImages, ...v10 });
+    expect(codes(relaxed)).not.toContain('SOURCE_VISUAL_NOT_SELECTED');
+    expect(relaxed.outlines[1]?.visualPlan?.mode).toBe('native');
+  });
+
+  test('an exercise slide never shows the exercise list image (item 208 slide 26)', () => {
+    const sourceImages = [{ id: 'src-10', src: '', pageNumber: 4, sourceContentUnitIds: ['6247'] }];
+    const exercises = explanationSlide({
+      id: 's26',
+      contentRole: 'worked_example',
+      sourceContentUnitIds: ['6247'],
+      visualPlan: { mode: 'image' },
+      suggestedImageIds: ['src-10'],
+      imagePlans: [{ imageId: 'src-10', shows: 'circles', teachingPoint: 'pattern' }],
+    });
+    const v9 = analyzeOutlines([exercises], { teachingFlow: v5Flow, sourceImages });
+    expect(v9.outlines[0]?.suggestedImageIds).toEqual(['src-10']);
+    const relaxed = analyzeOutlines([exercises], { teachingFlow: v5Flow, sourceImages, ...v10 });
+    expect(relaxed.outlines[0]?.suggestedImageIds).toBeUndefined();
+    expect(relaxed.outlines[0]?.visualPlan?.mode).toBe('native');
+    // Review MED-2: the normalised exercise slide is not blocked at all.
+    expect(codes(relaxed)).toEqual([]);
+    // A slide citing an exercise AND a teaching unit keeps the usual rule.
+    const mixed = analyzeOutlines(
+      [explanationSlide({ id: 'm', sourceContentUnitIds: ['6247', '6230'] })],
+      { teachingFlow: v5Flow, sourceImages, ...v10 },
+    );
+    expect(codes(mixed)).toContain('SOURCE_VISUAL_NOT_SELECTED');
+  });
+
+  test('follow-up: the summary (end) slide keeps its visual and its checks (item 208 slide 29)', () => {
+    const summary = explanationSlide({
+      id: 'sum',
+      slideType: 'end',
+      contentRole: 'summary',
+      sourceContentUnitIds: ['6225'],
+    });
+    const analysis = analyzeOutlines([summary], { teachingFlow: v5Flow, sourceImages: [], ...v10 });
+    expect(analysis.outlines[0]?.visualPlan).toEqual(summary.visualPlan);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'end' })).toBe(false);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'transition' })).toBe(true);
+    expect(isLearnerFirstFrameSlide({ type: 'slide', slideType: 'contents' })).toBe(true);
+  });
+
+  test("review HIGH-1: a part opener's dropped image never counts as shown elsewhere", () => {
+    const sourceImages = [{ id: 'src-2', src: '', pageNumber: 1, sourceContentUnitIds: ['6230'] }];
+    const opener = explanationSlide({
+      id: 'open',
+      slideType: 'transition',
+      contentRole: undefined,
+      sourceContentUnitIds: ['6230'],
+      visualPlan: { mode: 'image' },
+      suggestedImageIds: ['src-2'],
+    });
+    const teaching = explanationSlide({ id: 'teach', sourceContentUnitIds: ['6230'] });
+    const analysis = analyzeOutlines([opener, teaching], {
+      teachingFlow: v5Flow,
+      sourceImages,
+      ...v10,
+    });
+    // Normalisation and validation agree: the teaching slide must show src-2 itself.
+    expect(analysis.outlines[0]?.suggestedImageIds).toBeUndefined();
+    expect(analysis.outlines[1]?.visualPlan).toEqual(teaching.visualPlan);
+    const notSelected = blockingOutlineDiagnostics(analysis).filter(
+      (finding) => finding.code === 'SOURCE_VISUAL_NOT_SELECTED',
+    );
+    expect(notSelected.map((finding) => finding.outlineId)).toEqual(['teach']);
+    expect(notSelected[0]?.allowedValues).toEqual(['src-2']);
+  });
+
+  test('a structural slide needs no visual and its planned diagram is dropped (item 208 slide 24)', () => {
+    const transition = explanationSlide({
+      id: 's24',
+      slideType: 'transition',
+      contentRole: undefined,
+      title: 'تمارين',
+      sourceContentUnitIds: ['6233'],
+      visualPlan: {
+        mode: 'native',
+        diagram: { shows: 'سلسلة حدود عددية', teachingPoint: 'الفروق' },
+      },
+    });
+    const v9 = analyzeOutlines([transition], { teachingFlow: v5Flow, sourceImages: [] });
+    expect(v9.outlines[0]?.visualPlan?.mode).toBe('native');
+    const relaxed = analyzeOutlines([transition], {
+      teachingFlow: v5Flow,
+      sourceImages: [],
+      ...v10,
+    });
+    expect(relaxed.outlines[0]?.visualPlan).toBeUndefined();
+    expect(codes(relaxed)).not.toContain('VISUAL_REQUIRED');
+    expect(relaxed.repairs.map((repair) => repair.message)).toContain(
+      'a transition slide teaches nothing, so its visual was dropped (g5.v10)',
+    );
   });
 });

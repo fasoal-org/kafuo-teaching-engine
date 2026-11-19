@@ -14,6 +14,11 @@
 ### What this slide is for
 
 {{roleGuidance}}
+{{/if}}{{#if hasLearnerFirstSlide}}
+
+### Slide rules for this lesson (follow every one)
+
+{{learnerFirstSlideRules}}
 {{/if}}{{#if hasSourceContext}}
 
 ### Approved textbook source this slide teaches

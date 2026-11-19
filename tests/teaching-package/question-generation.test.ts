@@ -62,7 +62,9 @@ vi.mock('@/lib/server/resolve-model', async () => {
   const providers = await import('@/lib/ai/providers');
   return {
     resolveModel: async (params: { modelString?: string; stage?: string }) => {
-      mocks.resolveModel(params);
+      // A test makes a model unresolvable (a removed key) by returning an Error.
+      const forced: unknown = mocks.resolveModel(params);
+      if (forced instanceof Error) throw forced;
       const modelString = params.modelString ?? 'test:stage-model';
       const { providerId, modelId } = providers.parseModelString(modelString);
       return {
@@ -167,6 +169,8 @@ describe('teaching question generation from an approved package', () => {
       successor?: boolean;
       /** Kafuo R1 P4: the subject the producing attempt ran under (snapshot `subjectCode`). */
       subjectCode?: string;
+      /** The configured route frozen on the producing attempt (teaching-generation-model plan D-10). */
+      generationRoute?: Record<string, unknown>;
     } = {},
   ) {
     const itemId = unique('li');
@@ -247,6 +251,7 @@ describe('teaching question generation from an approved package', () => {
               fallbackModel: 'qwen:qwen3.7-flash',
             }
           : {}),
+        ...(options.generationRoute ? { generationRoute: options.generationRoute as never } : {}),
       },
       now: 1,
     });
@@ -410,11 +415,21 @@ describe('teaching question generation from an approved package', () => {
     it('both routes unusable → TEACHING_MODEL_UNAVAILABLE (503, retryable); nothing off-shape is handed to Kafuo', async () => {
       const seeded = await seed({ subjectCode: 'MATH' });
       mocks.callLLM.mockResolvedValue(ok('not json at all'));
-      await expect(generateTeachingQuestionSet(qp(), request(seeded))).rejects.toMatchObject({
+      const refusal = generateTeachingQuestionSet(qp(), request(seeded));
+      await expect(refusal).rejects.toMatchObject({
         code: 'TEACHING_MODEL_UNAVAILABLE',
         status: 503,
         details: expect.objectContaining({ subjectCode: 'MATH', retryable: true }),
       });
+      // L-7: the 503 details keep their earlier shape — role and outcome only, no model strings.
+      const details = ((await refusal.catch((error: unknown) => error)) as { details: unknown })
+        .details as { outcomes: unknown[] };
+      expect(details.outcomes).toEqual([
+        { role: 'primary', outcome: 'unusable_output' },
+        { role: 'fallback', outcome: 'unusable_output' },
+      ]);
+      expect(JSON.stringify(details)).not.toContain('gpt-6-luna');
+      expect(JSON.stringify(details)).not.toContain('qwen3.7-flash');
       expect(mocks.callLLM).toHaveBeenCalledTimes(2);
       expect((await ledger()).map((row) => row.outcome)).toEqual([
         'unusable_output',
@@ -440,6 +455,60 @@ describe('teaching question generation from an approved package', () => {
       expect(result.model).toBe('openai:gpt-6-luna');
       const rows = await ledger();
       expect(rows[0]).toMatchObject({ subject_code: 'PHYSICS', version_id: seeded.versionId });
+    });
+
+    describe('the package’s frozen generation route (teaching-generation-model plan D-6, D-7)', () => {
+      const FROZEN = {
+        primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+        settingKey: 'teaching_generation.route.MATH',
+      };
+
+      it('generates on the route frozen on the producing attempt, with its thinking value on the ledger', async () => {
+        const seeded = await seed({ subjectCode: 'MATH', generationRoute: FROZEN });
+        mocks.callLLM.mockResolvedValue(ok(JSON.stringify(ENVELOPE)));
+        const result = await generateTeachingQuestionSet(qp(), request(seeded));
+        expect(result.model).toBe('openai:gpt-6.1-terra');
+        expect(mocks.resolveModel.mock.calls.map((c) => c[0])).toEqual([
+          { modelString: 'openai:gpt-6.1-terra' },
+          { modelString: 'qwen:qwen3.7-flash' },
+        ]);
+        // The catalogue thinking config reaches the provider call (D-13).
+        expect(mocks.callLLM.mock.calls[0]![3]).toEqual({ mode: 'enabled', effort: 'medium' });
+        const rows = await ledger();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          subject_code: 'MATH',
+          policy_version: 'configured-2026-11',
+          model_string: 'openai:gpt-6.1-terra',
+          thinking_label: 'medium',
+          role: 'primary',
+        });
+      });
+
+      it('D-7: a frozen model whose key was removed → today’s table (logged; the ledger shows r1-2026-09)', async () => {
+        const seeded = await seed({ subjectCode: 'MATH', generationRoute: FROZEN });
+        mocks.resolveModel.mockImplementation((params: { modelString?: string }) =>
+          params.modelString === 'openai:gpt-6.1-terra'
+            ? new Error('openai: no API key configured')
+            : undefined,
+        );
+        mocks.callLLM.mockResolvedValue(ok(JSON.stringify(ENVELOPE)));
+        const result = await generateTeachingQuestionSet(qp(), request(seeded));
+        expect(result.model).toBe('openai:gpt-6-luna');
+        expect(mocks.resolveModel.mock.calls.slice(-2).map((c) => c[0])).toEqual([
+          { modelString: 'openai:gpt-6-luna' },
+          { modelString: 'qwen:qwen3.7-flash' },
+        ]);
+        const rows = await ledger();
+        expect(rows[0]).toMatchObject({
+          policy_version: 'r1-2026-09',
+          model_string: 'openai:gpt-6-luna',
+          thinking_label: 'low',
+        });
+        // The Kafuo-facing response keeps its shape: no route field is added.
+        expect(result).not.toHaveProperty('routeReplaced');
+      });
     });
 
     it('TEACHING_SUBJECT_ROUTING=off keeps the stage-routed port: two same-model retries, no ledger', async () => {

@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
+import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
+import { guideWrittenQuestionId } from '@/lib/server/teaching-package/guide-written-attempts';
 import { regenerateOneScene } from '@/lib/server/teaching-package/regenerate-one-scene';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import type { AppScene } from '@/lib/types/stage';
@@ -250,6 +252,18 @@ describe('regenerateOneScene — AT-G', () => {
     expect(await contentPromptOf({ key: 'g5', version: 'g5.v8' })).toContain(RULE);
     expect(await contentPromptOf({ key: 'g5', version: 'g5.v7' })).not.toContain(RULE);
     expect(await contentPromptOf()).not.toContain(RULE);
+  });
+
+  it('a g5.v10 package sends every edit instruction to the narration too (learner-first W4)', async () => {
+    const narrationOf = async (teachingModel: { key: string; version: string }) => {
+      const { prompts } = await run(content([image('src-3', 'x')]), { teachingModel });
+      const found = prompts.find((prompt) => ACTIONS_PROMPT.test(prompt.system))!;
+      return found.user;
+    };
+    // An AI-review fix changed «اليمين» to «اليسار» on the canvas only (item 208 slide
+    // 21): on g5.v10 the narration model gets the same instruction as the canvas.
+    expect(await narrationOf({ key: 'g5', version: 'g5.v10' })).toContain('INSTRUCTION-MARK');
+    expect(await narrationOf({ key: 'g5', version: 'g5.v8' })).not.toContain('INSTRUCTION-MARK');
   });
 
   it('an unparsable content answer fails with SCENE_CONTENT_GENERATION_FAILED and no Action call', async () => {
@@ -776,5 +790,671 @@ describe('regenerateOneScene — pinned Quran verses', () => {
   it('leaves a package without pins unchanged', async () => {
     const { prompts } = await run(content([image('src-3', 'x')]));
     for (const prompt of prompts) expect(prompt.system).not.toContain('Quran and hadith');
+  });
+});
+
+describe('regenerateOneScene — a lesson part moved between slides (owner, 14 Nov 2026)', () => {
+  async function runMove(
+    sourceContentUnitIds: string[],
+    options: { narrationOnly?: boolean; pre?: AppScene } = {},
+  ) {
+    const pre = options.pre ?? preImage();
+    const stub = model(content([image('src-3', 'x')]));
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds,
+      ...(options.narrationOnly ? { narrationOnly: true } : {}),
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    return { result, prompts: stub.prompts };
+  }
+
+  it('the rewritten slide carries the new part list, and every other kept field stays', async () => {
+    const { result } = await runMove(['cu-1', 'cu-9']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.sourceContentUnitIds).toEqual(['cu-1', 'cu-9']);
+    expect(result.scene.id).toBe(preImage().id);
+    expect(result.scene.learningObjectives).toEqual(preImage().learningObjectives);
+  });
+
+  it('the narration model gets the move directive too, so the narration follows the move', async () => {
+    const { result, prompts } = await runMove(['cu-1', 'cu-9']);
+    expect(result.ok).toBe(true);
+    const narration = prompts.filter((prompt) => ACTIONS_PROMPT.test(prompt.system));
+    expect(narration.length).toBeGreaterThan(0);
+    expect(narration.some((prompt) => prompt.user.includes('INSTRUCTION-MARK'))).toBe(true);
+  });
+
+  it('is refused for a narration-only run before any model call', async () => {
+    const { result, prompts } = await runMove(['cu-1', 'cu-9'], { narrationOnly: true });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('SCENE_TYPE_NOT_REGENERABLE');
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('a re-planned slide is built fresh from its plan, never from the old slide, and keeps its place and classification', async () => {
+    const pre = preImage();
+    const stub = model(content([]));
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds: ['cu-9'],
+      // The planner's own place and classification must never reach the slide.
+      replannedOutline: {
+        id: 'planned-id',
+        type: 'slide',
+        order: 99,
+        title: 'خطة جديدة',
+        description: 'PLANNED-DESCRIPTION',
+        keyPoints: ['PLANNED-POINT'],
+        slideType: 'section',
+        contentRole: 'summary',
+        contentKind: 'procedure',
+        teachingStage: { key: 'close', flowIndex: 9 },
+        suggestedImageIds: [],
+        mediaGenerations: [{ type: 'image', prompt: 'p', elementId: 'gen_img_1' }],
+      } as never,
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const contentPrompt = stub.prompts.find((prompt) => prompt.stage === 'scene-content:slide');
+    expect(contentPrompt?.user).toContain('PLANNED-POINT');
+    expect(contentPrompt?.user).not.toContain('EDIT MODE');
+    // The old slide's key point, description and image never reach the model or the slide.
+    expect(contentPrompt?.user).not.toContain('Explain patterns');
+    expect(imageSrcs(result.scene)).toEqual([]);
+    const scene = result.scene;
+    expect(scene.id).toBe(pre.id);
+    // A move renames nothing: the slide keeps its own title, not the plan's.
+    expect(scene.title).toBe(pre.title);
+    expect(contentPrompt?.user).not.toContain('خطة جديدة');
+    expect(scene.order).toBe(pre.order);
+    expect(scene.outlineId).toBe('o1');
+    expect(scene.teachingStage).toBeUndefined();
+    expect(scene.sourceContentUnitIds).toEqual(['cu-9']);
+    expect(scene.learningObjectives).toEqual(pre.learningObjectives);
+    if (scene.content.type !== 'slide') throw new Error('slide');
+    expect(scene.content.contentRole).toBe('example');
+    expect(scene.content.canvas.type).toBe('content');
+  });
+
+  it('the invariant check expects the requested list, and only then', async () => {
+    const { regenerationInvariantViolations } =
+      await import('@/lib/server/teaching-package/regenerate-one-scene');
+    const pre = preImage();
+    const moved = { ...pre, sourceContentUnitIds: ['cu-1', 'cu-9'] } as AppScene;
+    expect(regenerationInvariantViolations(pre, moved)).toEqual(['sourceContentUnitIds']);
+    expect(regenerationInvariantViolations(pre, moved, ['cu-1', 'cu-9'])).toEqual([]);
+    expect(regenerationInvariantViolations(pre, pre, ['cu-1', 'cu-9'])).toEqual([
+      'sourceContentUnitIds',
+    ]);
+  });
+});
+
+// g5.v11 (review findings 1 and 2): a regenerated attempt is checked against the pinned
+// guide like the run's, and its narration writer never reads the hidden key.
+describe('regenerateOneScene — g5.v11 attempt', () => {
+  const V11 = { key: 'g5', version: 'g5.v11' };
+  const book = {
+    templateVersionId: '3',
+    rules: [],
+    units: [
+      {
+        contentUnitId: '6234',
+        kind: 'UNDERSTANDING_CHECK',
+        element: 'try_it' as const,
+        required: true,
+        partIndex: 1,
+      },
+    ],
+  };
+  const guideAnswers = guideAnswerContextOf({
+    teachingModel: V11,
+    snapshot: {
+      bookStructure: book,
+      teacherGuide: {
+        guideId: 'tg-1',
+        items: [
+          {
+            contentUnitId: '6234',
+            label: '1A',
+            status: 'approved',
+            answer: { type: 'number', value: 12 },
+          },
+        ],
+      },
+    },
+    units: [{ unitId: '6234', normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟' }],
+    language: 'ar',
+  })!;
+  const outline: AppDocumentOutline = {
+    ...snapshot(),
+    outlines: [
+      {
+        id: 'o0',
+        order: 1,
+        type: 'slide',
+        title: 'جرّب',
+        description: 'Try it.',
+        keyPoints: ['1A) ما الحد التالي؟'],
+        slideType: 'content',
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['6234'],
+      },
+      {
+        id: 'o0-attempt',
+        order: 2,
+        type: 'quiz',
+        title: 'جرّب بنفسك',
+        description: 'Practice attempt.\n\nHIDDEN ANSWER KEY (g5.v11): the answers\n- item 1A: 12',
+        keyPoints: ['1A) ما الحد التالي؟'],
+        sourceContentUnitIds: ['6234'],
+        quizConfig: { questionCount: 1, difficulty: 'easy', questionTypes: ['single'] },
+      },
+    ],
+  } as unknown as AppDocumentOutline;
+  const pre = {
+    ...preImage(),
+    outlineId: 'o0-attempt',
+    type: 'quiz',
+    title: 'جرّب بنفسك',
+    sourceContentUnitIds: ['6234'],
+    content: { type: 'quiz', questions: [{ id: 'q', type: 'single', question: 'ما التالي؟' }] },
+  } as unknown as AppScene;
+  const quizReply = (keyed: string) =>
+    JSON.stringify([
+      {
+        type: 'single',
+        question: 'الأعداد 3، 6، 9 … ما الحد التالي؟',
+        options: [
+          { value: 'A', label: '11' },
+          { value: 'B', label: '12' },
+          { value: 'C', label: '15' },
+        ],
+        answer: [keyed],
+      },
+    ]);
+
+  it('regenerates a wrongly keyed attempt once with a correction, never giving the narration its key', async () => {
+    const prompts: Array<{ stage: string; system: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, system, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return quizReply(user.includes('CORRECTION (checked final answers') ? 'B' : 'C');
+    };
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: outline,
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'quiz') throw new Error('quiz');
+    expect(result.scene.content.questions[0]!.answer).toEqual(['B']);
+    const content = prompts.filter((prompt) => prompt.stage === 'scene-content:quiz');
+    expect(content).toHaveLength(2);
+    expect(content[0]!.user).toContain('HIDDEN ANSWER KEY');
+    const narration = prompts.filter((prompt) => ACTIONS_PROMPT.test(prompt.system));
+    expect(narration.length).toBeGreaterThan(0);
+    for (const prompt of narration) expect(prompt.user).not.toContain('HIDDEN ANSWER KEY');
+  });
+
+  // Owner, 17 Nov 2026: the attempt's engine-written question is never the model's to
+  // rewrite; it comes back after the model's questions under the same id.
+  it('keeps the written question of a proof item, out of the model’s hands', async () => {
+    const PROOF = 'MODEL-PROOF الفرق ثابت.';
+    const withProof = guideAnswerContextOf({
+      teachingModel: V11,
+      snapshot: {
+        bookStructure: book,
+        teacherGuide: {
+          guideId: 'tg-1',
+          items: [
+            {
+              contentUnitId: '6234',
+              label: '1A',
+              status: 'approved',
+              answer: { type: 'number', value: 12 },
+            },
+            {
+              contentUnitId: '6234',
+              label: '1B',
+              status: 'reference',
+              modelAnswer: { kind: 'proof', text: PROOF },
+            },
+          ],
+        },
+      },
+      units: [
+        {
+          unitId: '6234',
+          normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) أثبِتْ أنّ الفرقَ ثابتٌ.',
+        },
+      ],
+      language: 'ar',
+    })!;
+    const solved = {
+      ...outline,
+      outlines: [
+        ...outline.outlines,
+        {
+          id: 'o-sol',
+          order: 3,
+          type: 'slide',
+          title: 'الحل',
+          description: 'Solve it.',
+          keyPoints: ['نحل'],
+          slideType: 'content',
+          contentRole: 'worked_example',
+          sourceContentUnitIds: ['6234'],
+        },
+      ],
+    } as unknown as AppDocumentOutline;
+    const id = guideWrittenQuestionId('tg-1', { contentUnitId: '6234', label: '1B' });
+    const stale = { id, type: 'short_answer', question: 'OLD-WRITTEN-STEM', points: 2 };
+    const written = {
+      ...pre,
+      content: {
+        type: 'quiz',
+        questions: [...(pre.content as unknown as { questions: unknown[] }).questions, stale],
+      },
+    } as unknown as AppScene;
+    const prompts: Array<{ stage: string; system: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, system, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return quizReply('B');
+    };
+    const result = await regenerateOneScene({
+      scene: written,
+      scenes: [written],
+      stage,
+      outlineSnapshot: solved,
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers: withProof,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'quiz') throw new Error('quiz');
+    const questions = result.scene.content.questions;
+    expect(questions).toHaveLength(2);
+    expect(questions[0]!.answer).toEqual(['B']);
+    expect(questions[1]).toEqual({
+      id,
+      type: 'short_answer',
+      question: 'اكتب البرهان بنفسك خطوةً بخطوة، مع سبب كل خطوة:\nأثبِتْ أنّ الفرقَ ثابتٌ.',
+      hasAnswer: false,
+      points: 2,
+    });
+    const content = prompts.filter((prompt) => prompt.stage === 'scene-content:quiz');
+    for (const prompt of content) {
+      expect(prompt.user).not.toContain('OLD-WRITTEN-STEM');
+      expect(prompt.user).not.toContain(id);
+    }
+    expect(JSON.stringify(prompts)).not.toContain('MODEL-PROOF');
+    expect(JSON.stringify(result.scene)).not.toContain('MODEL-PROOF');
+  });
+
+  // The check's try-it slide, before the slide under test (re-review finding 1).
+  const tryOutline = {
+    id: 'o0',
+    order: 0,
+    type: 'slide',
+    title: 'جرّب',
+    description: 'Try it.',
+    keyPoints: ['1A) ما الحد التالي؟'],
+    slideType: 'content',
+    contentRole: 'check_understanding',
+    sourceContentUnitIds: ['6234'],
+  };
+  const withTry = (overrides: Record<string, unknown>): AppDocumentOutline => {
+    const base = snapshot({ suggestedImageIds: undefined, visualPlan: undefined, ...overrides });
+    return { ...base, outlines: [tryOutline, ...base.outlines] } as unknown as AppDocumentOutline;
+  };
+
+  it('regenerates a solution slide once with a correction when its final line disagrees', async () => {
+    const solutionOutline = withTry({
+      contentRole: 'worked_example',
+      sourceContentUnitIds: ['6234'],
+    });
+    const solutionPre = {
+      ...preImage([]),
+      content: { ...preImage([]).content, contentRole: 'worked_example' },
+      sourceContentUnitIds: ['6234'],
+    } as unknown as AppScene;
+    const line = (value: number) => ({
+      type: 'text',
+      content: `<p>الإجابة (1A): ${value}</p>`,
+      left: 60,
+      top: 200,
+      width: 400,
+      height: 60,
+    });
+    const prompts: Array<{ stage: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([line(user.includes('CORRECTION (checked final answers') ? 12 : 13)]);
+    };
+    const result = await regenerateOneScene({
+      scene: solutionPre,
+      scenes: [solutionPre],
+      stage,
+      outlineSnapshot: solutionOutline,
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'slide') throw new Error('slide');
+    const slides = prompts.filter((prompt) => prompt.stage === 'scene-content:slide');
+    expect(slides).toHaveLength(2);
+    expect(slides[1]!.user).toContain('CORRECTION (checked final answers');
+    // The lesson's digit style applies after the check («١٢» is 12).
+    expect(JSON.stringify(result.scene.content.canvas.elements)).toMatch(
+      /الإجابة \(1A\): (?:12|١٢)</u,
+    );
+  });
+
+  // Owner, 17 Nov 2026: a reference item's model answer reaches the solution slide's
+  // writer (after the try), never the try-it slide's.
+  it('gives a solution slide’s writer the guide model answer, never the try-it slide’s', async () => {
+    const PROOF = 'نفرض أن الفرق ثابت 3،\nإذن كل حد يزيد 3.';
+    const withModel = guideAnswerContextOf({
+      teachingModel: V11,
+      snapshot: {
+        bookStructure: book,
+        teacherGuide: {
+          guideId: 'tg-1',
+          items: [
+            {
+              contentUnitId: '6234',
+              label: '1A',
+              status: 'approved',
+              answer: { type: 'number', value: 12 },
+            },
+            {
+              contentUnitId: '6234',
+              label: '1B',
+              status: 'reference',
+              modelAnswer: { kind: 'proof', text: PROOF },
+            },
+          ],
+        },
+      },
+      units: [
+        {
+          unitId: '6234',
+          normalizedText: '1A) الأعداد 3، 6، 9 … ما الحد التالي؟\n1B) أثبت أن الفرق ثابت.',
+        },
+      ],
+      language: 'ar',
+    })!;
+    expect(withModel.resolved.modelAnswers.map((item) => item.display)).toEqual(['1B']);
+    const run = async (scene: AppScene, snapshotOutline: AppDocumentOutline, reply: string) => {
+      const prompts: Array<{ stage: string; user: string }> = [];
+      const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+        prompts.push({ stage: stageLabel, user });
+        if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+        return content([
+          { type: 'text', content: `<p>${reply}</p>`, left: 60, top: 200, width: 400, height: 60 },
+        ]);
+      };
+      const result = await regenerateOneScene({
+        scene,
+        scenes: [scene],
+        stage,
+        outlineSnapshot: snapshotOutline,
+        instruction: INSTRUCTION,
+        teachingModel: V11,
+        guideAnswers: withModel,
+        aiCallFor,
+        registerPolicy: policy,
+        refuseFallbackActions: true,
+        now: () => 42,
+      });
+      expect(result.ok).toBe(true);
+      return prompts.filter((prompt) => prompt.stage === 'scene-content:slide');
+    };
+    const solution = await run(
+      {
+        ...preImage([]),
+        content: { ...preImage([]).content, contentRole: 'worked_example' },
+        sourceContentUnitIds: ['6234'],
+      } as unknown as AppScene,
+      withTry({ contentRole: 'worked_example', sourceContentUnitIds: ['6234'] }),
+      'الإجابة (1A): 12',
+    );
+    expect(solution).toHaveLength(1);
+    expect(solution[0]!.user).toContain('GUIDE MODEL ANSWERS (g5.v11)');
+    expect(solution[0]!.user).toContain('  نفرض أن الفرق ثابت 3،');
+    const tryIt = await run(
+      {
+        ...preImage([]),
+        content: { ...preImage([]).content, contentRole: 'check_understanding' },
+        sourceContentUnitIds: ['6234'],
+      } as unknown as AppScene,
+      snapshot({
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['6234'],
+      }),
+      'ما الحد التالي؟',
+    );
+    expect(tryIt.length).toBeGreaterThan(0);
+    for (const prompt of tryIt) {
+      expect(prompt.user).not.toContain('GUIDE MODEL ANSWERS');
+      expect(prompt.user).not.toContain('نفرض أن الفرق ثابت 3');
+    }
+  });
+
+  const tryPre = (units: string[]) =>
+    ({
+      ...preImage([]),
+      content: { ...preImage([]).content, contentRole: 'check_understanding' },
+      sourceContentUnitIds: units,
+    }) as unknown as AppScene;
+  const textLine = (text: string) => ({
+    type: 'text',
+    content: `<p>${text}</p>`,
+    left: 60,
+    top: 200,
+    width: 400,
+    height: 60,
+  });
+
+  it('re-review finding 5c: keeps the slide as it was when the regenerated try still states the answer', async () => {
+    const prompts: string[] = [];
+    const aiCallFor = (stageLabel: string) => async (system: string) => {
+      prompts.push(stageLabel);
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([textLine('الحد التالي هو 12')]);
+    };
+    const pre = tryPre(['6234']);
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot({
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['6234'],
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+      }),
+      instruction: INSTRUCTION,
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('SCENE_CONTENT_GENERATION_FAILED');
+    expect(result.details).toEqual({ failure: 'GUIDE_ANSWER_LEAK' });
+    // First, then once with the leak correction; never a narration for the leaking slide.
+    expect(prompts.filter((stageLabel) => stageLabel === 'scene-content:slide')).toHaveLength(2);
+    expect(prompts).not.toContain('scene-actions');
+  });
+
+  it('re-review finding 3: a moved part is checked against its NEW units', async () => {
+    const prompts: Array<{ stage: string; user: string }> = [];
+    const aiCallFor = (stageLabel: string) => async (system: string, user: string) => {
+      prompts.push({ stage: stageLabel, user });
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return content([
+        textLine(user.includes('BEFORE the learner') ? 'ما الحد التالي؟' : 'الحد التالي هو 12'),
+      ]);
+    };
+    // The stored plan cites another unit; the move brings the check's unit onto it.
+    const pre = tryPre(['cu-1']);
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot({
+        contentRole: 'check_understanding',
+        sourceContentUnitIds: ['cu-1'],
+        suggestedImageIds: undefined,
+        visualPlan: undefined,
+      }),
+      instruction: INSTRUCTION,
+      sourceContentUnitIds: ['6234'],
+      teachingModel: V11,
+      guideAnswers,
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    const slides = prompts.filter((prompt) => prompt.stage === 'scene-content:slide');
+    expect(slides).toHaveLength(2);
+    expect(slides[1]!.user).toContain("BEFORE the learner's try of item 1A");
+  });
+
+  it('is unchanged without the pinned guide (g5.v10): one content call', async () => {
+    const prompts: string[] = [];
+    const aiCallFor = (stageLabel: string) => async (system: string) => {
+      prompts.push(stageLabel);
+      if (ACTIONS_PROMPT.test(system)) return JSON.stringify([{ type: 'text', content: SAUDI }]);
+      return quizReply('C');
+    };
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: outline,
+      instruction: INSTRUCTION,
+      teachingModel: { key: 'g5', version: 'g5.v10' },
+      aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      now: () => 42,
+    });
+    expect(result.ok).toBe(true);
+    expect(prompts.filter((stageLabel) => stageLabel === 'scene-content:quiz')).toHaveLength(1);
+  });
+});
+
+// Lesson 2-5 (17 Nov 2026, item 214 scenes 33 and 35): a regenerated exercise solution
+// slide never poses its item's try beside the answer, and its title names what it solves.
+describe('regenerateOneScene — g5.v11 exercise solution slide', () => {
+  const V11 = { key: 'g5', version: 'g5.v11' };
+  const solutionPre = (): AppScene => {
+    const pre = preImage();
+    return {
+      ...pre,
+      title: 'حل التمارين ٤–٦',
+      content: { ...pre.content, contentRole: 'worked_example' },
+    } as unknown as AppScene;
+  };
+  const solutionOutline = () =>
+    snapshot({ title: 'حل التمارين ٤–٦', contentRole: 'worked_example' });
+  const solved = (...lines: string[]) =>
+    content([
+      image(SRC_3),
+      ...lines.map((line, index) => ({
+        type: 'text',
+        content: `<p>${line}</p>`,
+        left: 60,
+        top: 140 + index * 50,
+        width: 400,
+        height: 40,
+      })),
+    ]);
+
+  it('keeps the slide as it was when the new one asks for a try beside the answer', async () => {
+    const { result } = await run(
+      solved(
+        'تمرين 2 (س14 في كتابك): اكتب المعادلة ومثّلها بيانيًا قبل قراءة الحل.',
+        'y = -7x - 4',
+      ),
+      { pre: solutionPre(), outline: solutionOutline(), teachingModel: V11 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      details: { failure: 'TRY_ON_SOLUTION_SLIDE' },
+    });
+  });
+
+  it('titles the slide by the exercises its new canvas solves', async () => {
+    const { result } = await run(
+      solved('حل التمارين 4–6', 'تمرين 4', '(س20 في كتابك)', 'y - 8 = 4(x + 4)'),
+      {
+        pre: solutionPre(),
+        outline: solutionOutline(),
+        teachingModel: V11,
+      },
+    );
+    expect(result.ok).toBe(true);
+    const scene = (result as { scene: AppScene }).scene;
+    expect(scene.title).toBe('حل التمرين ٤');
+  });
+
+  it('is unchanged on g5.v10: no refusal, no retitle', async () => {
+    const { result } = await run(
+      solved('حل التمارين 4–6', 'تمرين 4 قبل قراءة الحل اكتب المعادلة', 'y - 8 = 4(x + 4)'),
+      {
+        pre: solutionPre(),
+        outline: solutionOutline(),
+        teachingModel: { key: 'g5', version: 'g5.v10' },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect((result as { scene: AppScene }).scene.title).toBe('حل التمارين ٤–٦');
   });
 });

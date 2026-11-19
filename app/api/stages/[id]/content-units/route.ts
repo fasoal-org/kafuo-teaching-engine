@@ -2,8 +2,9 @@
  * GET /api/stages/[id]/content-units — the lesson parts of the grant's
  * version and their slide coverage (reviewer-generated-slide plan §8.3):
  * `{ lineageStatus, units[], positions[], stages[] }`. Editor grants only —
- * the `learner` and `preview` purposes are refused, as for writes. Unit TEXT
- * is never sent to the browser. Never writes.
+ * the `learner` and `preview` purposes are refused, as for writes. Each unit
+ * carries its retained text (owner, 14 Nov 2026: the teacher opens a part to
+ * read it in full) — editor grants only, `no-store`. Never writes.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';

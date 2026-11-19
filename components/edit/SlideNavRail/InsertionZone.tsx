@@ -64,9 +64,9 @@ export function InsertionZone({
             <span
               aria-hidden
               className={cn(
-                // Anchored at the right edge of the gap, vertically centered.
-                // z-30 lifts it above the adjacent active tile's ring (z-default).
-                'pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 z-30',
+                // Anchored at the end edge of the gap (right in LTR, left in Arabic),
+                // vertically centered. z-30 lifts it above the adjacent active tile's ring.
+                'pointer-events-none absolute end-2 top-1/2 -translate-y-1/2 z-30',
                 'inline-flex h-5 w-5 items-center justify-center rounded-full',
                 // Solid background + ring + shadow gives it real visual
                 // elevation against the neighbouring violet ring zones.
@@ -110,7 +110,7 @@ export function InsertionZone({
                 title={generateDisabled ? generateDisabledHint : undefined}
                 data-testid="scene-type-ai"
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
+                  'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-start text-sm',
                   'text-zinc-700 outline-none transition-colors hover:bg-violet-50 hover:text-violet-700',
                   'focus-visible:bg-violet-50 focus-visible:text-violet-700',
                   'dark:text-zinc-200 dark:hover:bg-violet-500/10 dark:hover:text-violet-300',
@@ -151,7 +151,7 @@ function SceneTypeChoice({
         onClick={() => onInsert(type)}
         data-testid={`scene-type-${type}`}
         className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm',
+          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-start text-sm',
           'text-zinc-700 outline-none transition-colors hover:bg-violet-50 hover:text-violet-700',
           'focus-visible:bg-violet-50 focus-visible:text-violet-700',
           'dark:text-zinc-200 dark:hover:bg-violet-500/10 dark:hover:text-violet-300',

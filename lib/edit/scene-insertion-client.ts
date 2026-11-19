@@ -72,6 +72,10 @@ export interface ContentUnitSummary {
   covered: boolean;
   /** Where a slide for this unit goes by default (plan §9.1); instructional uncovered units only. */
   suggestedPosition: InsertionPosition | null;
+  /** The part's retained text, shown when the teacher opens it (owner, 14 Nov 2026). */
+  text?: string | null;
+  /** The part's book subtype, when the manifest named one. */
+  subtype?: string | null;
 }
 
 export interface InsertionPosition {
@@ -160,7 +164,7 @@ export function canInsertScene(gate: InsertionGate | null): boolean {
   return gate !== null && gate.capability === 'write' && gate.editable && gate.supported;
 }
 
-/** The lesson parts and their coverage (no unit text ever reaches the browser). */
+/** The lesson parts, their coverage and each part's text (editor grants only, no-store). */
 export async function fetchContentUnits(
   stageId: string,
   fetchImpl: typeof fetch = fetch,

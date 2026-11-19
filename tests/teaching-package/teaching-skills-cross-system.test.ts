@@ -136,6 +136,25 @@ describe('W7 matrix — fixture mirror discipline (the shared artifact)', () => 
     );
   });
 
+  it('pins the configured generation model route (vector 9): only `modelRoute` separates it from vector 1', () => {
+    // teaching-generation-model-admin-config-plan-2026-11-18 D-9 (the plan's
+    // "vector 6", appended as the 9th entry): Kafuo's semantic payload mirrors
+    // `modelRoute` when present and omits it when absent.
+    const routed = vectors.vectors[8]!;
+    expect(routed.request.modelRoute).toEqual({
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'openai:gpt-6-luna', thinking: 'low' },
+      settingKey: 'teaching_generation.route.BIOLOGY',
+    });
+    expect(routed.digest).not.toBe(vectors.vectors[0]!.digest);
+    const { modelRoute: _route, ...withoutRoute } = JSON.parse(
+      JSON.stringify(routed.request),
+    ) as Vector['request'];
+    expect(canonicalRequestDigest(parseKafuoGenerationRequest(withoutRoute).request)).toBe(
+      vectors.vectors[0]!.digest,
+    );
+  });
+
   it('mirrors the exact governed shape Kafuo emits: marker + policy on every flow entry', () => {
     const wire = governedVector();
     expect(wire.teachingSkills).toBe(TEACHING_SKILLS_CONTRACT_V1);

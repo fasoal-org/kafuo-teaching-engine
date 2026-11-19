@@ -26,7 +26,12 @@ import {
   withoutSacredItems,
 } from '@/lib/server/teaching-package/sacred-text';
 
-import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
+import { exerciseQuestionText } from '@/lib/server/teaching-package/attempt-quizzes';
+import {
+  selectExercises,
+  type ExerciseGuideStatuses,
+} from '@/lib/server/teaching-package/exercise-selection';
+import { resolveTeacherGuide } from '@/lib/server/teaching-package/guide-answers';
 import {
   bookUnitFacts,
   exerciseQuestionNumbers,
@@ -35,7 +40,11 @@ import {
   type DetectedHiddenStepType,
 } from '@/lib/server/teaching-package/hidden-step-types';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { KafuoBookStructure, KafuoBookStructureUnit } from '@/lib/types/teaching-package';
+import type {
+  KafuoBookStructure,
+  KafuoBookStructureUnit,
+  KafuoTeacherGuide,
+} from '@/lib/types/teaching-package';
 
 export const BOOK_COVERAGE_INCOMPLETE = 'BOOK_COVERAGE_INCOMPLETE';
 /** g5.v8: more exercise units or exercise slides than `exercisePolicy` allows. */
@@ -60,14 +69,92 @@ export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
 /** The Teaching Model whose requests get the teacher-parity gates. */
 export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as const;
 
-/** The ONE g5.v8 switch: an explicit Teaching Model identity check. */
+/**
+ * g5.v9 (subject-teaching-skills-v1 plan, 14 Nov 2026) is g5.v8 plus a subject Teaching
+ * Skill in the objective position's Skill Policy. Its flow, book map and exercise
+ * policy are v8's, so it gets the same teacher-parity gates.
+ */
+const TEACHER_PARITY_VERSIONS: ReadonlySet<string> = new Set([
+  TEACHER_PARITY_TEACHING_MODEL.version,
+  'g5.v9',
+  // g5.v10 (learner-first, plan `docs/frds/g5-v10-weak-student-fixes-plan-2026-11-15.md`)
+  // is built on g5.v9. The v8 gates its attempt step would fail get a v10 variant in
+  // the wave that adds that step (plan W1, "v8 gates on v10").
+  'g5.v10',
+  // g5.v11 (teacher-guide answer referee, plan
+  // `docs/frds/teacher-guide-answer-referee-plan-2026-11-16.md`) is g5.v10 plus the
+  // approved guide answers, so it keeps every v8/v9/v10 gate.
+  'g5.v11',
+]);
+
+/** The ONE g5.v8/g5.v9/g5.v10/g5.v11 switch: an explicit Teaching Model identity check. */
 export function isTeacherParityModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
   return (
     model?.key === TEACHER_PARITY_TEACHING_MODEL.key &&
-    model?.version === TEACHER_PARITY_TEACHING_MODEL.version
+    typeof model?.version === 'string' &&
+    TEACHER_PARITY_VERSIONS.has(model.version)
   );
+}
+
+/**
+ * g5.v10, the learner-first Teaching Model (owner decisions D-1..D-10, 15 Nov 2026):
+ * every weak-student fix of its plan ships behind THIS switch only, never on g5.v1–v9
+ * (D-9 B).
+ */
+export const LEARNER_FIRST_TEACHING_MODEL = { key: 'g5', version: 'g5.v10' } as const;
+
+/**
+ * g5.v11 (teacher-guide answer referee plan §2.8, owner 16 Nov 2026): g5.v10 plus the
+ * approved teacher-guide answers. Its own behaviour ships behind {@link isGuideAnswerModel}
+ * only; every learner-first behaviour of g5.v10 applies to it unchanged.
+ */
+export const GUIDE_ANSWER_TEACHING_MODEL = { key: 'g5', version: 'g5.v11' } as const;
+
+/** The Teaching Model versions that get every g5.v10 learner-first behaviour. */
+const LEARNER_FIRST_VERSIONS: ReadonlySet<string> = new Set([
+  LEARNER_FIRST_TEACHING_MODEL.version,
+  GUIDE_ANSWER_TEACHING_MODEL.version,
+]);
+
+/** The ONE g5.v10/g5.v11 learner-first switch: an explicit Teaching Model identity check. */
+export function isLearnerFirstModel(
+  model: { key?: string | null; version?: string | null } | null | undefined,
+): boolean {
+  return (
+    model?.key === LEARNER_FIRST_TEACHING_MODEL.key &&
+    typeof model?.version === 'string' &&
+    LEARNER_FIRST_VERSIONS.has(model.version)
+  );
+}
+
+/** The ONE g5.v11 switch (the approved teacher-guide answers): an explicit identity check. */
+export function isGuideAnswerModel(
+  model: { key?: string | null; version?: string | null } | null | undefined,
+): boolean {
+  return (
+    model?.key === GUIDE_ANSWER_TEACHING_MODEL.key &&
+    model?.version === GUIDE_ANSWER_TEACHING_MODEL.version
+  );
+}
+
+/**
+ * g5.v10 quality plan W4: the outline checks' learner-first visual rules, with the
+ * book's exercise units («تمارين»; never the checks): an exercise slide shows no
+ * image of its exercise list.
+ */
+export function learnerFirstVisualsOf(
+  book:
+    | { units: ReadonlyArray<{ element?: string | null; contentUnitId: string | number }> }
+    | null
+    | undefined,
+): { exerciseUnitIds: string[] } {
+  return {
+    exerciseUnitIds: (book?.units ?? [])
+      .filter((unit) => unit.element === 'exercise')
+      .map((unit) => String(unit.contentUnitId)),
+  };
 }
 
 /**
@@ -79,8 +166,23 @@ export function isTeacherParityModel(
 export interface CoverageBookStructure extends KafuoBookStructure {
   /** The attempt's Teaching Model is g5.v8. */
   teacherParity?: true;
+  /** g5.v10: the learner-first repairs apply (an oversized exercises block is merged). */
+  learnerFirst?: true;
   /** g5.v8: per check / exercise unit, the facts its gates read (no text). */
   unitFacts?: Record<string, BookUnitFacts>;
+  /**
+   * g5.v11 only: the teacher-guide marks of the exercise questions, resolved from the
+   * attempt's pinned `teacherGuide` and these unit facts, so every `selectExercises`
+   * caller (planner text, gates, repair, attempts, correction) picks the same set.
+   */
+  exerciseGuide?: ExerciseGuideStatuses;
+  /**
+   * g5.v11 only (lesson 2-5, 17 Nov 2026): every book example keeps a slide of its own
+   * before its check — a slide teaching another example is never merged into a check's
+   * solution, and an example taught only on a check's slides is planned once
+   * ({@link missingExampleGaps}).
+   */
+  examplesKept?: true;
 }
 
 /** The units whose text the g5.v8 gates read: checks and exercises. */
@@ -163,6 +265,11 @@ function noItemsLeft(body: string, stripped: string): boolean {
 export function bookUnitFactsOf(
   book: KafuoBookStructure,
   units: ReadonlyArray<{ id: string; text: string }>,
+  /**
+   * Lesson 2-5 (17 Nov 2026, g5.v11 callers only): questions sharing a book line are
+   * counted each («(25 … (26 …»). Off, every earlier model counts as the backend does.
+   */
+  options: { inlineQuestions?: boolean } = {},
 ): Record<string, BookUnitFacts> {
   const text = new Map(units.map((unit) => [String(unit.id), unit.text] as const));
   const facts: Record<string, BookUnitFacts> = {};
@@ -172,9 +279,21 @@ export function bookUnitFactsOf(
     // 4 Nov 2026: a verse or hadith item is never an exercise or check item,
     // so it is not counted (and the engine never selects it).
     const items = isSacredExerciseElement(unit) ? withoutSacredItems(body) : body;
+    const unitFacts = bookUnitFacts(items, options);
+    // Lesson 2-5 (g5.v11): a question whose own text the attempt cannot read, or that
+    // prints no given (a graph-only one), is never set as a try without its figure.
+    const numbers = unitFacts.questionNumbers ?? [];
+    const unaskable =
+      options.inlineQuestions === true && unit.element === 'exercise' && numbers.length >= 2
+        ? numbers.filter((number) => {
+            const own = exerciseQuestionText(items, number, null, true);
+            return own === null || !/[0-9٠-٩]/u.test(own);
+          })
+        : [];
     facts[unit.contentUnitId] = {
-      ...bookUnitFacts(items),
+      ...unitFacts,
       ...(noItemsLeft(body, items) ? { noItemsLeft: true as const } : {}),
+      ...(unaskable.length > 0 ? { unaskableQuestions: unaskable } : {}),
     };
   }
   return facts;
@@ -188,9 +307,20 @@ export function teacherParityBook(
   book: KafuoBookStructure | undefined,
   teachingModel: { key?: string | null; version?: string | null } | null | undefined,
   unitFacts?: Record<string, BookUnitFacts> | null,
+  /** g5.v11 only: the attempt's guide items; ignored on every other Teaching Model. */
+  teacherGuide?: KafuoTeacherGuide | null,
 ): CoverageBookStructure | undefined {
   if (!book || !isTeacherParityModel(teachingModel)) return book;
-  return { ...book, teacherParity: true, ...(unitFacts ? { unitFacts } : {}) };
+  return {
+    ...book,
+    teacherParity: true,
+    ...(isLearnerFirstModel(teachingModel) ? { learnerFirst: true as const } : {}),
+    ...(unitFacts ? { unitFacts } : {}),
+    ...(teacherGuide && isGuideAnswerModel(teachingModel)
+      ? { exerciseGuide: resolveTeacherGuide(teacherGuide, book, unitFacts).exerciseStatuses }
+      : {}),
+    ...(isGuideAnswerModel(teachingModel) ? { examplesKept: true as const } : {}),
+  };
 }
 
 const STRUCTURAL_SLIDE_TYPES: ReadonlySet<string> = new Set([
@@ -204,7 +334,8 @@ function cites(outline: SceneOutline, unitId: string): boolean {
   return (outline.sourceContentUnitIds ?? []).some((id) => String(id) === unitId);
 }
 
-function teaches(outline: SceneOutline): boolean {
+/** A teaching slide: a slide that is not a cover, contents, transition or end slide. */
+export function teaches(outline: SceneOutline): boolean {
   return outline.type === 'slide' && !STRUCTURAL_SLIDE_TYPES.has(String(outline.slideType ?? ''));
 }
 
@@ -221,7 +352,9 @@ export type BookCoverageGapKind =
   | 'solution_before_try_it'
   // g5.v8 only:
   | 'missing_recall'
-  | 'missing_exercises';
+  | 'missing_exercises'
+  // g5.v11 only (`missingExampleGaps`, never a diagnosis: planned once, else logged):
+  | 'missing_example';
 
 export interface BookCoverageGap {
   kind: BookCoverageGapKind;
@@ -351,6 +484,70 @@ export function findBookCoverageGaps(
     // the repair (`mergeDuplicateSolutions`).
   }
   if (book.teacherParity) gaps.push(...teacherParityGaps(outlines, book));
+  return gaps;
+}
+
+/**
+ * Lesson 2-5 (17 Nov 2026, g5.v11 books only, `examplesKept`): the book's required worked
+ * examples that have no slide of their own before the check that follows them — cited
+ * only by a check's try-it slide or a check's solution (item 214: Example 3 sat only on
+ * check 2's solution and check 3's try, so check 3 was tried with no example). Each is
+ * anchored right before that check's try-it slide (with no such try, after the last
+ * slide of an earlier unit of its part). NOT a coverage diagnosis: the runner plans each
+ * once after the outline gates, and only logs one it cannot place — never a pause.
+ */
+export function missingExampleGaps(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure | undefined,
+): BookCoverageGap[] {
+  if (!book?.examplesKept) return [];
+  const checks = new Set(
+    book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
+  );
+  const ownSlide = (outline: SceneOutline) =>
+    teaches(outline) &&
+    outline.contentRole !== 'check_understanding' &&
+    !(outline.sourceContentUnitIds ?? []).some((id) => checks.has(String(id)));
+  const gaps: BookCoverageGap[] = [];
+  book.units.forEach((unit, position) => {
+    if (unit.element !== 'worked_example' || !unit.required) return;
+    const check = book.units.find(
+      (other) => other.element === 'try_it' && other.pairedExampleUnitId === unit.contentUnitId,
+    );
+    const tryAt = check
+      ? outlines.findIndex(
+          (outline) =>
+            teaches(outline) &&
+            outline.contentRole === 'check_understanding' &&
+            cites(outline, check.contentUnitId),
+        )
+      : -1;
+    const before = tryAt >= 0 ? outlines.slice(0, tryAt) : outlines;
+    if (before.some((outline) => ownSlide(outline) && cites(outline, unit.contentUnitId))) return;
+    const earlier = new Set(
+      book.units
+        .slice(0, position)
+        .filter((other) => other.partIndex !== undefined && other.partIndex === unit.partIndex)
+        .map((other) => other.contentUnitId),
+    );
+    const anchorIndex =
+      tryAt > 0
+        ? tryAt - 1
+        : earlier.size > 0
+          ? lastIndexWhere(
+              outlines,
+              (outline) =>
+                teaches(outline) &&
+                (outline.sourceContentUnitIds ?? []).some((id) => earlier.has(String(id))),
+            )
+          : undefined;
+    gaps.push({
+      kind: 'missing_example',
+      unit,
+      message: `${describe(unit)} has no slide of its own before its check`,
+      ...(anchorIndex !== undefined && anchorIndex >= 0 ? { anchorIndex } : {}),
+    });
+  });
   return gaps;
 }
 
@@ -546,8 +743,10 @@ function plannedExerciseItems(
 }
 
 const WORKING_STEP_LABELS: Readonly<Record<DetectedHiddenStepType, string>> = {
+  // Both cycles named: the diagnostic knows the step type, not which cycle the unit counts
+  // along, and a Hijri-only example read as wrong on a weekday item (13 Nov 2026).
   ordered_named_set:
-    'the numbered set (the whole cycle numbered, e.g. محرم = 1 … ذو الحجة = 12) before the step',
+    'the numbered set (the whole cycle numbered, e.g. السبت = 1 … الجمعة = 7, or محرم = 1 … ذو الحجة = 12) before the step',
   clock_time: 'the time worked step by step in minutes, crossing noon explicitly',
 };
 
@@ -791,6 +990,45 @@ function teacherParityDiagnostics(
  * this the planner could drop it unnoticed and Submit alone would refuse the
  * package (`ESSENTIAL_SECTION_UNCOVERED`), after every scene was paid for.
  */
+/**
+ * Lesson 2-5 (17 Nov 2026): the normalized content's practice subtypes, as the book
+ * profile kinds they print («تأكد» = GUIDED_PRACTICE, «تدرب وحل المسائل» = PRACTICE).
+ */
+const PRACTICE_SUBTYPE_KIND: Readonly<Record<string, string>> = {
+  GUIDED_PRACTICE: 'GUIDED_PRACTICE',
+  INDEPENDENT_PRACTICE: 'PRACTICE',
+};
+
+/**
+ * Lesson 2-5 (17 Nov 2026, g5.v11 callers only): a practice unit the book map left
+ * untyped (`kind` and `element` null: a «تأكد» or a «تدرب» continuation printed without
+ * its title, units 6419 and 6423) takes the kind its normalized subtype names, and the
+ * element the map's OWN rules give that kind (`exercise`). Only a `PRACTICE_SET` unit,
+ * only a subtype listed above, only when the rules make it an exercise; every other unit
+ * (an `ignore`d test-prep or cumulative review among them) is left as the map sent it.
+ * The SAME book when nothing changes.
+ */
+export function withTypedPracticeUnits<T extends KafuoBookStructure>(
+  book: T | undefined,
+  units: ReadonlyArray<{ id: string; role?: string | null; subtype?: string | null }>,
+): T | undefined {
+  if (!book) return book;
+  const byId = new Map(units.map((unit) => [String(unit.id), unit] as const));
+  let changed = false;
+  const typed = book.units.map((unit) => {
+    if (unit.element !== null || unit.kind !== null) return unit;
+    const source = byId.get(String(unit.contentUnitId));
+    if (source?.role?.toUpperCase() !== 'PRACTICE_SET') return unit;
+    const kind = PRACTICE_SUBTYPE_KIND[source.subtype?.toUpperCase() ?? ''];
+    if (!kind) return unit;
+    const element = book.rules.find((rule) => rule.kind === kind)?.element;
+    if (element !== 'exercise') return unit;
+    changed = true;
+    return { ...unit, kind, element };
+  });
+  return changed ? { ...book, units: typed } : book;
+}
+
 export function requireEssentialUntypedUnits<T extends KafuoBookStructure>(
   book: T | undefined,
   essentialIds: readonly string[] | null | undefined,
@@ -865,11 +1103,13 @@ function exerciseMarker(unit: KafuoBookStructureUnit): string {
  */
 export function bookStructureRequirement(
   book: KafuoBookStructure | undefined,
-  options: { teacherParity?: boolean } = {},
+  options: { teacherParity?: boolean; learnerFirst?: boolean } = {},
 ): string {
   if (!book) return '';
   const rules = book.rules.map((rule) => `${rule.kind}=${rule.element}`).join(', ');
-  if (options.teacherParity) return teacherParityRequirement(book, rules);
+  if (options.teacherParity) {
+    return teacherParityRequirement(book, rules, options.learnerFirst === true);
+  }
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v7). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -902,9 +1142,54 @@ function checkListLine(book: KafuoBookStructure): string[] {
   ];
 }
 
+/** The catalogue row g5.v10 rewrites (owner D-2.5, D-2.7); pinned by a test. */
+export const AVERAGE_CHANGE_STEP =
+  'Show the average change as a calculation, then the estimate, then whether it can be relied on';
+const LEARNER_FIRST_ESTIMATE_STEP =
+  'State what is expected next, reasoned with the method the book itself uses (never an average-change calculation the book does not use), then why the data support it, then whether it can be relied on';
+
+/** g5.v10: the hidden-step catalogue without the invented average-change method. */
+export function learnerFirstPlannerCatalogue(): string {
+  const catalogue = hiddenStepCatalogue();
+  return catalogue.includes(AVERAGE_CHANGE_STEP)
+    ? catalogue.replace(AVERAGE_CHANGE_STEP, LEARNER_FIRST_ESTIMATE_STEP)
+    : catalogue;
+}
+
+/**
+ * g5.v10 (learner-first plan W3, owner decisions D-1, D-2, D-4, D-5, D-8 of 15 Nov
+ * 2026): the lines the planner gets on top of — or instead of — g5.v8's.
+ */
+function learnerFirstLines(book: KafuoBookStructure): string[] {
+  const reading = book.units.some((unit) =>
+    /MATH_READING|VOCABULARY_LINK/.test(String(unit.kind ?? '')),
+  );
+  return [
+    'LEARNER-FIRST (g5.v10), for a weak student:',
+    "- DEFINITIONS: the first slide that uses a term this lesson teaches shows a definition box with the term and the book's own definition sentence, verbatim (cite that concept unit). Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.",
+    ...(reading
+      ? [
+          '- Teach each kind=MATH_READING («قراءة الرياضيات») and kind=VOCABULARY_LINK («ربط المفردات») unit where the book prints it, on the slide that first uses its notation or term (cite it there).',
+        ]
+      : []),
+    '- CLAIMS: a slide that tests a conjecture or gives a counterexample states the conjecture itself first, verbatim from the book, in its key points.',
+    '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use. To estimate a next value, add the last difference again (the latest rise: «آخر زيادة 4، إذن 41 + 4 = 45») and plan that working as key points.',
+    // Quality plan W4 (item 208, 15 Nov 2026): no month list at check 1; the wrong pictures.
+    '- CYCLES: an item on a fixed named cycle (the Hijri months, the days of the week) gives the whole cycle, numbered in order, as given data on its try-it slide and on its solution slide. Listing the cycle is the data of the item, never a hint.',
+    "- PICTURES: a unit's book picture is shown once, on the slide whose item it shows. A slide that only solves exercises shows no picture of the exercise list.",
+    "- ATTEMPT: never plan a quiz for a check or an exercise; the engine adds the learner's attempt itself, right after each try-it slide and before each exercise slide.",
+    '- Say the caution that examples do not prove a conjecture at most once per lesson part.',
+  ];
+}
+
 /** The g5.v8 planner guidance: recall, one solution per check, visible working, exercises. */
-function teacherParityRequirement(book: KafuoBookStructure, rules: string): string {
+function teacherParityRequirement(
+  book: KafuoBookStructure,
+  rules: string,
+  learnerFirst = false,
+): string {
   const policy = book.exercisePolicy;
+  if (learnerFirst) return learnerFirstRequirement(book, rules);
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v8). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -950,6 +1235,59 @@ function teacherParityRequirement(book: KafuoBookStructure, rules: string): stri
 }
 
 /**
+ * g5.v10 planner guidance: g5.v8's structure (one try-it slide and one solution slide
+ * per check, visible working, the engine's exercises block), with no recall slide (the
+ * opening boxes are excluded, as on g5.v9), every item stated verbatim and explained,
+ * the learner's attempt added by the engine, and the learner-first rules.
+ */
+function learnerFirstRequirement(book: KafuoBookStructure, rules: string): string {
+  const policy = book.exercisePolicy;
+  return [
+    '',
+    'BOOK-STRUCTURED LESSON (g5.v10). Each [[CONTENT_UNIT]] marker shows the kind the book',
+    `printed it as and its lesson part. The lesson template maps kinds to elements: ${rules}.`,
+    'Plan in the book order: every required unit gets its own instructional slide that cites it.',
+    'CHECKS: every try_it unit gets ONE try-it slide (contentRole check_understanding) that states',
+    "every one of the check's items (1A, 1B, …) verbatim, without answers and without solving.",
+    "The engine adds the learner's attempt right after it. Then ONE solution slide (contentRole",
+    "worked_example) PER CHECK that cites the check's unit and solves and explains EVERY item, in",
+    "the book order, each to a final answer from the given data. Never split a check's solution",
+    'across slides: each check has exactly one solution slide.',
+    "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
+    'the example, not the check that follows it.',
+    ...checkListLine(book),
+    'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
+    learnerFirstPlannerCatalogue(),
+    ...(policy && !book.units.some(isUsableExercise)
+      ? [
+          'EXERCISES: no exercise unit of this lesson holds a usable item, so the lesson has no',
+          'exercises block: plan no «تمارين» slide and cite no element=exercise unit.',
+        ]
+      : policy
+        ? [
+            'EXERCISES: element=exercise units are not taught one by one. Only in the last part,',
+            'just before the closing summary slide, comes the exercises block: one transition slide',
+            '«تمارين», a title only (a study tip is taught where the book prints it, in book order,',
+            'never moved onto this slide), then the exercise slides (contentRole worked_example). The engine fixes',
+            'which exercise units the block solves and on which slide (EXERCISES BLOCK below), easiest',
+            "first, and adds the learner's attempt before each exercise slide. Plan EXACTLY the",
+            'exercise slides the EXERCISES BLOCK lists, each citing exactly its listed units: one',
+            'exercise slide carries several exercises (e.g. «تمرين ١» and «تمرين ٢» together);',
+            'never one slide per exercise. Each exercise slide labels its items with the',
+            'EXERCISE LABELS of the block (numbered once across the lesson, never restarting at',
+            "«تمرين ١»), writes that label in each item's key point, puts the book's number only as a",
+            'small grey tag such as «(س٣٥ في كتابك)», states each item and solves EVERY listed item with compact',
+            'visible working. Never cite a unit marked exerciseUsable=false, except a',
+            'reason=instructions_only unit, which is only the instruction line of the exercises',
+            'paired with the same example.',
+          ]
+        : []),
+    ...learnerFirstLines(book),
+    'Transition slides never count as teaching a unit.',
+  ].join('\n');
+}
+
+/**
  * g5.v8: the exercises block the engine selected ({@link selectExercises}),
  * as the planner must plan it. Built from the coverage book (map + pinned unit
  * facts), so the planner is told exactly the set the gate checks. Empty for
@@ -984,7 +1322,44 @@ export function exerciseBlockRequirement(book: CoverageBookStructure | undefined
           'its next questions.',
         ]
       : []),
+    ...(book.learnerFirst ? learnerFirstExerciseLabels(selection) : []),
   ].join('\n');
+}
+
+const INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const indic = (value: number) =>
+  String(value).replace(/[0-9]/g, (digit) => INDIC_DIGITS[Number(digit)]!);
+
+/**
+ * Quality plan W5 (g5.v10): the engine numbers the exercises once, across the whole
+ * block, in the selection order — item 208 labelled three different items «تمرين 1».
+ * A unit with listed questions takes one label per question; any other unit, one label.
+ */
+function learnerFirstExerciseLabels(selection: NonNullable<ReturnType<typeof selectExercises>>) {
+  let next = 1;
+  const lines = selection.slides.map((ids, index) => {
+    const questions = selection.slideQuestions?.[index] ?? {};
+    const labels = ids.flatMap((id) => {
+      const numbers = questions[id];
+      if (!numbers?.length) return [`«تمرين ${indic(next++)}» = unit ${id}`];
+      return numbers.map(
+        (number) =>
+          `«تمرين ${indic(next++)}» = unit ${id} question ${number} «(س${indic(number)} في كتابك)»`,
+      );
+    });
+    const first = next - labels.length;
+    const title =
+      first === next - 1
+        ? `حل التمرين ${indic(first)}`
+        : `حل التمارين ${indic(first)}–${indic(next - 1)}`;
+    return `- exercise slide ${index + 1} (title «${title}»): ${labels.join('; ')};`;
+  });
+  return [
+    'EXERCISE LABELS (g5.v10, fixed by the engine): use exactly these labels, numbered once across',
+    'the whole block — never restart at «تمرين ١» on the next slide, and never call a check',
+    '(«تحقق من فهمك») item «تمرين»:',
+    ...lines,
+  ];
 }
 
 /** «1–4», or «1, 3, 5» when the numbers are not consecutive. */
