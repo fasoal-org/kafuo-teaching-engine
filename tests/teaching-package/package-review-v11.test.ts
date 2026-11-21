@@ -595,14 +595,15 @@ describe('the package review fixes a slide kept with a GUIDE_ANSWER_LEAK issue',
     expect(LEAKING.generationIssues).toEqual([ISSUE]);
   });
 
-  it('g5.v10: unchanged — no finding from the issue, and without it nothing new is read', async () => {
+  it('g5.v10: unchanged — no finding from the issue', async () => {
     const leaking = job('g5.v10', [LEAKING]);
     const finished = await leaking.run();
     expect(leaking.regenerate).not.toHaveBeenCalled();
     expect(finished).toMatchObject({ status: 'passed', findings: [], fixes: [] });
     const clean = job('g5.v10', [FIXED]);
     expect(await clean.run()).toMatchObject({ status: 'passed', findings: [] });
-    expect(mocks.readAttemptById).not.toHaveBeenCalled();
+    // 21 Nov 2026 (D2): the attempt is now read on every first review — the
+    // label-script finding is model-gated too — so the leak's old lazy read is gone.
   });
 
   it('names every item of the issue, or none when its wording is unknown; slides only', () => {

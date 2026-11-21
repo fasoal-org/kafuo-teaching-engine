@@ -6,6 +6,7 @@ import {
   MAX_PACKAGE_REVIEWS_IN_FLIGHT,
   REVIEW_LEASE_MS,
   generationIssueFindings,
+  labelScriptFindings,
   reviewStatusOf,
   teacherOnlyReason,
   toStoredFindings,
@@ -484,5 +485,49 @@ describe('every kept generation issue becomes a review finding (21 Nov 2026)', (
     } as unknown as AppScene;
     const [finding] = generationIssueFindings([quiz], reviewSlidesOf([quiz]));
     expect(finding!.check).toBe('G1');
+  });
+});
+
+describe('the label-script finding (D2, 21 Nov 2026)', () => {
+  const units = [
+    { id: '6688', text: 'ABCD ≅ WXYZ', order: 1, role: 'EXAMPLE', title: 'مثال' },
+    { id: '6690', text: 'المثلث س ص ع', order: 2, role: 'EXAMPLE', title: 'مثال 2' },
+  ] as never;
+
+  function slideOf(id: string, order: number, visibleText: string, cited: string[]) {
+    return {
+      ...slideScene(id, order),
+      content: {
+        type: 'slide',
+        contentRole: 'worked_example',
+        canvas: {
+          elements: [{ id: 'e1', type: 'text', content: `<p>${visibleText}</p>` }],
+        },
+      },
+      sourceContentUnitIds: cited,
+    } as unknown as AppScene;
+  }
+
+  it('a slide writing the book’s Latin labels as Arabic letters gets one G2 finding', () => {
+    const scenes = [slideOf('s1', 12, 'المثلث ز ي س و مطابق', ['6688'])];
+    const slides = reviewSlidesOf(scenes);
+    const [finding] = labelScriptFindings(slides, units);
+    expect(finding).toMatchObject({
+      id: 'l1',
+      targetId: 's1',
+      check: 'G2',
+      severity: 'high',
+      status: 'open',
+    });
+    expect(finding!.whatIsWrong).toContain('الشريحة 12');
+    expect(finding!.whatIsWrong).toContain('LABEL_SCRIPT_CHANGED');
+    expect(teacherOnlyReason(finding, slides)).toBeNull();
+  });
+
+  it('Arabic labels in the book give no finding, and clean Latin labels neither', () => {
+    const arabic = [slideOf('s1', 3, 'المثلث س ص ع قائم', ['6690'])];
+    expect(labelScriptFindings(reviewSlidesOf(arabic), units)).toEqual([]);
+    const clean = [slideOf('s2', 4, 'المثلث ABCD مطابق', ['6688'])];
+    expect(labelScriptFindings(reviewSlidesOf(clean), units)).toEqual([]);
   });
 });

@@ -30,6 +30,7 @@
  */
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
+import { labelScriptChanged } from '@/lib/server/teaching-package/label-script-check';
 import { createLogger } from '@/lib/logger';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -78,6 +79,7 @@ const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
   // 21 Nov 2026: G1 is the server-stated "kept generation issue" finding; the slide is
   // regenerated once exactly like any other auto-fixable finding.
   'G1',
+  'G2',
   'S1',
   'S2',
   'S3',
@@ -653,9 +655,24 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       const liveIssueCodes = (regenerated.generationIssues ?? [])
         .filter((issue) => issue.code !== 'GUIDE_ANSWER_LEAK')
         .map((issue) => issue.code);
+      // D2: a G2 (label script) is decided from the live scene too — the regenerated
+      // canvas either kept the book's Latin labels or rewrote them again.
+      const liveSlide = sceneToReviewSlide(regenerated);
+      const unitTextOf = new Map(context.units.map((unit) => [String(unit.id), unit.text ?? '']));
+      const liveLabelWrong = sceneFindings.some(
+        (finding) =>
+          finding.check === 'G2' &&
+          labelScriptChanged(
+            liveSlide.visibleText,
+            (liveSlide.citedUnitIds ?? []).map((id) => unitTextOf.get(String(id)) ?? '').join('\n'),
+          ),
+      );
       let stillWrong = false;
       for (const finding of sceneFindings) {
         if (finding.check === 'G1' && liveIssueCodes.length > 0) {
+          finding.teacherReason = 'STILL_WRONG';
+          stillWrong = true;
+        } else if (finding.check === 'G2' && liveLabelWrong) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (reportedChecks.has(finding.check) || fixBrokeNarration) {
