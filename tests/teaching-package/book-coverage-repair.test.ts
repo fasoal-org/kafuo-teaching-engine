@@ -9,6 +9,7 @@ import {
   repairBookCoverageGaps,
   type BookCoverageRepairContext,
 } from '@/lib/server/teaching-package/book-coverage-repair';
+import { teacherParityBook } from '@/lib/server/teaching-package/book-coverage';
 import type { PlanInsertedSlideInput } from '@/lib/server/teaching-package/plan-inserted-slide';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { KafuoBookStructure, TeachingFlowEntry } from '@/lib/types/teaching-package';
@@ -682,5 +683,100 @@ describe('g5.v7 book coverage repair', () => {
     expect(plan).not.toHaveBeenCalled();
     expect(result.inserted).toBe(0);
     expect(result.blocking).toEqual(blocking);
+  });
+});
+
+describe('an example taught twice (21 Nov 2026)', () => {
+  const V8 = { key: 'g5', version: 'g5.v8' };
+  const parityBook = (book: KafuoBookStructure = BOOK) => teacherParityBook(book, V8)!;
+  const parityContext = (
+    plan: BookCoverageRepairContext['plan'],
+    book: KafuoBookStructure = BOOK,
+  ): BookCoverageRepairContext => ({
+    ...context(plan),
+    book: parityBook(book),
+    diagnose: (outlines) => ({
+      outlines,
+      blocking: findBookCoverageDiagnostics(outlines, parityBook(book)),
+    }),
+  });
+
+  const complete = [
+    slide('ex3', ['4030'], { contentRole: 'worked_example' }),
+    slide('try3', ['4032'], { contentRole: 'check_understanding' }),
+    slide('sol3', ['4032', '4030'], { contentRole: 'worked_example' }),
+  ];
+
+  it('drops the repeats and keeps the first teaching slide of the example', async () => {
+    const candidate = [
+      complete[0]!,
+      slide('dup', ['4030'], { contentRole: 'worked_example' }),
+      ...complete.slice(1),
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook());
+    expect(blocking.map((d) => d.code)).toContain('EXAMPLE_TAUGHT_TWICE');
+
+    const result = await repairBookCoverageGaps(
+      candidate,
+      blocking,
+      aiCall,
+      parityContext(planning('worked_example')),
+    );
+
+    expect(result.restructured).toBeGreaterThanOrEqual(1);
+    expect(result.outlines.map((o) => o.id)).toEqual(['ex3', 'try3', 'sol3']);
+    expect(result.blocking).toEqual([]);
+    // No model call: the drop is deterministic.
+    expect(aiCall).not.toHaveBeenCalled();
+  });
+
+  it('replaces a «جرّب» repeat by planning the try-it when the check exists', async () => {
+    const candidate = [
+      complete[0]!,
+      slide('jarrab', ['4030'], { contentRole: 'check_understanding' }),
+      complete[2]!,
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook());
+    expect(blocking.map((d) => d.code)).toContain('EXAMPLE_TAUGHT_TWICE');
+
+    const plan = planning('check_understanding');
+    const result = await repairBookCoverageGaps(candidate, blocking, aiCall, parityContext(plan));
+
+    // The repeat is gone and the check's own try-it was planned in its place.
+    expect(result.outlines.map((o) => o.id)).not.toContain('jarrab');
+    expect(plan).toHaveBeenCalled();
+    const plannedUnits = plan.mock.calls.map((call) => call[0]!.unitIds);
+    expect(plannedUnits).toContainEqual(['4032']);
+    expect(result.outlines.some((o) => o.sourceContentUnitIds?.includes('4032'))).toBe(true);
+  });
+
+  it('drops a repeat of an example whose book has no check, and never invents one', async () => {
+    const noCheck: KafuoBookStructure = {
+      ...BOOK,
+      units: BOOK.units.filter((unit) => unit.element !== 'try_it'),
+    };
+    const noCheckContext = (
+      plan: BookCoverageRepairContext['plan'],
+    ): BookCoverageRepairContext => ({
+      ...context(plan),
+      book: parityBook(noCheck),
+      diagnose: (outlines) => ({
+        outlines,
+        blocking: findBookCoverageDiagnostics(outlines, parityBook(noCheck)),
+      }),
+    });
+    const candidate = [
+      slide('ex3', ['4030'], { contentRole: 'worked_example' }),
+      slide('dup', ['4030'], { contentRole: 'worked_example' }),
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook(noCheck));
+    expect(blocking.map((d) => d.code)).toContain('EXAMPLE_TAUGHT_TWICE');
+
+    const plan = planning('check_understanding');
+    const result = await repairBookCoverageGaps(candidate, blocking, aiCall, noCheckContext(plan));
+
+    expect(result.outlines.map((o) => o.id)).toEqual(['ex3']);
+    // No try-it was planned: the book has none to plan.
+    expect(plan).not.toHaveBeenCalled();
   });
 });

@@ -394,6 +394,46 @@ export function guideLeakFindings(
   return findings;
 }
 
+/**
+ * 21 Nov 2026 (clear slide findings): each scene the run kept with a generation issue —
+ * a placeholder slide, `NARRATION_MISSING`, `NARRATION_AUDIO_FAILED` or any other kept
+ * code — is one must-fix `G1` finding, so the fix loop regenerates that slide once and
+ * the submit/approve gate refuses the package until it is clean. The note names the
+ * slide by position and title (ids are not readable, owner 21 Nov 2026) and lists the
+ * issue codes; no book text. Ids `i<n>`, after the reviewer's `f<n>` and the leaks' `g<n>`.
+ */
+export function generationIssueFindings(
+  scenes: readonly AppScene[],
+  slides: readonly ReviewSlide[],
+): StoredFinding[] {
+  const byId = new Map(scenes.map((scene) => [scene.id, scene]));
+  const findings: StoredFinding[] = [];
+  for (const slide of slides) {
+    const scene = byId.get(slide.id);
+    if (!scene) continue;
+    const issues = (scene.generationIssues ?? []).filter(
+      (issue) => issue.code !== GUIDE_LEAK_ISSUE_CODE,
+    );
+    if (issues.length === 0) continue;
+    const codes = issues.map((issue) => issue.code).join(', ');
+    const position = slide.order;
+    findings.push({
+      id: `i${findings.length + 1}`,
+      targetId: slide.id,
+      targetTitle: slide.title,
+      targetOrder: slide.order,
+      check: 'G1',
+      severity: 'high',
+      bookEvidence: { quote: '', unitId: null },
+      whatIsWrong: `الشريحة ${position}: «${slide.title}» أُبقيت ومكتوب فيها مشكلة توليد (${codes})؛ يجب إعادة توليدها قبل الإرسال.`,
+      fixNote: `أعد توليد هذه الشريحة كاملة؛ أبقت مشكلة التوليد: ${codes}.`,
+      status: 'open',
+      teacherReason: null,
+    });
+  }
+  return findings;
+}
+
 /** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
 export function withSceneDigests(
   findings: readonly StoredFinding[],
@@ -633,6 +673,10 @@ export async function runPackageReview(
           leakFindings = guideLeakFindings(scenes, slides);
         }
       }
+      // Every kept generation issue is a finding on any Teaching Model (a placeholder
+      // or a silent slide is broken whatever generated it), stated before the paid call
+      // so the reviewer's answer and the fix loop see it with the first answer.
+      const issueFindings = generationIssueFindings(scenes, slides);
       // HIGH-1: the reads above may have stalled past the lease (evicted, or
       // claimed elsewhere): never start the paid call under a lost lease.
       if (!(await heartbeat())) {
@@ -643,7 +687,7 @@ export async function runPackageReview(
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
       // An answer that arrives after the eviction is the resumed run's to get.
       if (deps.signal?.aborted) return null;
-      findings = [...toStoredFindings(answer, slides), ...leakFindings];
+      findings = [...toStoredFindings(answer, slides), ...leakFindings, ...issueFindings];
       await recordUsage(call, {
         summary: answer.summary,
         findings,

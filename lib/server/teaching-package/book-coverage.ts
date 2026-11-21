@@ -63,6 +63,12 @@ export const EXERCISE_SELECTED_MISSING = 'EXERCISE_SELECTED_MISSING';
 export const EXERCISE_UNSELECTED_CITED = 'EXERCISE_UNSELECTED_CITED';
 /** g5.v8: a «تأكد» check has more than one solution slide (owner, 4 Nov 2026: one per check). */
 export const SOLUTION_SLIDES_DUPLICATED = 'SOLUTION_SLIDES_DUPLICATED';
+/**
+ * 21 Nov 2026 (owner, slide findings point 3): a worked example taught on more than one
+ * slide — either more than one `worked_example` slide cites it, or a
+ * `check_understanding` slide cites the example without its own check («جرّب» repeats).
+ */
+export const EXAMPLE_TAUGHT_TWICE = 'EXAMPLE_TAUGHT_TWICE';
 /** g5.v8: the recall slide comes after the first teaching slide of part 1. */
 export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
 
@@ -618,6 +624,59 @@ export function recallPlacement(
  * and no exercise unit, so the exercises block is never counted. Only checks
  * with two or more are returned, each with its slides in plan order.
  */
+/**
+ * The worked examples taught on more than one slide (21 Nov 2026). For each book
+ * `worked_example` unit, the slide indexes that only repeat its teaching:
+ *
+ * - every `worked_example` slide after the first that cites the example without citing
+ *   its paired check (a solution slide cites the check, so it never counts) and without
+ *   citing any exercise unit;
+ * - every `check_understanding` slide that cites the example but not that example's
+ *   check — the «جرّب» slide that repeats the example instead of checking it.
+ *
+ * Dropped by the repair (`dropExamplesTaughtTwice`); the check's own try-it slide is
+ * then planned by the standing missing-try-it machinery when the check exists.
+ */
+export function examplesTaughtTwice(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): Array<{ unitId: string; indexes: number[] }> {
+  const exerciseIds = new Set(
+    book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+  );
+  const groups: Array<{ unitId: string; indexes: number[] }> = [];
+  for (const unit of book.units) {
+    if (unit.element !== 'worked_example') continue;
+    const exampleId = unit.contentUnitId;
+    const checkId = book.units.find(
+      (candidate) =>
+        candidate.element === 'try_it' &&
+        String(candidate.pairedExampleUnitId) === String(exampleId),
+    )?.contentUnitId;
+    const repeats: number[] = [];
+    let taught = 0;
+    outlines.forEach((outline, index) => {
+      if (!teaches(outline) || !cites(outline, exampleId)) return;
+      const citesCheck = checkId !== undefined && cites(outline, checkId);
+      const citesExercise = (outline.sourceContentUnitIds ?? []).some((id) =>
+        exerciseIds.has(String(id)),
+      );
+      if (citesCheck || citesExercise) return;
+      if (outline.contentRole === 'check_understanding') {
+        // The «جرّب» repeat: it teaches the example and checks nothing of its own.
+        repeats.push(index);
+        return;
+      }
+      if (outline.contentRole === 'worked_example') {
+        taught += 1;
+        if (taught > 1) repeats.push(index);
+      }
+    });
+    if (repeats.length > 0) groups.push({ unitId: exampleId, indexes: repeats });
+  }
+  return groups;
+}
+
 export function duplicateSolutionSlides(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure,
@@ -774,6 +833,21 @@ function teacherParityDiagnostics(
       field: 'sourceContentUnitIds',
       message: `check ${group.unitId} has more than one solution slide; one solution slide solves all of its items`,
     });
+  }
+  // 21 Nov 2026: an example taught on more than one slide. The message names each
+  // repeat by 1-based position and title, as the owner reads them.
+  for (const group of examplesTaughtTwice(outlines, book)) {
+    for (const index of group.indexes) {
+      const outline = outlines[index]!;
+      diagnostics.push({
+        code: EXAMPLE_TAUGHT_TWICE,
+        disposition: 'admin_correctable',
+        outlineIndex: index,
+        ...(outline.id ? { outlineId: outline.id } : {}),
+        field: 'sourceContentUnitIds',
+        message: `الشريحة ${index + 1}: «${outline.title ?? ''}» تُدرّب المثال ${group.unitId} المُدرَّج أصلًا على شريحة أخرى؛ احذف هذه الشريحة`,
+      });
+    }
   }
   // Recall first (lessons 307, 315, 317): the recall slide opens part 1.
   if (book.units.some((unit) => unit.element === 'prior_knowledge')) {

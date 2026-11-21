@@ -31,6 +31,8 @@ import {
   RECALL_NOT_FIRST,
   recallPlacement,
   SOLUTION_SLIDES_DUPLICATED,
+  EXAMPLE_TAUGHT_TWICE,
+  examplesTaughtTwice,
   teaches,
   WORKING_STEP_MISSING,
   type BookCoverageGap,
@@ -311,6 +313,7 @@ const TEACHER_PARITY_FINDINGS: ReadonlySet<string> = new Set([
   WORKING_STEP_MISSING,
   RECALL_NOT_FIRST,
   SOLUTION_SLIDES_DUPLICATED,
+  EXAMPLE_TAUGHT_TWICE,
 ]);
 
 /** The most key points a merged solution slide keeps (its points join, never drop). */
@@ -322,6 +325,27 @@ const MERGED_SOLUTION_MAX_POINTS = 8;
  * selected visuals join it, and the others are removed. Exercise slides are
  * never touched. Returns the new list and how many slides were removed.
  */
+/**
+ * 21 Nov 2026 (owner, slide findings point 3), deterministic, no model call: the slides
+ * `examplesTaughtTwice` names are dropped — the first `worked_example` slide of the
+ * example keeps its teaching, and a «جرّب» repeat that checks nothing goes entirely. The
+ * example's own try-it slide is then planned by the standing missing-try-it machinery
+ * when its check exists in the book map; a book with no check for that example gets the
+ * drop only — a check is never invented.
+ */
+export function dropExamplesTaughtTwice(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): { outlines: SceneOutline[]; dropped: number } {
+  const groups = examplesTaughtTwice(outlines, book);
+  if (groups.length === 0) return { outlines: [...outlines], dropped: 0 };
+  const drop = new Set(groups.flatMap((group) => group.indexes));
+  return {
+    outlines: outlines.filter((_outline, index) => !drop.has(index)),
+    dropped: drop.size,
+  };
+}
+
 export function mergeDuplicateSolutions(
   outlines: readonly SceneOutline[],
   book: CoverageBookStructure,
@@ -528,6 +552,7 @@ export async function repairBookCoverageGaps(
       (issue) =>
         issue.code === SOLUTION_SLIDES_DUPLICATED ||
         issue.code === RECALL_NOT_FIRST ||
+        issue.code === EXAMPLE_TAUGHT_TWICE ||
         // g5.v10: an oversized exercises block is regrouped without a model call.
         (context.book.learnerFirst === true && issue.code === EXERCISE_CAP_EXCEEDED),
     )
@@ -547,6 +572,15 @@ export async function repairBookCoverageGaps(
       open = diagnosed.blocking;
       return true;
     };
+    // 21 Nov 2026: the repeats of an example taught twice go first — the merges below
+    // then see the plan without them.
+    const deduped = dropExamplesTaughtTwice(outlines, context.book);
+    const dedupKept = deduped.dropped > 0 && accept(deduped.outlines);
+    if (deduped.dropped > 0) {
+      log.info(
+        `book coverage repair: ${dedupKept ? deduped.dropped : 0} slide(s) repeating an already-taught example dropped${dedupKept ? '' : ' (rolled back)'}`,
+      );
+    }
     const merged = mergeDuplicateSolutions(outlines, context.book);
     // Lesson 2-5: an example slide that only stopped citing the check is a change too.
     const mergeKept = merged.merged + merged.recited > 0 && accept(merged.outlines);
@@ -561,6 +595,7 @@ export async function repairBookCoverageGaps(
       );
     }
     restructured =
+      (dedupKept ? deduped.dropped : 0) +
       (mergeKept ? merged.merged + merged.recited : 0) +
       (moveKept ? 1 : 0) +
       (groupKept ? grouped.merged : 0);

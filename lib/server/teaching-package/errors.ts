@@ -157,6 +157,7 @@ export type TeachingPackageErrorCode =
    * success — the reviewer confirms, corrects, or regenerates (FR-TS-044/071).
    */
   | 'SKILL_ALIGNMENT_UNRESOLVED'
+  | 'SLIDES_NEED_REGENERATION'
   // --- Teaching Actions + Action Engine (Module 3/4 W1, plan §7.1.2) ---
   /**
    * A governed run could not resolve a Scene's authoritative Flow context:
@@ -495,6 +496,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   TEACHING_MODEL_CONFIG_CONTRADICTORY: 422,
   SCENE_CLASSIFICATION_INVALID: 422,
   SKILL_ALIGNMENT_UNRESOLVED: 409,
+  SLIDES_NEED_REGENERATION: 409,
   GOVERNED_FLOW_CONTEXT_UNRESOLVED: 422,
   GOVERNED_SCENE_GENERATION_FAILED: 422,
   GOVERNED_ACTION_GENERATION_FAILED: 422,

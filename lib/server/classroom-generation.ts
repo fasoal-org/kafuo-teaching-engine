@@ -37,6 +37,10 @@ import {
   type WidgetType,
 } from '@openmaic/generation';
 import { createSceneWithActions } from '@/lib/server/scene-generation';
+import {
+  NARRATION_MISSING_ISSUE_CODE,
+  narrationMissing,
+} from '@/lib/server/teaching-package/narration-audio-issue';
 import { generatePBLV2Project } from '@/lib/pbl/v2/agents/planner';
 import { getDefaultAgents } from '@/lib/orchestration/registry/store';
 import { createLogger } from '@/lib/logger';
@@ -410,6 +414,21 @@ export function markNarrationAudioGaps(
   scenes: readonly Scene[],
 ): void {
   for (const scene of scenes) {
+    // 21 Nov 2026: a slide scene with no spoken line at all is marked too — before,
+    // `spoken` was empty so `missing` was 0 and a silent slide carried no mark at
+    // all (lesson 3-4 scene 4). Quiz (bank quizzes included), interactive and pbl
+    // scenes are not narrated and never get this mark.
+    if (narrationMissing(scene)) {
+      markSceneIssues(store, scene.id, [
+        {
+          code: NARRATION_MISSING_ISSUE_CODE,
+          message:
+            'the slide has no narration at all: no spoken line was generated for it; students would see it in silence',
+        },
+      ]);
+      log.warn(`Scene "${scene.title}" kept with no narration at all; marked for review`);
+      continue;
+    }
     const spoken = (scene.actions ?? []).filter(
       (action) => action.type === 'speech' && Boolean((action as SpeechAction).text),
     ) as SpeechAction[];

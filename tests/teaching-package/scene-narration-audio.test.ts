@@ -7,7 +7,13 @@ import {
   buildSceneAlignmentBaseline,
   deriveSceneAlignment,
 } from '@/lib/server/teaching-package/alignment';
-import { issuesAfterAudioRepair } from '@/lib/server/teaching-package/narration-audio-issue';
+import {
+  NARRATION_MISSING_ISSUE_CODE,
+  issuesAfterAudioRepair,
+  issuesAfterNarrationRepair,
+  narrationMissing,
+} from '@/lib/server/teaching-package/narration-audio-issue';
+import { markNarrationAudioGaps } from '@/lib/server/classroom-generation';
 import {
   regenerateSceneNarrationAudio,
   type NarrationAudioDeps,
@@ -408,5 +414,67 @@ describe('regenerateSceneNarrationAudio', () => {
 describe('issuesAfterAudioRepair', () => {
   it('removes the audio mark when nothing is missing and drops an empty list', () => {
     expect(issuesAfterAudioRepair([AUDIO_ISSUE], { spoken: 2, missing: 0 })).toBeUndefined();
+  });
+});
+
+describe('NARRATION_MISSING (21 Nov 2026)', () => {
+  const slideOf = (id: string, actions: unknown[]) =>
+    ({ id, type: 'slide', title: 'شريحة', actions }) as unknown as Scene;
+  const speech = (text: string | null, audioId?: string) =>
+    ({ type: 'speech', text, ...(audioId ? { audioId } : {}) }) as unknown as SpeechAction;
+
+  it('a narrated slide with no spoken line at all is marked; a quiz scene is not', () => {
+    const silent = slideOf('silent', []);
+    const quiz = { id: 'quiz', type: 'quiz', title: 'اختبار', actions: [] } as unknown as Scene;
+    const voiced = slideOf('voiced', [speech('جملة', 'audio-1')]);
+    const written: Array<[string, ReadonlyArray<{ code: string; message: string }>]> = [];
+    const tracked = (scene: Scene) => {
+      let issues: ReadonlyArray<{ code: string; message: string }> | undefined;
+      return {
+        scene,
+        read: () => issues,
+        write(value: ReadonlyArray<{ code: string; message: string }>) {
+          issues = value;
+          written.push([scene.id, value]);
+        },
+      };
+    };
+    const trackedScenes = [silent, quiz, voiced].map(tracked);
+    const store = {
+      getState: () => ({
+        scenes: trackedScenes.map((entry) => ({
+          ...entry.scene,
+          get generationIssues() {
+            return entry.read();
+          },
+          set generationIssues(value: ReadonlyArray<{ code: string; message: string }>) {
+            entry.write(value);
+          },
+        })),
+      }),
+    };
+    markNarrationAudioGaps(store as never, [silent, quiz, voiced]);
+
+    // Only the silent slide is marked; the quiz and the voiced slide are not.
+    expect(written).toHaveLength(1);
+    expect(written[0]![0]).toBe('silent');
+    expect(written[0]![1]!.map((issue) => issue.code)).toEqual([NARRATION_MISSING_ISSUE_CODE]);
+  });
+
+  it('narrationMissing: a slide without a spoken line; not a quiz, not a voiced slide', () => {
+    expect(narrationMissing(slideOf('a', []))).toBe(true);
+    expect(narrationMissing(slideOf('b', [speech(null)]))).toBe(true);
+    expect(narrationMissing({ id: 'c', type: 'quiz', actions: [] } as never)).toBe(false);
+    expect(narrationMissing(slideOf('d', [speech('نص')]))).toBe(false);
+  });
+
+  it('issuesAfterNarrationRepair clears NARRATION_MISSING once the scene speaks, and keeps it otherwise', () => {
+    const marked = [{ code: NARRATION_MISSING_ISSUE_CODE, message: 'silent' }];
+    expect(issuesAfterNarrationRepair(marked, slideOf('a', [speech('نص', 'a1')]))).toBeUndefined();
+    const kept = issuesAfterNarrationRepair(marked, slideOf('b', []));
+    expect(kept!.map((issue) => issue.code)).toEqual([NARRATION_MISSING_ISSUE_CODE]);
+    // The audio mark still round-trips beside it.
+    const both = issuesAfterNarrationRepair([], slideOf('c', [speech('نص')]));
+    expect(both!.map((issue) => issue.code)).toEqual(['NARRATION_AUDIO_FAILED']);
   });
 });

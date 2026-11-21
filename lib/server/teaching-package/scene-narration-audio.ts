@@ -33,8 +33,10 @@ import {
 } from '@/lib/server/teaching-package/alignment';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
+  NARRATION_MISSING_ISSUE_CODE,
   issuesAfterAudioRepair,
   narrationAudioGap,
+  narrationMissing,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
@@ -294,7 +296,14 @@ export async function regenerateSceneNarrationAudio(
     );
   }
 
-  const issues = issuesAfterAudioRepair(live.scene.generationIssues, gap);
+  // 21 Nov 2026: a scene that holds a spoken line again must not keep a stale
+  // NARRATION_MISSING. The audio mark keeps its own post-repair `gap` semantics.
+  const baseIssues = narrationMissing(live.scene)
+    ? live.scene.generationIssues
+    : (live.scene.generationIssues ?? []).filter(
+        (issue) => issue.code !== NARRATION_MISSING_ISSUE_CODE,
+      );
+  const issues = issuesAfterAudioRepair(baseIssues, gap);
   const unchangedIssues =
     JSON.stringify(issues ?? null) === JSON.stringify(live.scene.generationIssues ?? null);
   if (summary.generated === 0 && unchangedIssues) {

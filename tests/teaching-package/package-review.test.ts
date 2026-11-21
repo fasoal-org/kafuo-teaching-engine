@@ -5,6 +5,7 @@ import { REVIEWER_CALL_TIMEOUT_MS } from '@/lib/server/teaching-model/reviewer-p
 import {
   MAX_PACKAGE_REVIEWS_IN_FLIGHT,
   REVIEW_LEASE_MS,
+  generationIssueFindings,
   reviewStatusOf,
   teacherOnlyReason,
   toStoredFindings,
@@ -436,5 +437,52 @@ describe('leases and in-flight caps (D-6, D-7)', () => {
   it('at most 2 package reviews and 2 question reviews run at once per process', () => {
     expect(MAX_PACKAGE_REVIEWS_IN_FLIGHT).toBe(2);
     expect(MAX_QUESTION_REVIEWS_IN_FLIGHT).toBe(2);
+  });
+});
+
+describe('every kept generation issue becomes a review finding (21 Nov 2026)', () => {
+  const broken = slideScene('s1', 3, {
+    title: 'مثال 1 – إذا وفقط إذا',
+    generationIssues: [
+      { code: 'PLACEHOLDER_SLIDE', message: 'the slide could not be generated' },
+      { code: 'NARRATION_MISSING', message: 'no spoken line' },
+    ],
+  });
+
+  it('one G1 finding per scene, naming the slide by position and title with its codes', () => {
+    const scenes = [slideScene('s0', 1), broken];
+    const [finding] = generationIssueFindings(scenes, reviewSlidesOf(scenes));
+    expect(finding).toMatchObject({
+      id: 'i1',
+      targetId: 's1',
+      targetTitle: 'مثال 1 – إذا وفقط إذا',
+      check: 'G1',
+      severity: 'high',
+      status: 'open',
+    });
+    expect(finding!.whatIsWrong).toContain('الشريحة 3');
+    expect(finding!.whatIsWrong).toContain('مثال 1 – إذا وفقط إذا');
+    expect(finding!.whatIsWrong).toContain('PLACEHOLDER_SLIDE');
+    // Auto-fixable: the fix loop regenerates the slide once, like any other finding.
+    expect(teacherOnlyReason(finding, reviewSlidesOf(scenes))).toBeNull();
+  });
+
+  it('a GUIDE_ANSWER_LEAK scene is not duplicated: it already has its own finding', () => {
+    const leaking = slideScene('s1', 2, {
+      generationIssues: [{ code: 'GUIDE_ANSWER_LEAK', message: 'stated the answer' }],
+    });
+    expect(generationIssueFindings([leaking], reviewSlidesOf([leaking]))).toEqual([]);
+  });
+
+  it('a clean stage gives no finding, and a placeholder quiz scene gets one too', () => {
+    const clean = slideScene('s0', 1);
+    expect(generationIssueFindings([clean], reviewSlidesOf([clean]))).toEqual([]);
+    const quiz = {
+      ...slideScene('q1', 2),
+      type: 'quiz',
+      generationIssues: [{ code: 'PLACEHOLDER_QUIZ', message: 'not generated' }],
+    } as unknown as AppScene;
+    const [finding] = generationIssueFindings([quiz], reviewSlidesOf([quiz]));
+    expect(finding!.check).toBe('G1');
   });
 });

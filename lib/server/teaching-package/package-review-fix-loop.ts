@@ -75,6 +75,9 @@ export const PACKAGE_REVIEWER_ACTOR = 'system:package-reviewer';
  * exist only in package-review-v2, so v1 reviews are unchanged.
  */
 const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
+  // 21 Nov 2026: G1 is the server-stated "kept generation issue" finding; the slide is
+  // regenerated once exactly like any other auto-fixable finding.
+  'G1',
   'S1',
   'S2',
   'S3',
@@ -644,9 +647,18 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // with the new canvas (a new S6, package-review-v2 only) did not fix the slide —
       // item 208's «اليمين»/«اليسار» fix was closed as fixed. Never reached on v1.
       const fixBrokeNarration = reportedChecks.has('S6');
+      // 21 Nov 2026: a G1 (kept generation issue) is decided from the live scene, not
+      // the re-review — the reviewer's rubric never reports it. Still broken after the
+      // one regeneration ⇒ stays open for a person; clean ⇒ fixed.
+      const liveIssueCodes = (regenerated.generationIssues ?? [])
+        .filter((issue) => issue.code !== 'GUIDE_ANSWER_LEAK')
+        .map((issue) => issue.code);
       let stillWrong = false;
       for (const finding of sceneFindings) {
-        if (reportedChecks.has(finding.check) || fixBrokeNarration) {
+        if (finding.check === 'G1' && liveIssueCodes.length > 0) {
+          finding.teacherReason = 'STILL_WRONG';
+          stillWrong = true;
+        } else if (reportedChecks.has(finding.check) || fixBrokeNarration) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (audioCode !== null) {

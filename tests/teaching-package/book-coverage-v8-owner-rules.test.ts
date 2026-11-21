@@ -12,6 +12,8 @@ import {
   findBookCoverageGaps,
   RECALL_NOT_FIRST,
   SOLUTION_SLIDES_DUPLICATED,
+  EXAMPLE_TAUGHT_TWICE,
+  examplesTaughtTwice,
   teacherParityBook,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -439,5 +441,60 @@ describe('verse strip and solutions that refuse (lesson 316)', () => {
     expect(kept).not.toContain('﴿');
     expect(kept).toContain('خليليَّ عوجا ساعةً');
     expect(kept).toContain('تذكرتُ شيئًا قد مضى');
+  });
+});
+
+describe('an example taught on more than one slide (21 Nov 2026)', () => {
+  it('fires on a second worked-example slide of the same example, naming position and title', () => {
+    const plan = [
+      ...plan317().slice(0, 5),
+      slide('dup', ['5488'], { contentRole: 'worked_example' }),
+      ...plan317().slice(5),
+    ];
+    const found = findBookCoverageDiagnostics(plan, book317());
+    const taughtTwice = found.filter((d) => d.code === EXAMPLE_TAUGHT_TWICE);
+    expect(taughtTwice).toHaveLength(1);
+    expect(taughtTwice[0]!.disposition).toBe('admin_correctable');
+    expect(taughtTwice[0]!.message).toContain('الشريحة 6');
+    expect(taughtTwice[0]!.message).toContain('«dup»');
+    expect(examplesTaughtTwice(plan, book317())).toEqual([{ unitId: '5488', indexes: [5] }]);
+    // g5.v7 is unchanged: no such finding.
+    expect(codes(findBookCoverageDiagnostics(plan, book317(V7)))).not.toContain(
+      EXAMPLE_TAUGHT_TWICE,
+    );
+  });
+
+  it('fires on a «جرّب» slide that cites the example without its check', () => {
+    const plan = [
+      ...plan317().slice(0, 5),
+      slide('jarrab', ['5488'], { contentRole: 'check_understanding' }),
+      ...plan317().slice(5),
+    ];
+    expect(examplesTaughtTwice(plan, book317())).toEqual([{ unitId: '5488', indexes: [5] }]);
+    expect(codes(findBookCoverageDiagnostics(plan, book317()))).toContain(EXAMPLE_TAUGHT_TWICE);
+  });
+
+  it('does not fire on the shipped plan, on check solutions, or on exercises', () => {
+    // plan317: the example is taught once; every solution slide cites the check; the
+    // exercises slide cites an exercise unit.
+    expect(examplesTaughtTwice(plan317(), book317())).toEqual([]);
+    expect(codes(findBookCoverageDiagnostics(plan317(), book317()))).not.toContain(
+      EXAMPLE_TAUGHT_TWICE,
+    );
+    // A second worked-example slide that ALSO cites the example's check (a solution)
+    // teaches nothing twice.
+    const withSolution = [
+      ...plan317().slice(0, 5),
+      slide('sol-of-check', ['5488', '5489'], { contentRole: 'worked_example' }),
+      ...plan317().slice(5),
+    ];
+    expect(examplesTaughtTwice(withSolution, book317())).toEqual([]);
+    // A second slide citing the example AND an exercise unit is an exercise slide.
+    const withExercise = [
+      ...plan317().slice(0, 5),
+      slide('practice', ['5488', '5500'], { contentRole: 'worked_example' }),
+      ...plan317().slice(5),
+    ];
+    expect(examplesTaughtTwice(withExercise, book317())).toEqual([]);
   });
 });
