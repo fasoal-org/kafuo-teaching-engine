@@ -758,6 +758,50 @@ describe('an example taught twice (21 Nov 2026)', () => {
     expect(result.blocking).toEqual([]);
   });
 
+  it('an exercises slide citing the check is not its solution: the try-it still gets one', async () => {
+    const withExercise: KafuoBookStructure = {
+      ...BOOK,
+      units: [
+        ...BOOK.units,
+        {
+          contentUnitId: '4040',
+          kind: 'PRACTICE',
+          element: 'exercise',
+          required: false,
+          partIndex: 3,
+        },
+      ],
+    };
+    const exerciseContext: BookCoverageRepairContext = {
+      ...context(planning('asked')),
+      book: parityBook(withExercise),
+      diagnose: (outlines) => ({
+        outlines,
+        blocking: findBookCoverageDiagnostics(outlines, parityBook(withExercise)),
+      }),
+    };
+    const candidate = [
+      complete[0]!,
+      slide('jarrab', ['4030'], { contentRole: 'check_understanding' }),
+      slide('exercises', ['4040', '4032'], { contentRole: 'worked_example' }),
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook(withExercise));
+    expect(blocking.map((d) => d.code)).toContain('EXAMPLE_TAUGHT_TWICE');
+
+    const result = await repairBookCoverageGaps(candidate, blocking, aiCall, exerciseContext);
+
+    // The try-it goes in the dropped slide's place and its own solution right after it;
+    // the exercises slide stays where it was.
+    expect(result.outlines.map((o) => o.id)).toEqual([
+      'ex3',
+      'ex3-book-missing_try_it-4032-r1',
+      'ex3-book-missing_try_it-4032-r1-book-missing_solution-4032-r1',
+      'exercises',
+    ]);
+    expect(result.outlines[2]!.contentRole).toBe('worked_example');
+    expect(result.blocking).toEqual([]);
+  });
+
   it('keeps the "one similar item" slide of an example whose book has no check (H4)', async () => {
     const noCheck: KafuoBookStructure = {
       ...BOOK,

@@ -570,6 +570,11 @@ export async function repairBookCoverageGaps(
   let restructured = 0;
   // 21 Nov 2026: a check whose «جرّب» repeat was dropped gets its try-it in that place.
   const tryItAfter = new Map<string, string>();
+  const exerciseIds = new Set(
+    context.book.units
+      .filter((unit) => unit.element === 'exercise')
+      .map((unit) => String(unit.contentUnitId)),
+  );
   // g5.v8: one solution slide per check and recall first are fixed without a
   // model call, before any slide is planned, then the candidate is re-diagnosed.
   if (
@@ -688,17 +693,20 @@ export async function repairBookCoverageGaps(
       planned += 1;
       // g5.v8: a new try-it's solution goes right after it in the same round,
       // so try-it → solution → per-item solutions fit the two rounds. A try-it planned in
-      // a dropped «جرّب» repeat's place keeps the check's solution already after it.
+      // a dropped «جرّب» repeat's place keeps the check's solution already after it —
+      // counted as SOLUTION_SLIDES_DUPLICATED counts: an exercises slide citing the check
+      // is never its solution.
       const solvedAfter =
         gap.inRepeatPlace === true &&
-        outlines
-          .slice(gap.anchorIndex! + 2)
-          .some(
-            (next) =>
-              teaches(next) &&
-              next.contentRole === 'worked_example' &&
-              (next.sourceContentUnitIds ?? []).some((id) => String(id) === gap.unit.contentUnitId),
+        outlines.slice(gap.anchorIndex! + 2).some((next) => {
+          const ids = (next.sourceContentUnitIds ?? []).map(String);
+          return (
+            teaches(next) &&
+            next.contentRole === 'worked_example' &&
+            ids.includes(gap.unit.contentUnitId) &&
+            !ids.some((id) => exerciseIds.has(id))
           );
+        });
       if (context.book.teacherParity === true && gap.kind === 'missing_try_it' && !solvedAfter) {
         const solution = await planGap(
           {
