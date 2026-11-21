@@ -629,22 +629,28 @@ export function recallPlacement(
  * `worked_example` unit, the slide indexes that only repeat its teaching:
  *
  * - every `worked_example` slide after the first that cites the example without citing
- *   its paired check (a solution slide cites the check, so it never counts) and without
- *   citing any exercise unit;
- * - every `check_understanding` slide that cites the example but not that example's
- *   check — the «جرّب» slide that repeats the example instead of checking it.
+ *   any check (a solution slide cites a check — this example's or another's — so it never
+ *   counts, review H3) and without citing any exercise unit;
+ * - when the example HAS a check in the book map, every `check_understanding` slide that
+ *   cites the example but no check — the «جرّب» slide that repeats the example instead of
+ *   checking it. An example with no check keeps its "write one similar item" slide (the
+ *   v8/v10 rule, review H4).
  *
- * Dropped by the repair (`dropExamplesTaughtTwice`); the check's own try-it slide is
- * then planned by the standing missing-try-it machinery when the check exists.
+ * `firstIndex` is the example's first teaching slide, when it has one (the message names
+ * it by position and title). Dropped by the repair (`dropExamplesTaughtTwice`); the
+ * check's own try-it slide is then planned in the dropped «جرّب» slide's place.
  */
 export function examplesTaughtTwice(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure,
-): Array<{ unitId: string; indexes: number[] }> {
+): Array<{ unitId: string; indexes: number[]; firstIndex?: number }> {
   const exerciseIds = new Set(
     book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
   );
-  const groups: Array<{ unitId: string; indexes: number[] }> = [];
+  const checkIds = new Set(
+    book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
+  );
+  const groups: Array<{ unitId: string; indexes: number[]; firstIndex?: number }> = [];
   for (const unit of book.units) {
     if (unit.element !== 'worked_example') continue;
     const exampleId = unit.contentUnitId;
@@ -654,25 +660,30 @@ export function examplesTaughtTwice(
         String(candidate.pairedExampleUnitId) === String(exampleId),
     )?.contentUnitId;
     const repeats: number[] = [];
-    let taught = 0;
+    let firstIndex: number | undefined;
     outlines.forEach((outline, index) => {
       if (!teaches(outline) || !cites(outline, exampleId)) return;
-      const citesCheck = checkId !== undefined && cites(outline, checkId);
-      const citesExercise = (outline.sourceContentUnitIds ?? []).some((id) =>
-        exerciseIds.has(String(id)),
-      );
-      if (citesCheck || citesExercise) return;
+      const citesAny = (ids: ReadonlySet<string>) =>
+        (outline.sourceContentUnitIds ?? []).some((id) => ids.has(String(id)));
+      if (citesAny(checkIds) || citesAny(exerciseIds)) return;
       if (outline.contentRole === 'check_understanding') {
         // The «جرّب» repeat: it teaches the example and checks nothing of its own.
-        repeats.push(index);
+        // Without a check in the book this is the "one similar item" slide: kept.
+        if (checkId !== undefined) repeats.push(index);
         return;
       }
       if (outline.contentRole === 'worked_example') {
-        taught += 1;
-        if (taught > 1) repeats.push(index);
+        if (firstIndex === undefined) firstIndex = index;
+        else repeats.push(index);
       }
     });
-    if (repeats.length > 0) groups.push({ unitId: exampleId, indexes: repeats });
+    if (repeats.length > 0) {
+      groups.push({
+        unitId: exampleId,
+        indexes: repeats,
+        ...(firstIndex !== undefined ? { firstIndex } : {}),
+      });
+    }
   }
   return groups;
 }
@@ -835,8 +846,13 @@ function teacherParityDiagnostics(
     });
   }
   // 21 Nov 2026: an example taught on more than one slide. The message names each
-  // repeat by 1-based position and title, as the owner reads them.
+  // repeat — and the slide that already teaches the example — by 1-based position and
+  // title, as the owner reads them; never by unit id (review LOW).
   for (const group of examplesTaughtTwice(outlines, book)) {
+    const first = group.firstIndex !== undefined ? outlines[group.firstIndex] : undefined;
+    const taughtOn = first
+      ? `على الشريحة ${group.firstIndex! + 1}: «${first.title ?? ''}»`
+      : 'على شريحة أخرى';
     for (const index of group.indexes) {
       const outline = outlines[index]!;
       diagnostics.push({
@@ -845,7 +861,7 @@ function teacherParityDiagnostics(
         outlineIndex: index,
         ...(outline.id ? { outlineId: outline.id } : {}),
         field: 'sourceContentUnitIds',
-        message: `الشريحة ${index + 1}: «${outline.title ?? ''}» تُدرّب المثال ${group.unitId} المُدرَّج أصلًا على شريحة أخرى؛ احذف هذه الشريحة`,
+        message: `الشريحة ${index + 1}: «${outline.title ?? ''}» تُعيد شرح مثال مشروح أصلًا ${taughtOn}؛ احذف هذه الشريحة`,
       });
     }
   }

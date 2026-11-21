@@ -29,6 +29,8 @@ import {
   renderSlidesBlock,
 } from '@/lib/server/teaching-package/package-review-prompt';
 import type { StoredFinding } from '@/lib/server/teaching-package/package-review-store';
+import { slidesNeedingRegeneration } from '@/lib/server/teaching-package/lifecycle';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import {
   refixReviewId,
   seedRefixFindings,
@@ -457,15 +459,44 @@ describe('every kept generation issue becomes a review finding (21 Nov 2026)', (
       id: 'i1',
       targetId: 's1',
       targetTitle: 'مثال 1 – إذا وفقط إذا',
+      targetOrder: 3,
       check: 'G1',
       severity: 'high',
       status: 'open',
     });
-    expect(finding!.whatIsWrong).toContain('الشريحة 3');
+    // The play position (second slide), not the raw `order` 3 (review 21 Nov 2026).
+    expect(finding!.whatIsWrong).toContain('الشريحة 2:');
     expect(finding!.whatIsWrong).toContain('مثال 1 – إذا وفقط إذا');
     expect(finding!.whatIsWrong).toContain('PLACEHOLDER_SLIDE');
     // Auto-fixable: the fix loop regenerates the slide once, like any other finding.
     expect(teacherOnlyReason(finding, reviewSlidesOf(scenes))).toBeNull();
+  });
+
+  it('the finding and the submit/approve gate name the same position (gaps, any array order)', () => {
+    const issue = [{ code: 'NARRATION_MISSING', message: 'no spoken line' }];
+    // Stored out of play order, with a gap in `order` (1, 3, 7).
+    const scenes = [
+      slideScene('c', 7, { title: 'ج', generationIssues: issue }),
+      slideScene('a', 1, { title: 'أ' }),
+      slideScene('b', 3, { title: 'ب', generationIssues: issue }),
+    ];
+    const gate = slidesNeedingRegeneration(scenes);
+    expect(gate).toEqual([
+      { position: 2, title: 'ب', codes: ['NARRATION_MISSING'] },
+      { position: 3, title: 'ج', codes: ['NARRATION_MISSING'] },
+    ]);
+    const findings = generationIssueFindings(scenes, reviewSlidesOf(scenes));
+    expect(findings.map((finding) => finding.whatIsWrong.split(':')[0])).toEqual([
+      'الشريحة 2',
+      'الشريحة 3',
+    ]);
+    expect(scenePlayPositions(scenes)).toEqual(
+      new Map([
+        ['a', 1],
+        ['b', 2],
+        ['c', 3],
+      ]),
+    );
   });
 
   it('a GUIDE_ANSWER_LEAK scene is not duplicated: it already has its own finding', () => {

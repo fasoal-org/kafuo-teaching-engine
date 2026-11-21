@@ -748,6 +748,47 @@ describe('an example taught twice (21 Nov 2026)', () => {
     const plannedUnits = plan.mock.calls.map((call) => call[0]!.unitIds);
     expect(plannedUnits).toContainEqual(['4032']);
     expect(result.outlines.some((o) => o.sourceContentUnitIds?.includes('4032'))).toBe(true);
+    // Review 21 Nov 2026 (R): the try-it takes the dropped slide's place — before the
+    // check's solution, never after it — and the solution already there is the only one.
+    expect(result.outlines.map((o) => o.id)).toEqual([
+      'ex3',
+      'ex3-book-missing_try_it-4032-r1',
+      'sol3',
+    ]);
+    expect(result.blocking).toEqual([]);
+  });
+
+  it('keeps the "one similar item" slide of an example whose book has no check (H4)', async () => {
+    const noCheck: KafuoBookStructure = {
+      ...BOOK,
+      units: BOOK.units.filter((unit) => unit.element !== 'try_it'),
+    };
+    const noCheckContext: BookCoverageRepairContext = {
+      ...context(planning('check_understanding')),
+      book: parityBook(noCheck),
+      diagnose: (outlines) => ({
+        outlines,
+        blocking: findBookCoverageDiagnostics(outlines, parityBook(noCheck)),
+      }),
+    };
+    // The v8/v10 rule's own slide: one similar item, citing the example with no check.
+    const similar = slide('similar', ['4030'], { contentRole: 'check_understanding' });
+    expect(
+      findBookCoverageDiagnostics(
+        [slide('ex3', ['4030'], { contentRole: 'worked_example' }), similar],
+        parityBook(noCheck),
+      ).map((d) => d.code),
+    ).not.toContain('EXAMPLE_TAUGHT_TWICE');
+    // A real repeat beside it is still dropped; the similar-item slide survives.
+    const candidate = [
+      slide('ex3', ['4030'], { contentRole: 'worked_example' }),
+      slide('dup', ['4030'], { contentRole: 'worked_example' }),
+      similar,
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook(noCheck));
+    const result = await repairBookCoverageGaps(candidate, blocking, aiCall, noCheckContext);
+    expect(result.outlines.map((o) => o.id)).toEqual(['ex3', 'similar']);
+    expect(result.blocking).toEqual([]);
   });
 
   it('drops a repeat of an example whose book has no check, and never invents one', async () => {

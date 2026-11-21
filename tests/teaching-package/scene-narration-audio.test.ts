@@ -427,13 +427,14 @@ describe('NARRATION_MISSING (21 Nov 2026)', () => {
     const silent = slideOf('silent', []);
     const quiz = { id: 'quiz', type: 'quiz', title: 'اختبار', actions: [] } as unknown as Scene;
     const voiced = slideOf('voiced', [speech('جملة', 'audio-1')]);
-    const written: Array<[string, ReadonlyArray<{ code: string; message: string }>]> = [];
+    type Issues = ReadonlyArray<{ code: string; message: string }> | undefined;
+    const written: Array<[string, Issues]> = [];
     const tracked = (scene: Scene) => {
-      let issues: ReadonlyArray<{ code: string; message: string }> | undefined;
+      let issues: Issues;
       return {
         scene,
         read: () => issues,
-        write(value: ReadonlyArray<{ code: string; message: string }>) {
+        write(value: Issues) {
           issues = value;
           written.push([scene.id, value]);
         },
@@ -447,7 +448,7 @@ describe('NARRATION_MISSING (21 Nov 2026)', () => {
           get generationIssues() {
             return entry.read();
           },
-          set generationIssues(value: ReadonlyArray<{ code: string; message: string }>) {
+          set generationIssues(value: Issues) {
             entry.write(value);
           },
         })),

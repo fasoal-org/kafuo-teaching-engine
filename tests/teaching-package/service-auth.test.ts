@@ -154,6 +154,8 @@ describe('teaching package service auth', () => {
       OUTLINE_SCENE_CONFIG_INVALID: 422,
       SCENE_RUNTIME_UNAVAILABLE: 409,
       SCENE_CAP_CONFLICT: 409,
+      // 21 Nov 2026: a slide still kept with a generation issue refuses submit/approve.
+      SLIDES_NEED_REGENERATION: 409,
       ORIENTATION_VISUAL_MISSING: 422,
       VISUAL_COMPLIANCE_UNAPPROVED: 422,
       TEACHING_PACKAGE_NOT_APPROVED: 409,

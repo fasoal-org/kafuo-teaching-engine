@@ -457,7 +457,12 @@ describe('an example taught on more than one slide (21 Nov 2026)', () => {
     expect(taughtTwice[0]!.disposition).toBe('admin_correctable');
     expect(taughtTwice[0]!.message).toContain('الشريحة 6');
     expect(taughtTwice[0]!.message).toContain('«dup»');
-    expect(examplesTaughtTwice(plan, book317())).toEqual([{ unitId: '5488', indexes: [5] }]);
+    // The slide that already teaches it is named by position and title too, never by id.
+    expect(taughtTwice[0]!.message).toContain('الشريحة 5: «ex1»');
+    expect(taughtTwice[0]!.message).not.toContain('5488');
+    expect(examplesTaughtTwice(plan, book317())).toEqual([
+      { unitId: '5488', indexes: [5], firstIndex: 4 },
+    ]);
     // g5.v7 is unchanged: no such finding.
     expect(codes(findBookCoverageDiagnostics(plan, book317(V7)))).not.toContain(
       EXAMPLE_TAUGHT_TWICE,
@@ -470,8 +475,84 @@ describe('an example taught on more than one slide (21 Nov 2026)', () => {
       slide('jarrab', ['5488'], { contentRole: 'check_understanding' }),
       ...plan317().slice(5),
     ];
-    expect(examplesTaughtTwice(plan, book317())).toEqual([{ unitId: '5488', indexes: [5] }]);
+    expect(examplesTaughtTwice(plan, book317())).toEqual([
+      { unitId: '5488', indexes: [5], firstIndex: 4 },
+    ]);
     expect(codes(findBookCoverageDiagnostics(plan, book317()))).toContain(EXAMPLE_TAUGHT_TWICE);
+  });
+
+  // H3 (review 21 Nov 2026): the solution of ANOTHER check that also cites this example
+  // (check 2's solution citing [C2, E3]) is a solution, never E3's first teaching — so
+  // E3's own slide is not a repeat, and the repair never drops it.
+  it('never counts a solution of another check as the example’s teaching', () => {
+    const twoChecks = teacherParityBook(
+      {
+        rules: [],
+        units: [
+          {
+            contentUnitId: 'E2',
+            kind: 'EXAMPLE',
+            element: 'worked_example',
+            required: true,
+            partIndex: 1,
+          },
+          {
+            contentUnitId: 'C2',
+            kind: 'CHECK',
+            element: 'try_it',
+            required: true,
+            partIndex: 1,
+            pairedExampleUnitId: 'E2',
+          },
+          {
+            contentUnitId: 'E3',
+            kind: 'EXAMPLE',
+            element: 'worked_example',
+            required: true,
+            partIndex: 1,
+          },
+          {
+            contentUnitId: 'C3',
+            kind: 'CHECK',
+            element: 'try_it',
+            required: true,
+            partIndex: 1,
+            pairedExampleUnitId: 'E3',
+          },
+        ],
+      } as unknown as KafuoBookStructure,
+      V8,
+    )!;
+    const plan = [
+      slide('ex2', ['E2'], { contentRole: 'worked_example' }),
+      slide('try2', ['C2'], { contentRole: 'check_understanding' }),
+      slide('sol2', ['C2', 'E3'], { contentRole: 'worked_example' }),
+      slide('ex3', ['E3'], { contentRole: 'worked_example' }),
+      slide('try3', ['C3'], { contentRole: 'check_understanding' }),
+      slide('sol3', ['C3'], { contentRole: 'worked_example' }),
+    ];
+    expect(examplesTaughtTwice(plan, twoChecks)).toEqual([]);
+    expect(codes(findBookCoverageDiagnostics(plan, twoChecks))).not.toContain(EXAMPLE_TAUGHT_TWICE);
+  });
+
+  // H4 (review 21 Nov 2026): an example with no check in the book gets the v8/v10 "write
+  // one similar item" slide (check_understanding citing the example). That slide is the
+  // rule's own, never a «جرّب» repeat.
+  it('keeps the "one similar item" slide of an example that has no check', () => {
+    const noCheck = teacherParityBook(
+      {
+        ...BOOK_317,
+        units: BOOK_317.units.filter((unit) => unit.element !== 'try_it'),
+      } as KafuoBookStructure,
+      V8,
+    )!;
+    const plan = [
+      slide('concept', ['5486']),
+      slide('ex1', ['5488'], { contentRole: 'worked_example' }),
+      slide('similar', ['5488'], { contentRole: 'check_understanding' }),
+    ];
+    expect(examplesTaughtTwice(plan, noCheck)).toEqual([]);
+    expect(codes(findBookCoverageDiagnostics(plan, noCheck))).not.toContain(EXAMPLE_TAUGHT_TWICE);
   });
 
   it('does not fire on the shipped plan, on check solutions, or on exercises', () => {

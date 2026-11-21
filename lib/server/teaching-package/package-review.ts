@@ -55,6 +55,7 @@ import {
 } from '@/lib/server/teaching-model/reviewer-call';
 import { currentWorkerId } from '@/lib/server/teaching-model/worker-id';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import {
   loadReviewBookUnits,
   reviewedSceneDigest,
@@ -408,6 +409,8 @@ export function generationIssueFindings(
   slides: readonly ReviewSlide[],
 ): StoredFinding[] {
   const byId = new Map(scenes.map((scene) => [scene.id, scene]));
+  // The same play position the submit/approve gate names (review 21 Nov 2026).
+  const positions = scenePlayPositions(scenes);
   const findings: StoredFinding[] = [];
   for (const slide of slides) {
     const scene = byId.get(slide.id);
@@ -417,7 +420,7 @@ export function generationIssueFindings(
     );
     if (issues.length === 0) continue;
     const codes = issues.map((issue) => issue.code).join(', ');
-    const position = slide.order;
+    const position = positions.get(slide.id) ?? slide.order;
     findings.push({
       id: `i${findings.length + 1}`,
       targetId: slide.id,

@@ -55,6 +55,7 @@ import {
 } from '@/lib/server/teaching-package/successor-model';
 import { findUntaughtEssentialSections } from '@/lib/server/teaching-package/content-unit-coverage';
 import { readInsertedSlideUnits } from '@/lib/server/teaching-package/scene-insertion-store';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { collectStageVisualFindings } from '@/lib/server/visual-compliance/stage-gate';
@@ -411,14 +412,16 @@ async function assertEssentialSectionsCovered(
 export function slidesNeedingRegeneration(
   scenes: readonly AppScene[],
 ): Array<{ position: number; title: string; codes: string[] }> {
+  // The same play position the review findings name (`scenePlayPositions`).
+  const positions = scenePlayPositions(scenes);
   return scenes
-    .map((scene, index) => ({ scene, position: index + 1 }))
-    .filter((entry) => (entry.scene.generationIssues ?? []).length > 0)
-    .map((entry) => ({
-      position: entry.position,
-      title: entry.scene.title,
-      codes: (entry.scene.generationIssues ?? []).map((issue) => issue.code),
-    }));
+    .filter((scene) => (scene.generationIssues ?? []).length > 0)
+    .map((scene) => ({
+      position: positions.get(scene.id)!,
+      title: scene.title,
+      codes: (scene.generationIssues ?? []).map((issue) => issue.code),
+    }))
+    .sort((a, b) => a.position - b.position);
 }
 
 /**
