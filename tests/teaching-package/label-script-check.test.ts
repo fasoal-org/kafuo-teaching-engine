@@ -120,3 +120,22 @@ describe('labelScriptChanged: comma-separated lists', () => {
     expect(labelScriptChanged('الشكل الرباعي ز ي س و', 'الشكل الرباعي WXYZ')).toBe(true);
   });
 });
+
+/** Review LOW (21 Nov 2026): «و» inside a label run is a letter, not the conjunction. */
+describe('labelScriptChanged: «و» inside a label run', () => {
+  it('«و س ي ز» for WXYZ fires', () => {
+    expect(labelScriptChanged('الشكل الرباعي و س ي ز', 'WXYZ')).toBe(true);
+    expect(spacedArabicLetterRuns('الشكل الرباعي و س ي ز')).toEqual(['وسيز']);
+  });
+
+  it('«هـ و ز ح» for EFGH fires', () => {
+    expect(labelScriptChanged('الشكل هـ و ز ح متوازي أضلاع', 'EFGH')).toBe(true);
+    expect(spacedArabicLetterRuns('الشكل هـ و ز ح')).toEqual(['هوزح']);
+  });
+
+  it('«و» between single letters is still the conjunction', () => {
+    expect(spacedArabicLetterRuns('أوجد قيمتي س و ص')).toEqual([]);
+    expect(labelScriptChanged('أوجد قيمتي س و ص', 'في △ABC أوجد قيمة كل متغير')).toBe(false);
+    expect(spacedArabicLetterRuns('طولا الضلعين ٣ م و ٤ م')).toEqual([]);
+  });
+});

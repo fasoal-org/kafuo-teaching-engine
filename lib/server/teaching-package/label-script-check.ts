@@ -100,13 +100,27 @@ function followsGeometryCue(tokens: Token[], start: number): boolean {
   return previous.word === 'الرباعي' && before?.kind === 'other' && before.word === 'الشكل';
 }
 
+/** How many letters follow token `index`, space-joined in one run (a comma or bracket ends it). */
+function lettersAfter(tokens: Token[], index: number): number {
+  let count = 0;
+  let token = tokens[index + 1];
+  while (token?.kind === 'letter' && !(count > 0 && token.opens)) {
+    count += 1;
+    if (token.closes) break;
+    token = tokens[index + 1 + count];
+  }
+  return count;
+}
+
 /**
  * The single-Arabic-letter runs a canvas text prints («ز ي س و», «النقاط ز، ي، س»), two
  * to six letters. Never a run: a word of the language, a letter right after a number
- * («٣ م»: a unit), or a «و» followed by a letter or a number («س و ص», «٣ م و ٤ م»: the
- * conjunction, which splits the run). A bracket or a stop ends a run. Comma-separated
- * letters are a run only right after a geometry cue (△, ∠, «النقاط», «الرؤوس», «المثلث»,
- * «الشكل الرباعي»), and never when bracketed («(س، ص)»: a coordinate pair).
+ * («٣ م»: a unit), or a «و» that is the conjunction, which splits the run — before a
+ * number («٣ م و ٤ م») or between single letters («س و ص»). Inside a run of three or
+ * more letters «و» is a label letter («و س ي ز», «هـ و ز ح»). A bracket or a stop ends a
+ * run. Comma-separated letters are a run only right after a geometry cue (△, ∠,
+ * «النقاط», «الرؤوس», «المثلث», «الشكل الرباعي»), and never when bracketed («(س، ص)»:
+ * a coordinate pair).
  */
 export function spacedArabicLetterRuns(text: string): string[] {
   const tokens = tokensOf(text);
@@ -116,6 +130,8 @@ export function spacedArabicLetterRuns(text: string): string[] {
   let start = -1;
   let commaJoined = false;
   let opened = false;
+  /** Letters space-joined at the end of the current run (a comma restarts the count). */
+  let tail = 0;
   const flush = (closed = false) => {
     const list = commaJoined && ((opened && closed) || !followsGeometryCue(tokens, start));
     if (!list && current.length >= 2 && current.length <= MAX_RUN) runs.push(current.join(''));
@@ -123,13 +139,17 @@ export function spacedArabicLetterRuns(text: string): string[] {
     start = -1;
     commaJoined = false;
     opened = false;
+    tail = 0;
   };
   tokens.forEach((token, index) => {
     const next = tokens[index + 1];
     if (token.kind === 'comma') {
       // A comma continues a run only between two letters: «ز، ي، س».
       if (current.length === 0 || next?.kind !== 'letter') flush();
-      else commaJoined = true;
+      else {
+        commaJoined = true;
+        tail = 0;
+      }
       return;
     }
     if (token.kind !== 'letter') {
@@ -139,7 +159,9 @@ export function spacedArabicLetterRuns(text: string): string[] {
     const previous = tokens[index - 1];
     const unit = previous?.kind === 'number' && !previous.closes;
     const conjunction =
-      token.letter === 'و' && (next?.kind === 'letter' || next?.kind === 'number');
+      token.letter === 'و' &&
+      (next?.kind === 'number' ||
+        (next?.kind === 'letter' && tail <= 1 && lettersAfter(tokens, index) <= 1));
     if (unit || conjunction) {
       flush();
       return;
@@ -150,6 +172,7 @@ export function spacedArabicLetterRuns(text: string): string[] {
       opened = token.opens;
     }
     current.push(token.letter);
+    tail += 1;
     if (token.closes) flush(true);
   });
   flush();
