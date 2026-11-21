@@ -16,7 +16,7 @@ export interface BankQuestion {
   points: number;
 }
 
-export type BankQuestionsStatus = 'ready' | 'pending_approval' | 'not_bank';
+export type BankQuestionsStatus = 'ready' | 'pending_approval' | 'not_bank' | 'preview_unapproved';
 
 export interface BankQuestionsResponse {
   status: BankQuestionsStatus;

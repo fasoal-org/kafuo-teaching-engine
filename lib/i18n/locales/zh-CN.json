@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "专业模式",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} 讲解 · {{cue}} 动作",
       "panLeft": "左移视口",
       "panRight": "右移视口",
+      "panLabel": "Scroll",
       "collapseAxis": "收起为轴线",
       "expandTrack": "展开轨道",
       "emptyHint": "把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。",
@@ -956,6 +959,9 @@
     "retry": "重新答题",
     "bankPending": "题目将在审核通过后准备",
     "bankUnavailable": "无法加载题目",
+    "previewUnapproved": "本题库测验的题目将在软件包获得批准后显示。请在管理面板的课程题目页面查看题目。",
+    "sessionExpired": "会话已结束，或课程已更改。请重新打开课程。",
+    "bankUnreachable": "暂时无法访问题库。",
     "gradingUnavailable": "评分暂时不可用，请重试。",
     "trueFalse": "判断",
     "questionOf": "第 {{current}} 题，共 {{total}} 题",

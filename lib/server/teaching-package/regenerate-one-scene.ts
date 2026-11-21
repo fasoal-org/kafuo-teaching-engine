@@ -55,8 +55,7 @@ import {
 } from '@/lib/server/teaching-package/errors';
 import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import {
-  issuesAfterAudioRepair,
-  narrationAudioGap,
+  issuesAfterNarrationRepair,
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
@@ -345,7 +344,7 @@ function withSlideIdentity(
  */
 function withNarrationAudioMark(candidate: AppScene, scenes: readonly AppScene[]): AppScene {
   if (!stageHasNarrationAudio(scenes)) return candidate;
-  const issues = issuesAfterAudioRepair(candidate.generationIssues, narrationAudioGap(candidate));
+  const issues = issuesAfterNarrationRepair(candidate.generationIssues, candidate);
   const { generationIssues: _built, ...rest } = candidate;
   return (issues ? { ...rest, generationIssues: issues } : rest) as AppScene;
 }

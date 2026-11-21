@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} narraciones · {{cue}} señales",
       "panLeft": "Desplazar a la izquierda",
       "panRight": "Desplazar a la derecha",
+      "panLabel": "Scroll",
       "collapseAxis": "Contraer al eje",
       "expandTrack": "Expandir pista",
       "emptyHint": "Arrastra acciones al eje para empezar, o deja que MAIC Agent genere la narración.",
@@ -956,6 +959,9 @@
     "retry": "Reintentar",
     "bankPending": "Las preguntas se preparan después de la aprobación",
     "bankUnavailable": "No se pudieron cargar las preguntas",
+    "previewUnapproved": "Las preguntas de este cuestionario aparecerán cuando el paquete esté aprobado. Revisa las preguntas en la pantalla de preguntas de la lección del panel de administración.",
+    "sessionExpired": "La sesión terminó o la lección cambió. Abre la lección de nuevo.",
+    "bankUnreachable": "No se puede acceder al banco de preguntas en este momento.",
     "gradingUnavailable": "La calificación no está disponible. Inténtalo de nuevo.",
     "trueFalse": "Verdadero / Falso",
     "questionOf": "Pregunta {{current}} de {{total}}",

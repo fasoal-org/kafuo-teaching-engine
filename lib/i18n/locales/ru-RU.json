@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} реплик · {{cue}} действий",
       "panLeft": "Прокрутить влево",
       "panRight": "Прокрутить вправо",
+      "panLabel": "Scroll",
       "collapseAxis": "Свернуть до оси",
       "expandTrack": "Развернуть дорожку",
       "emptyHint": "Перетащите действия на ось, чтобы начать, или позвольте MAIC Agent сгенерировать закадровый текст.",
@@ -956,6 +959,9 @@
     "retry": "Повторить",
     "bankPending": "Вопросы готовятся после утверждения",
     "bankUnavailable": "Не удалось загрузить вопросы",
+    "previewUnapproved": "Вопросы этого теста появятся после утверждения пакета. Проверьте вопросы на экране вопросов урока в панели администрирования.",
+    "sessionExpired": "Сеанс завершён или урок изменился. Откройте урок заново.",
+    "bankUnreachable": "Сейчас банк вопросов недоступен.",
     "gradingUnavailable": "Проверка сейчас недоступна. Попробуйте ещё раз.",
     "trueFalse": "Верно / Неверно",
     "questionOf": "Вопрос {{current}} из {{total}}",

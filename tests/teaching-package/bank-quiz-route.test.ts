@@ -71,6 +71,10 @@ function learnerGrant() {
   };
 }
 
+function editorGrant(purpose: 'edit' | 'preview' = 'edit') {
+  return { ...learnerGrant(), purpose, learnerKey: undefined, student: undefined };
+}
+
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.resolveRegenerationGrant.mockResolvedValue({
@@ -112,6 +116,65 @@ describe('bank quiz route', () => {
       params,
     );
     expect(response.status).toBe(400);
+  });
+
+  it.each(['edit', 'preview'])(
+    'GET for a %s grant Kafuo refuses with 404 teaching_stage_scope_mismatch is 200 preview_unapproved',
+    async (purpose) => {
+      const { KafuoIntegrationError } = await import('@/lib/server/tutor/kafuo-integration-client');
+      mocks.resolveRegenerationGrant.mockResolvedValue({
+        ok: true,
+        value: { grant: editorGrant(purpose as 'edit' | 'preview'), pool: {} },
+      });
+      // An older version after a regeneration: Kafuo will never serve it questions.
+      mocks.quizQuestions.mockRejectedValue(
+        new KafuoIntegrationError('scope mismatch', 404, 'teaching_stage_scope_mismatch'),
+      );
+      const { GET } = await import('@/app/api/stages/[id]/bank-quiz/route');
+      const response = await GET(
+        new NextRequest(`http://te.test/api/stages/${STAGE}/bank-quiz?sceneId=scene-check`),
+        params,
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        status: 'preview_unapproved',
+        questions: [],
+      });
+    },
+  );
+
+  it('GET for a learner grant with the same refusal still gets the error', async () => {
+    const { KafuoIntegrationError } = await import('@/lib/server/tutor/kafuo-integration-client');
+    mocks.quizQuestions.mockRejectedValue(
+      new KafuoIntegrationError('scope mismatch', 404, 'teaching_stage_scope_mismatch'),
+    );
+    const { GET } = await import('@/app/api/stages/[id]/bank-quiz/route');
+    const response = await GET(
+      new NextRequest(`http://te.test/api/stages/${STAGE}/bank-quiz?sceneId=scene-check`),
+      params,
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'BANK_QUIZ_REFUSED' },
+    });
+  });
+
+  it('GET for an editor grant with another Kafuo 404 is still the refusal', async () => {
+    const { KafuoIntegrationError } = await import('@/lib/server/tutor/kafuo-integration-client');
+    mocks.resolveRegenerationGrant.mockResolvedValue({
+      ok: true,
+      value: { grant: editorGrant(), pool: {} },
+    });
+    mocks.quizQuestions.mockRejectedValue(new KafuoIntegrationError('nope', 404, 'other_reason'));
+    const { GET } = await import('@/app/api/stages/[id]/bank-quiz/route');
+    const response = await GET(
+      new NextRequest(`http://te.test/api/stages/${STAGE}/bank-quiz?sceneId=scene-check`),
+      params,
+    );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'BANK_QUIZ_REFUSED' },
+    });
   });
 
   it('GET with no grant answers the resolver’s 404', async () => {
@@ -215,6 +278,9 @@ describe('bank quiz locale keys', () => {
   const keys = [
     'bankPending',
     'bankUnavailable',
+    'bankUnreachable',
+    'previewUnapproved',
+    'sessionExpired',
     'gradingUnavailable',
     'trueFalse',
     'questionOf',
@@ -231,5 +297,35 @@ describe('bank quiz locale keys', () => {
     }
     expect(quiz.questionOf).toContain('{{current}}');
     expect(quiz.questionOf).toContain('{{total}}');
+  });
+
+  // Review 21 Nov 2026: the view is shared with learners, so the wording names neither the
+  // preview nor the package version, and there is no reopen button (a reload cannot renew
+  // a grant) — hence no `reopen` text.
+  const previewWord: Record<string, RegExp> = {
+    enUS: /preview|package/i,
+    arSA: /المعاينة|الحزمة/,
+    deDE: /Vorschau|Paket/i,
+    esMX: /vista previa|paquete/i,
+    frFR: /aperçu|paquet/i,
+    jaJP: /プレビュー|パッケージ/,
+    koKR: /미리보기|패키지/,
+    ptBR: /pré-visualização|pacote/i,
+    ruRU: /предпросмотр|пакет/i,
+    viVN: /xem trước|gói/i,
+    zhCN: /预览|软件包/,
+    zhTW: /預覽|套件/,
+  };
+  it.each(Object.entries(locales))('%s words sessionExpired for learners too', (code, locale) => {
+    const quiz = (locale as { quiz: Record<string, unknown> }).quiz;
+    expect(quiz.sessionExpired as string).not.toMatch(previewWord[code]!);
+    expect(quiz.reopen).toBeUndefined();
+  });
+
+  it('ar-SA and en-US say the session ended or the lesson changed', () => {
+    expect(arSA.quiz.sessionExpired).toBe('انتهت الجلسة أو تغيّر الدرس. افتح الدرس من جديد.');
+    expect(enUS.quiz.sessionExpired).toBe(
+      'The session ended or the lesson changed. Open the lesson again.',
+    );
   });
 });

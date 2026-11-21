@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "專業模式",
@@ -364,7 +365,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -498,6 +500,7 @@
       "counts": "{{speech}} 旁白 · {{cue}} 提示",
       "panLeft": "向左平移",
       "panRight": "向右平移",
+      "panLabel": "Scroll",
       "collapseAxis": "收合至時間軸",
       "expandTrack": "展開音軌",
       "emptyHint": "將動作拖曳至時間軸以開始，或讓 MAIC Agent 生成旁白。",
@@ -941,6 +944,9 @@
     "retry": "重新答題",
     "bankPending": "題目將在審核通過後準備",
     "bankUnavailable": "無法載入題目",
+    "previewUnapproved": "本題庫測驗的題目將在套件獲批准後顯示。請在管理面板的課程題目頁面查看題目。",
+    "sessionExpired": "工作階段已結束，或課程已變更。請重新開啟課程。",
+    "bankUnreachable": "暫時無法存取題庫。",
     "gradingUnavailable": "評分暫時無法使用，請重試。",
     "trueFalse": "是非",
     "questionOf": "第 {{current}} 題，共 {{total}} 題",

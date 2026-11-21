@@ -49,6 +49,7 @@ import {
   replaceStageAfterRegeneration,
 } from '@/lib/server/teaching-package/lifecycle';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import { storedScenesNeedingReview } from '@/lib/server/teaching-package/scenes-needing-review';
 import type {
   GenerationAttempt,
   GenerationExecutionInput,
@@ -423,13 +424,6 @@ export async function startGenerationAttempt(
   return { attempt: admitted.attempt, execution: request.generation, created: admitted.created };
 }
 
-/** The marked-scene count the runner recorded on the attempt, 0 when absent. */
-function scenesNeedingReviewOf(attempt: GenerationAttempt): number {
-  const value = (attempt.inputSnapshot as { scenesNeedingReview?: unknown } | undefined)
-    ?.scenesNeedingReview;
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
-}
-
 /**
  * AI reviewer layer (plan §4.6): a Kafuo binding queues its package review in
  * the SAME transaction as the binding and the `generation_succeeded` event, so
@@ -480,7 +474,10 @@ async function emitGenerationSucceeded(
       completedAt: now,
       generationRuns: attempt.generationRuns,
       // 3 Oct 2026: scenes kept with a generation problem marker (a count only).
-      scenesNeedingReview: scenesNeedingReviewOf(attempt),
+      // The stored value is the live one here: the runner counted the very scenes
+      // this Stage just saved, and nothing edits them before this binding
+      // transaction. Later reads count the live Stage (`scenes-needing-review.ts`).
+      scenesNeedingReview: storedScenesNeedingReview(attempt),
     },
     version: {
       id: version.id,

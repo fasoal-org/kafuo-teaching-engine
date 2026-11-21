@@ -62,8 +62,7 @@ import {
   type GuideAnswerFinding,
 } from '@/lib/server/teaching-package/guide-answer-guard';
 import {
-  issuesAfterAudioRepair,
-  narrationAudioGap,
+  issuesAfterNarrationRepair,
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import {
@@ -168,7 +167,7 @@ function codeOf(error: unknown): string | undefined {
 /** On a voiced package the new slide is marked exactly as regeneration marks it (D-11). */
 function withNarrationAudioMark(candidate: AppScene, scenes: readonly AppScene[]): AppScene {
   if (!stageHasNarrationAudio(scenes)) return candidate;
-  const issues = issuesAfterAudioRepair(candidate.generationIssues, narrationAudioGap(candidate));
+  const issues = issuesAfterNarrationRepair(candidate.generationIssues, candidate);
   const { generationIssues: _built, ...rest } = candidate;
   return (issues ? { ...rest, generationIssues: issues } : rest) as AppScene;
 }

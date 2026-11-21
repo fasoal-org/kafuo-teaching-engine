@@ -245,6 +245,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -400,7 +401,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -555,6 +557,7 @@
       "counts": "{{speech}} narração · {{cue}} ações",
       "panLeft": "Mover para a esquerda",
       "panRight": "Mover para a direita",
+      "panLabel": "Scroll",
       "collapseAxis": "Recolher para o eixo",
       "expandTrack": "Expandir trilha",
       "emptyHint": "Arraste as ações para o eixo para começar, ou deixe o MAIC Agent gerar a narração.",
@@ -956,6 +959,9 @@
     "retry": "Tentar novamente",
     "bankPending": "As perguntas são preparadas após a aprovação",
     "bankUnavailable": "Não foi possível carregar as perguntas",
+    "previewUnapproved": "As perguntas deste quiz aparecerão depois que o pacote for aprovado. Revise as perguntas na tela de perguntas da lição no painel de administração.",
+    "sessionExpired": "A sessão terminou ou a lição mudou. Abra a lição novamente.",
+    "bankUnreachable": "Não foi possível acessar o banco de perguntas agora.",
     "gradingUnavailable": "A correção não está disponível agora. Tente novamente.",
     "trueFalse": "Verdadeiro / Falso",
     "questionOf": "Pergunta {{current}} de {{total}}",

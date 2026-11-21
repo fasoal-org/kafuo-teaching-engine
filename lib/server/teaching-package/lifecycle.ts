@@ -55,6 +55,7 @@ import {
 } from '@/lib/server/teaching-package/successor-model';
 import { findUntaughtEssentialSections } from '@/lib/server/teaching-package/content-unit-coverage';
 import { readInsertedSlideUnits } from '@/lib/server/teaching-package/scene-insertion-store';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
 import { collectStageVisualFindings } from '@/lib/server/visual-compliance/stage-gate';
@@ -402,6 +403,54 @@ async function assertEssentialSectionsCovered(
   }
 }
 
+/**
+ * Slides the live Stage still holds with a generation issue (21 Nov 2026, owner-approved
+ * business change: a slide kept with a problem can no longer be submitted or approved as
+ * is). Each is named by 1-based play position and title — ids are not readable (owner).
+ * Reject and discard are never gated, and published versions are untouched.
+ */
+export function slidesNeedingRegeneration(
+  scenes: readonly AppScene[],
+): Array<{ position: number; title: string; codes: string[] }> {
+  // The same play position the review findings name (`scenePlayPositions`).
+  const positions = scenePlayPositions(scenes);
+  return scenes
+    .filter((scene) => (scene.generationIssues ?? []).length > 0)
+    .map((scene) => ({
+      position: positions.get(scene.id)!,
+      title: scene.title,
+      codes: (scene.generationIssues ?? []).map((issue) => issue.code),
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+/**
+ * The gate as a command-level check (21 Nov 2026): advisory — read outside any
+ * transaction, never a second connection inside one. Safe against races because both
+ * commands re-prove the stage revision under their lock: any scene edit (a generation
+ * issue included) bumps the revision, and approve refuses with STAGE_CHANGED_SINCE_
+ * SUBMISSION before promoting anything the gate did not see.
+ */
+async function refuseStageWithGenerationIssues(stageId: string): Promise<void> {
+  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+  const document = await store.loadDocument(stageId);
+  if (document) refuseSlidesNeedingRegeneration(document.scenes);
+}
+
+/** Throws the 409 `SLIDES_NEED_REGENERATION` refusal when any scene still carries one. */
+function refuseSlidesNeedingRegeneration(scenes: readonly AppScene[]): void {
+  const slides = slidesNeedingRegeneration(scenes);
+  if (slides.length === 0) return;
+  const named = slides
+    .map((slide) => `الشريحة ${slide.position}: «${slide.title}» (${slide.codes.join(', ')})`)
+    .join('؛ ');
+  throw new TeachingPackageError(
+    'SLIDES_NEED_REGENERATION',
+    `لا يمكن إرسال الحزمة قبل إعادة توليد هذه الشرائح: ${named}`,
+    { slides },
+  );
+}
+
 async function prepareSubmitValidation(
   pool: ConnectableQueryable,
   versionId: string,
@@ -418,6 +467,9 @@ async function prepareSubmitValidation(
   // read is stale the other way (says approved, the locked row says draft), the
   // absent proof is treated as drift and re-proved under the lock.
   if (version.status !== 'draft' && version.status !== 'rejected') return null;
+  // The generation-issue gate (21 Nov 2026), before any other: a slide kept with a
+  // generation issue can no longer be submitted as is, whatever backs the version.
+  await refuseStageWithGenerationIssues(version.currentStageId);
   const flow = await readFlowForVersion(pool, version.id);
   const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
   // Check 2 — the legacy/Module-2 discriminator (§M): the durable persisted
@@ -832,6 +884,13 @@ export async function approve(
   pool: ConnectableQueryable,
   command: LifecycleCommandContext,
 ): Promise<TeachingPackageVersion> {
+  // The same generation-issue gate as submit (21 Nov 2026), read before the
+  // transaction: the revision re-check inside it proves the stage did not move, so
+  // these are the submitted scenes. Any other status keeps its own refusal.
+  const approving = await readVersion(pool, command.versionId, { tenantId: command.tenantId });
+  if (approving && approving.status === 'in_review') {
+    await refuseStageWithGenerationIssues(approving.currentStageId);
+  }
   return runLifecycleCommand(pool, command, async (tx, locked, actorRef, now) => {
     if (locked.status !== 'in_review') {
       throw invalidTransition(locked.status, 'approve');

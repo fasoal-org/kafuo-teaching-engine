@@ -13,6 +13,7 @@ import {
   teachingPackageErrorResponse,
 } from '@/lib/server/teaching-package/route-helpers';
 import { getGenerationAttempt } from '@/lib/server/teaching-package/resolve';
+import { withLiveScenesNeedingReview } from '@/lib/server/teaching-package/scenes-needing-review';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 
@@ -27,7 +28,10 @@ export async function GET(
     authenticateServiceRequest(req);
     const { attemptId } = await params;
     const tenantId = parseTenantId(req.nextUrl.searchParams.get('tenantId'));
-    const attempt = await getGenerationAttempt(attemptId, { tenantId });
+    // 21 Nov 2026: a succeeded attempt's `scenesNeedingReview` is its live Stage's count.
+    const attempt = await withLiveScenesNeedingReview(
+      await getGenerationAttempt(attemptId, { tenantId }),
+    );
     return NextResponse.json({ attempt });
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);

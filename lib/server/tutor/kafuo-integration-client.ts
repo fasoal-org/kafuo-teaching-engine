@@ -252,7 +252,12 @@ export interface BankQuizQuestion {
   points: number;
 }
 
-export type BankQuizQuestionsStatus = 'ready' | 'pending_approval' | 'not_bank';
+export type BankQuizQuestionsStatus =
+  | 'ready'
+  | 'pending_approval'
+  | 'not_bank'
+  /** TE-side answer (never Kafuo's): a preview/edit of a version Kafuo will not serve. */
+  | 'preview_unapproved';
 
 export interface BankQuizQuestionsResult {
   status: BankQuizQuestionsStatus;

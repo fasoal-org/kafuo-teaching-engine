@@ -198,6 +198,31 @@ describe('W5 — the timeline marks the offending Action row', () => {
     expect(container.querySelectorAll('[data-testid="action-finding-marker"]')).toHaveLength(0);
   });
 
+  // Owner, 21 Nov 2026: the two rows above the cards became one side toolbox.
+  it('keeps every timeline control in the side toolbox, with no header row above the cards', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ governed: false }) } as Response);
+    await render(createElement(ActionsBar, { sceneId: 'scene-1' }));
+    const toolbox = container.querySelector('[data-testid="edit-timeline-toolbox"]');
+    expect(toolbox).not.toBeNull();
+    const text = toolbox!.textContent ?? '';
+    for (const key of [
+      'edit.timeline.title',
+      'edit.timeline.counts',
+      'edit.timeline.addAction',
+      'edit.timeline.panLabel',
+    ]) {
+      expect(text).toContain(key);
+    }
+    for (const label of [
+      'edit.timeline.panLeft',
+      'edit.timeline.panRight',
+      'edit.timeline.collapseAxis',
+    ]) {
+      expect(toolbox!.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
+    }
+    expect(container.querySelector('.h-10')).toBeNull();
+  });
+
   it('renders no marker when the inspection GET is unreachable', async () => {
     fetchMock.mockResolvedValue({ ok: false } as Response);
     await render(createElement(ActionsBar, { sceneId: 'scene-1' }));

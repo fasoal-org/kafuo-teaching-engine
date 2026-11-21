@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} lời giảng · {{cue}} hiệu ứng",
       "panLeft": "Trượt sang trái",
       "panRight": "Trượt sang phải",
+      "panLabel": "Scroll",
       "collapseAxis": "Thu về trục",
       "expandTrack": "Mở rộng dải",
       "emptyHint": "Kéo các hành động lên trục để bắt đầu, hoặc để MAIC Agent tự viết lời giảng.",
@@ -956,6 +959,9 @@
     "retry": "Làm lại",
     "bankPending": "Câu hỏi sẽ được chuẩn bị sau khi phê duyệt",
     "bankUnavailable": "Không thể tải câu hỏi",
+    "previewUnapproved": "Câu hỏi của bài kiểm tra này sẽ hiển thị sau khi gói được phê duyệt. Xem các câu hỏi trong màn hình câu hỏi của bài học trên bảng quản trị.",
+    "sessionExpired": "Phiên đã kết thúc hoặc bài học đã thay đổi. Hãy mở lại bài học.",
+    "bankUnreachable": "Hiện không thể truy cập ngân hàng câu hỏi.",
     "gradingUnavailable": "Hiện không thể chấm điểm. Vui lòng thử lại.",
     "trueFalse": "Đúng / Sai",
     "questionOf": "Câu {{current}} / {{total}}",

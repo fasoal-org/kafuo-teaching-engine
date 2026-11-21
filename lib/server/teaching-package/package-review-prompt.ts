@@ -32,12 +32,28 @@ export const SLIDE_CHECKS = ['S1', 'S2', 'S3', 'S4', 'S5'] as const;
  * narration) is the teacher's.
  */
 export const LEARNER_FIRST_SLIDE_CHECKS = ['S6', 'S7'] as const;
+/**
+ * A deterministic finding the server itself states (21 Nov 2026): a scene kept with a
+ * generation issue (a placeholder, no narration, missing audio, …) is a must-fix finding
+ * named `G1`, so the fix loop regenerates that slide once. Never part of the reviewer's
+ * rubric: the model never answers it, and the fix loop decides it from the live scene.
+ */
+export const GENERATION_ISSUE_CHECK = 'G1' as const;
+/**
+ * A second deterministic server finding (21 Nov 2026, D2): the book prints Latin labels on
+ * a slide's cited units and the canvas wrote them in Arabic letters
+ * (`labelScriptChanged`). Named LABEL_SCRIPT_CHANGED in the finding's text; decided from
+ * the live scene after the one regeneration, exactly like G1.
+ */
+export const LABEL_SCRIPT_CHECK = 'G2' as const;
 /** The question checks a package quiz Scene is reviewed with (plan §4.3). */
 export const PACKAGE_QUIZ_CHECKS = ['Q1', 'Q2', 'Q5'] as const;
 export type PackageReviewCheck =
   | (typeof SLIDE_CHECKS)[number]
   | (typeof LEARNER_FIRST_SLIDE_CHECKS)[number]
-  | (typeof PACKAGE_QUIZ_CHECKS)[number];
+  | (typeof PACKAGE_QUIZ_CHECKS)[number]
+  | typeof GENERATION_ISSUE_CHECK
+  | typeof LABEL_SCRIPT_CHECK;
 /** The `package-review-v1` codes (every package but g5.v10). */
 export const PACKAGE_REVIEW_CHECKS: readonly PackageReviewCheck[] = [
   ...SLIDE_CHECKS,

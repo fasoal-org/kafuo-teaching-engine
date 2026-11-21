@@ -156,6 +156,19 @@ export async function readBankQuizQuestions(
   try {
     return await deps.client.quizQuestions(scope);
   } catch (error) {
+    // A preview or edit of a version Kafuo will never serve questions for (404
+    // `teaching_stage_scope_mismatch`, e.g. an older version after a regeneration) is a
+    // normal preview state, not a failure: answered as such, with HTTP 200, instead of a
+    // bare refusal. A learner grant still gets the error — its delivery is validated
+    // against the current stage (21 Nov 2026, clear quiz messages in the preview).
+    if (
+      grant.purpose !== 'learner' &&
+      error instanceof KafuoIntegrationError &&
+      error.status === 404 &&
+      error.code === 'teaching_stage_scope_mismatch'
+    ) {
+      return { status: 'preview_unapproved', questions: [] };
+    }
     throw kafuoFailure(error);
   }
 }

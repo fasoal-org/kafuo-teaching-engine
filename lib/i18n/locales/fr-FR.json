@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} narrations · {{cue}} repères",
       "panLeft": "Défiler vers la gauche",
       "panRight": "Défiler vers la droite",
+      "panLabel": "Scroll",
       "collapseAxis": "Réduire à l’axe",
       "expandTrack": "Déplier la piste",
       "emptyHint": "Faites glisser des actions sur l’axe pour commencer, ou laissez l’agent MAIC générer la narration.",
@@ -956,6 +959,9 @@
     "retry": "Recommencer",
     "bankPending": "Les questions sont préparées après validation",
     "bankUnavailable": "Impossible de charger les questions",
+    "previewUnapproved": "Les questions de ce quiz apparaîtront une fois le paquet approuvé. Consultez les questions dans l'écran des questions de la leçon du panneau d'administration.",
+    "sessionExpired": "La session est terminée ou la leçon a changé. Ouvrez à nouveau la leçon.",
+    "bankUnreachable": "La banque de questions est indisponible pour le moment.",
     "gradingUnavailable": "La correction est indisponible. Réessayez.",
     "trueFalse": "Vrai / Faux",
     "questionOf": "Question {{current}} sur {{total}}",

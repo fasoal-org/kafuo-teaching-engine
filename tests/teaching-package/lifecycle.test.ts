@@ -926,4 +926,131 @@ describe('teaching package lifecycle', () => {
       404,
     );
   });
+
+  describe('the generation-issue submit/approve gate (21 Nov 2026)', () => {
+    /** A live stage whose second scene is a placeholder kept with a generation issue. */
+    async function seedStageWithIssue(stageId: string): Promise<void> {
+      const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+        pool,
+        ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+        mutationFence: teachingPackageStageGuardFence(),
+      });
+      const scenes = [
+        makeSlideScene('clean-1', stageId, 1),
+        {
+          ...makeSlideScene('broken-1', stageId, 2, 'مثال 1 – إذا وفقط إذا'),
+          generationIssues: [
+            { code: 'PLACEHOLDER_SLIDE', message: 'the slide could not be generated' },
+            { code: 'NARRATION_MISSING', message: 'no spoken line' },
+          ],
+        } as unknown as AppScene,
+      ];
+      await store.saveDocument(makeDocument(stageId, 'Gated', scenes));
+    }
+
+    it('submit gives 409 SLIDES_NEED_REGENERATION with position, title and codes', async () => {
+      const { stageId } = { stageId: unique('stage-gate') };
+      await seedStageWithIssue(stageId);
+      const versionId = unique('tpv');
+      await insertVersion(qp(), {
+        id: versionId,
+        aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: unique('li') } },
+        version: 1,
+        status: 'draft',
+        currentStageId: stageId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+
+      await expect(
+        submitForReview(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' }),
+      ).rejects.toMatchObject({
+        code: 'SLIDES_NEED_REGENERATION',
+        status: 409,
+        details: {
+          slides: [
+            {
+              position: 2,
+              title: 'مثال 1 – إذا وفقط إذا',
+              codes: ['PLACEHOLDER_SLIDE', 'NARRATION_MISSING'],
+            },
+          ],
+        },
+      });
+    });
+
+    it('approve refuses the exactly-submitted stage when a scene carries an issue', async () => {
+      const stageId = unique('stage-gate');
+      await seedStageWithIssue(stageId);
+      const versionId = unique('tpv');
+      await insertVersion(qp(), {
+        id: versionId,
+        aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: unique('li') } },
+        version: 1,
+        status: 'in_review',
+        currentStageId: stageId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+      // A version submitted before this deploy: its captured revision is the stage as it
+      // stands (issues included), so only the new gate refuses it.
+      const manifest = await readStageFreshnessManifest(stageId, tx());
+      await pool.query(
+        'UPDATE teaching_package_versions SET submitted_stage_rev = $1 WHERE id = $2',
+        [manifest?.rev ?? 0, versionId],
+      );
+
+      await expect(
+        approve(tx(), { tenantId: 'tenant-test', versionId, actorRef: 'reviewer-1' }),
+      ).rejects.toMatchObject({ code: 'SLIDES_NEED_REGENERATION', status: 409 });
+
+      // Reject is not gated: the reviewer can still send the package back.
+      const rejected = await reject(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+        reason: 'أعد توليد الشرائح المعلّمة',
+      });
+      expect(rejected.status).toBe('rejected');
+    });
+
+    it('a clean stage submits and approves as before', async () => {
+      const stageId = unique('stage-gate');
+      const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+        pool,
+        ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+        mutationFence: teachingPackageStageGuardFence(),
+      });
+      await store.saveDocument(
+        makeDocument(stageId, 'Clean', [makeSlideScene('ok-1', stageId, 1)]),
+      );
+      const versionId = unique('tpv');
+      await insertVersion(qp(), {
+        id: versionId,
+        aggregate: { tenantId: 'tenant-test', learningItem: { type: 'lesson', id: unique('li') } },
+        version: 1,
+        status: 'draft',
+        currentStageId: stageId,
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        now: 1,
+      });
+
+      const submitted = await submitForReview(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
+      const approved = await approve(tx(), {
+        tenantId: 'tenant-test',
+        versionId,
+        actorRef: 'reviewer-1',
+      });
+      expect(submitted.status).toBe('in_review');
+      expect(approved.status).toBe('approved');
+    });
+  });
 });

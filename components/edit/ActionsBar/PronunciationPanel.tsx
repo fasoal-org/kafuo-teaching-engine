@@ -189,7 +189,11 @@ export function PronunciationPanel({ actionId, sceneId }: { actionId: string; sc
   );
 }
 
-/** Stage-level narration reading mode (D-4b), owners/editors only. */
+/**
+ * Stage-level narration reading mode (D-4b), owners/editors only. Stacked for
+ * the timeline toolbox (owner, 21 Nov 2026), with a note that it applies to the
+ * whole lesson, not only to the slide on screen.
+ */
 export function SpeechReadingModeSetting() {
   const { t } = useI18n();
   const visible = usePronunciationSurfaces();
@@ -197,21 +201,26 @@ export function SpeechReadingModeSetting() {
   const setMode = useStageStore((state) => state.setSpeechReadingMode);
   if (!visible) return null;
   return (
-    <label
-      className="flex items-center gap-2 px-3 py-1 text-[11.5px] text-muted-foreground"
+    <div
+      className="flex flex-col gap-1 border-t border-border/60 pt-2 text-[11px] text-muted-foreground"
       data-testid="speech-reading-mode"
     >
-      {t('edit.pronunciation.readingMode')}
-      <select
-        className="rounded border border-border bg-transparent px-1 py-0.5 text-foreground"
-        value={mode}
-        onChange={(event) =>
-          setMode(event.target.value === 'accessible' ? 'accessible' : 'natural')
-        }
-      >
-        <option value="natural">{t('edit.pronunciation.readingModeNatural')}</option>
-        <option value="accessible">{t('edit.pronunciation.readingModeAccessible')}</option>
-      </select>
-    </label>
+      <label className="flex flex-col gap-1">
+        {t('edit.pronunciation.readingMode')}
+        <select
+          className="w-full rounded border border-border bg-transparent px-1 py-0.5 text-foreground"
+          value={mode}
+          onChange={(event) =>
+            setMode(event.target.value === 'accessible' ? 'accessible' : 'natural')
+          }
+        >
+          <option value="natural">{t('edit.pronunciation.readingModeNatural')}</option>
+          <option value="accessible">{t('edit.pronunciation.readingModeAccessible')}</option>
+        </select>
+      </label>
+      <span className="text-[10.5px] text-muted-foreground/70">
+        {t('edit.pronunciation.readingModeScope')}
+      </span>
+    </div>
   );
 }

@@ -140,6 +140,16 @@ describe('ThumbItem generation-issue card', () => {
     expect(audioButton(host)).toBeNull();
     expect(regenerateButton(host)).toBeNull();
   });
+
+  it('a slide with no narration at all says so in Arabic and offers the slide regeneration', () => {
+    const missing = { code: 'NARRATION_MISSING', message: 'the slide has no narration at all' };
+    const slide = { ...quiz([missing]), type: 'slide', actions: [] } as unknown as Scene;
+    const host = mount({ scene: slide, onRegenerate: vi.fn(), onRegenerateAudio: vi.fn() });
+    expect(host.textContent).toContain('هذه الشريحة بلا شرح صوتي');
+    expect(host.textContent).not.toContain('the slide has no narration at all');
+    expect(regenerateButton(host)).not.toBeNull();
+    expect(audioButton(host)).toBeNull();
+  });
 });
 
 // D-5 A (2 Nov 2026): a manual image delete left the narration describing it.

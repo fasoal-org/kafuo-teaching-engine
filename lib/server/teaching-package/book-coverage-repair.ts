@@ -31,6 +31,8 @@ import {
   RECALL_NOT_FIRST,
   recallPlacement,
   SOLUTION_SLIDES_DUPLICATED,
+  EXAMPLE_TAUGHT_TWICE,
+  examplesTaughtTwice,
   teaches,
   WORKING_STEP_MISSING,
   type BookCoverageGap,
@@ -96,7 +98,14 @@ export interface BookCoverageRepairResult {
  * g5.v8: a gap this module placed itself (an anchorless teaching gap), with
  * the content role its flow position allows.
  */
-type PlacedGap = BookCoverageGap & { placedRole?: string };
+type PlacedGap = BookCoverageGap & {
+  placedRole?: string;
+  /**
+   * 21 Nov 2026: a `missing_try_it` planned in the place of a dropped «جرّب» repeat
+   * (`dropExamplesTaughtTwice`); the check's solution already there stays the only one.
+   */
+  inRepeatPlace?: true;
+};
 
 /** The content role the missing slide must carry. */
 function roleFor(gap: PlacedGap): string {
@@ -311,6 +320,7 @@ const TEACHER_PARITY_FINDINGS: ReadonlySet<string> = new Set([
   WORKING_STEP_MISSING,
   RECALL_NOT_FIRST,
   SOLUTION_SLIDES_DUPLICATED,
+  EXAMPLE_TAUGHT_TWICE,
 ]);
 
 /** The most key points a merged solution slide keeps (its points join, never drop). */
@@ -322,6 +332,49 @@ const MERGED_SOLUTION_MAX_POINTS = 8;
  * selected visuals join it, and the others are removed. Exercise slides are
  * never touched. Returns the new list and how many slides were removed.
  */
+/**
+ * 21 Nov 2026 (owner, slide findings point 3), deterministic, no model call: the slides
+ * `examplesTaughtTwice` names are dropped — the first `worked_example` slide of the
+ * example keeps its teaching, and a «جرّب» repeat that checks nothing goes entirely. The
+ * example's own try-it slide is then planned by the missing-try-it machinery in the
+ * dropped «جرّب» slide's place (`tryItAfter`: check unit id → the id of the kept slide
+ * right before it), so it never lands after the check's solution (review 21 Nov 2026).
+ * A «جرّب»-shaped slide is a repeat only when the example's check exists in the book map
+ * (otherwise it is the v8 "one similar item" slide and stays); a check is never invented.
+ */
+export function dropExamplesTaughtTwice(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): { outlines: SceneOutline[]; dropped: number; tryItAfter: Map<string, string> } {
+  const groups = examplesTaughtTwice(outlines, book);
+  const tryItAfter = new Map<string, string>();
+  if (groups.length === 0) return { outlines: [...outlines], dropped: 0, tryItAfter };
+  const drop = new Set(groups.flatMap((group) => group.indexes));
+  for (const group of groups) {
+    const checkId = book.units.find(
+      (unit) =>
+        unit.element === 'try_it' && String(unit.pairedExampleUnitId) === String(group.unitId),
+    )?.contentUnitId;
+    if (checkId === undefined || tryItAfter.has(checkId)) continue;
+    const repeat = group.indexes.find(
+      (index) => outlines[index]!.contentRole === 'check_understanding',
+    );
+    if (repeat === undefined) continue;
+    let before = repeat - 1;
+    while (before >= 0 && drop.has(before)) before -= 1;
+    // Never ahead of the example itself (review 21 Nov 2026): a «جرّب» repeat placed before
+    // the example's first teaching slide re-plans the try-it right after that slide.
+    const first = group.firstIndex;
+    if (first !== undefined && before < first && !drop.has(first)) before = first;
+    if (before >= 0) tryItAfter.set(checkId, outlines[before]!.id);
+  }
+  return {
+    outlines: outlines.filter((_outline, index) => !drop.has(index)),
+    dropped: drop.size,
+    tryItAfter,
+  };
+}
+
 export function mergeDuplicateSolutions(
   outlines: readonly SceneOutline[],
   book: CoverageBookStructure,
@@ -519,6 +572,13 @@ export async function repairBookCoverageGaps(
   let open = [...blocking];
   let inserted = 0;
   let restructured = 0;
+  // 21 Nov 2026: a check whose «جرّب» repeat was dropped gets its try-it in that place.
+  const tryItAfter = new Map<string, string>();
+  const exerciseIds = new Set(
+    context.book.units
+      .filter((unit) => unit.element === 'exercise')
+      .map((unit) => String(unit.contentUnitId)),
+  );
   // g5.v8: one solution slide per check and recall first are fixed without a
   // model call, before any slide is planned, then the candidate is re-diagnosed.
   if (
@@ -528,6 +588,7 @@ export async function repairBookCoverageGaps(
       (issue) =>
         issue.code === SOLUTION_SLIDES_DUPLICATED ||
         issue.code === RECALL_NOT_FIRST ||
+        issue.code === EXAMPLE_TAUGHT_TWICE ||
         // g5.v10: an oversized exercises block is regrouped without a model call.
         (context.book.learnerFirst === true && issue.code === EXERCISE_CAP_EXCEEDED),
     )
@@ -547,6 +608,18 @@ export async function repairBookCoverageGaps(
       open = diagnosed.blocking;
       return true;
     };
+    // 21 Nov 2026: the repeats of an example taught twice go first — the merges below
+    // then see the plan without them.
+    const deduped = dropExamplesTaughtTwice(outlines, context.book);
+    const dedupKept = deduped.dropped > 0 && accept(deduped.outlines);
+    if (dedupKept) {
+      for (const [checkId, anchorId] of deduped.tryItAfter) tryItAfter.set(checkId, anchorId);
+    }
+    if (deduped.dropped > 0) {
+      log.info(
+        `book coverage repair: ${dedupKept ? deduped.dropped : 0} slide(s) repeating an already-taught example dropped${dedupKept ? '' : ' (rolled back)'}`,
+      );
+    }
     const merged = mergeDuplicateSolutions(outlines, context.book);
     // Lesson 2-5: an example slide that only stopped citing the check is a change too.
     const mergeKept = merged.merged + merged.recited > 0 && accept(merged.outlines);
@@ -561,6 +634,7 @@ export async function repairBookCoverageGaps(
       );
     }
     restructured =
+      (dedupKept ? deduped.dropped : 0) +
       (mergeKept ? merged.merged + merged.recited : 0) +
       (moveKept ? 1 : 0) +
       (groupKept ? grouped.merged : 0);
@@ -590,13 +664,22 @@ export async function repairBookCoverageGaps(
       options.examples === true
         ? missingExampleGaps(outlines, context.book).filter((gap) => gap.anchorIndex !== undefined)
         : null;
-    const gaps =
+    const found =
       options.examples === true
         ? placed!.length > 0
           ? placed
           : null
         : repairableGaps(outlines, open, context.book, context.flow);
-    if (!gaps) break;
+    if (!found) break;
+    // 21 Nov 2026 (review): the try-it of a check whose «جرّب» repeat was dropped goes in
+    // that slide's place — right after the slide that preceded it — not after the last
+    // slide citing the example (usually the check's own solution).
+    const gaps: PlacedGap[] = found.map((gap) => {
+      if (gap.kind !== 'missing_try_it') return gap;
+      const anchorId = tryItAfter.get(gap.unit.contentUnitId);
+      const at = anchorId === undefined ? -1 : outlines.findIndex((o) => o.id === anchorId);
+      return at >= 0 ? { ...gap, anchorIndex: at, inRepeatPlace: true } : gap;
+    });
     // Insert from the last anchor backwards, so earlier anchors keep their index.
     // g5.v8 only: gaps sharing one anchor (a check's items) go in last-first, so
     // they land in book order; g5.v7 keeps its order exactly.
@@ -613,8 +696,22 @@ export async function repairBookCoverageGaps(
       outlines.splice(gap.anchorIndex! + 1, 0, outline);
       planned += 1;
       // g5.v8: a new try-it's solution goes right after it in the same round,
-      // so try-it → solution → per-item solutions fit the two rounds.
-      if (context.book.teacherParity === true && gap.kind === 'missing_try_it') {
+      // so try-it → solution → per-item solutions fit the two rounds. A try-it planned in
+      // a dropped «جرّب» repeat's place keeps the check's solution already after it —
+      // counted as SOLUTION_SLIDES_DUPLICATED counts: an exercises slide citing the check
+      // is never its solution.
+      const solvedAfter =
+        gap.inRepeatPlace === true &&
+        outlines.slice(gap.anchorIndex! + 2).some((next) => {
+          const ids = (next.sourceContentUnitIds ?? []).map(String);
+          return (
+            teaches(next) &&
+            next.contentRole === 'worked_example' &&
+            ids.includes(gap.unit.contentUnitId) &&
+            !ids.some((id) => exerciseIds.has(id))
+          );
+        });
+      if (context.book.teacherParity === true && gap.kind === 'missing_try_it' && !solvedAfter) {
         const solution = await planGap(
           {
             kind: 'missing_solution',

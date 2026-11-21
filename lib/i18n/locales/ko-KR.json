@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "프로 모드",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "cue": {
@@ -497,6 +499,7 @@
       "counts": "내레이션 {{speech}}개 · 동작 {{cue}}개",
       "panLeft": "왼쪽으로 이동",
       "panRight": "오른쪽으로 이동",
+      "panLabel": "Scroll",
       "collapseAxis": "축으로 접기",
       "expandTrack": "트랙 펼치기",
       "emptyHint": "위의 동작을 축으로 끌어 시작하거나, MAIC Agent가 내레이션을 생성하도록 하세요.",
@@ -956,6 +959,9 @@
     "retry": "다시 풀기",
     "bankPending": "문제는 승인 후에 준비됩니다",
     "bankUnavailable": "문제를 불러오지 못했습니다",
+    "previewUnapproved": "이 퀴즈의 문제는 패키지가 승인된 후에 표시됩니다. 관리자 패널의 수업 문제 화면에서 문제를 확인하세요.",
+    "sessionExpired": "세션이 종료되었거나 수업이 변경되었습니다. 수업을 다시 열어 주세요.",
+    "bankUnreachable": "현재 문제 은행에 접속할 수 없습니다.",
     "gradingUnavailable": "지금은 채점할 수 없습니다. 다시 시도해 주세요.",
     "trueFalse": "참 / 거짓",
     "questionOf": "{{total}}문제 중 {{current}}번",

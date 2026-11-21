@@ -30,6 +30,7 @@
  */
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
+import { labelScriptChanged } from '@/lib/server/teaching-package/label-script-check';
 import { createLogger } from '@/lib/logger';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -75,6 +76,10 @@ export const PACKAGE_REVIEWER_ACTOR = 'system:package-reviewer';
  * exist only in package-review-v2, so v1 reviews are unchanged.
  */
 const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
+  // 21 Nov 2026: G1 is the server-stated "kept generation issue" finding; the slide is
+  // regenerated once exactly like any other auto-fixable finding.
+  'G1',
+  'G2',
   'S1',
   'S2',
   'S3',
@@ -644,9 +649,33 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // with the new canvas (a new S6, package-review-v2 only) did not fix the slide —
       // item 208's «اليمين»/«اليسار» fix was closed as fixed. Never reached on v1.
       const fixBrokeNarration = reportedChecks.has('S6');
+      // 21 Nov 2026: a G1 (kept generation issue) is decided from the live scene, not
+      // the re-review — the reviewer's rubric never reports it. Still broken after the
+      // one regeneration ⇒ stays open for a person; clean ⇒ fixed.
+      const liveIssueCodes = (regenerated.generationIssues ?? [])
+        .filter((issue) => issue.code !== 'GUIDE_ANSWER_LEAK')
+        .map((issue) => issue.code);
+      // D2: a G2 (label script) is decided from the live scene too — the regenerated
+      // canvas either kept the book's Latin labels or rewrote them again.
+      const liveSlide = sceneToReviewSlide(regenerated);
+      const unitTextOf = new Map(context.units.map((unit) => [String(unit.id), unit.text ?? '']));
+      const liveLabelWrong = sceneFindings.some(
+        (finding) =>
+          finding.check === 'G2' &&
+          labelScriptChanged(
+            liveSlide.visibleText,
+            (liveSlide.citedUnitIds ?? []).map((id) => unitTextOf.get(String(id)) ?? '').join('\n'),
+          ),
+      );
       let stillWrong = false;
       for (const finding of sceneFindings) {
-        if (reportedChecks.has(finding.check) || fixBrokeNarration) {
+        if (finding.check === 'G1' && liveIssueCodes.length > 0) {
+          finding.teacherReason = 'STILL_WRONG';
+          stillWrong = true;
+        } else if (finding.check === 'G2' && liveLabelWrong) {
+          finding.teacherReason = 'STILL_WRONG';
+          stillWrong = true;
+        } else if (reportedChecks.has(finding.check) || fixBrokeNarration) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (audioCode !== null) {

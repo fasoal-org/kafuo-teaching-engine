@@ -1,25 +1,39 @@
 'use client';
 
 import { useEffect, useState, ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
 import { AccessCodeModal } from '@/components/access-code-modal';
+import { classroomStageIdFromPathname } from '@/lib/access-code/classroom-stage-id';
 import { useSettingsStore } from '@/lib/store/settings';
 
 export function AccessCodeGuard({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  // The classroom the browser is actually opening, if this page is one: an editor
+  // handoff's Stage-scoped grant covers exactly that classroom and no other page.
+  const stageId = classroomStageIdFromPathname(pathname);
   const [status, setStatus] = useState<{
     enabled: boolean;
     authenticated: boolean;
+    editorGrantCovered: boolean;
     loading: boolean;
-  }>({ enabled: false, authenticated: false, loading: true });
+  }>({ enabled: false, authenticated: false, editorGrantCovered: false, loading: true });
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/access-code/status')
+    // With a classroom Stage id the status route also checks the editor grant
+    // (owner, 21 Nov 2026): a handoff-redeemed browser opens its own classroom
+    // without the access-code modal. Without one the question is unchanged.
+    const url = stageId
+      ? `/api/access-code/status?stageId=${encodeURIComponent(stageId)}`
+      : '/api/access-code/status';
+    fetch(url)
       .then((res) => res.json())
       .then((data) => {
         if (!cancelled) {
           setStatus({
             enabled: data.enabled,
             authenticated: data.authenticated,
+            editorGrantCovered: Boolean(data.editorGrantCovered),
             loading: false,
           });
         }
@@ -27,15 +41,21 @@ export function AccessCodeGuard({ children }: { children: ReactNode }) {
       .catch(() => {
         if (!cancelled) {
           // Default to requiring auth on error — safer than silently disabling
-          setStatus({ enabled: true, authenticated: false, loading: false });
+          setStatus({
+            enabled: true,
+            authenticated: false,
+            editorGrantCovered: false,
+            loading: false,
+          });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [stageId]);
 
-  const needsAuth = !status.loading && status.enabled && !status.authenticated;
+  const needsAuth =
+    !status.loading && status.enabled && !status.authenticated && !status.editorGrantCovered;
 
   return (
     <>

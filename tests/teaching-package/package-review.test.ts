@@ -5,6 +5,8 @@ import { REVIEWER_CALL_TIMEOUT_MS } from '@/lib/server/teaching-model/reviewer-p
 import {
   MAX_PACKAGE_REVIEWS_IN_FLIGHT,
   REVIEW_LEASE_MS,
+  generationIssueFindings,
+  labelScriptFindings,
   reviewStatusOf,
   teacherOnlyReason,
   toStoredFindings,
@@ -27,6 +29,8 @@ import {
   renderSlidesBlock,
 } from '@/lib/server/teaching-package/package-review-prompt';
 import type { StoredFinding } from '@/lib/server/teaching-package/package-review-store';
+import { slidesNeedingRegeneration } from '@/lib/server/teaching-package/lifecycle';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import {
   refixReviewId,
   seedRefixFindings,
@@ -436,5 +440,159 @@ describe('leases and in-flight caps (D-6, D-7)', () => {
   it('at most 2 package reviews and 2 question reviews run at once per process', () => {
     expect(MAX_PACKAGE_REVIEWS_IN_FLIGHT).toBe(2);
     expect(MAX_QUESTION_REVIEWS_IN_FLIGHT).toBe(2);
+  });
+});
+
+describe('every kept generation issue becomes a review finding (21 Nov 2026)', () => {
+  const broken = slideScene('s1', 3, {
+    title: 'مثال 1 – إذا وفقط إذا',
+    generationIssues: [
+      { code: 'PLACEHOLDER_SLIDE', message: 'the slide could not be generated' },
+      { code: 'NARRATION_MISSING', message: 'no spoken line' },
+    ],
+  });
+
+  it('one G1 finding per scene, naming the slide by position and title with its codes', () => {
+    const scenes = [slideScene('s0', 1), broken];
+    const [finding] = generationIssueFindings(scenes, reviewSlidesOf(scenes));
+    expect(finding).toMatchObject({
+      id: 'i1',
+      targetId: 's1',
+      targetTitle: 'مثال 1 – إذا وفقط إذا',
+      targetOrder: 3,
+      check: 'G1',
+      severity: 'high',
+      status: 'open',
+    });
+    // The play position (second slide), not the raw `order` 3 (review 21 Nov 2026).
+    expect(finding!.whatIsWrong).toContain('الشريحة 2:');
+    expect(finding!.whatIsWrong).toContain('مثال 1 – إذا وفقط إذا');
+    expect(finding!.whatIsWrong).toContain('PLACEHOLDER_SLIDE');
+    // Auto-fixable: the fix loop regenerates the slide once, like any other finding.
+    expect(teacherOnlyReason(finding, reviewSlidesOf(scenes))).toBeNull();
+  });
+
+  it('the finding and the submit/approve gate name the same position (gaps, any array order)', () => {
+    const issue = [{ code: 'NARRATION_MISSING', message: 'no spoken line' }];
+    // Stored out of play order, with a gap in `order` (1, 3, 7).
+    const scenes = [
+      slideScene('c', 7, { title: 'ج', generationIssues: issue }),
+      slideScene('a', 1, { title: 'أ' }),
+      slideScene('b', 3, { title: 'ب', generationIssues: issue }),
+    ];
+    const gate = slidesNeedingRegeneration(scenes);
+    expect(gate).toEqual([
+      { position: 2, title: 'ب', codes: ['NARRATION_MISSING'] },
+      { position: 3, title: 'ج', codes: ['NARRATION_MISSING'] },
+    ]);
+    const findings = generationIssueFindings(scenes, reviewSlidesOf(scenes));
+    expect(findings.map((finding) => finding.whatIsWrong.split(':')[0])).toEqual([
+      'الشريحة 2',
+      'الشريحة 3',
+    ]);
+    expect(scenePlayPositions(scenes)).toEqual(
+      new Map([
+        ['a', 1],
+        ['b', 2],
+        ['c', 3],
+      ]),
+    );
+  });
+
+  it('a GUIDE_ANSWER_LEAK scene is not duplicated: it already has its own finding', () => {
+    const leaking = slideScene('s1', 2, {
+      generationIssues: [{ code: 'GUIDE_ANSWER_LEAK', message: 'stated the answer' }],
+    });
+    expect(generationIssueFindings([leaking], reviewSlidesOf([leaking]))).toEqual([]);
+  });
+
+  it('a clean stage gives no finding, and a placeholder quiz scene gets one too', () => {
+    const clean = slideScene('s0', 1);
+    expect(generationIssueFindings([clean], reviewSlidesOf([clean]))).toEqual([]);
+    const quiz = {
+      ...slideScene('q1', 2),
+      type: 'quiz',
+      generationIssues: [{ code: 'PLACEHOLDER_QUIZ', message: 'not generated' }],
+    } as unknown as AppScene;
+    const [finding] = generationIssueFindings([quiz], reviewSlidesOf([quiz]));
+    expect(finding!.check).toBe('G1');
+  });
+});
+
+describe('the label-script finding (D2, 21 Nov 2026)', () => {
+  const units = [
+    { id: '6688', text: 'ABCD ≅ WXYZ', order: 1, role: 'EXAMPLE', title: 'مثال' },
+    { id: '6690', text: 'المثلث س ص ع', order: 2, role: 'EXAMPLE', title: 'مثال 2' },
+  ] as never;
+
+  function slideOf(id: string, order: number, visibleText: string, cited: string[]) {
+    return {
+      ...slideScene(id, order),
+      content: {
+        type: 'slide',
+        contentRole: 'worked_example',
+        canvas: {
+          elements: [{ id: 'e1', type: 'text', content: `<p>${visibleText}</p>` }],
+        },
+      },
+      sourceContentUnitIds: cited,
+    } as unknown as AppScene;
+  }
+
+  it('a slide writing the book’s Latin labels as Arabic letters gets one G2 finding', () => {
+    const scenes = [
+      slideOf('s0', 3, 'مقدمة', ['6690']),
+      slideOf('s1', 12, 'المثلث ز ي س و مطابق', ['6688']),
+    ];
+    const slides = reviewSlidesOf(scenes);
+    const [finding] = labelScriptFindings(slides, units);
+    expect(finding).toMatchObject({
+      id: 'l1',
+      targetId: 's1',
+      targetOrder: 12,
+      check: 'G2',
+      severity: 'high',
+      status: 'open',
+    });
+    // The play position (second slide), as the gate and the G1 findings name it.
+    expect(finding!.whatIsWrong).toContain('الشريحة 2:');
+    expect(finding!.whatIsWrong).toContain('LABEL_SCRIPT_CHANGED');
+    expect(finding!.fixNote).toContain('(ABCD، WXYZ)');
+    expect(teacherOnlyReason(finding, slides)).toBeNull();
+  });
+
+  it('the fix note names the cited units’ own Latin runs, never a fixed example (review)', () => {
+    const own = [
+      {
+        id: '6700',
+        text: 'الشكل PQRS يطابق الشكل △K′L′M′N′',
+        order: 1,
+        role: 'EXAMPLE',
+        title: 'م',
+      },
+    ] as never;
+    const scenes = [slideOf('s1', 1, 'الشكل ز ي س و', ['6700'])];
+    const [finding] = labelScriptFindings(reviewSlidesOf(scenes), own);
+    expect(finding!.fixNote).toContain('(PQRS، K′L′M′N′)');
+    expect(finding!.fixNote).not.toContain('ABCD');
+    expect(finding!.fixNote).not.toContain('WXYZ');
+  });
+
+  it('ordinary Arabic maths text on the canvas gives no finding (review H5)', () => {
+    const geometry = [
+      { id: '6710', text: 'في △ABC، AB = 3 m', order: 1, role: 'EXAMPLE', title: 'م' },
+    ] as never;
+    const scenes = [
+      slideOf('s1', 1, 'أوجد قيمتي س و ص', ['6710']),
+      slideOf('s2', 2, 'طولا الضلعين ٣ م و ٤ م', ['6710']),
+    ];
+    expect(labelScriptFindings(reviewSlidesOf(scenes), geometry)).toEqual([]);
+  });
+
+  it('Arabic labels in the book give no finding, and clean Latin labels neither', () => {
+    const arabic = [slideOf('s1', 3, 'المثلث س ص ع قائم', ['6690'])];
+    expect(labelScriptFindings(reviewSlidesOf(arabic), units)).toEqual([]);
+    const clean = [slideOf('s2', 4, 'المثلث ABCD مطابق', ['6688'])];
+    expect(labelScriptFindings(reviewSlidesOf(clean), units)).toEqual([]);
   });
 });

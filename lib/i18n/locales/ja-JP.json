@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "プロモード",
@@ -415,7 +416,8 @@
         "ACTION_STRUCTURE_INVALID": "Invalid narration or animation steps were removed from this slide.",
         "ACTION_TYPE_UNKNOWN": "Invalid narration or animation steps were removed from this slide.",
         "NARRATION_DESCRIBES_DELETED_IMAGE": "The narration still describes an image that was deleted from this slide.",
-        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there."
+        "NARRATION_AUDIO_FAILED": "The teacher's voice could not be generated for some narration lines; students will not hear it there.",
+        "NARRATION_MISSING": "This slide has no narration: no spoken line was generated for it, so students would see it in silence."
       }
     },
     "zorder": {
@@ -570,6 +572,7 @@
       "counts": "{{speech}} ナレーション · {{cue}} アクション",
       "panLeft": "左にスクロール",
       "panRight": "右にスクロール",
+      "panLabel": "Scroll",
       "collapseAxis": "軸に折りたたむ",
       "expandTrack": "トラックを展開",
       "emptyHint": "上のアクションを軸にドラッグして開始するか、MAIC Agent にナレーションを生成させましょう。",
@@ -956,6 +959,9 @@
     "retry": "やり直す",
     "bankPending": "問題は承認後に用意されます",
     "bankUnavailable": "問題を読み込めませんでした",
+    "previewUnapproved": "このクイズの問題はパッケージの承認後に表示されます。管理パネルの授業の問題画面で問題を確認してください。",
+    "sessionExpired": "セッションが終了したか、授業が変更されました。授業を開き直してください。",
+    "bankUnreachable": "現在問題バンクに接続できません。",
     "gradingUnavailable": "現在採点できません。もう一度お試しください。",
     "trueFalse": "正誤",
     "questionOf": "{{total}} 問中 {{current}} 問目",

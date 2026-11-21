@@ -595,14 +595,18 @@ describe('the package review fixes a slide kept with a GUIDE_ANSWER_LEAK issue',
     expect(LEAKING.generationIssues).toEqual([ISSUE]);
   });
 
-  it('g5.v10: unchanged — no finding from the issue, and without it nothing new is read', async () => {
+  it('g5.v10: unchanged — no finding from the issue', async () => {
     const leaking = job('g5.v10', [LEAKING]);
     const finished = await leaking.run();
     expect(leaking.regenerate).not.toHaveBeenCalled();
     expect(finished).toMatchObject({ status: 'passed', findings: [], fixes: [] });
+    // 21 Nov 2026 (D2): the attempt is read on every first review — the label-script
+    // finding is model-gated too — but exactly once, for both model-gated checks.
+    expect(mocks.readAttemptById).toHaveBeenCalledTimes(1);
+    expect(mocks.readAttemptById).toHaveBeenCalledWith(expect.anything(), 'attempt-1');
     const clean = job('g5.v10', [FIXED]);
     expect(await clean.run()).toMatchObject({ status: 'passed', findings: [] });
-    expect(mocks.readAttemptById).not.toHaveBeenCalled();
+    expect(mocks.readAttemptById).toHaveBeenCalledTimes(1);
   });
 
   it('names every item of the issue, or none when its wording is unknown; slides only', () => {
@@ -648,5 +652,179 @@ describe('the package review fixes a slide kept with a GUIDE_ANSWER_LEAK issue',
     expect(finding!.fixNote).toContain('لا تذكر الإجابة النهائية للبند 1A');
     expect(finding!.fixNote).toContain('وأبقِ كل ما سواه كما هو');
     expect(finding!.fixNote).not.toContain('فقط');
+  });
+});
+
+// D2 (21 Nov 2026), review MEDIUM: the label-script finding through the whole review run —
+// the Teaching Model gate (g5.v10/v11 only), the fix loop's G2 decision from the live
+// scene (fixed versus STILL_WRONG), and a failed attempt read that adds nothing.
+describe('the label-script check in the review run (D2)', () => {
+  const LABEL_UNIT = {
+    unitId: '6688',
+    normalizedText: 'في الشكل المجاور، يُطابق الشكل الرباعي ABCD الشكل الرباعي WXYZ.',
+  };
+  const labelScene = (text: string, issues?: Array<{ code: string; message: string }>) =>
+    ({
+      id: 'label',
+      stageId: 'stage-1',
+      title: 'التطابق',
+      order: 1,
+      type: 'slide',
+      sourceContentUnitIds: ['6688'],
+      content: {
+        type: 'slide',
+        contentRole: 'worked_example',
+        canvas: { elements: [{ id: 'e', type: 'text', content: `<p>${text}</p>` }] },
+      },
+      actions: [{ id: 'a', type: 'speech', text: 'نقرأ الشكل.' }],
+      ...(issues ? { generationIssues: issues } : {}),
+    }) as unknown as AppScene;
+  const ARABIC = labelScene('الشكل الرباعي ز ي س و مطابق');
+  const LATIN = labelScene('الشكل الرباعي WXYZ مطابق');
+
+  function labelJob(
+    version: string,
+    scenes: AppScene[],
+    after: AppScene,
+    options: { attemptFails?: boolean } = {},
+  ) {
+    const attempt = mocks.readAttemptById.mockReset();
+    if (options.attemptFails) attempt.mockRejectedValue(new Error('attempt read failed'));
+    else attempt.mockResolvedValue({ teachingModel: { key: 'g5', version }, inputSnapshot: {} });
+    mocks.readContentUnitsForAttempt.mockResolvedValue([...UNITS, LABEL_UNIT]);
+    mocks.readVersionById.mockResolvedValue({
+      id: 'version-1',
+      tenantId: 'tenant-1',
+      status: 'draft',
+      currentStageId: 'stage-1',
+    });
+    const claimed = {
+      id: 'review-1',
+      tenantId: 'tenant-1',
+      learningItem: { type: 'lesson', id: '203' },
+      versionId: 'version-1',
+      attemptId: 'attempt-1',
+      stageId: 'stage-1',
+      subjectCode: 'MATH',
+      status: 'running',
+      findings: [],
+      fixes: [],
+      runAttempts: 1,
+      leaseOwner: 'w',
+      leaseUntil: 2,
+      reviewedAt: null,
+      createdAt: 1,
+      startedAt: 1,
+    } as unknown as PackageReview;
+    mocks.claimReview.mockResolvedValue({ ...claimed });
+    mocks.renewReviewLease.mockResolvedValue(true);
+    mocks.saveReviewProgress.mockReset().mockResolvedValue(undefined);
+    mocks.sumReviewSpend.mockResolvedValue({ rows: 0 });
+    mocks.enqueueWebhookEvent.mockResolvedValue(undefined);
+    mocks.finishReview
+      .mockReset()
+      .mockImplementation(async (_tx: unknown, _id: string, _worker: string, outcome: object) => ({
+        ...claimed,
+        ...outcome,
+      }));
+    const regenerate = vi.fn(async (_grant: unknown, sceneId: string) => ({
+      status: 200,
+      body: {
+        regenerationId: `tpsr-${sceneId}`,
+        status: 'succeeded',
+        replayed: false,
+        sceneId,
+        scene: after,
+        resultSceneRev: 2,
+        current: { rev: 2, scene: after },
+      },
+    }));
+    // The loop's live scene is the one the audio step returns.
+    const regenerateAudio = vi.fn(async (_grant: unknown, sceneId: string) => ({
+      sceneId,
+      scene: after,
+      rev: 3,
+      generated: 1,
+      missing: 0,
+    }));
+    const callReviewer = vi.fn(async () => ({
+      answer: { summary: 's', findings: [] },
+      call: { provider: 'anthropic' as const, modelString: 'anthropic:model', usage: null },
+    }));
+    const fixLoop = createPackageReviewFixLoop({
+      regenerate: regenerate as never,
+      regenerateAudio: regenerateAudio as never,
+      readVersion: (async () => ({
+        id: 'version-1',
+        tenantId: 'tenant-1',
+        status: 'draft',
+        currentStageId: 'stage-1',
+      })) as never,
+      readScene: async (_pool, _stage, sceneId) => {
+        const scene = scenes.find((candidate) => candidate.id === sceneId);
+        return scene ? { rev: 1, scene } : null;
+      },
+    });
+    const run = () =>
+      runPackageReview('review-1', {
+        pool: {} as never,
+        now: () => 5,
+        workerId: 'w',
+        callReviewer: callReviewer as never,
+        fixLoop,
+        loadScenes: async () => scenes,
+      });
+    return { run, regenerate };
+  }
+
+  it.each(['g5.v10', 'g5.v11'])(
+    '%s: G2 regenerates the slide once; a canvas with the book’s labels closes it',
+    async (version) => {
+      const { run, regenerate } = labelJob(version, [ARABIC], LATIN);
+      const finished = await run();
+      expect(regenerate).toHaveBeenCalledTimes(1);
+      const [, sceneId, request] = regenerate.mock.calls[0] as unknown as [
+        unknown,
+        string,
+        { instruction: string },
+      ];
+      expect(sceneId).toBe('label');
+      // The note names the book's own runs.
+      expect(request.instruction).toContain('ABCD، WXYZ');
+      expect(finished).toMatchObject({
+        status: 'fixed',
+        findings: [{ id: 'l1', targetId: 'label', check: 'G2', status: 'fixed' }],
+        fixes: [{ sceneId: 'label', outcome: 'fixed' }],
+      });
+    },
+  );
+
+  it('a regeneration that writes the Arabic letters again stays open as STILL_WRONG', async () => {
+    const { run, regenerate } = labelJob('g5.v10', [ARABIC], ARABIC);
+    const finished = await run();
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(finished).toMatchObject({
+      status: 'needs_teacher',
+      findings: [{ id: 'l1', check: 'G2', status: 'open', teacherReason: 'STILL_WRONG' }],
+    });
+  });
+
+  it('g5.v8: no G2 finding and no regeneration (the version gate)', async () => {
+    const { run, regenerate } = labelJob('g5.v8', [ARABIC], LATIN);
+    const finished = await run();
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(finished).toMatchObject({ status: 'passed', findings: [], fixes: [] });
+  });
+
+  it('a failed attempt read adds no model-gated finding, and a G1 still stands', async () => {
+    const broken = labelScene('الشكل الرباعي ز ي س و مطابق', [
+      { code: 'NARRATION_MISSING', message: 'no spoken line' },
+    ]);
+    const { run } = labelJob('g5.v10', [broken], LATIN, { attemptFails: true });
+    const finished = await run();
+    // The review still finishes (never a new failure point); the fix loop's own W2 read
+    // fails the same way and keeps the v1 flow.
+    expect(finished!.findings.map((finding) => finding.check)).toEqual(['G1']);
+    expect(finished!.findings[0]).toMatchObject({ status: 'fixed' });
   });
 });

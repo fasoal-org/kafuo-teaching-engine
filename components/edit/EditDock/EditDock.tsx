@@ -42,8 +42,14 @@ import { TeachingSkillsPanel } from './TeachingSkillsPanel';
  * The timeline's height, in px — the body only; the edit bar is added on top of
  * it, so folding never takes the bar away. The timeline height is fixed: the
  * height-drag handle was removed (owner decision), so only the fold moves it.
+ *
+ * 296, not the old 224 (owner, 21 Nov 2026): the SATTS rows — the reading-mode
+ * row under the header and each narration card's «النطق» row — came out of
+ * the same fixed body, which left a narration card's text box about 13px tall,
+ * so its text was hidden and typing did not show. 296 gives that box about
+ * three lines (~85px).
  */
-const TIMELINE_DEFAULT_HEIGHT = 224;
+const TIMELINE_DEFAULT_HEIGHT = 296;
 /** The axis of node icons, with room for the chips that hang off it. */
 const TIMELINE_COLLAPSED_HEIGHT = 86;
 

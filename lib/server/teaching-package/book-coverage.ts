@@ -63,6 +63,12 @@ export const EXERCISE_SELECTED_MISSING = 'EXERCISE_SELECTED_MISSING';
 export const EXERCISE_UNSELECTED_CITED = 'EXERCISE_UNSELECTED_CITED';
 /** g5.v8: a «تأكد» check has more than one solution slide (owner, 4 Nov 2026: one per check). */
 export const SOLUTION_SLIDES_DUPLICATED = 'SOLUTION_SLIDES_DUPLICATED';
+/**
+ * 21 Nov 2026 (owner, slide findings point 3): a worked example taught on more than one
+ * slide — either more than one `worked_example` slide cites it, or a
+ * `check_understanding` slide cites the example without its own check («جرّب» repeats).
+ */
+export const EXAMPLE_TAUGHT_TWICE = 'EXAMPLE_TAUGHT_TWICE';
 /** g5.v8: the recall slide comes after the first teaching slide of part 1. */
 export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
 
@@ -618,6 +624,70 @@ export function recallPlacement(
  * and no exercise unit, so the exercises block is never counted. Only checks
  * with two or more are returned, each with its slides in plan order.
  */
+/**
+ * The worked examples taught on more than one slide (21 Nov 2026). For each book
+ * `worked_example` unit, the slide indexes that only repeat its teaching:
+ *
+ * - every `worked_example` slide after the first that cites the example without citing
+ *   any check (a solution slide cites a check — this example's or another's — so it never
+ *   counts, review H3) and without citing any exercise unit;
+ * - when the example HAS a check in the book map, every `check_understanding` slide that
+ *   cites the example but no check — the «جرّب» slide that repeats the example instead of
+ *   checking it. An example with no check keeps its "write one similar item" slide (the
+ *   v8/v10 rule, review H4).
+ *
+ * `firstIndex` is the example's first teaching slide, when it has one (the message names
+ * it by position and title). Dropped by the repair (`dropExamplesTaughtTwice`); the
+ * check's own try-it slide is then planned in the dropped «جرّب» slide's place.
+ */
+export function examplesTaughtTwice(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): Array<{ unitId: string; indexes: number[]; firstIndex?: number }> {
+  const exerciseIds = new Set(
+    book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+  );
+  const checkIds = new Set(
+    book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
+  );
+  const groups: Array<{ unitId: string; indexes: number[]; firstIndex?: number }> = [];
+  for (const unit of book.units) {
+    if (unit.element !== 'worked_example') continue;
+    const exampleId = unit.contentUnitId;
+    const checkId = book.units.find(
+      (candidate) =>
+        candidate.element === 'try_it' &&
+        String(candidate.pairedExampleUnitId) === String(exampleId),
+    )?.contentUnitId;
+    const repeats: number[] = [];
+    let firstIndex: number | undefined;
+    outlines.forEach((outline, index) => {
+      if (!teaches(outline) || !cites(outline, exampleId)) return;
+      const citesAny = (ids: ReadonlySet<string>) =>
+        (outline.sourceContentUnitIds ?? []).some((id) => ids.has(String(id)));
+      if (citesAny(checkIds) || citesAny(exerciseIds)) return;
+      if (outline.contentRole === 'check_understanding') {
+        // The «جرّب» repeat: it teaches the example and checks nothing of its own.
+        // Without a check in the book this is the "one similar item" slide: kept.
+        if (checkId !== undefined) repeats.push(index);
+        return;
+      }
+      if (outline.contentRole === 'worked_example') {
+        if (firstIndex === undefined) firstIndex = index;
+        else repeats.push(index);
+      }
+    });
+    if (repeats.length > 0) {
+      groups.push({
+        unitId: exampleId,
+        indexes: repeats,
+        ...(firstIndex !== undefined ? { firstIndex } : {}),
+      });
+    }
+  }
+  return groups;
+}
+
 export function duplicateSolutionSlides(
   outlines: readonly SceneOutline[],
   book: KafuoBookStructure,
@@ -774,6 +844,26 @@ function teacherParityDiagnostics(
       field: 'sourceContentUnitIds',
       message: `check ${group.unitId} has more than one solution slide; one solution slide solves all of its items`,
     });
+  }
+  // 21 Nov 2026: an example taught on more than one slide. The message names each
+  // repeat — and the slide that already teaches the example — by 1-based position and
+  // title, as the owner reads them; never by unit id (review LOW).
+  for (const group of examplesTaughtTwice(outlines, book)) {
+    const first = group.firstIndex !== undefined ? outlines[group.firstIndex] : undefined;
+    const taughtOn = first
+      ? `على الشريحة ${group.firstIndex! + 1}: «${first.title ?? ''}»`
+      : 'على شريحة أخرى';
+    for (const index of group.indexes) {
+      const outline = outlines[index]!;
+      diagnostics.push({
+        code: EXAMPLE_TAUGHT_TWICE,
+        disposition: 'admin_correctable',
+        outlineIndex: index,
+        ...(outline.id ? { outlineId: outline.id } : {}),
+        field: 'sourceContentUnitIds',
+        message: `الشريحة ${index + 1}: «${outline.title ?? ''}» تُعيد شرح مثال مشروح أصلًا ${taughtOn}؛ احذف هذه الشريحة`,
+      });
+    }
   }
   // Recall first (lessons 307, 315, 317): the recall slide opens part 1.
   if (book.units.some((unit) => unit.element === 'prior_knowledge')) {

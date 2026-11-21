@@ -28,6 +28,10 @@ import type { AppDocument, AppStage } from '@/lib/document-store/persistence-typ
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createLogger } from '@/lib/logger';
 import {
+  labelScriptChanged,
+  latinLabelRuns,
+} from '@/lib/server/teaching-package/label-script-check';
+import {
   createOwnerBoundDocumentStore,
   type TransactionSource,
 } from '@/lib/persistence/owner-bound-document-store';
@@ -54,6 +58,7 @@ import {
 } from '@/lib/server/teaching-model/reviewer-call';
 import { currentWorkerId } from '@/lib/server/teaching-model/worker-id';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
+import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import {
   loadReviewBookUnits,
   reviewedSceneDigest,
@@ -394,6 +399,98 @@ export function guideLeakFindings(
   return findings;
 }
 
+/**
+ * 21 Nov 2026 (clear slide findings): each scene the run kept with a generation issue —
+ * a placeholder slide, `NARRATION_MISSING`, `NARRATION_AUDIO_FAILED` or any other kept
+ * code — is one must-fix `G1` finding, so the fix loop regenerates that slide once and
+ * the submit/approve gate refuses the package until it is clean. The note names the
+ * slide by position and title (ids are not readable, owner 21 Nov 2026) and lists the
+ * issue codes; no book text. Ids `i<n>`, after the reviewer's `f<n>` and the leaks' `g<n>`.
+ */
+export function generationIssueFindings(
+  scenes: readonly AppScene[],
+  slides: readonly ReviewSlide[],
+): StoredFinding[] {
+  const byId = new Map(scenes.map((scene) => [scene.id, scene]));
+  // The same play position the submit/approve gate names (review 21 Nov 2026).
+  const positions = scenePlayPositions(scenes);
+  const findings: StoredFinding[] = [];
+  for (const slide of slides) {
+    const scene = byId.get(slide.id);
+    if (!scene) continue;
+    const issues = (scene.generationIssues ?? []).filter(
+      (issue) => issue.code !== GUIDE_LEAK_ISSUE_CODE,
+    );
+    if (issues.length === 0) continue;
+    const codes = issues.map((issue) => issue.code).join(', ');
+    const position = positions.get(slide.id) ?? slide.order;
+    findings.push({
+      id: `i${findings.length + 1}`,
+      targetId: slide.id,
+      targetTitle: slide.title,
+      targetOrder: slide.order,
+      check: 'G1',
+      severity: 'high',
+      bookEvidence: { quote: '', unitId: null },
+      whatIsWrong: `الشريحة ${position}: «${slide.title}» أُبقيت ومكتوب فيها مشكلة توليد (${codes})؛ يجب إعادة توليدها قبل الإرسال.`,
+      fixNote: `أعد توليد هذه الشريحة كاملة؛ أبقت مشكلة التوليد: ${codes}.`,
+      status: 'open',
+      teacherReason: null,
+    });
+  }
+  return findings;
+}
+
+/**
+ * D2 (21 Nov 2026), g5.v10/v11 only: each slide whose cited book units print a Latin label
+ * run (ABCD, WXYZ, △PMQ) while its canvas writes the labels as spaced Arabic letters
+ * («ز ي س و») is one must-fix `G2` finding — LABEL_SCRIPT_CHANGED — so the fix loop
+ * regenerates that slide once with the book's own labels. Never fires when the book itself
+ * prints Arabic labels. Ids `l<n>`, after the reviewer's `f<n>`, the leaks' `g<n>` and the
+ * generation issues' `i<n>`.
+ *
+ * The fix note names the cited units' own Latin runs (review 21 Nov 2026), so the one
+ * regeneration writes the book's labels, never a fixed example. A book read from its PDF
+ * text only (`sourceKind: 'pdf_text'`, one unit with id `book`) gives no slide its cited
+ * units' text, so the check finds nothing there: it fails open, never a false finding
+ * (the whole book's text would match any slide against every label in the lesson).
+ */
+export function labelScriptFindings(
+  slides: readonly ReviewSlide[],
+  units: readonly { id: string; text: string }[],
+): StoredFinding[] {
+  const textOf = new Map(units.map((unit) => [unit.id, unit.text ?? '']));
+  // The same play position the gate and the other findings name (review 21 Nov 2026).
+  const positions = scenePlayPositions(slides);
+  const findings: StoredFinding[] = [];
+  for (const slide of slides) {
+    if (slide.sceneType !== 'slide') continue;
+    const unitText = (slide.citedUnitIds ?? [])
+      .map((id) => textOf.get(String(id)) ?? '')
+      .join('\n');
+    if (!labelScriptChanged(slide.visibleText, unitText)) continue;
+    const position = positions.get(slide.id) ?? slide.order;
+    const bookRuns = latinLabelRuns(unitText).slice(0, MAX_NAMED_LABEL_RUNS).join('، ');
+    findings.push({
+      id: `l${findings.length + 1}`,
+      targetId: slide.id,
+      targetTitle: slide.title,
+      targetOrder: slide.order,
+      check: 'G2',
+      severity: 'high',
+      bookEvidence: { quote: '', unitId: null },
+      whatIsWrong: `الشريحة ${position}: «${slide.title}» كتبت رموز الكتاب اللاتينية بحروف عربية (LABEL_SCRIPT_CHANGED)؛ يجب إعادة توليدها برموز الكتاب نفسها.`,
+      fixNote: `أعد كتابة رموز الأشكال بحروف الكتاب اللاتينية نفسها (${bookRuns}) على الشريحة وفي الشرح.`,
+      status: 'open',
+      teacherReason: null,
+    });
+  }
+  return findings;
+}
+
+/** The most Latin label runs one fix note names (the cited units' own, in book order). */
+const MAX_NAMED_LABEL_RUNS = 8;
+
 /** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
 export function withSceneDigests(
   findings: readonly StoredFinding[],
@@ -617,22 +714,32 @@ export async function runPackageReview(
     let review = claimed;
     let findings: StoredFinding[];
     if (claimed.reviewedAt === null) {
-      // g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
-      // answer before the learner's try is a must-fix finding, stored with the first
-      // answer (a resume and a flagged-slide regeneration read it back). Only a g5.v11
-      // run leaves that issue; the attempt is read only then, so every other package
-      // reads and reviews exactly as before. A failed read adds nothing (never a new
-      // failure point).
+      // The attempt is read once for both model-gated deterministic findings (a failed
+      // read adds nothing -- never a new failure point):
+      // - g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
+      //   answer before the learner's try is a must-fix finding, stored with the first
+      //   answer (a resume and a flagged-slide regeneration read it back);
+      // - g5.v10/v11 (D2, 21 Nov 2026): the label-script check.
+      // Every package now reads the attempt here; any other Teaching Model gets neither
+      // finding and reviews exactly as before.
+      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId)
+        .then(
+          (row) => row,
+          () => null,
+        )
+        .catch(() => null);
       let leakFindings: StoredFinding[] = [];
-      if (scenes.some(carriesGuideLeak)) {
-        const attempt = await readAttemptById(
-          pool as unknown as Queryable,
-          claimed.attemptId,
-        ).catch(() => null);
-        if (isGuideAnswerModel(attempt?.teachingModel)) {
-          leakFindings = guideLeakFindings(scenes, slides);
-        }
+      if (scenes.some(carriesGuideLeak) && isGuideAnswerModel(attempt?.teachingModel)) {
+        leakFindings = guideLeakFindings(scenes, slides);
       }
+      // Every kept generation issue is a finding on any Teaching Model (a placeholder
+      // or a silent slide is broken whatever generated it), stated before the paid call
+      // so the reviewer's answer and the fix loop see it with the first answer.
+      const issueFindings = generationIssueFindings(scenes, slides);
+      // D2: never on earlier Teaching Models (owner D-9 B).
+      const labelFindings = isLearnerFirstModel(attempt?.teachingModel)
+        ? labelScriptFindings(slides, book.units)
+        : [];
       // HIGH-1: the reads above may have stalled past the lease (evicted, or
       // claimed elsewhere): never start the paid call under a lost lease.
       if (!(await heartbeat())) {
@@ -643,7 +750,12 @@ export async function runPackageReview(
       const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
       // An answer that arrives after the eviction is the resumed run's to get.
       if (deps.signal?.aborted) return null;
-      findings = [...toStoredFindings(answer, slides), ...leakFindings];
+      findings = [
+        ...toStoredFindings(answer, slides),
+        ...leakFindings,
+        ...issueFindings,
+        ...labelFindings,
+      ];
       await recordUsage(call, {
         summary: answer.summary,
         findings,

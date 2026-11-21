@@ -51,6 +51,7 @@ import {
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils/cn';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { localeDirection } from '@/lib/i18n';
 import { flushStageSave, isStageEditingLocked, useStageStore } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -1049,7 +1050,7 @@ function DropZone({
 }
 
 export function ActionsBar({ sceneId }: { sceneId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const scene = useStageStore((s) => s.scenes.find((x) => x.id === sceneId));
   const actions = scene?.actions ?? EMPTY;
   const sceneOrder = scene?.order ?? 0;
@@ -1257,297 +1258,317 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
     return { action, index, key: (action.id ?? `a-${index}`) as string, speechIndex };
   });
 
-  const header = (
+  // The timeline's toolbox (owner, 21 Nov 2026): every timeline control sits in
+  // one side column instead of two rows above the cards, so the narration cards
+  // get the dock's full height. Folded, it keeps only the title and the fold.
+  const toolbox = (
     <>
-      {/* The title is also the fold: it was a click target long before there was
-          a toggle beside it, so the cursor already knows this spot. */}
-      <button
-        type="button"
-        data-testid="edit-timeline-title"
-        onClick={toggleCollapsed}
-        className="flex shrink-0 items-center gap-2.5"
-      >
-        <span className="size-1.5 rounded-full bg-primary" />
-        <span className="text-[12px] font-medium tracking-[0.18em] text-foreground/80">
-          {t('edit.timeline.title')}
-        </span>
-      </button>
-
-      {!lineMode && (
+      <div className="flex items-center gap-2">
+        {/* The title is also the fold: it was a click target long before there was
+            a toggle beside it, so the cursor already knows this spot. */}
         <button
           type="button"
-          onClick={(e) => {
-            const slot = discussionPresent ? actions.length - 1 : actions.length;
-            setPickerAt({ slot, rect: e.currentTarget.getBoundingClientRect() });
-          }}
-          className="ms-1.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
+          data-testid="edit-timeline-title"
+          onClick={toggleCollapsed}
+          className="flex min-w-0 items-center gap-2.5"
         >
-          <Plus className="size-3" />
-          {t('edit.timeline.addAction')}
-          <ChevronDown className="size-3 opacity-70" />
+          <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+          <span className="truncate text-[12px] font-medium tracking-[0.18em] text-foreground/80">
+            {t('edit.timeline.title')}
+          </span>
         </button>
-      )}
-
-      {!lineMode && ttsActive && mayGenerate && (
         <button
           type="button"
-          onClick={regenerateAllAudio}
-          disabled={regenAll}
-          title={t('edit.timeline.regenAllTts')}
-          aria-label={t('edit.timeline.regenAllTts')}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+          onClick={toggleCollapsed}
+          title={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
+          aria-label={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
+          className="ms-auto grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
         >
-          <RefreshCw className={cn('size-3', regenAll && 'animate-spin')} />
-          {t('edit.timeline.voiceAll')}
+          {lineMode ? <UnfoldVertical className="size-4" /> : <FoldVertical className="size-4" />}
         </button>
-      )}
+      </div>
 
-      <span className="ms-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/60">
-        {t('edit.timeline.counts', { speech: speechCount, cue: cueCount })}
-      </span>
-      {/* pan the timeline viewport left/right. `dir="ltr"`: the timeline runs left to
-          right in every language, so its pan buttons keep their physical order. */}
       {!lineMode && (
-        <div
-          dir="ltr"
-          className="flex shrink-0 items-center border-s border-gray-200/70 ps-1 dark:border-gray-700/60"
-        >
+        <>
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground/60">
+            {t('edit.timeline.counts', { speech: speechCount, cue: cueCount })}
+          </span>
+
           <button
             type="button"
-            onClick={() => panViewport(-1)}
-            title={t('edit.timeline.panLeft')}
-            aria-label={t('edit.timeline.panLeft')}
-            className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+            onClick={(e) => {
+              const slot = discussionPresent ? actions.length - 1 : actions.length;
+              setPickerAt({ slot, rect: e.currentTarget.getBoundingClientRect() });
+            }}
+            className="flex w-full items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15"
           >
-            <ChevronsLeft className="size-4" />
+            <Plus className="size-3 shrink-0" />
+            {t('edit.timeline.addAction')}
+            <ChevronDown className="ms-auto size-3 shrink-0 opacity-70" />
           </button>
-          <button
-            type="button"
-            onClick={() => panViewport(1)}
-            title={t('edit.timeline.panRight')}
-            aria-label={t('edit.timeline.panRight')}
-            className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <ChevronsRight className="size-4" />
-          </button>
-        </div>
+
+          {ttsActive && mayGenerate && (
+            <button
+              type="button"
+              onClick={regenerateAllAudio}
+              disabled={regenAll}
+              title={t('edit.timeline.regenAllTts')}
+              aria-label={t('edit.timeline.regenAllTts')}
+              className="flex w-full items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+            >
+              <RefreshCw className={cn('size-3 shrink-0', regenAll && 'animate-spin')} />
+              {t('edit.timeline.voiceAll')}
+            </button>
+          )}
+
+          <SpeechReadingModeSetting />
+
+          {/* Pan the timeline viewport left/right. `dir="ltr"`: the timeline runs
+              left to right in every language, so its pan buttons keep their
+              physical order. */}
+          <div className="mt-auto flex items-center gap-1 border-t border-border/60 pt-2">
+            <span className="text-[11px] text-muted-foreground">{t('edit.timeline.panLabel')}</span>
+            <div dir="ltr" className="ms-auto flex items-center">
+              <button
+                type="button"
+                onClick={() => panViewport(-1)}
+                title={t('edit.timeline.panLeft')}
+                aria-label={t('edit.timeline.panLeft')}
+                className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <ChevronsLeft className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => panViewport(1)}
+                title={t('edit.timeline.panRight')}
+                aria-label={t('edit.timeline.panRight')}
+                className="grid size-7 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <ChevronsRight className="size-4" />
+              </button>
+            </div>
+          </div>
+        </>
       )}
-      <button
-        type="button"
-        onClick={toggleCollapsed}
-        title={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
-        aria-label={lineMode ? t('edit.timeline.expandTrack') : t('edit.timeline.collapseAxis')}
-        className="ms-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-      >
-        {lineMode ? <UnfoldVertical className="size-4" /> : <FoldVertical className="size-4" />}
-      </button>
     </>
   );
 
   return (
     <>
-      {/* The timeline's own header row: what it is, what it can insert, how much
-          it holds, and its fold. Geometry unchanged from the standalone bar. */}
-      <div className="flex h-10 shrink-0 items-center gap-2 px-6">{header}</div>
-      <SpeechReadingModeSetting />
-      {/* `dir="ltr"`: the timeline is a left-to-right time axis in every language
-          (owner, 14 Nov 2026: RTL applies to the chrome, not to time). */}
-      <div ref={scrollRef} dir="ltr" className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-        <div className="relative h-full min-w-max">
-          {/* the timeline axis (top) — nodes hang below it; hidden when empty
+      {/* `dir="ltr"` on the row: the toolbox stays at the physical left beside a
+          timeline that is a left-to-right time axis in every language (owner,
+          14 Nov 2026: RTL applies to the chrome, not to time). The toolbox's own
+          content follows the UI language. */}
+      <div dir="ltr" className="flex min-h-0 flex-1">
+        <aside
+          data-testid="edit-timeline-toolbox"
+          dir={localeDirection(locale)}
+          className="flex w-[196px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-border/60 bg-muted/20 px-3 py-2.5 [scrollbar-width:thin]"
+        >
+          {toolbox}
+        </aside>
+        <div
+          ref={scrollRef}
+          dir="ltr"
+          className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+        >
+          <div className="relative h-full min-w-max">
+            {/* the timeline axis (top) — nodes hang below it; hidden when empty
                 so the placeholder hint doesn't collide with the line */}
-          {actions.length > 0 && (
-            <div
-              className="pointer-events-none absolute inset-x-3 bg-gradient-to-r from-border/30 via-border to-border/30"
-              style={{ top: AXIS_FROM_TOP - 1, height: 2 }}
-            />
-          )}
-          <div className="relative flex h-full items-stretch px-3.5">
-            {actions.length === 0 && (
-              <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
-                {t('edit.timeline.emptyHint')}
-              </span>
+            {actions.length > 0 && (
+              <div
+                className="pointer-events-none absolute inset-x-3 bg-gradient-to-r from-border/30 via-border to-border/30"
+                style={{ top: AXIS_FROM_TOP - 1, height: 2 }}
+              />
             )}
-            <DropZone
-              active={dragOver === 0}
-              slot={0}
-              flex={actions.length === 0}
-              onEnter={() => setDragOver(0)}
-              onDrop={() => handleDrop(0)}
-              onInsert={(slot, rect) => setPickerAt({ slot, rect })}
-              insertLabel={t('edit.timeline.addAction')}
-            />
-            {items.map(({ action, index, key, speechIndex: si }) => {
-              // A discussion is pinned terminal, so it can't be drag-reordered.
-              const isDiscussion = action.type === 'discussion';
-              const onDragStart = isDiscussion
-                ? () => {}
-                : (e: React.DragEvent) => {
-                    dragRef.current = { kind: 'move', id: key };
-                    setBlankDragImage(e);
-                  };
-              const onDragEnd = () => {
-                dragRef.current = null;
-                setDragOver(null);
-              };
-              const onPick = () =>
-                useCanvasStore.getState().setPickTarget(
-                  useStageStore.getState().stage?.id
-                    ? {
-                        purpose: 'cue',
-                        stageId: useStageStore.getState().stage!.id,
-                        sceneId,
-                        actionId: key,
-                        cueType: action.type,
-                      }
-                    : null,
+            <div className="relative flex h-full items-stretch px-3.5">
+              {actions.length === 0 && (
+                <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[12px] text-muted-foreground/60">
+                  {t('edit.timeline.emptyHint')}
+                </span>
+              )}
+              <DropZone
+                active={dragOver === 0}
+                slot={0}
+                flex={actions.length === 0}
+                onEnter={() => setDragOver(0)}
+                onDrop={() => handleDrop(0)}
+                onInsert={(slot, rect) => setPickerAt({ slot, rect })}
+                insertLabel={t('edit.timeline.addAction')}
+              />
+              {items.map(({ action, index, key, speechIndex: si }) => {
+                // A discussion is pinned terminal, so it can't be drag-reordered.
+                const isDiscussion = action.type === 'discussion';
+                const onDragStart = isDiscussion
+                  ? () => {}
+                  : (e: React.DragEvent) => {
+                      dragRef.current = { kind: 'move', id: key };
+                      setBlankDragImage(e);
+                    };
+                const onDragEnd = () => {
+                  dragRef.current = null;
+                  setDragOver(null);
+                };
+                const onPick = () =>
+                  useCanvasStore.getState().setPickTarget(
+                    useStageStore.getState().stage?.id
+                      ? {
+                          purpose: 'cue',
+                          stageId: useStageStore.getState().stage!.id,
+                          sceneId,
+                          actionId: key,
+                          cueType: action.type,
+                        }
+                      : null,
+                  );
+                const dot = (
+                  <NodeDot
+                    action={action}
+                    onTip={setTip}
+                    onPick={onPick}
+                    onDragStart={onDragStart}
+                    onDragEnd={onDragEnd}
+                    canDrag={!isDiscussion}
+                  />
                 );
-              const dot = (
-                <NodeDot
-                  action={action}
-                  onTip={setTip}
-                  onPick={onPick}
-                  onDragStart={onDragStart}
-                  onDragEnd={onDragEnd}
-                  canDrag={!isDiscussion}
-                />
-              );
-              return (
-                <div key={key} className="relative flex h-full items-stretch">
-                  {/* W5: the governance finding marker (TAE-RQ-025/027) —
+                return (
+                  <div key={key} className="relative flex h-full items-stretch">
+                    {/* W5: the governance finding marker (TAE-RQ-025/027) —
                       identity + code only, keyed by the row's Action id, so
                       the reviewer sees WHICH row the inspection flagged; the
                       Teaching Skills panel carries the codes and messages. */}
-                  {actionFindings.has(key) && (
-                    <span
-                      data-testid="action-finding-marker"
-                      data-action-id={key}
-                      data-finding-codes={[...actionFindings.get(key)!]
-                        .map((finding) => finding.code)
-                        .join(',')}
-                      title={[...actionFindings.get(key)!]
-                        .map((finding) => finding.code)
-                        .join(', ')}
-                      className="absolute left-1/2 top-0 z-10 -translate-x-1/2 rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white shadow-sm"
-                    >
-                      !
-                    </span>
-                  )}
-                  <motion.div
-                    initial={reduce ? false : { opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{
-                      duration: 0.22,
-                      delay: reduce ? 0 : Math.min(index * 0.02, 0.24),
-                      ease: 'easeOut',
-                    }}
-                    className="flex h-full flex-col items-center"
-                    style={{ paddingTop: AXIS_FROM_TOP - 12 }}
-                  >
-                    {lineMode ? (
-                      <div className="w-9">{dot}</div>
-                    ) : (
-                      <>
-                        {dot}
-                        <div className="my-1 h-2.5 w-px bg-border" />
-                        <div className="min-h-0 w-full flex-1">
-                          {action.type === 'speech' ? (
-                            <SpeechClip
-                              text={(action as { text?: string }).text ?? ''}
-                              index={si}
-                              actionId={key}
-                              audioId={(action as { audioId?: string }).audioId}
-                              audioUrl={(action as { audioUrl?: string }).audioUrl}
-                              audioInvalidated={
-                                (action as { audioInvalidated?: boolean }).audioInvalidated
-                              }
-                              sceneOrder={sceneOrder}
-                              language={language}
-                              ttsActive={ttsActive}
-                              ttsRefresh={ttsRefresh}
-                              regenerating={regeneratingIds.has(key)}
-                              autoFocus={key === focusId}
-                              onFocused={() => setFocusId(null)}
-                              onCommit={(text) => {
-                                // Editing the text invalidates any cached audio
-                                // (the blob is keyed by order+id and the stamped
-                                // audioId, not the text), so drop the stamped
-                                // fields and delete the blob — the line then
-                                // reads as un-voiced until regen.
-                                const prevAudioId = (action as { audioId?: string }).audioId;
-                                commit((cur) => setSpeechTextClearAudioById(cur, key, text));
-                                // Re-check status only AFTER the blob is gone, so
-                                // the status row can't race the async delete and
-                                // briefly still read "voiced".
-                                void discardSpeechAudio(sceneOrder, {
-                                  id: key,
-                                  audioId: prevAudioId,
-                                }).finally(() => setTtsRefresh((n) => n + 1));
-                              }}
-                              onGenerated={(assetId, provenance) => {
-                                commit((cur) => setAudioIdById(cur, key, assetId, provenance));
-                                // Stage persistence is debounced; flush so the
-                                // stamped reference is durable once the row
-                                // settles (pool bytes persist first, stamp last).
-                                void flushStageSave().catch(() => undefined);
-                              }}
-                              onDelete={() => {
-                                commit((cur) => removeById(cur, key));
-                              }}
-                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
-                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
-                              canMoveLeft={index > 0}
-                              canMoveRight={index < lastMovableIndex}
-                              onDragStart={onDragStart}
-                              onDragEnd={onDragEnd}
-                            />
-                          ) : isDiscussion ? (
-                            <DiscussionClip
-                              topic={(action as DiscussionAction).topic ?? ''}
-                              prompt={(action as DiscussionAction).prompt ?? ''}
-                              agentId={(action as DiscussionAction).agentId ?? ''}
-                              agents={discussionAgents}
-                              onTopicChange={(v) =>
-                                commit((cur) => setDiscussionTopicById(cur, key, v))
-                              }
-                              onPromptChange={(v) =>
-                                commit((cur) => setDiscussionPromptById(cur, key, v))
-                              }
-                              onAgentChange={(v) =>
-                                commit((cur) => setDiscussionAgentById(cur, key, v))
-                              }
-                              onDelete={() => commit((cur) => removeById(cur, key))}
-                            />
-                          ) : (
-                            <CueMarker
-                              action={action}
-                              elements={sceneElements}
-                              onTip={setTip}
-                              onDelete={() => commit((cur) => removeById(cur, key))}
-                              onPick={onPick}
-                              onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
-                              onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
-                              canMoveLeft={index > 0}
-                              canMoveRight={index < lastMovableIndex}
-                              onDragStart={onDragStart}
-                              onDragEnd={onDragEnd}
-                            />
-                          )}
-                        </div>
-                      </>
+                    {actionFindings.has(key) && (
+                      <span
+                        data-testid="action-finding-marker"
+                        data-action-id={key}
+                        data-finding-codes={[...actionFindings.get(key)!]
+                          .map((finding) => finding.code)
+                          .join(',')}
+                        title={[...actionFindings.get(key)!]
+                          .map((finding) => finding.code)
+                          .join(', ')}
+                        className="absolute left-1/2 top-0 z-10 -translate-x-1/2 rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white shadow-sm"
+                      >
+                        !
+                      </span>
                     )}
-                  </motion.div>
-                  <DropZone
-                    active={dragOver === index + 1}
-                    slot={index + 1}
-                    onEnter={() => setDragOver(index + 1)}
-                    onDrop={() => handleDrop(index + 1)}
-                    onInsert={(slot, rect) => setPickerAt({ slot, rect })}
-                    insertLabel={t('edit.timeline.addAction')}
-                  />
-                </div>
-              );
-            })}
+                    <motion.div
+                      initial={reduce ? false : { opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.22,
+                        delay: reduce ? 0 : Math.min(index * 0.02, 0.24),
+                        ease: 'easeOut',
+                      }}
+                      className="flex h-full flex-col items-center"
+                      style={{ paddingTop: AXIS_FROM_TOP - 12 }}
+                    >
+                      {lineMode ? (
+                        <div className="w-9">{dot}</div>
+                      ) : (
+                        <>
+                          {dot}
+                          <div className="my-1 h-2.5 w-px bg-border" />
+                          <div className="min-h-0 w-full flex-1">
+                            {action.type === 'speech' ? (
+                              <SpeechClip
+                                text={(action as { text?: string }).text ?? ''}
+                                index={si}
+                                actionId={key}
+                                audioId={(action as { audioId?: string }).audioId}
+                                audioUrl={(action as { audioUrl?: string }).audioUrl}
+                                audioInvalidated={
+                                  (action as { audioInvalidated?: boolean }).audioInvalidated
+                                }
+                                sceneOrder={sceneOrder}
+                                language={language}
+                                ttsActive={ttsActive}
+                                ttsRefresh={ttsRefresh}
+                                regenerating={regeneratingIds.has(key)}
+                                autoFocus={key === focusId}
+                                onFocused={() => setFocusId(null)}
+                                onCommit={(text) => {
+                                  // Editing the text invalidates any cached audio
+                                  // (the blob is keyed by order+id and the stamped
+                                  // audioId, not the text), so drop the stamped
+                                  // fields and delete the blob — the line then
+                                  // reads as un-voiced until regen.
+                                  const prevAudioId = (action as { audioId?: string }).audioId;
+                                  commit((cur) => setSpeechTextClearAudioById(cur, key, text));
+                                  // Re-check status only AFTER the blob is gone, so
+                                  // the status row can't race the async delete and
+                                  // briefly still read "voiced".
+                                  void discardSpeechAudio(sceneOrder, {
+                                    id: key,
+                                    audioId: prevAudioId,
+                                  }).finally(() => setTtsRefresh((n) => n + 1));
+                                }}
+                                onGenerated={(assetId, provenance) => {
+                                  commit((cur) => setAudioIdById(cur, key, assetId, provenance));
+                                  // Stage persistence is debounced; flush so the
+                                  // stamped reference is durable once the row
+                                  // settles (pool bytes persist first, stamp last).
+                                  void flushStageSave().catch(() => undefined);
+                                }}
+                                onDelete={() => {
+                                  commit((cur) => removeById(cur, key));
+                                }}
+                                onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
+                                onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
+                                canMoveLeft={index > 0}
+                                canMoveRight={index < lastMovableIndex}
+                                onDragStart={onDragStart}
+                                onDragEnd={onDragEnd}
+                              />
+                            ) : isDiscussion ? (
+                              <DiscussionClip
+                                topic={(action as DiscussionAction).topic ?? ''}
+                                prompt={(action as DiscussionAction).prompt ?? ''}
+                                agentId={(action as DiscussionAction).agentId ?? ''}
+                                agents={discussionAgents}
+                                onTopicChange={(v) =>
+                                  commit((cur) => setDiscussionTopicById(cur, key, v))
+                                }
+                                onPromptChange={(v) =>
+                                  commit((cur) => setDiscussionPromptById(cur, key, v))
+                                }
+                                onAgentChange={(v) =>
+                                  commit((cur) => setDiscussionAgentById(cur, key, v))
+                                }
+                                onDelete={() => commit((cur) => removeById(cur, key))}
+                              />
+                            ) : (
+                              <CueMarker
+                                action={action}
+                                elements={sceneElements}
+                                onTip={setTip}
+                                onDelete={() => commit((cur) => removeById(cur, key))}
+                                onPick={onPick}
+                                onMoveLeft={() => commit((cur) => moveByIdDir(cur, key, -1))}
+                                onMoveRight={() => commit((cur) => moveByIdDir(cur, key, 1))}
+                                canMoveLeft={index > 0}
+                                canMoveRight={index < lastMovableIndex}
+                                onDragStart={onDragStart}
+                                onDragEnd={onDragEnd}
+                              />
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </motion.div>
+                    <DropZone
+                      active={dragOver === index + 1}
+                      slot={index + 1}
+                      onEnter={() => setDragOver(index + 1)}
+                      onDrop={() => handleDrop(index + 1)}
+                      onInsert={(slot, rect) => setPickerAt({ slot, rect })}
+                      insertLabel={t('edit.timeline.addAction')}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
