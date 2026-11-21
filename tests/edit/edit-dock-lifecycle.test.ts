@@ -288,9 +288,10 @@ describe('EditDock fold', () => {
   it('keeps the global edit bar while the timeline is folded, at the fixed height', async () => {
     const host = await renderDock();
     const section = host.querySelector('[data-testid="edit-dock"]') as HTMLElement;
-    // 224 timeline + 36 bar. The height is FIXED: the height-drag handle above
-    // the bar was removed (owner decision), so only the fold moves it.
-    expect(section.style.height).toBe('260px');
+    // 296 timeline + 36 bar (owner, 21 Nov 2026: room for the narration text
+    // box under the SATTS rows). The height is FIXED: the height-drag handle
+    // above the bar was removed (owner decision), so only the fold moves it.
+    expect(section.style.height).toBe('332px');
     expect(section.querySelector('.cursor-row-resize')).toBeNull();
 
     await click(host.querySelector('[data-testid="timeline-fold"]'));
@@ -304,7 +305,7 @@ describe('EditDock fold', () => {
     ).toBe('true');
 
     await click(host.querySelector('[data-testid="timeline-fold"]'));
-    expect(section.style.height).toBe('260px');
+    expect(section.style.height).toBe('332px');
   });
 
   it('never remounts the timeline for a global control, batch in flight included', async () => {
