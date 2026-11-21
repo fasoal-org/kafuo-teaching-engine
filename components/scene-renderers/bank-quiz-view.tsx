@@ -6,6 +6,8 @@
  * grades them through Kafuo (`/api/stages/:id/bank-quiz`). Before approval it
  * says the questions are prepared after approval; a Scene Kafuo does not treat
  * as a bank position (`not_bank`) falls back to the Scene's own questions.
+ * A preview of a version that will never get questions says so (no button); an
+ * expired grant or access (401 / a plain 404) offers to re-enter the page.
  * Answers are kept in the view only; nothing is graded locally.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -25,6 +27,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 import type { QuizQuestion } from '@/lib/types/stage';
 import {
+  BankQuizRequestError,
   bankAnswersPayload,
   fetchBankQuestions,
   isBankAnswerComplete,
@@ -47,7 +50,12 @@ interface BankQuizViewProps {
 
 type LoadState =
   | { kind: 'loading' }
-  | { kind: 'error' }
+  /** The load failed: `unreachable` is Kafuo's 503 (the bank itself, not the quiz). */
+  | { kind: 'error'; unreachable: boolean }
+  /** 401, or a 404 with no error code: the grant or access is gone. Reload to re-enter. */
+  | { kind: 'session_expired' }
+  /** A preview of a version that will never get questions until the package is approved. */
+  | { kind: 'preview_unapproved' }
   | { kind: 'pending' }
   | { kind: 'not_bank' }
   | { kind: 'ready'; questions: BankQuestion[] };
@@ -230,7 +238,14 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
         // A marked bank Scene has no questions of its own, so `not_bank` here means Kafuo
         // could not resolve it: show the retry rather than an empty quiz (W6 review).
         if (response.status === 'not_bank') {
-          return setLoad(sceneQuestions.length > 0 ? { kind: 'not_bank' } : { kind: 'error' });
+          return setLoad(
+            sceneQuestions.length > 0
+              ? { kind: 'not_bank' }
+              : { kind: 'error', unreachable: false },
+          );
+        }
+        if (response.status === 'preview_unapproved') {
+          return setLoad({ kind: 'preview_unapproved' });
         }
         if (response.status === 'pending_approval' || response.questions.length === 0) {
           return setLoad({ kind: 'pending' });
@@ -239,7 +254,20 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
       })
       .catch((error) => {
         log.warn('Failed to load bank quiz questions:', error);
-        if (!cancelled) setLoad({ kind: 'error' });
+        if (cancelled) return;
+        // 401, or a plain 404: the access cookie or the grant is gone (an expired
+        // preview, or the version's stage changed after a regeneration). Re-entering
+        // is the only fix, so the button reloads rather than retries.
+        if (
+          error instanceof BankQuizRequestError &&
+          (error.status === 401 || (error.status === 404 && error.code === null))
+        ) {
+          return setLoad({ kind: 'session_expired' });
+        }
+        setLoad({
+          kind: 'error',
+          unreachable: error instanceof BankQuizRequestError && error.status === 503,
+        });
       });
     return () => {
       cancelled = true;
@@ -299,12 +327,43 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
       </Centered>
     );
   }
+  if (load.kind === 'preview_unapproved') {
+    return (
+      <Centered>
+        <Clock className="h-8 w-8 text-violet-500" />
+        <p className="max-w-md text-sm text-gray-600 dark:text-gray-300">
+          {t('quiz.previewUnapproved')}
+        </p>
+      </Centered>
+    );
+  }
+  if (load.kind === 'session_expired') {
+    return (
+      <Centered>
+        <p className="max-w-md text-sm text-gray-600 dark:text-gray-300">
+          {t('quiz.sessionExpired')}
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
+        >
+          <RotateCcw className="h-4 w-4" />
+          {t('quiz.reopen')}
+        </button>
+      </Centered>
+    );
+  }
   if (load.kind === 'error' || phase === 'grade_error') {
     const gradeError = phase === 'grade_error';
     return (
       <Centered>
         <p className="text-sm text-gray-600 dark:text-gray-300">
-          {gradeError ? t('quiz.gradingUnavailable') : t('quiz.bankUnavailable')}
+          {gradeError
+            ? t('quiz.gradingUnavailable')
+            : load.kind === 'error' && load.unreachable
+              ? t('quiz.bankUnreachable')
+              : t('quiz.bankUnavailable')}
         </p>
         <button
           type="button"
