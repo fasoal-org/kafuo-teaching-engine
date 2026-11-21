@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import {
   Archive,
   Download,
@@ -38,7 +38,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
 import type { StageMode } from '@/lib/types/stage';
+
+/** The grant cookie is fixed for the tab's session, so nothing ever needs a re-read. */
+const subscribeNever = () => () => {};
+const notOnServer = () => false;
 
 interface HeaderControlsProps {
   readonly mode?: StageMode;
@@ -81,6 +86,15 @@ export function HeaderControls({
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Owner, 21 Nov 2026: a Teaching Package classroom opened from the admin
+  // panel (an editor-grant session: edit, preview or learner) shows neither the
+  // theme picker nor the settings dialog. Read after hydration (the server
+  // snapshot is `false`), so the server markup never disagrees with the client.
+  const packageSession = useSyncExternalStore(
+    subscribeNever,
+    isTeachingPackageGrantSession,
+    notOnServer,
+  );
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
 
   // Export plumbing — uses the stage / media task stores to check
@@ -151,63 +165,68 @@ export function HeaderControls({
         <LanguageSwitcher />
 
         {/* Theme — same Portal-backed DropdownMenu pattern. Non-modal keeps
-            Radix from body scroll-locking a fixed-height classroom layout. */}
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <button
-              className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
-              aria-label={t('settings.theme')}
-            >
-              {theme === 'light' && <Sun className="w-4 h-4" />}
-              {theme === 'dark' && <Moon className="w-4 h-4" />}
-              {theme === 'system' && <Monitor className="w-4 h-4" />}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={8} className="min-w-[140px]">
-            <DropdownMenuItem
-              onSelect={() => setTheme('light')}
-              className={cn(
-                'cursor-pointer gap-2',
-                theme === 'light' &&
-                  'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-              )}
-            >
-              <Sun className="w-4 h-4" />
-              {t('settings.themeOptions.light')}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => setTheme('dark')}
-              className={cn(
-                'cursor-pointer gap-2',
-                theme === 'dark' &&
-                  'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-              )}
-            >
-              <Moon className="w-4 h-4" />
-              {t('settings.themeOptions.dark')}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => setTheme('system')}
-              className={cn(
-                'cursor-pointer gap-2',
-                theme === 'system' &&
-                  'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-              )}
-            >
-              <Monitor className="w-4 h-4" />
-              {t('settings.themeOptions.system')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+            Radix from body scroll-locking a fixed-height classroom layout.
+            Hidden with the settings button in a package classroom. */}
+        {!packageSession && (
+          <>
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
+                  aria-label={t('settings.theme')}
+                >
+                  {theme === 'light' && <Sun className="w-4 h-4" />}
+                  {theme === 'dark' && <Moon className="w-4 h-4" />}
+                  {theme === 'system' && <Monitor className="w-4 h-4" />}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={8} className="min-w-[140px]">
+                <DropdownMenuItem
+                  onSelect={() => setTheme('light')}
+                  className={cn(
+                    'cursor-pointer gap-2',
+                    theme === 'light' &&
+                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  )}
+                >
+                  <Sun className="w-4 h-4" />
+                  {t('settings.themeOptions.light')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setTheme('dark')}
+                  className={cn(
+                    'cursor-pointer gap-2',
+                    theme === 'dark' &&
+                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  )}
+                >
+                  <Moon className="w-4 h-4" />
+                  {t('settings.themeOptions.dark')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setTheme('system')}
+                  className={cn(
+                    'cursor-pointer gap-2',
+                    theme === 'system' &&
+                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  )}
+                >
+                  <Monitor className="w-4 h-4" />
+                  {t('settings.themeOptions.system')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-        {/* Settings */}
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
-          aria-label={t('settings.title')}
-        >
-          <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
-        </button>
+            {/* Settings */}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
+              aria-label={t('settings.title')}
+            >
+              <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Pro Switch — toggle property: on/off both clickable, not a
