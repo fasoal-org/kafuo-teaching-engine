@@ -540,19 +540,53 @@ describe('the label-script finding (D2, 21 Nov 2026)', () => {
   }
 
   it('a slide writing the book’s Latin labels as Arabic letters gets one G2 finding', () => {
-    const scenes = [slideOf('s1', 12, 'المثلث ز ي س و مطابق', ['6688'])];
+    const scenes = [
+      slideOf('s0', 3, 'مقدمة', ['6690']),
+      slideOf('s1', 12, 'المثلث ز ي س و مطابق', ['6688']),
+    ];
     const slides = reviewSlidesOf(scenes);
     const [finding] = labelScriptFindings(slides, units);
     expect(finding).toMatchObject({
       id: 'l1',
       targetId: 's1',
+      targetOrder: 12,
       check: 'G2',
       severity: 'high',
       status: 'open',
     });
-    expect(finding!.whatIsWrong).toContain('الشريحة 12');
+    // The play position (second slide), as the gate and the G1 findings name it.
+    expect(finding!.whatIsWrong).toContain('الشريحة 2:');
     expect(finding!.whatIsWrong).toContain('LABEL_SCRIPT_CHANGED');
+    expect(finding!.fixNote).toContain('(ABCD، WXYZ)');
     expect(teacherOnlyReason(finding, slides)).toBeNull();
+  });
+
+  it('the fix note names the cited units’ own Latin runs, never a fixed example (review)', () => {
+    const own = [
+      {
+        id: '6700',
+        text: 'الشكل PQRS يطابق الشكل △K′L′M′N′',
+        order: 1,
+        role: 'EXAMPLE',
+        title: 'م',
+      },
+    ] as never;
+    const scenes = [slideOf('s1', 1, 'الشكل ز ي س و', ['6700'])];
+    const [finding] = labelScriptFindings(reviewSlidesOf(scenes), own);
+    expect(finding!.fixNote).toContain('(PQRS، K′L′M′N′)');
+    expect(finding!.fixNote).not.toContain('ABCD');
+    expect(finding!.fixNote).not.toContain('WXYZ');
+  });
+
+  it('ordinary Arabic maths text on the canvas gives no finding (review H5)', () => {
+    const geometry = [
+      { id: '6710', text: 'في △ABC، AB = 3 m', order: 1, role: 'EXAMPLE', title: 'م' },
+    ] as never;
+    const scenes = [
+      slideOf('s1', 1, 'أوجد قيمتي س و ص', ['6710']),
+      slideOf('s2', 2, 'طولا الضلعين ٣ م و ٤ م', ['6710']),
+    ];
+    expect(labelScriptFindings(reviewSlidesOf(scenes), geometry)).toEqual([]);
   });
 
   it('Arabic labels in the book give no finding, and clean Latin labels neither', () => {

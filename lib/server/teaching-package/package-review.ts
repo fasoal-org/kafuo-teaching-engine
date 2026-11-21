@@ -27,7 +27,10 @@ import {
 import type { AppDocument, AppStage } from '@/lib/document-store/persistence-types';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createLogger } from '@/lib/logger';
-import { labelScriptChanged } from '@/lib/server/teaching-package/label-script-check';
+import {
+  labelScriptChanged,
+  latinLabelRuns,
+} from '@/lib/server/teaching-package/label-script-check';
 import {
   createOwnerBoundDocumentStore,
   type TransactionSource,
@@ -445,12 +448,20 @@ export function generationIssueFindings(
  * regenerates that slide once with the book's own labels. Never fires when the book itself
  * prints Arabic labels. Ids `l<n>`, after the reviewer's `f<n>`, the leaks' `g<n>` and the
  * generation issues' `i<n>`.
+ *
+ * The fix note names the cited units' own Latin runs (review 21 Nov 2026), so the one
+ * regeneration writes the book's labels, never a fixed example. A book read from its PDF
+ * text only (`sourceKind: 'pdf_text'`, one unit with id `book`) gives no slide its cited
+ * units' text, so the check finds nothing there: it fails open, never a false finding
+ * (the whole book's text would match any slide against every label in the lesson).
  */
 export function labelScriptFindings(
   slides: readonly ReviewSlide[],
   units: readonly { id: string; text: string }[],
 ): StoredFinding[] {
   const textOf = new Map(units.map((unit) => [unit.id, unit.text ?? '']));
+  // The same play position the gate and the other findings name (review 21 Nov 2026).
+  const positions = scenePlayPositions(slides);
   const findings: StoredFinding[] = [];
   for (const slide of slides) {
     if (slide.sceneType !== 'slide') continue;
@@ -458,6 +469,8 @@ export function labelScriptFindings(
       .map((id) => textOf.get(String(id)) ?? '')
       .join('\n');
     if (!labelScriptChanged(slide.visibleText, unitText)) continue;
+    const position = positions.get(slide.id) ?? slide.order;
+    const bookRuns = latinLabelRuns(unitText).slice(0, MAX_NAMED_LABEL_RUNS).join('، ');
     findings.push({
       id: `l${findings.length + 1}`,
       targetId: slide.id,
@@ -466,15 +479,17 @@ export function labelScriptFindings(
       check: 'G2',
       severity: 'high',
       bookEvidence: { quote: '', unitId: null },
-      whatIsWrong: `الشريحة ${slide.order}: «${slide.title}» كتبت رموز الكتاب اللاتينية بحروف عربية (LABEL_SCRIPT_CHANGED)؛ يجب إعادة توليدها برموز الكتاب نفسها.`,
-      fixNote:
-        'أعد كتابة رموز الأشكال بحروف الكتاب اللاتينية نفسها (ABCD، WXYZ) على الشريحة وفي الشرح.',
+      whatIsWrong: `الشريحة ${position}: «${slide.title}» كتبت رموز الكتاب اللاتينية بحروف عربية (LABEL_SCRIPT_CHANGED)؛ يجب إعادة توليدها برموز الكتاب نفسها.`,
+      fixNote: `أعد كتابة رموز الأشكال بحروف الكتاب اللاتينية نفسها (${bookRuns}) على الشريحة وفي الشرح.`,
       status: 'open',
       teacherReason: null,
     });
   }
   return findings;
 }
+
+/** The most Latin label runs one fix note names (the cited units' own, in book order). */
+const MAX_NAMED_LABEL_RUNS = 8;
 
 /** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
 export function withSceneDigests(
@@ -699,19 +714,14 @@ export async function runPackageReview(
     let review = claimed;
     let findings: StoredFinding[];
     if (claimed.reviewedAt === null) {
-      // g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
-      // answer before the learner's try is a must-fix finding, stored with the first
-      // answer (a resume and a flagged-slide regeneration read it back). Only a g5.v11
-      // run leaves that issue; the attempt is read only then, so every other package
-      // reads and reviews exactly as before. A failed read adds nothing (never a new
-      // failure point).
       // The attempt is read once for both model-gated deterministic findings (a failed
       // read adds nothing -- never a new failure point):
       // - g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
       //   answer before the learner's try is a must-fix finding, stored with the first
       //   answer (a resume and a flagged-slide regeneration read it back);
       // - g5.v10/v11 (D2, 21 Nov 2026): the label-script check.
-      // Every other package reads and reviews exactly as before.
+      // Every package now reads the attempt here; any other Teaching Model gets neither
+      // finding and reviews exactly as before.
       const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId)
         .then(
           (row) => row,

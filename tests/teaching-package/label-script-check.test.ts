@@ -37,3 +37,53 @@ describe('labelScriptChanged (D2, 21 Nov 2026)', () => {
     expect(LABEL_SCRIPT_CHANGED).toBe('LABEL_SCRIPT_CHANGED');
   });
 });
+
+/** Review H5 (21 Nov 2026): ordinary Arabic maths text is not a rewritten label run. */
+describe('labelScriptChanged: false positives (H5)', () => {
+  it('«س و ص» is two variables joined by «و», not a label run', () => {
+    expect(labelScriptChanged('أوجد قيمتي س و ص', 'في △ABC أوجد قيمة كل متغير')).toBe(false);
+    expect(spacedArabicLetterRuns('أوجد قيمتي س و ص')).toEqual([]);
+  });
+
+  it('«٣ م و ٤ م» is two lengths with their unit, not a label run', () => {
+    expect(labelScriptChanged('طولا الضلعين ٣ م و ٤ م', 'AB = 3 m')).toBe(false);
+    expect(spacedArabicLetterRuns('طولا الضلعين ٣ م و ٤ م')).toEqual([]);
+  });
+
+  it('a run whose letters the cited units print on their own is the book’s own', () => {
+    // The unit prints AB and the variables س and ص: «س ص» on the canvas is the book's.
+    expect(labelScriptChanged('نعوّض س ص', 'إذا كان AB يساوي س ص')).toBe(false);
+    // The same canvas against a unit with the Latin run only still fires.
+    expect(labelScriptChanged('نعوّض س ص', 'إذا كان AB يساوي 5')).toBe(true);
+  });
+
+  it('the 3-3 shape still fires, inside real Arabic prose that holds ز ي س و within words', () => {
+    const unit =
+      'في الشكل المجاور، يُطابق الشكل الرباعي ABCD الشكل الرباعي WXYZ. اكتب عبارة التطابق وسمِّ الزوايا المتطابقة.';
+    expect(labelScriptChanged('المثلث ز ي س و مطابق', unit)).toBe(true);
+    expect(labelScriptChanged('الشكل ز ي س و.', unit)).toBe(true);
+  });
+});
+
+/** Review MEDIUM (21 Nov 2026): label runs the first version missed. */
+describe('labelScriptChanged: false negatives', () => {
+  it('a label glued to △ or ∠', () => {
+    expect(labelScriptChanged('في المثلث △ز ي س', '△XYZ قائم الزاوية')).toBe(true);
+    expect(labelScriptChanged('قياس ∠أ ب ج', 'm∠ABC = 40°')).toBe(true);
+  });
+
+  it('comma-separated labels', () => {
+    expect(labelScriptChanged('النقاط ز، ي، س على استقامة واحدة', 'X, Y, Z: XYZ')).toBe(true);
+    expect(spacedArabicLetterRuns('النقاط ز، ي، س على')).toEqual(['زيس']);
+  });
+
+  it('labels with harakat or primes, and a primed Latin run in the book', () => {
+    expect(labelScriptChanged('المثلث سَ صَ عَ', 'PQR')).toBe(true);
+    expect(labelScriptChanged('صورة المثلث أ′ ب′ ج′', '△A′B′C′ صورة △ABC')).toBe(true);
+    expect(latinLabelRuns('△A′B′C′ صورة △ABC')).toEqual(['A′B′C′', 'ABC']);
+  });
+
+  it('adds no new finding on bracketed list markers', () => {
+    expect(labelScriptChanged('(أ) (ب) (ج)', 'ABC')).toBe(false);
+  });
+});
