@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -570,6 +571,7 @@
       "counts": "{{speech}} lời giảng · {{cue}} hiệu ứng",
       "panLeft": "Trượt sang trái",
       "panRight": "Trượt sang phải",
+      "panLabel": "Scroll",
       "collapseAxis": "Thu về trục",
       "expandTrack": "Mở rộng dải",
       "emptyHint": "Kéo các hành động lên trục để bắt đầu, hoặc để MAIC Agent tự viết lời giảng.",

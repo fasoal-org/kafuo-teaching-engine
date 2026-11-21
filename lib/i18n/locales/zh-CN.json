@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "专业模式",
@@ -570,6 +571,7 @@
       "counts": "{{speech}} 讲解 · {{cue}} 动作",
       "panLeft": "左移视口",
       "panRight": "右移视口",
+      "panLabel": "Scroll",
       "collapseAxis": "收起为轴线",
       "expandTrack": "展开轨道",
       "emptyHint": "把上方的动作拖到轴上开始编排，或让 MAIC Agent 生成讲解。",

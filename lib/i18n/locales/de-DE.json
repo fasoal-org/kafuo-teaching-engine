@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -570,6 +571,7 @@
       "counts": "Sprechertexte: {{speech}} · Aktionen: {{cue}}",
       "panLeft": "Nach links verschieben",
       "panRight": "Nach rechts verschieben",
+      "panLabel": "Scroll",
       "collapseAxis": "Auf Achse einklappen",
       "expandTrack": "Spur ausklappen",
       "emptyHint": "Ziehe Aktionen auf die Achse, um zu beginnen, oder lass den MAIC Agent einen Sprechertext erstellen.",

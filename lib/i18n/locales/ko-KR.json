@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "프로 모드",
@@ -497,6 +498,7 @@
       "counts": "내레이션 {{speech}}개 · 동작 {{cue}}개",
       "panLeft": "왼쪽으로 이동",
       "panRight": "오른쪽으로 이동",
+      "panLabel": "Scroll",
       "collapseAxis": "축으로 접기",
       "expandTrack": "트랙 펼치기",
       "emptyHint": "위의 동작을 축으로 끌어 시작하거나, MAIC Agent가 내레이션을 생성하도록 하세요.",

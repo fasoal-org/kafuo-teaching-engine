@@ -260,6 +260,7 @@
       "readingMode": "نمط قراءة السرد",
       "readingModeNatural": "طبيعي",
       "readingModeAccessible": "ميسّر (بنية صريحة)",
+      "readingModeScope": "يُطبَّق على الدرس كله",
       "unvoicedCount": "{{count}} سطرًا بلا صوت"
     },
     "proMode": "احترافي",
@@ -570,6 +571,7 @@
       "counts": "{{speech}} سرد · {{cue}} إجراءات",
       "panLeft": "تحريك لليسار",
       "panRight": "تحريك لليمين",
+      "panLabel": "تحريك",
       "collapseAxis": "طي إلى المحور",
       "expandTrack": "توسيع المسار",
       "emptyHint": "اسحب الإجراءات إلى المحور للبدء، أو دع MAIC Agent يولّد السرد.",

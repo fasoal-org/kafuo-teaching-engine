@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -570,6 +571,7 @@
       "counts": "{{speech}} narration · {{cue}} cues",
       "panLeft": "Pan left",
       "panRight": "Pan right",
+      "panLabel": "Scroll",
       "collapseAxis": "Collapse to axis",
       "expandTrack": "Expand track",
       "emptyHint": "Drag actions onto the axis to start, or let MAIC Agent generate narration.",

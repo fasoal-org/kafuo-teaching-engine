@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "Pro",
@@ -570,6 +571,7 @@
       "counts": "{{speech}} реплик · {{cue}} действий",
       "panLeft": "Прокрутить влево",
       "panRight": "Прокрутить вправо",
+      "panLabel": "Scroll",
       "collapseAxis": "Свернуть до оси",
       "expandTrack": "Развернуть дорожку",
       "emptyHint": "Перетащите действия на ось, чтобы начать, или позвольте MAIC Agent сгенерировать закадровый текст.",

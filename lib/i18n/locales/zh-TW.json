@@ -260,6 +260,7 @@
       "readingMode": "Narration reading mode",
       "readingModeNatural": "Natural",
       "readingModeAccessible": "Accessible (explicit structure)",
+      "readingModeScope": "Applies to the whole lesson",
       "unvoicedCount": "{{count}} lines have no audio"
     },
     "proMode": "專業模式",
@@ -498,6 +499,7 @@
       "counts": "{{speech}} 旁白 · {{cue}} 提示",
       "panLeft": "向左平移",
       "panRight": "向右平移",
+      "panLabel": "Scroll",
       "collapseAxis": "收合至時間軸",
       "expandTrack": "展開音軌",
       "emptyHint": "將動作拖曳至時間軸以開始，或讓 MAIC Agent 生成旁白。",
