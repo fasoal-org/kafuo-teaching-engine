@@ -2,9 +2,14 @@
  * GET /api/teaching-packages/aggregate?tenantId&learningItemType&learningItemId
  * — the lightweight reconciliation read (plan §4.4.4): approvedVersion,
  * workingVersion, latestAttempt, latestAggregateSequence. No Stage/Scene/
- * history document. The state and the sequence watermark are read in ONE
- * transaction under the webhook advisory lock so the watermark can never
+ * history document is returned. The state and the sequence watermark are read
+ * in ONE transaction under the webhook advisory lock so the watermark can never
  * describe a state the rows do not match.
+ *
+ * 21 Nov 2026: a succeeded latestAttempt reports
+ * `inputSnapshot.scenesNeedingReview` as its live Stage's count (the
+ * Submit/Approve gate's), read AFTER that transaction commits; the stored value
+ * stays when the Stage cannot be read. Kafuo's reconciliation reads this key.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -24,6 +29,7 @@ import {
 } from '@/lib/server/teaching-package/route-helpers';
 import { authenticateServiceRequest } from '@/lib/server/teaching-package/service-auth';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
+import { withLiveScenesNeedingReview } from '@/lib/server/teaching-package/scenes-needing-review';
 
 export const runtime = 'nodejs';
 
@@ -68,7 +74,12 @@ export async function GET(req: NextRequest) {
         latestAggregateSequence: sequence,
       };
     });
-    return NextResponse.json(result);
+    // Outside the transaction: the Stage read takes its own connection, never a
+    // second one while the advisory-locked transaction holds the first.
+    const latestAttempt = result.latestAttempt
+      ? await withLiveScenesNeedingReview(result.latestAttempt)
+      : null;
+    return NextResponse.json({ ...result, latestAttempt });
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);
     if (mapped) return mapped;
