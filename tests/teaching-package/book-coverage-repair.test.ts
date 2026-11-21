@@ -758,6 +758,34 @@ describe('an example taught twice (21 Nov 2026)', () => {
     expect(result.blocking).toEqual([]);
   });
 
+  it('a «جرّب» repeat before the example’s own slide never puts the try-it before the example', async () => {
+    // Review LOW (21 Nov 2026): [k, «جرّب», ex1, sol1] became [k, try-it, ex1, sol1].
+    const candidate = [
+      slide('k', ['9999'], { slideType: 'transition' }),
+      slide('jarrab', ['4030'], { contentRole: 'check_understanding' }),
+      complete[0]!,
+      complete[2]!,
+    ];
+    const blocking = findBookCoverageDiagnostics(candidate, parityBook());
+    expect(blocking.map((d) => d.code)).toContain('EXAMPLE_TAUGHT_TWICE');
+
+    const result = await repairBookCoverageGaps(
+      candidate,
+      blocking,
+      aiCall,
+      parityContext(planning('check_understanding')),
+    );
+
+    // Anchored no earlier than the example's first teaching slide: example, try-it, solution.
+    expect(result.outlines.map((o) => o.id)).toEqual([
+      'k',
+      'ex3',
+      'ex3-book-missing_try_it-4032-r1',
+      'sol3',
+    ]);
+    expect(result.blocking).toEqual([]);
+  });
+
   it('an exercises slide citing the check is not its solution: the try-it still gets one', async () => {
     const withExercise: KafuoBookStructure = {
       ...BOOK,

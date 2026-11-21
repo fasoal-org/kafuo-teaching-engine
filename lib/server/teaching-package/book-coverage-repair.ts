@@ -362,6 +362,10 @@ export function dropExamplesTaughtTwice(
     if (repeat === undefined) continue;
     let before = repeat - 1;
     while (before >= 0 && drop.has(before)) before -= 1;
+    // Never ahead of the example itself (review 21 Nov 2026): a «جرّب» repeat placed before
+    // the example's first teaching slide re-plans the try-it right after that slide.
+    const first = group.firstIndex;
+    if (first !== undefined && before < first && !drop.has(first)) before = first;
     if (before >= 0) tryItAfter.set(checkId, outlines[before]!.id);
   }
   return {
