@@ -87,3 +87,36 @@ describe('labelScriptChanged: false negatives', () => {
     expect(labelScriptChanged('(أ) (ب) (ج)', 'ABC')).toBe(false);
   });
 });
+
+/** Review MEDIUM (21 Nov 2026, second pass): the comma rule read ordinary lists as labels. */
+describe('labelScriptChanged: comma-separated lists', () => {
+  it('an answer list «أ، ب، ج» is not a label run', () => {
+    expect(labelScriptChanged('أجب عن الأسئلة أ، ب، ج', 'المثلث ABC')).toBe(false);
+    expect(spacedArabicLetterRuns('أجب عن الأسئلة أ، ب، ج')).toEqual([]);
+  });
+
+  it('a bracketed coordinate pair «(س، ص)» is never a label run', () => {
+    expect(labelScriptChanged('النقطة (س، ص) تقع على المستقيم', 'AB')).toBe(false);
+    expect(spacedArabicLetterRuns('(س، ص)')).toEqual([]);
+    // Not even after a geometry cue.
+    expect(spacedArabicLetterRuns('النقاط (س، ص)')).toEqual([]);
+  });
+
+  it('comma-separated letters after a geometry cue are still labels', () => {
+    expect(labelScriptChanged('△ز، ي، س قائم الزاوية', 'XYZ')).toBe(true);
+    expect(labelScriptChanged('∠أ، ب، ج حادة', 'ABC')).toBe(true);
+    expect(labelScriptChanged('الرؤوس ز، ي، س', 'XYZ')).toBe(true);
+    expect(labelScriptChanged('المثلث ز، ي، س', 'XYZ')).toBe(true);
+    expect(labelScriptChanged('الشكل الرباعي ز، ي، س، ل', 'WXYZ')).toBe(true);
+  });
+
+  it('a run is skipped when the canvas itself prints a Latin run of the same length', () => {
+    expect(labelScriptChanged('في المثلث ABC: النقاط أ، ب، ج', 'المثلث ABC')).toBe(false);
+    expect(labelScriptChanged('في المثلث ABC نرسم ز ي س', 'XYZ')).toBe(false);
+  });
+
+  it('«ز ي س و» for WXYZ still fires', () => {
+    expect(labelScriptChanged('ز ي س و', 'WXYZ')).toBe(true);
+    expect(labelScriptChanged('الشكل الرباعي ز ي س و', 'الشكل الرباعي WXYZ')).toBe(true);
+  });
+});

@@ -19,8 +19,15 @@
 const ARABIC_MARKS = /[ً-ٰٟـ]/g;
 /** Prime marks a label may carry (A′B′C′, أ′). */
 const PRIMES = /[′″‴ʹʺ']/g;
-/** Geometry symbols a label is glued to («△ز ي س», «∠أ ب ج»): read as a separator. */
+/** Geometry symbols a label is glued to («△ز ي س», «∠أ ب ج»): set apart as a cue token. */
 const GEOMETRY_SYMBOLS = /[△▵∆Δ∠∡⊿]/g;
+const GEOMETRY_SYMBOL = /^[△▵∆Δ∠∡⊿]$/;
+/**
+ * Words after which comma-separated letters name points («النقاط ز، ي، س»); the
+ * two-word «الشكل الرباعي» is matched beside them. Anywhere else a comma list
+ * («أجب عن الأسئلة أ، ب، ج») is an ordinary list, not a label run.
+ */
+const GEOMETRY_CUE_WORDS = new Set(['النقاط', 'الرؤوس', 'المثلث']);
 /**
  * A word-shaped Latin letter run, as printed: `ABCD`, `WXYZ`, `PMQ`, `A′B′C′`. The edges are
  * the old `\b`'s (no ASCII word character either side).
@@ -53,20 +60,22 @@ type Token =
   | { kind: 'letter'; letter: string; opens: boolean; closes: boolean }
   | { kind: 'number'; closes: boolean }
   | { kind: 'comma' }
-  | { kind: 'other' };
+  | { kind: 'cue' }
+  | { kind: 'other'; word: string };
 
 /** The text as whitespace tokens: marks and primes dropped, △/∠ and commas set apart. */
 function tokensOf(text: string): Token[] {
   const normalized = (text || '')
     .replace(ARABIC_MARKS, '')
     .replace(PRIMES, '')
-    .replace(GEOMETRY_SYMBOLS, ' ')
+    .replace(GEOMETRY_SYMBOLS, ' $& ')
     .replace(/([،,])/g, ' $1 ');
   return normalized
     .split(/\s+/)
     .filter(Boolean)
     .map((raw): Token => {
       if (COMMA.test(raw)) return { kind: 'comma' };
+      if (GEOMETRY_SYMBOL.test(raw)) return { kind: 'cue' };
       const lead = LEADING.exec(raw)?.[0] ?? '';
       const rest = raw.slice(lead.length);
       const trail = TRAILING.exec(rest)?.[0] ?? '';
@@ -77,29 +86,50 @@ function tokensOf(text: string): Token[] {
       if (HAS_DIGIT.test(core) && !HAS_ARABIC_LETTER.test(core)) {
         return { kind: 'number', closes: trail !== '' };
       }
-      return { kind: 'other' };
+      return { kind: 'other', word: core };
     });
 }
 
+/** Whether the run starting at token `start` follows a geometry cue (△, ∠, «النقاط», …). */
+function followsGeometryCue(tokens: Token[], start: number): boolean {
+  const previous = tokens[start - 1];
+  if (previous?.kind === 'cue') return true;
+  if (previous?.kind !== 'other') return false;
+  if (GEOMETRY_CUE_WORDS.has(previous.word)) return true;
+  const before = tokens[start - 2];
+  return previous.word === 'الرباعي' && before?.kind === 'other' && before.word === 'الشكل';
+}
+
 /**
- * The single-Arabic-letter runs a canvas text prints («ز ي س و», «ز، ي، س»), two to six
- * letters. Never a run: a word of the language, a letter right after a number («٣ م»: a
- * unit), or a «و» followed by a letter or a number («س و ص», «٣ م و ٤ م»: the
- * conjunction, which splits the run). A bracket or a stop ends a run.
+ * The single-Arabic-letter runs a canvas text prints («ز ي س و», «النقاط ز، ي، س»), two
+ * to six letters. Never a run: a word of the language, a letter right after a number
+ * («٣ م»: a unit), or a «و» followed by a letter or a number («س و ص», «٣ م و ٤ م»: the
+ * conjunction, which splits the run). A bracket or a stop ends a run. Comma-separated
+ * letters are a run only right after a geometry cue (△, ∠, «النقاط», «الرؤوس», «المثلث»,
+ * «الشكل الرباعي»), and never when bracketed («(س، ص)»: a coordinate pair).
  */
 export function spacedArabicLetterRuns(text: string): string[] {
   const tokens = tokensOf(text);
   const runs: string[] = [];
   let current: string[] = [];
-  const flush = () => {
-    if (current.length >= 2 && current.length <= MAX_RUN) runs.push(current.join(''));
+  /** The current run's first-letter token, whether a comma joined it, and its bracket. */
+  let start = -1;
+  let commaJoined = false;
+  let opened = false;
+  const flush = (closed = false) => {
+    const list = commaJoined && ((opened && closed) || !followsGeometryCue(tokens, start));
+    if (!list && current.length >= 2 && current.length <= MAX_RUN) runs.push(current.join(''));
     current = [];
+    start = -1;
+    commaJoined = false;
+    opened = false;
   };
   tokens.forEach((token, index) => {
     const next = tokens[index + 1];
     if (token.kind === 'comma') {
       // A comma continues a run only between two letters: «ز، ي، س».
       if (current.length === 0 || next?.kind !== 'letter') flush();
+      else commaJoined = true;
       return;
     }
     if (token.kind !== 'letter') {
@@ -115,8 +145,12 @@ export function spacedArabicLetterRuns(text: string): string[] {
       return;
     }
     if (token.opens) flush();
+    if (current.length === 0) {
+      start = index;
+      opened = token.opens;
+    }
     current.push(token.letter);
-    if (token.closes) flush();
+    if (token.closes) flush(true);
   });
   flush();
   return runs;
@@ -135,7 +169,8 @@ function standaloneArabicLetters(text: string): Set<string> {
  * units do not print that run's letters on their own (then they are the book's).
  * Same length, not same letters: the OCR's Latin→Arabic mapping is not a transliteration
  * the check could predict («WXYZ» arrived as «ز ي س و»), but a label run rewritten letter
- * by letter keeps its length.
+ * by letter keeps its length. A run is skipped when the canvas itself prints a Latin run
+ * of that length: the canvas kept the book's labels, so the Arabic run is something else.
  */
 export function labelScriptChanged(canvasText: string, unitText: string): boolean {
   const latin = latinLabelRuns(unitText);
@@ -143,10 +178,16 @@ export function labelScriptChanged(canvasText: string, unitText: string): boolea
     // The book prints no Latin labels here — Arabic labels on the canvas are its own.
     return false;
   }
-  const lengths = new Set(latin.map((run) => distinctLetters(run.replace(PRIMES, '')).length));
+  const lengthsOf = (runs: string[]) =>
+    new Set(runs.map((run) => distinctLetters(run.replace(PRIMES, '')).length));
+  const lengths = lengthsOf(latin);
+  const canvasLatinLengths = lengthsOf(latinLabelRuns(canvasText));
   const bookLetters = standaloneArabicLetters(unitText);
   return spacedArabicLetterRuns(canvasText).some(
-    (run) => lengths.has(run.length) && ![...run].every((letter) => bookLetters.has(letter)),
+    (run) =>
+      lengths.has(run.length) &&
+      !canvasLatinLengths.has(run.length) &&
+      ![...run].every((letter) => bookLetters.has(letter)),
   );
 }
 
