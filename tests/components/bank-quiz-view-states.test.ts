@@ -3,8 +3,9 @@
 /**
  * The bank quiz view's load states (clear quiz messages, 21 Nov 2026): a preview of a
  * version that will never get questions says so with no button; an expired grant or
- * access (401 / a plain 404) offers to re-enter the page; 503 is the bank itself and
- * keeps Retry; `pending_approval` is unchanged. Written with `createElement` because the
+ * access (401 / a plain 404) says the session ended, with no button (a reload cannot renew
+ * a grant); only Kafuo's 503 BANK_QUIZ_UNAVAILABLE names the bank, any other 503 keeps the
+ * generic message, both with Retry; `pending_approval` is unchanged. Written with `createElement` because the
  * vitest include covers `*.test.ts` only.
  */
 import { act, createElement, type ReactElement } from 'react';
@@ -81,14 +82,15 @@ describe('BankQuizView load states', () => {
   it.each([
     ['401', () => new BankQuizRequestError(401, null)],
     ['a plain 404', () => new BankQuizRequestError(404, null)],
-  ])('session_expired for %s offers to reopen, and reopening reloads', async (_name, error) => {
+  ])('session_expired for %s says so, with no button', async (_name, error) => {
+    // Review 21 Nov 2026: a reload re-opens `/classroom/:id` only and never redeems a
+    // handoff, so it cannot renew an expired or stale grant (preview or learner): the
+    // lesson has to be opened again from where it was opened.
     mocks.fetchBankQuestions.mockRejectedValue(error());
     const host = await renderLoaded();
     expect(textOf(host)).toContain('quiz.sessionExpired');
-    const button = host.querySelector('button');
-    expect(button?.textContent).toContain('quiz.reopen');
-    act(() => button?.click());
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('button')).toBeNull();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('a 404 with an error code is the ordinary error, not session_expired', async () => {
@@ -106,6 +108,17 @@ describe('BankQuizView load states', () => {
     expect(textOf(host)).toContain('quiz.bankUnreachable');
     const button = host.querySelector('button');
     expect(button?.textContent).toContain('quiz.retry');
+  });
+
+  it.each([
+    ['no code', null],
+    ['another code', 'INTERNAL_ERROR'],
+  ])('any other 503 (%s) keeps the generic message and Retry', async (_name, code) => {
+    mocks.fetchBankQuestions.mockRejectedValue(new BankQuizRequestError(503, code));
+    const host = await renderLoaded();
+    expect(textOf(host)).toContain('quiz.bankUnavailable');
+    expect(textOf(host)).not.toContain('quiz.bankUnreachable');
+    expect(host.querySelector('button')?.textContent).toContain('quiz.retry');
   });
 
   it('pending_approval is unchanged', async () => {

@@ -281,7 +281,6 @@ describe('bank quiz locale keys', () => {
     'bankUnreachable',
     'previewUnapproved',
     'sessionExpired',
-    'reopen',
     'gradingUnavailable',
     'trueFalse',
     'questionOf',
@@ -298,5 +297,35 @@ describe('bank quiz locale keys', () => {
     }
     expect(quiz.questionOf).toContain('{{current}}');
     expect(quiz.questionOf).toContain('{{total}}');
+  });
+
+  // Review 21 Nov 2026: the view is shared with learners, so the wording names neither the
+  // preview nor the package version, and there is no reopen button (a reload cannot renew
+  // a grant) — hence no `reopen` text.
+  const previewWord: Record<string, RegExp> = {
+    enUS: /preview|package/i,
+    arSA: /المعاينة|الحزمة/,
+    deDE: /Vorschau|Paket/i,
+    esMX: /vista previa|paquete/i,
+    frFR: /aperçu|paquet/i,
+    jaJP: /プレビュー|パッケージ/,
+    koKR: /미리보기|패키지/,
+    ptBR: /pré-visualização|pacote/i,
+    ruRU: /предпросмотр|пакет/i,
+    viVN: /xem trước|gói/i,
+    zhCN: /预览|软件包/,
+    zhTW: /預覽|套件/,
+  };
+  it.each(Object.entries(locales))('%s words sessionExpired for learners too', (code, locale) => {
+    const quiz = (locale as { quiz: Record<string, unknown> }).quiz;
+    expect(quiz.sessionExpired as string).not.toMatch(previewWord[code]!);
+    expect(quiz.reopen).toBeUndefined();
+  });
+
+  it('ar-SA and en-US say the session ended or the lesson changed', () => {
+    expect(arSA.quiz.sessionExpired).toBe('انتهت الجلسة أو تغيّر الدرس. افتح الدرس من جديد.');
+    expect(enUS.quiz.sessionExpired).toBe(
+      'The session ended or the lesson changed. Open the lesson again.',
+    );
   });
 });

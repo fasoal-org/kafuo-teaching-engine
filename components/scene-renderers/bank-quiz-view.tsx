@@ -7,7 +7,9 @@
  * says the questions are prepared after approval; a Scene Kafuo does not treat
  * as a bank position (`not_bank`) falls back to the Scene's own questions.
  * A preview of a version that will never get questions says so (no button); an
- * expired grant or access (401 / a plain 404) offers to re-enter the page.
+ * expired grant or access (401 / a plain 404) says the session ended, with no button:
+ * a reload re-opens this page only and never renews a grant, so the lesson has to be
+ * opened again from where it was opened (preview or learner alike).
  * Answers are kept in the view only; nothing is graded locally.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -50,9 +52,12 @@ interface BankQuizViewProps {
 
 type LoadState =
   | { kind: 'loading' }
-  /** The load failed: `unreachable` is Kafuo's 503 (the bank itself, not the quiz). */
+  /**
+   * The load failed: `unreachable` is Kafuo's 503 `BANK_QUIZ_UNAVAILABLE` (the bank
+   * itself, not the quiz).
+   */
   | { kind: 'error'; unreachable: boolean }
-  /** 401, or a 404 with no error code: the grant or access is gone. Reload to re-enter. */
+  /** 401, or a 404 with no error code: the grant or access is gone. Open the lesson again. */
   | { kind: 'session_expired' }
   /** A preview of a version that will never get questions until the package is approved. */
   | { kind: 'preview_unapproved' }
@@ -256,17 +261,22 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
         log.warn('Failed to load bank quiz questions:', error);
         if (cancelled) return;
         // 401, or a plain 404: the access cookie or the grant is gone (an expired
-        // preview, or the version's stage changed after a regeneration). Re-entering
-        // is the only fix, so the button reloads rather than retries.
+        // session, or the version's stage changed after a regeneration). Only opening
+        // the lesson again from its source mints a new grant; a reload or a retry
+        // cannot (review 21 Nov 2026), so the state has no button.
         if (
           error instanceof BankQuizRequestError &&
           (error.status === 401 || (error.status === 404 && error.code === null))
         ) {
           return setLoad({ kind: 'session_expired' });
         }
+        // Only Kafuo's own 503 names the bank; any other 503 keeps the generic message.
         setLoad({
           kind: 'error',
-          unreachable: error instanceof BankQuizRequestError && error.status === 503,
+          unreachable:
+            error instanceof BankQuizRequestError &&
+            error.status === 503 &&
+            error.code === 'BANK_QUIZ_UNAVAILABLE',
         });
       });
     return () => {
@@ -338,19 +348,12 @@ export function BankQuizView({ questions: sceneQuestions, sceneId, stageId }: Ba
     );
   }
   if (load.kind === 'session_expired') {
+    // No button: a reload re-opens this page only and never renews the grant.
     return (
       <Centered>
         <p className="max-w-md text-sm text-gray-600 dark:text-gray-300">
           {t('quiz.sessionExpired')}
         </p>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
-        >
-          <RotateCcw className="h-4 w-4" />
-          {t('quiz.reopen')}
-        </button>
       </Centered>
     );
   }
