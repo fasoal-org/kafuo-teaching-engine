@@ -401,7 +401,11 @@ type ShapedOp =
   | { kind: 'op'; op: SlideOperation; reason: string };
 
 /** A correction op that names a slide (every op but `ignore_issue`, which the reviewer never sends). */
-type SlideOperation = Exclude<CorrectionOperation, { op: 'ignore_issue' }>;
+/** The ops the reviewer may return: never an ignore, a review or an undo (P3 ops). */
+type SlideOperation = Exclude<
+  CorrectionOperation,
+  { op: 'ignore_issue' } | { op: 'review_plan' } | { op: 'revert_fix' }
+>;
 
 function hasSacredText(text: string): boolean {
   return /[﴾﴿]/.test(text) || findSacredSpans(text).spans.length > 0;
@@ -437,7 +441,12 @@ function shapeOp(raw: unknown): ShapedOp | null {
   }
   try {
     const [parsed] = parseCorrectionOperations([candidate]);
-    return parsed && parsed.op !== 'ignore_issue' ? { kind: 'op', op: parsed, reason } : null;
+    return parsed &&
+      parsed.op !== 'ignore_issue' &&
+      parsed.op !== 'review_plan' &&
+      parsed.op !== 'revert_fix'
+      ? { kind: 'op', op: parsed, reason }
+      : null;
   } catch {
     return null;
   }

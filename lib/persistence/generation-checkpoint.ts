@@ -193,9 +193,12 @@ export async function upsertCheckpointForPause(
       input.actorRef,
       input.now,
       blockingCount,
-      input.planFixes && input.planFixes.length > 0
-        ? JSON.stringify({ planFixes: input.planFixes })
-        : null,
+      // Every pause of a runner with the plan review is marked (P3), so a checkpoint
+      // paused before it existed is told apart and reviewed once.
+      JSON.stringify({
+        planReviewed: true,
+        ...(input.planFixes && input.planFixes.length > 0 ? { planFixes: input.planFixes } : {}),
+      }),
     ],
   );
   const row = result.rows[0];
@@ -271,7 +274,12 @@ export async function applyCheckpointEdit(
     now: number;
   },
 ): Promise<GenerationCheckpoint | null> {
-  assertCheckpointPersistable({ outlines: edit.outlines, diagnostics: edit.diagnostics });
+  // The log entry too: a plan review's fixes (P3) keep removed slides for an undo.
+  assertCheckpointPersistable({
+    outlines: edit.outlines,
+    diagnostics: edit.diagnostics,
+    logEntry: edit.logEntry,
+  });
   const result = await queryable.query<RawCheckpointRow>(
     `UPDATE teaching_package_generation_checkpoints
         SET outlines = $4::jsonb,

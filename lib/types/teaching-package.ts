@@ -771,6 +771,13 @@ export interface GenerationCheckpointLogEntry {
    * the resume) began (package-planner-issue-resolve-plan-2026-11-22 §3b).
    */
   planFixes?: PlanReviewFix[];
+  /**
+   * On a `paused` entry: the pausing run had the plan review (P3). A checkpoint whose
+   * pauses all lack it paused before the review existed and is reviewed once.
+   */
+  planReviewed?: boolean;
+  /** A `review_plan` on this checkpoint (P3): `started`, then `finished` with its fixes. */
+  planReview?: 'started' | 'finished';
 }
 
 export interface GenerationCheckpoint {

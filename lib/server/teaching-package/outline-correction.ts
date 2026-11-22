@@ -51,7 +51,12 @@ import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
-import { withoutUndoState } from '@/lib/server/teaching-package/plan-fix-records';
+import {
+  autoFixesOf,
+  planReviewStatusOf,
+  withoutUndoState,
+  type PlanReviewStatus,
+} from '@/lib/server/teaching-package/plan-fix-records';
 import { findOutlineSkillSelectionIssues } from '@/lib/server/teaching-package/skill-policy';
 import { validateSceneClassifications } from '@/lib/server/teaching-package/skill-validators';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -377,6 +382,14 @@ export type CorrectionOperation =
    * no longer blocks the edit, the resume or the resumed run's outline gate.
    * Recorded in the edit log, which is where it is read back from.
    */
+  /**
+   * P3 (package-plan-review-p3-contract-2026-11-22): run the plan review once on a
+   * plan that paused before the review existed. Alone in its request; it starts in
+   * the background and the view says `planReview.status` while it runs.
+   */
+  | { op: 'review_plan' }
+  /** P3: undo one recorded plan-review fix (`autoFixes[].id`) while the attempt is paused. */
+  | { op: 'revert_fix'; fixId: string }
   | {
       op: 'ignore_issue';
       issueKey: string;
@@ -503,6 +516,17 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
       }
       return { op: 'ignore_issue', issueKey: record.issueKey as string };
     }
+    if (record?.op === 'review_plan') return { op: 'review_plan' };
+    if (record?.op === 'revert_fix') {
+      if (
+        typeof record.fixId !== 'string' ||
+        record.fixId.trim() === '' ||
+        record.fixId.length > 64
+      ) {
+        invalid(`operations[${index}].fixId must name a recorded plan-review fix`);
+      }
+      return { op: 'revert_fix', fixId: record.fixId as string };
+    }
     if (!record || typeof record.outlineId !== 'string' || record.outlineId.trim() === '') {
       invalid(`operations[${index}] must name an outlineId`);
     }
@@ -544,7 +568,7 @@ export function parseCorrectionOperations(raw: unknown): CorrectionOperation[] {
       return { op: 'set', outlineId, field: record.field as CorrectionField, value: record.value };
     }
     invalid(
-      `operations[${index}].op must be "set", "remove", "move", "insert_book_slide" or "ignore_issue"`,
+      `operations[${index}].op must be "set", "remove", "move", "insert_book_slide", "ignore_issue", "review_plan" or "revert_fix"`,
     );
   });
 }
@@ -747,6 +771,9 @@ export function applyCorrectionOperations(
   for (const [index, operation] of operations.entries()) {
     // Changes no outline: the caller checks the key and filters the diagnosis.
     if (operation.op === 'ignore_issue') continue;
+    // P3: the caller applies these itself (the review in the background; the undo from
+    // the edit log's recorded before-state), never through this function.
+    if (operation.op === 'review_plan' || operation.op === 'revert_fix') continue;
     const position = next.findIndex((outline) => outline.id === operation.outlineId);
     if (position < 0) {
       invalid(
@@ -999,6 +1026,10 @@ export interface CorrectionView {
     }>;
   };
   editLog: GenerationCheckpoint['editLog'];
+  /** P3: every plan-review fix on this checkpoint, without its values, and whether it was undone. */
+  autoFixes: ReturnType<typeof autoFixesOf>;
+  /** P3: `not_reviewed` (paused before the review existed), `reviewing` or `reviewed`. */
+  planReview: { status: PlanReviewStatus };
 }
 
 function ignoredIssueList(
@@ -1046,6 +1077,7 @@ export function buildCorrectionView(
   flow: readonly TeachingFlowEntry[],
 ): CorrectionView {
   const pending = new Set(checkpoint.pendingOutlineIds ?? []);
+  const reviewStatus = planReviewStatusOf(checkpoint.editLog);
   return {
     attemptId: attempt.id,
     attemptStatus: attempt.status,
@@ -1055,10 +1087,12 @@ export function buildCorrectionView(
     revision: checkpoint.revision,
     // Mirrors the resume's own gate: outline-level findings block; a `scenes`
     // finding is resolved by the resume regenerating that Scene, and a missing
-    // visual teaching note by the resume re-planning that slide's visual.
+    // visual teaching note by the resume re-planning that slide's visual. Never
+    // while the plan review is still working on the plan (P3).
     canResume:
       checkpoint.state === 'awaiting' &&
       attempt.status === 'awaiting_admin_correction' &&
+      reviewStatus !== 'reviewing' &&
       checkpoint.diagnostics.every(
         (diagnostic) =>
           diagnostic.field === SCENE_REGENERATION_FIELD ||
@@ -1156,5 +1190,9 @@ export function buildCorrectionView(
       .map((entry) =>
         entry.planFixes ? { ...entry, planFixes: entry.planFixes.map(withoutUndoState) } : entry,
       ),
+    // P3 (package-plan-review-p3-contract-2026-11-22): what the plan review changed
+    // and whether a person undid it (never the values), and whether it ran.
+    autoFixes: autoFixesOf(checkpoint.editLog),
+    planReview: { status: reviewStatus },
   };
 }

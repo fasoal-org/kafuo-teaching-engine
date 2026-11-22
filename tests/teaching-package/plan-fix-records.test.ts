@@ -5,10 +5,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  autoFixesOf,
   bookRepairFixes,
   MAX_PLAN_FIXES,
+  PLAN_REVIEW_STALE_MS,
   PLAN_REVIEWER_ACTOR,
+  planReviewStatusOf,
   recordedPlanFixes,
+  revertPlanFix,
   withoutUndoState,
   withPlanFixes,
 } from '@/lib/server/teaching-package/plan-fix-records';
@@ -205,5 +209,130 @@ describe('recordedPlanFixes and withPlanFixes', () => {
     expect(visible).not.toHaveProperty('from');
     expect(visible).not.toHaveProperty('to');
     expect(visible).toMatchObject({ op: 'remove', outlineId: 'a', reason: 'نقل' });
+  });
+});
+
+describe('P3: the review status, the view list and the undo', () => {
+  const paused = (extra: Record<string, unknown> = {}) => ({
+    event: 'paused',
+    at: 1_000,
+    ...extra,
+  });
+
+  it('tells a plan paused before the review from a reviewed or running one', () => {
+    expect(planReviewStatusOf([paused()])).toBe('not_reviewed');
+    expect(planReviewStatusOf([paused({ planReviewed: true })])).toBe('reviewed');
+    const started = { event: 'edited', at: 10_000, planReview: 'started' as const };
+    expect(planReviewStatusOf([paused(), started], 10_000 + 60_000)).toBe('reviewing');
+    // A review whose process died is not stuck forever.
+    expect(planReviewStatusOf([paused(), started], 10_000 + PLAN_REVIEW_STALE_MS)).toBe(
+      'not_reviewed',
+    );
+    expect(
+      planReviewStatusOf([
+        paused(),
+        started,
+        { event: 'edited', at: 20_000, planReview: 'finished' },
+      ]),
+    ).toBe('reviewed');
+  });
+
+  it('lists every fix without its values, and marks the undone ones', () => {
+    const [move, set] = recordedPlanFixes(
+      [
+        {
+          op: 'move',
+          outlineId: 'a',
+          from: 2,
+          to: 0,
+          reason: 'نقل',
+          actor: PLAN_REVIEWER_ACTOR,
+          round: 0,
+        },
+        {
+          op: 'set',
+          outlineId: 'b',
+          field: 'contentRole',
+          from: 'procedure',
+          to: 'explanation',
+          reason: 'دور',
+          actor: PLAN_REVIEWER_ACTOR,
+          round: 1,
+        },
+      ],
+      1,
+      5,
+    );
+    const list = autoFixesOf([
+      paused({ planReviewed: true, planFixes: [move] }),
+      { event: 'edited', at: 6, planFixes: [set] },
+      { event: 'edited', at: 7, operations: [{ op: 'revert_fix', fixId: move!.id }] },
+    ]);
+    expect(list).toEqual([
+      { id: move!.id, op: 'move', outlineId: 'a', reason: 'نقل', round: 0, at: 5, reverted: true },
+      {
+        id: set!.id,
+        op: 'set',
+        outlineId: 'b',
+        field: 'contentRole',
+        reason: 'دور',
+        round: 1,
+        at: 5,
+        reverted: false,
+      },
+    ]);
+    expect(JSON.stringify(list)).not.toContain('procedure');
+  });
+
+  it('undoes each kind of fix, and refuses when the plan no longer holds what it needs', () => {
+    const plan = [slide('a'), slide('b', { contentRole: 'explanation' }), slide('c')];
+    const ids = (outlines: SceneOutline[] | null) => outlines?.map((outline) => outline.id);
+
+    expect(ids(revertPlanFix(plan, { op: 'move', outlineId: 'c', from: 0 }))).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
+    expect(ids(revertPlanFix(plan, { op: 'insert_book_slide', outlineId: 'b' }))).toEqual([
+      'a',
+      'c',
+    ]);
+    const removed = slide('x');
+    expect(
+      ids(
+        revertPlanFix(plan, { op: 'remove', outlineId: 'x', from: { index: 1, outline: removed } }),
+      ),
+    ).toEqual(['a', 'x', 'b', 'c']);
+    // The old index is clamped.
+    expect(
+      ids(
+        revertPlanFix(plan, {
+          op: 'remove',
+          outlineId: 'x',
+          from: { index: 99, outline: removed },
+        }),
+      ),
+    ).toEqual(['a', 'b', 'c', 'x']);
+    const set = revertPlanFix(plan, {
+      op: 'set',
+      outlineId: 'b',
+      field: 'contentRole',
+      from: 'procedure',
+    })!;
+    expect(set[1]!.contentRole).toBe('procedure');
+    // An absent old value removes the field.
+    const cleared = revertPlanFix(plan, { op: 'set', outlineId: 'b', field: 'contentRole' })!;
+    expect(cleared[1]).not.toHaveProperty('contentRole');
+    // The input is never mutated.
+    expect(plan[1]!.contentRole).toBe('explanation');
+
+    expect(revertPlanFix(plan, { op: 'move', outlineId: 'gone', from: 0 })).toBeNull();
+    expect(
+      revertPlanFix(plan, {
+        op: 'remove',
+        outlineId: 'a',
+        from: { index: 0, outline: slide('a') },
+      }),
+    ).toBeNull();
   });
 });

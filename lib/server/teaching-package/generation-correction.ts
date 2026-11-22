@@ -63,6 +63,23 @@ import {
   type CorrectionView,
 } from '@/lib/server/teaching-package/outline-correction';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
+import {
+  MAX_PLAN_FIXES,
+  PLAN_REVIEWER_ACTOR,
+  planFixesOf,
+  planReviewStatusOf,
+  recordedPlanFixes,
+  revertedFixIds,
+  revertPlanFix,
+  type PlanFixDraft,
+  type PlanReviewStatus,
+} from '@/lib/server/teaching-package/plan-fix-records';
+import { applyPlanAutoFixes } from '@/lib/server/teaching-package/plan-auto-fixes';
+import { reviewPlan } from '@/lib/server/teaching-package/plan-review';
+import { createPlanReviewAiCall } from '@/lib/server/teaching-package/routed-plan-review-call';
+import { createLogger } from '@/lib/logger';
+import type { AICallFn } from '@openmaic/generation';
+import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationAttempt,
   GenerationCheckpoint,
@@ -76,6 +93,7 @@ import type {
 /** The actor recorded for a pause the runner makes on its own. */
 export const RUNNER_ACTOR_REF = 'system:generation-runner';
 const REASON_MAX_LENGTH = 500;
+const log = createLogger('GenerationCorrection');
 
 const aggregateOf = (attempt: GenerationAttempt): TeachingPackageAggregateKey => ({
   tenantId: attempt.tenantId,
@@ -252,6 +270,19 @@ export async function editGenerationCorrection(
         { currentRevision: checkpoint.revision },
       );
     }
+    // P3 (package-plan-review-p3-contract-2026-11-22): the plan review works on the
+    // plan in the background; nothing else may change it meanwhile.
+    const reviewStatus = planReviewStatusOf(checkpoint.editLog);
+    if (reviewStatus === 'reviewing') {
+      throw new TeachingPackageError(
+        'STALE_STATE',
+        'the plan reviewer is working on this plan; reload it when it finishes',
+        { currentRevision: checkpoint.revision },
+      );
+    }
+    if (command.operations.some((operation) => operation.op === 'review_plan')) {
+      return startPlanReview(tx, attempt, checkpoint, command, actorRef, reviewStatus);
+    }
     const flow = flowOf(attempt);
     const diagnosisContext = diagnosisContextFromCheckpoint(
       checkpoint,
@@ -261,7 +292,30 @@ export async function editGenerationCorrection(
       attempt.teachingModel,
       attempt.inputSnapshot.teacherGuide,
     );
-    const edited = applyCorrectionOperations(checkpoint.outlines, command.operations, {
+    // P3: «تراجع» puts one recorded fix's before-state back, before any other op.
+    const reverted = revertedFixIds(checkpoint.editLog);
+    const recorded = new Map(planFixesOf(checkpoint.editLog).map((fix) => [fix.id, fix] as const));
+    let base = checkpoint.outlines;
+    for (const [index, operation] of command.operations.entries()) {
+      if (operation.op !== 'revert_fix') continue;
+      const fix = recorded.get(operation.fixId);
+      if (!fix || reverted.has(operation.fixId) || checkpoint.phase !== 'outline') {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          `operations[${index}] undoes a fix that is not recorded on this plan, or was undone already`,
+        );
+      }
+      const undone = revertPlanFix(base, fix);
+      if (!undone) {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          `operations[${index}]: the plan no longer holds what this fix changed; reload the correction`,
+        );
+      }
+      base = undone;
+      reverted.add(operation.fixId);
+    }
+    const edited = applyCorrectionOperations(base, command.operations, {
       phase: checkpoint.phase,
       flow,
       sourceRefs: checkpoint.sourceRefs,
@@ -322,6 +376,223 @@ export async function editGenerationCorrection(
   });
 }
 
+/**
+ * P3 (package-plan-review-p3-contract-2026-11-22): mark the review of a plan that
+ * paused before the plan review existed as started, and return at once. The route
+ * then runs it in the background (`runCheckpointPlanReview`), which stores the
+ * reviewed plan as the next revision. Alone in its request; outline phase only;
+ * once per checkpoint (a finished or running review refuses another).
+ */
+async function startPlanReview(
+  tx: Queryable,
+  attempt: GenerationAttempt,
+  checkpoint: GenerationCheckpoint,
+  command: EditCorrectionCommand,
+  actorRef: string,
+  status: PlanReviewStatus,
+): Promise<CorrectionView> {
+  if (command.operations.length !== 1) {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'review_plan must be the only operation of its request',
+    );
+  }
+  if (status !== 'not_reviewed' || checkpoint.phase !== 'outline') {
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'the plan review already ran on this plan (or the plan is past its outline phase)',
+    );
+  }
+  const now = Date.now();
+  const updated = await applyCheckpointEdit(tx, attempt.id, {
+    tenantId: command.tenantId,
+    expectedRevision: command.expectedRevision,
+    outlines: checkpoint.outlines,
+    diagnostics: checkpoint.diagnostics,
+    repairs: checkpoint.repairs,
+    logEntry: {
+      event: 'edited',
+      actorRef,
+      at: now,
+      operations: [{ op: 'review_plan' }],
+      blockingCount: checkpoint.diagnostics.length,
+      planReview: 'started',
+    },
+    now,
+  });
+  if (!updated) {
+    throw new TeachingPackageError('STALE_STATE', 'the correction changed concurrently; reload it');
+  }
+  return buildCorrectionView(attempt, updated, flowOf(attempt));
+}
+
+/**
+ * P3 (package-plan-review-p3-contract-2026-11-22): the background half of
+ * `review_plan`. The free rule fixes (P1) and the AI plan review (P2) run on the
+ * paused plan, on the planning route frozen on the attempt, and the reviewed plan
+ * is stored as the next revision with its fixes (`planReview: 'finished'`). A
+ * failed call, or nothing kept, still finishes the review, so the page leaves its
+ * busy state; the plan is then as it was. The book repair is not run here: its
+ * planner needs the lesson's unit text, which a checkpoint does not keep (the AI
+ * review's `insert_book_slide` adds a missing book solution slide instead). Never
+ * throws: a failure is logged with counts and codes only.
+ */
+export async function runCheckpointPlanReview(
+  pool: ConnectableQueryable,
+  attemptId: string,
+  scope: { tenantId: string },
+  deps: { aiCall?: AICallFn; now?: () => number } = {},
+): Promise<void> {
+  const now = deps.now ?? Date.now;
+  try {
+    const attempt = await readAttempt(pool, attemptId, scope);
+    const checkpoint = await readCheckpoint(pool, attemptId, scope);
+    if (
+      !attempt ||
+      !checkpoint ||
+      checkpoint.state !== 'awaiting' ||
+      attempt.status !== 'awaiting_admin_correction' ||
+      planReviewStatusOf(checkpoint.editLog, now()) !== 'reviewing'
+    ) {
+      return;
+    }
+    const flow = flowOf(attempt);
+    const diagnosisContext = diagnosisContextFromCheckpoint(
+      checkpoint,
+      flow,
+      isGoverned(attempt),
+      attempt.inputSnapshot.bookStructure,
+      attempt.teachingModel,
+      attempt.inputSnapshot.teacherGuide,
+    );
+    const ignored = ignoredIssueKeys(checkpoint.editLog);
+    const diagnose = (candidate: SceneOutline[]) => {
+      const diagnosis = diagnoseCandidateOutlines(candidate, diagnosisContext);
+      return {
+        outlines: diagnosis.outlines,
+        blocking: withoutIgnoredIssues(diagnosis.blocking, ignored),
+      };
+    };
+    const generationRun = checkpoint.sourceRefs.generationRun;
+    // Diagnosed afresh, with today's rules, like an edit: an old pause's stored list
+    // may predate a rule (or a fix) the review relies on.
+    const initial = diagnose(checkpoint.outlines);
+    let outlines = initial.outlines;
+    let blocking = initial.blocking;
+    const drafts: PlanFixDraft[] = [];
+    const ruled = applyPlanAutoFixes(outlines, blocking, { flow, diagnose });
+    if (ruled.fixes.length > 0) {
+      outlines = ruled.outlines;
+      blocking = ruled.blocking;
+      drafts.push(...ruled.fixes);
+    }
+    if (blocking.length > 0) {
+      const aiCall = deps.aiCall ?? (await createPlanReviewAiCall({ attempt, generationRun }));
+      const book = diagnosisContext.bookStructure;
+      const units = checkpoint.sourceRefs.contentUnits ?? [];
+      const reviewed = await reviewPlan(outlines, blocking, aiCall, {
+        phase: 'outline',
+        flow,
+        // A checkpoint keeps the units' ids, roles and titles, never their text.
+        units: units.map((unit) => ({
+          id: String(unit.id),
+          role: unit.role,
+          element:
+            book?.units.find((entry) => String(entry.contentUnitId) === String(unit.id))?.element ??
+            null,
+          title: unit.title,
+          text: '',
+        })),
+        requiredUnitIds: (book?.units ?? [])
+          .filter((unit) => unit.required)
+          .map((unit) => String(unit.contentUnitId)),
+        essentialUnitIds: (checkpoint.sourceRefs.essentialContentUnitIds ?? []).map(String),
+        bookSummary: book
+          ? book.units
+              .map(
+                (unit) =>
+                  `${unit.contentUnitId}: ${unit.element}${unit.required ? ' (required)' : ''}`,
+              )
+              .join('\n')
+          : null,
+        language:
+          typeof attempt.inputSnapshot.generationContext?.language === 'string'
+            ? attempt.inputSnapshot.generationContext.language
+            : 'ar-SA',
+        languageDirective: checkpoint.languageDirective,
+        // No unit text here, so the strictest sacred-text mode guards any new key point.
+        sacredMode: 'full',
+        diagnose,
+        editContext: {
+          phase: 'outline',
+          flow,
+          sourceRefs: checkpoint.sourceRefs,
+          pendingOutlineIds: null,
+          ...(book ? { bookStructure: book } : {}),
+        },
+      });
+      if (reviewed.fixes.length > 0) {
+        outlines = reviewed.outlines;
+        blocking = reviewed.blocking;
+        drafts.push(...reviewed.fixes);
+      }
+    }
+    const planFixes = recordedPlanFixes(drafts, generationRun, now());
+    const finished = await applyCheckpointEdit(pool, attemptId, {
+      tenantId: scope.tenantId,
+      expectedRevision: checkpoint.revision,
+      outlines,
+      diagnostics: blocking,
+      repairs: checkpoint.repairs,
+      logEntry: {
+        event: 'edited',
+        actorRef: PLAN_REVIEWER_ACTOR,
+        at: now(),
+        operations: [],
+        blockingCount: blocking.length,
+        planReview: 'finished',
+        ...(planFixes.length > 0 ? { planFixes: planFixes.slice(-MAX_PLAN_FIXES) } : {}),
+      },
+      now: now(),
+    });
+    log.info(
+      `Plan review of paused attempt ${attemptId}: ${planFixes.length} fix(es), ${blocking.length} issue(s) left${finished ? '' : ' (the correction moved meanwhile; not stored)'}`,
+    );
+  } catch (error) {
+    log.warn(
+      `Plan review of paused attempt ${attemptId} failed: ${error instanceof TeachingPackageError ? error.code : error instanceof Error ? error.name : 'unknown'}`,
+    );
+    // Finish the review with the plan unchanged, so the page leaves its busy state.
+    await finishPlanReviewUnchanged(pool, attemptId, scope, now()).catch(() => {});
+  }
+}
+
+async function finishPlanReviewUnchanged(
+  pool: Queryable,
+  attemptId: string,
+  scope: { tenantId: string },
+  at: number,
+): Promise<void> {
+  const checkpoint = await readCheckpoint(pool, attemptId, scope);
+  if (!checkpoint || planReviewStatusOf(checkpoint.editLog, at) !== 'reviewing') return;
+  await applyCheckpointEdit(pool, attemptId, {
+    tenantId: scope.tenantId,
+    expectedRevision: checkpoint.revision,
+    outlines: checkpoint.outlines,
+    diagnostics: checkpoint.diagnostics,
+    repairs: checkpoint.repairs,
+    logEntry: {
+      event: 'edited',
+      actorRef: PLAN_REVIEWER_ACTOR,
+      at,
+      operations: [],
+      blockingCount: checkpoint.diagnostics.length,
+      planReview: 'finished',
+    },
+    now: at,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Resume
 // ---------------------------------------------------------------------------
@@ -372,6 +643,14 @@ export async function resumeGenerationAttempt(
       throw new TeachingPackageError(
         'STALE_STATE',
         `the correction is at revision ${checkpoint.revision}, not ${command.expectedRevision}`,
+        { currentRevision: checkpoint.revision },
+      );
+    }
+    // P3: never while the plan review is working on the plan.
+    if (planReviewStatusOf(checkpoint.editLog) === 'reviewing') {
+      throw new TeachingPackageError(
+        'STALE_STATE',
+        'the plan reviewer is working on this plan; reload it when it finishes',
         { currentRevision: checkpoint.revision },
       );
     }

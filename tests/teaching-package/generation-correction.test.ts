@@ -725,6 +725,189 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
       ]);
     });
 
+    describe('P3: what a person sees and undoes (package-plan-review-p3-contract)', () => {
+      async function pausedWithMove() {
+        answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+        const started = await startAndRun({
+          flow: flowV4(),
+          teachingModel: { key: 'g5', version: 'g5.v4' },
+        });
+        expect((await attempt(started.attemptId)).status).toBe('awaiting_admin_correction');
+        return started;
+      }
+
+      it('lists the fixes without their values, and «تراجع» puts one back, once', async () => {
+        const { attemptId } = await pausedWithMove();
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(view.planReview).toEqual({ status: 'reviewed' });
+        expect(view.autoFixes).toEqual([
+          {
+            id: expect.stringMatching(/^tpf-/),
+            op: 'move',
+            outlineId: 'o-visual',
+            reason: expect.stringMatching(/[؀-ۿ]/),
+            round: 0,
+            at: expect.any(Number),
+            reverted: false,
+          },
+        ]);
+        const fixId = view.autoFixes[0]!.id;
+
+        const undone = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: view.revision,
+          operations: [{ op: 'revert_fix', fixId }],
+        });
+        expect(undone.outlines.map((outline) => outline.id)).toEqual(['o-visual', 'o-intro']);
+        expect(undone.autoFixes[0]!.reverted).toBe(true);
+        // Re-diagnosed like any edit: the order issue is back.
+        expect(undone.blockingIssues.map((issue) => issue.code)).toContain('FLOW_SEQUENCE_INVALID');
+
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: undone.revision,
+            operations: [{ op: 'revert_fix', fixId }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: undone.revision,
+            operations: [{ op: 'revert_fix', fixId: 'tpf-unknown' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      });
+
+      it('a plan that paused before the review existed is reviewed once, in the background, and edits wait for it', async () => {
+        const { attemptId, context } = await pausedWithMove();
+        // Make it look like a checkpoint from before the plan review: no marks, no fixes.
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET edit_log = (SELECT jsonb_agg(entry - 'planReviewed' - 'planFixes')
+                                FROM jsonb_array_elements(edit_log) AS entry),
+                  outlines = (SELECT jsonb_agg(o ORDER BY (o->>'id') DESC)
+                                FROM jsonb_array_elements(outlines) AS o)
+            WHERE attempt_id = $1`,
+          [attemptId],
+        );
+        const {
+          getGenerationCorrection,
+          editGenerationCorrection,
+          resumeGenerationAttempt,
+          runCheckpointPlanReview,
+        } = await correction();
+        const before = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(before.planReview).toEqual({ status: 'not_reviewed' });
+        expect(before.autoFixes).toEqual([]);
+
+        const started = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: before.revision,
+          operations: [{ op: 'review_plan' }],
+        });
+        expect(started.planReview).toEqual({ status: 'reviewing' });
+        expect(started.canResume).toBe(false);
+        // Nothing else may change the plan, or resume it, while the review runs.
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: started.revision,
+            operations: [{ op: 'remove', outlineId: 'o-intro' }],
+          }),
+        ).rejects.toMatchObject({ code: 'STALE_STATE' });
+        await expect(
+          resumeGenerationAttempt(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: started.revision,
+            requestDigest: DIGEST,
+            learningItem: context.aggregate.learningItem,
+          }),
+        ).rejects.toMatchObject({ code: 'STALE_STATE' });
+
+        // The background half: the rule fix moves the slide; the reviewer sets the role.
+        const aiCall = vi.fn(async () =>
+          JSON.stringify({
+            ops: [
+              {
+                op: 'set',
+                outlineId: 'o-visual',
+                field: 'contentRole',
+                value: 'explanation',
+                reason: 'الدور مش مسموح هنا',
+              },
+            ],
+          }),
+        );
+        await runCheckpointPlanReview(txPool(), attemptId, { tenantId: TENANT }, { aiCall });
+        expect(aiCall).toHaveBeenCalledTimes(1);
+
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.blockingIssues).toEqual([]);
+        expect(after.canResume).toBe(true);
+        expect(after.outlines.map((outline) => [outline.id, outline.contentRole])).toEqual([
+          ['o-intro', 'explanation'],
+          ['o-visual', 'explanation'],
+        ]);
+        expect(after.autoFixes.map((fix) => [fix.op, fix.outlineId, fix.round])).toEqual([
+          ['move', 'o-visual', 0],
+          ['set', 'o-visual', 1],
+        ]);
+        // Once per checkpoint.
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: after.revision,
+            operations: [{ op: 'review_plan' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      });
+
+      it('a review whose call fails still finishes, with the plan as it was', async () => {
+        const { attemptId } = await pausedWithMove();
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET edit_log = (SELECT jsonb_agg(entry - 'planReviewed' - 'planFixes')
+                                FROM jsonb_array_elements(edit_log) AS entry)
+            WHERE attempt_id = $1`,
+          [attemptId],
+        );
+        const { getGenerationCorrection, editGenerationCorrection, runCheckpointPlanReview } =
+          await correction();
+        const before = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: before.revision,
+          operations: [{ op: 'review_plan' }],
+        });
+        await runCheckpointPlanReview(
+          txPool(),
+          attemptId,
+          { tenantId: TENANT },
+          {
+            aiCall: async () => {
+              throw new Error('route down');
+            },
+          },
+        );
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.blockingIssues.map((issue) => issue.code)).toEqual([
+          'CONTENT_ROLE_NOT_ALLOWED',
+        ]);
+      });
+    });
+
     // The rollback case (the key's position would break the order, so the run still
     // pauses with the mismatch) is test (d) "flow correction" below, unchanged.
     it('a stage key that names one flow position fixes its index and the run completes', async () => {

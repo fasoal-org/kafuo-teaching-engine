@@ -195,3 +195,130 @@ export function withoutUndoState(fix: PlanReviewFix): Omit<PlanReviewFix, 'from'
   const { from: _undoState, to: _newValue, ...visible } = fix;
   return visible;
 }
+
+// ---------------------------------------------------------------------------
+// P3 (package-plan-review-p3-contract-2026-11-22): what a person sees of the
+// fixes on a paused attempt, the automatic review of an attempt paused before
+// the plan review existed, and the undo of one fix.
+// ---------------------------------------------------------------------------
+
+/** A `review_plan` still running after this long died with its process; it may run again. */
+export const PLAN_REVIEW_STALE_MS = 15 * 60_000;
+
+/** The minimal edit-log entry shape these readers need. */
+interface PlanReviewLogEntry {
+  event: string;
+  at: number;
+  planFixes?: readonly PlanReviewFix[];
+  planReviewed?: boolean;
+  planReview?: 'started' | 'finished';
+  operations?: readonly unknown[];
+}
+
+export type PlanReviewStatus = 'not_reviewed' | 'reviewing' | 'reviewed';
+
+/**
+ * Whether the plan review has seen this paused plan: a pause by a runner with the
+ * review (`planReviewed`) or a finished `review_plan` makes it `reviewed`; a started
+ * one, younger than {@link PLAN_REVIEW_STALE_MS}, `reviewing`; anything else (a
+ * checkpoint paused before the review existed) `not_reviewed`.
+ */
+export function planReviewStatusOf(
+  editLog: readonly PlanReviewLogEntry[],
+  now: number = Date.now(),
+): PlanReviewStatus {
+  let status: PlanReviewStatus = 'not_reviewed';
+  for (const entry of editLog) {
+    if (entry.planReviewed === true || entry.planReview === 'finished') status = 'reviewed';
+    else if (entry.planReview === 'started' && status !== 'reviewed') {
+      status = now - entry.at < PLAN_REVIEW_STALE_MS ? 'reviewing' : 'not_reviewed';
+    }
+  }
+  return status;
+}
+
+/** Every fix recorded on a checkpoint's edit log, in order. */
+export function planFixesOf(editLog: readonly PlanReviewLogEntry[]): PlanReviewFix[] {
+  return editLog.flatMap((entry) => [...(entry.planFixes ?? [])]);
+}
+
+/** The fix ids a person undid (`revert_fix` operations in the edit log). */
+export function revertedFixIds(editLog: readonly PlanReviewLogEntry[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of editLog) {
+    for (const op of entry.operations ?? []) {
+      const record = op && typeof op === 'object' ? (op as Record<string, unknown>) : null;
+      if (record?.op === 'revert_fix' && typeof record.fixId === 'string') ids.add(record.fixId);
+    }
+  }
+  return ids;
+}
+
+/** The correction view's list: each fix without its values, and whether it was undone. */
+export function autoFixesOf(editLog: readonly PlanReviewLogEntry[]): Array<{
+  id: string;
+  op: PlanReviewFix['op'];
+  outlineId: string;
+  field?: string;
+  reason: string;
+  round: number;
+  at: number;
+  reverted: boolean;
+}> {
+  const reverted = revertedFixIds(editLog);
+  return planFixesOf(editLog).map((fix) => ({
+    id: fix.id,
+    op: fix.op,
+    outlineId: fix.outlineId,
+    ...(fix.field !== undefined ? { field: fix.field } : {}),
+    reason: fix.reason,
+    round: fix.round,
+    at: fix.at,
+    reverted: reverted.has(fix.id),
+  }));
+}
+
+function clamp(index: unknown, length: number): number {
+  const value = typeof index === 'number' && Number.isInteger(index) ? index : length;
+  return Math.max(0, Math.min(value, length));
+}
+
+/**
+ * The plan with one fix undone (P3 «تراجع»): a `set` gets its old value back (an
+ * absent one is removed), a `move` goes back to its old index, a removed slide is
+ * re-inserted at its old index (clamped), and an added slide is removed. Returns
+ * `null` when the plan no longer holds what the undo needs (the slide is gone, or a
+ * removed slide is back already). Never mutates its input.
+ */
+export function revertPlanFix(
+  outlines: readonly SceneOutline[],
+  fix: Pick<PlanReviewFix, 'op' | 'outlineId' | 'field' | 'from'>,
+): SceneOutline[] | null {
+  const next = outlines.map((outline) => ({ ...outline }));
+  const at = next.findIndex((outline) => outline.id === fix.outlineId);
+  if (fix.op === 'remove') {
+    const removed = (fix.from as { index?: unknown; outline?: SceneOutline } | undefined)?.outline;
+    if (at !== -1 || !removed || typeof removed !== 'object') return null;
+    next.splice(
+      clamp((fix.from as { index?: unknown }).index, next.length),
+      0,
+      structuredClone(removed),
+    );
+    return next;
+  }
+  if (at === -1) return null;
+  if (fix.op === 'insert_book_slide') {
+    next.splice(at, 1);
+    return next;
+  }
+  if (fix.op === 'move') {
+    const [moved] = next.splice(at, 1);
+    next.splice(clamp(fix.from, next.length), 0, moved!);
+    return next;
+  }
+  if (!fix.field) return null;
+  const outline = next[at] as unknown as Record<string, unknown>;
+  if (fix.from === undefined) delete outline[fix.field];
+  else outline[fix.field] = structuredClone(fix.from);
+  return next;
+}
