@@ -473,6 +473,31 @@ describe('persistence route editor grant', () => {
     expect(remove.status).toBe(403);
   });
 
+  // Teacher voice (owner, 22 Nov 2026): with ACCESS_CODE on, the middleware lets a
+  // grant-cookie holder allocate without the access code; only a non-learner grant
+  // may then store media (a teacher storing a line's narration).
+  it('without the access cookie, allocates for a teacher grant and refuses a learner grant', async () => {
+    vi.stubEnv('ACCESS_CODE', 'teacher-voice-code');
+    const form = () => {
+      const data = new FormData();
+      data.append('meta', new Blob([JSON.stringify({})], { type: 'application/json' }), 'meta');
+      data.append('bytes', new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/mpeg' }), 'bytes');
+      return data;
+    };
+    const learner = await call('/assets', {
+      method: 'POST',
+      headers: { cookie: grantCookie(STAGE_X, 'read', 'learner') },
+      body: form(),
+    });
+    expect(learner.status).toBe(401);
+    const teacher = await call('/assets', {
+      method: 'POST',
+      headers: { cookie: grantCookie(STAGE_X, 'write', 'edit') },
+      body: form(),
+    });
+    expect(teacher.status).toBe(201);
+  });
+
   it('keeps the grant-free behavior: 503 without the dev token', async () => {
     const response = await call(`/documents/${STAGE_X}`, {
       headers: { cookie: `anonymous_id=${OWNER_COOKIE}` },

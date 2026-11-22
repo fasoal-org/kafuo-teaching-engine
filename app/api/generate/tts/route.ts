@@ -41,6 +41,11 @@ import {
 import type { TTSProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import {
+  accessCodeRequiredResponse,
+  hasAccessCookieOrNoGate,
+} from '@/lib/server/teaching-package/editor-grant-tenant-access';
+import { resolveRegenerationGrant } from '@/lib/server/teaching-package/regeneration-grant';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 import { QwenVoiceCloneError, qwenVoiceCloneErrorMessage } from '@/lib/audio/qwen-voice-clone';
@@ -101,6 +106,15 @@ export async function POST(req: NextRequest) {
     const speechConfig = readSpeechConfig();
     const stageId = typeof body.stageId === 'string' && body.stageId ? body.stageId : null;
     const dynamic = body.dynamic === true;
+    // Teacher voice (owner, 22 Nov 2026): a teacher who opened the editor from the
+    // admin holds an editor grant and no access code. Without the access cookie this
+    // paid route serves only a WRITE editor grant for the Stage named in the body
+    // (a learner or preview grant, or no Stage, keeps the middleware's answer).
+    if (!hasAccessCookieOrNoGate(req.headers)) {
+      if (!stageId) return accessCodeRequiredResponse();
+      const resolved = await resolveRegenerationGrant(req.headers, stageId, { requireWrite: true });
+      if (!resolved.ok) return resolved.response;
+    }
     let stageAccess: Awaited<ReturnType<typeof loadStageForSpeech>> = null;
     if (stageId) {
       try {

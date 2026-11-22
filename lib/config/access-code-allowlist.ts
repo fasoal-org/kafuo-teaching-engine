@@ -138,6 +138,16 @@ export const EDITOR_GRANT_EXEMPT_ROUTES: ReadonlyArray<readonly [method: string,
   // same-origin only, like every POST row.
   ['GET', '/api/stages/:id/bank-quiz'],
   ['POST', '/api/stages/:id/bank-quiz'],
+  // Teacher voice (owner, 22 Nov 2026): a teacher who opened the editor from the
+  // admin could neither see that the server voices lessons (no voice controls on
+  // speech lines) nor voice a line (the request, then storing its clip, got the
+  // middleware's 401). Each handler refuses a request without the access cookie
+  // unless it carries a non-learner editor grant
+  // (`hasAccessCookieOrTeacherGrant`); `generate/tts` additionally requires a
+  // write grant for the Stage named in its body.
+  ['GET', '/api/server-providers'],
+  ['POST', '/api/generate/tts'],
+  ['POST', '/api/persistence/assets'],
 ];
 
 /** Literal segments are lowercase words; `:id` becomes one `STAGE_ID` segment. */
