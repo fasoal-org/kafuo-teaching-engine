@@ -1300,6 +1300,67 @@ describe('reviewPlan: keyPoints (D-8)', () => {
     expect(result.fixes.map((fix) => [fix.outlineId, fix.round])).toEqual([['o-sol', 2]]);
     expect(result.outlines[2]!.keyPoints).toEqual([VERSE, 'البداية 11:40', NEW_STEP]);
   });
+
+  describe('allowKeyPoints: false (the review of a paused attempt, P3: no unit text, no quotes)', () => {
+    it('makes no model call when a missing working step is the only open issue', async () => {
+      const outlines = plan();
+      const aiCall = model();
+
+      const result = await reviewPlan(
+        outlines,
+        [workingStep],
+        aiCall,
+        context({ allowKeyPoints: false }),
+      );
+
+      expect(aiCall).not.toHaveBeenCalled();
+      expect(result.rounds).toBe(0);
+      expect(result.fixes).toEqual([]);
+      expect(result.outlines).toEqual(outlines);
+      expect(result.blocking).toEqual([workingStep]);
+    });
+
+    it('offers no keyPoints slide, drops a set keyPoints, and still fixes the other issue', async () => {
+      const stageIssue = issue('POSITION_CARDINALITY', { outlineId: 'o-4', flowIndex: 3 });
+      const both = fakeDiagnose((candidate) => [
+        ...(candidate.some((outline) => outline.keyPoints.includes(NEW_STEP)) ? [] : [workingStep]),
+        ...(candidate.find((outline) => outline.id === 'o-4')?.teachingStage?.flowIndex === 2
+          ? []
+          : [stageIssue]),
+      ]);
+      const outlines = plan();
+      const aiCall = model(
+        answer(setKeyPoints('o-sol', ['البداية 11:40', 'النهاية 12:15', NEW_STEP])),
+        answer({
+          op: 'set',
+          outlineId: 'o-4',
+          field: 'teachingStage',
+          value: 2,
+          reason: 'مكان الشريحة',
+        }),
+      );
+
+      const result = await reviewPlan(
+        outlines,
+        [workingStep, stageIssue],
+        aiCall,
+        context({ diagnose: both, allowKeyPoints: false }),
+      );
+
+      expect(aiCall).toHaveBeenCalledTimes(2);
+      for (const [, user] of aiCall.mock.calls) {
+        expect(user).toContain('- keyPoints: none (no keyPoints op is accepted now)');
+      }
+      expect(aiCall.mock.calls[1]![1]).toContain(
+        'set keyPoints on o-sol was dropped: no keyPoints op is accepted on this review',
+      );
+      expect(result.outlines[2]!.keyPoints).toEqual(['البداية 11:40', 'النهاية 12:15']);
+      expect(result.fixes.map((fix) => [fix.op, fix.outlineId, fix.field, fix.round])).toEqual([
+        ['set', 'o-4', 'teachingStage', 2],
+      ]);
+      expect(codesOf(result.blocking)).toEqual(['WORKING_STEP_MISSING']);
+    });
+  });
 });
 
 describe('reviewPlan: the POSITION_CARDINALITY fallback (step 7)', () => {

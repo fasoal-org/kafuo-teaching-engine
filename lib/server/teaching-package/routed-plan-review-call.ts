@@ -8,8 +8,12 @@
  * `package_generation`, stage `scene-outlines-stream`, the paused run's number).
  *
  * With `TEACHING_SUBJECT_ROUTING=off` the stage route is used, as in every other
- * unrouted outline call. A call whose route is spent throws; the review ends on it
- * and records nothing (the review never rethrows a failed call).
+ * unrouted outline call.
+ *
+ * The route is resolved by the first call, never when the call is made: a route that
+ * cannot be resolved, or is spent, makes that call throw. `reviewPlan` never rethrows
+ * a failed call; it ends with `endedOnError`, and the paused-attempt review then keeps
+ * only the free rule fixes (P1) and nothing of the AI review (`runCheckpointPlanReview`).
  */
 import type { AICallFn } from '@openmaic/generation';
 
@@ -22,26 +26,29 @@ import type { GenerationAttempt } from '@/lib/types/teaching-package';
 
 const OUTLINE_STAGE = 'scene-outlines-stream';
 
-export async function createPlanReviewAiCall(input: {
+export function createPlanReviewAiCall(input: {
   attempt: GenerationAttempt;
   /** The paused run (its ledger rows keep that run's number). */
   generationRun: number;
   execute?: typeof executeTeachingCall;
-}): Promise<AICallFn> {
+}): AICallFn {
   if (readRoutingMode() === 'off') {
+    // The stage route resolves its model on the first call too.
     const routed = createGenerationAiCallFactory();
     return routed(OUTLINE_STAGE);
   }
   const snapshot = input.attempt.inputSnapshot;
   const subjectCode = (snapshot.subjectCode as string | undefined) ?? '';
-  const { policy } = await resolveFrozenPlanRoute({
-    subjectCode,
-    frozenPlanRoute: snapshot.planRoute,
-    frozenGenerationRoute: snapshot.generationRoute,
-    step: `plan review of paused attempt ${input.attempt.id}`,
-  });
+  let route: ReturnType<typeof resolveFrozenPlanRoute> | undefined;
   const execute = input.execute ?? executeTeachingCall;
   return async (systemPrompt, userPrompt) => {
+    route ??= resolveFrozenPlanRoute({
+      subjectCode,
+      frozenPlanRoute: snapshot.planRoute,
+      frozenGenerationRoute: snapshot.generationRoute,
+      step: `plan review of paused attempt ${input.attempt.id}`,
+    });
+    const { policy } = await route;
     const result = await execute(
       policy,
       {

@@ -156,8 +156,19 @@ export interface PlanReviewContext {
    * Absent: they are detected in the units' text (the older-backend rule).
    */
   sacredQuotes?: readonly SacredQuote[];
-  /** S-9 policy block of the prompt; absent → `full` (fail-safe). */
+  /**
+   * S-9 policy block of the prompt; absent → `full` (fail-safe). It only picks the
+   * prompt's policy text: the keyPoints guard is `sacredQuotes` and the units' text.
+   */
   sacredMode?: SacredPolicyMode;
+  /**
+   * Whether the reviewer may write a missing working step (`set keyPoints`, D-8); absent
+   * → true. False for a caller with no unit text and no run quotes (the review of a
+   * paused attempt, P3): a new step could not be grounded, nor its verses guarded. Then
+   * no slide is offered under "keyPoints", a `set keyPoints` is dropped, and an open
+   * `WORKING_STEP_MISSING` is not a reason for a model call (no other op writes a step).
+   */
+  allowKeyPoints?: boolean;
 }
 
 export interface PlanReviewResult {
@@ -347,8 +358,10 @@ function modelCanFix(
   issue: OutlineDiagnostic,
   outlines: readonly SceneOutline[],
   flow: readonly TeachingFlowEntry[],
+  allowKeyPoints: boolean,
 ): boolean {
   if (UNFIXABLE_CODES.has(issue.code)) return false;
+  if (issue.code === WORKING_STEP_MISSING && !allowKeyPoints) return false;
   if (issue.code === POSITION_CARDINALITY && issue.flowIndex !== undefined) {
     return stageSlides(outlines, issue.flowIndex, flow).length >= 1;
   }
@@ -389,7 +402,9 @@ function reviewTargets(
     outlineId: working[gap.anchorIndex!]!.id,
     unitId: gap.unit.contentUnitId,
   }));
-  return { removable, keyPointSlides: [...keyPointSlideIds(working, open, book)], insertable };
+  const keyPointSlides =
+    context.allowKeyPoints === false ? [] : [...keyPointSlideIds(working, open, book)];
+  return { removable, keyPointSlides, insertable };
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +617,12 @@ function applyReviewOps(
     const index = working.findIndex((outline) => outline.id === outlineId);
 
     if (shaped.kind === 'keyPoints') {
+      if (context.allowKeyPoints === false) {
+        refuse(
+          `set keyPoints on ${slide(outlineId)} was dropped: no keyPoints op is accepted on this review`,
+        );
+        continue;
+      }
       const outline = working[index];
       if (!outline || !keyPointSlideIds(working, open, book).has(outlineId)) {
         refuse(
@@ -783,7 +804,7 @@ function diagnoseRound(
 ): { outlines: SceneOutline[]; blocking: OutlineDiagnostic[]; fixes: PlanFixDraft[] } {
   const diagnosed = context.diagnose(candidate);
   if (!diagnosed.blocking.some((issue) => issue.code === FLOW_SEQUENCE_INVALID)) {
-    return { ...diagnosed, fixes: [...fixes] };
+    return { ...diagnosed, fixes: withDiagnosedValues(fixes, diagnosed.outlines) };
   }
   const auto = applyPlanAutoFixes(diagnosed.outlines, diagnosed.blocking, {
     flow: context.flow,
@@ -792,8 +813,28 @@ function diagnoseRound(
   return {
     outlines: auto.outlines,
     blocking: auto.blocking,
-    fixes: [...fixes, ...auto.fixes.map((fix) => ({ ...fix, round }))],
+    fixes: [
+      ...withDiagnosedValues(fixes, auto.outlines),
+      ...auto.fixes.map((fix) => ({ ...fix, round })),
+    ],
   };
+}
+
+/**
+ * Each `set` fix's `to` as the kept plan holds it: the diagnosis may normalise a field
+ * an op set (slide semantics, structural roles, grounded visuals), and the P3 undo only
+ * restores a value still equal to `to`, so `to` must be the stored value (P3 review).
+ */
+function withDiagnosedValues(
+  fixes: readonly PlanFixDraft[],
+  outlines: readonly SceneOutline[],
+): PlanFixDraft[] {
+  return fixes.map((fix) => {
+    if (fix.op !== 'set' || !fix.field) return fix;
+    const outline = outlines.find((entry) => entry.id === fix.outlineId);
+    if (!outline) return fix;
+    return { ...fix, to: (outline as unknown as Record<string, unknown>)[fix.field] };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -926,7 +967,11 @@ export async function reviewPlan(
   let feedback: string[] = [];
 
   for (let round = 1; round <= PLAN_REVIEW_ROUNDS && open.length > 0; round += 1) {
-    if (!open.some((issue) => modelCanFix(issue, current, context.flow))) {
+    if (
+      !open.some((issue) =>
+        modelCanFix(issue, current, context.flow, context.allowKeyPoints !== false),
+      )
+    ) {
       log.info(`plan review: no open issue an op can fix (${open.length} open); no model call`);
       break;
     }

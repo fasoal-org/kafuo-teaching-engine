@@ -7,12 +7,15 @@ import { describe, expect, it } from 'vitest';
 import {
   autoFixesOf,
   bookRepairFixes,
+  checkpointPlanReviewStatus,
   MAX_PLAN_FIXES,
+  PLAN_REVIEW_MAX_STALE_STARTS,
   PLAN_REVIEW_STALE_MS,
   PLAN_REVIEWER_ACTOR,
   planReviewStatusOf,
   recordedPlanFixes,
   revertPlanFix,
+  withoutPlanFixIds,
   withoutUndoState,
   withPlanFixes,
 } from '@/lib/server/teaching-package/plan-fix-records';
@@ -318,10 +321,16 @@ describe('P3: the review status, the view list and the undo', () => {
       outlineId: 'b',
       field: 'contentRole',
       from: 'procedure',
+      to: 'explanation',
     })!;
     expect(set[1]!.contentRole).toBe('procedure');
     // An absent old value removes the field.
-    const cleared = revertPlanFix(plan, { op: 'set', outlineId: 'b', field: 'contentRole' })!;
+    const cleared = revertPlanFix(plan, {
+      op: 'set',
+      outlineId: 'b',
+      field: 'contentRole',
+      to: 'explanation',
+    })!;
     expect(cleared[1]).not.toHaveProperty('contentRole');
     // The input is never mutated.
     expect(plan[1]!.contentRole).toBe('explanation');
@@ -334,5 +343,97 @@ describe('P3: the review status, the view list and the undo', () => {
         from: { index: 0, outline: slide('a') },
       }),
     ).toBeNull();
+  });
+
+  it('never overwrites a later change: a set undo is refused when the field no longer holds what the fix wrote', () => {
+    const plan = [
+      slide('a', { contentRole: 'example', teachingStage: { key: 'k', flowIndex: 1 } }),
+    ];
+    // A person (or a later fix) changed the role after the fix wrote `explanation`.
+    expect(
+      revertPlanFix(plan, {
+        op: 'set',
+        outlineId: 'a',
+        field: 'contentRole',
+        from: 'procedure',
+        to: 'explanation',
+      }),
+    ).toBeNull();
+    // A field the fix cleared, and that is set again since, is refused too.
+    expect(
+      revertPlanFix(plan, { op: 'set', outlineId: 'a', field: 'contentRole', from: 'x' }),
+    ).toBeNull();
+    // An object value is compared as JSON.
+    const restored = revertPlanFix(plan, {
+      op: 'set',
+      outlineId: 'a',
+      field: 'teachingStage',
+      from: { key: 'old', flowIndex: 0 },
+      to: { key: 'k', flowIndex: 1 },
+    })!;
+    expect(restored[0]!.teachingStage).toEqual({ key: 'old', flowIndex: 0 });
+    // A move is undone wherever the slide is now (unchanged rule).
+    expect(revertPlanFix(plan, { op: 'move', outlineId: 'a', from: 3 })).toHaveLength(1);
+  });
+
+  it('stops counting a review that keeps dying: two stale starts make the plan reviewed', () => {
+    const start = (at: number) => ({ event: 'edited', at, planReview: 'started' as const });
+    const now = 100 * PLAN_REVIEW_STALE_MS;
+    expect(planReviewStatusOf([paused(), start(0)], now)).toBe('not_reviewed');
+    // The second start runs: still reviewing while it is fresh.
+    expect(planReviewStatusOf([paused(), start(0), start(now - 1_000)], now)).toBe('reviewing');
+    // Both went stale: no third paid start.
+    expect(planReviewStatusOf([paused(), start(0), start(PLAN_REVIEW_STALE_MS)], now)).toBe(
+      'reviewed',
+    );
+    expect(PLAN_REVIEW_MAX_STALE_STARTS).toBe(2);
+  });
+
+  it('reports reviewed for every checkpoint that is not awaiting in its outline phase', () => {
+    const fresh = [paused(), { event: 'edited', at: 10_000, planReview: 'started' as const }];
+    const at = 10_000 + 60_000;
+    expect(
+      checkpointPlanReviewStatus({ state: 'awaiting', phase: 'outline', editLog: [paused()] }, at),
+    ).toBe('not_reviewed');
+    expect(
+      checkpointPlanReviewStatus({ state: 'awaiting', phase: 'outline', editLog: fresh }, at),
+    ).toBe('reviewing');
+    for (const [state, phase] of [
+      ['awaiting', 'scenes'],
+      ['resumed', 'outline'],
+      ['abandoned', 'outline'],
+    ] as const) {
+      expect(checkpointPlanReviewStatus({ state, phase, editLog: [paused()] }, at)).toBe(
+        'reviewed',
+      );
+      expect(checkpointPlanReviewStatus({ state, phase, editLog: fresh }, at)).toBe('reviewed');
+    }
+  });
+
+  it('drops undone fixes from the snapshot record, and the key when none is left', () => {
+    const [one, two] = recordedPlanFixes(
+      [
+        {
+          op: 'move',
+          outlineId: 'a',
+          from: 1,
+          to: 0,
+          reason: 'r',
+          actor: PLAN_REVIEWER_ACTOR,
+          round: 0,
+        },
+        { op: 'remove', outlineId: 'b', reason: 'r', actor: PLAN_REVIEWER_ACTOR, round: 1 },
+      ],
+      1,
+    );
+    const stored = { fixes: [one!, two!], promptVersion: 'v1' };
+    expect(withoutPlanFixIds(stored, new Set([one!.id]))).toEqual({
+      fixes: [two],
+      promptVersion: 'v1',
+    });
+    expect(withoutPlanFixIds(stored, new Set([one!.id, two!.id]))).toBeUndefined();
+    // Nothing to drop: the same record, so nothing is written.
+    expect(withoutPlanFixIds(stored, new Set(['tpf-other']))).toBe(stored);
+    expect(withoutPlanFixIds(undefined, new Set([one!.id]))).toBeUndefined();
   });
 });

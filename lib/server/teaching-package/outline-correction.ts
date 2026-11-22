@@ -53,7 +53,7 @@ import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
 import {
   autoFixesOf,
-  planReviewStatusOf,
+  checkpointPlanReviewStatus,
   withoutUndoState,
   type PlanReviewStatus,
 } from '@/lib/server/teaching-package/plan-fix-records';
@@ -1077,7 +1077,9 @@ export function buildCorrectionView(
   flow: readonly TeachingFlowEntry[],
 ): CorrectionView {
   const pending = new Set(checkpoint.pendingOutlineIds ?? []);
-  const reviewStatus = planReviewStatusOf(checkpoint.editLog);
+  // P3: `reviewed` unless the checkpoint is awaiting in its outline phase, so the admin
+  // page never sends `review_plan` to a scenes-phase, resumed or abandoned checkpoint.
+  const reviewStatus = checkpointPlanReviewStatus(checkpoint);
   return {
     attemptId: attempt.id,
     attemptStatus: attempt.status,

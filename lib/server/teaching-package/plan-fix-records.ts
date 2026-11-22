@@ -205,6 +205,12 @@ export function withoutUndoState(fix: PlanReviewFix): Omit<PlanReviewFix, 'from'
 /** A `review_plan` still running after this long died with its process; it may run again. */
 export const PLAN_REVIEW_STALE_MS = 15 * 60_000;
 
+/**
+ * Started reviews that went stale after which the plan counts as `reviewed`: a review
+ * that keeps dying is not started again and again (each start may pay for model calls).
+ */
+export const PLAN_REVIEW_MAX_STALE_STARTS = 2;
+
 /** The minimal edit-log entry shape these readers need. */
 interface PlanReviewLogEntry {
   event: string;
@@ -221,20 +227,41 @@ export type PlanReviewStatus = 'not_reviewed' | 'reviewing' | 'reviewed';
  * Whether the plan review has seen this paused plan: a pause by a runner with the
  * review (`planReviewed`) or a finished `review_plan` makes it `reviewed`; a started
  * one, younger than {@link PLAN_REVIEW_STALE_MS}, `reviewing`; anything else (a
- * checkpoint paused before the review existed) `not_reviewed`.
+ * checkpoint paused before the review existed) `not_reviewed`, until
+ * {@link PLAN_REVIEW_MAX_STALE_STARTS} started reviews went stale: then `reviewed`.
  */
 export function planReviewStatusOf(
   editLog: readonly PlanReviewLogEntry[],
   now: number = Date.now(),
 ): PlanReviewStatus {
   let status: PlanReviewStatus = 'not_reviewed';
+  let staleStarts = 0;
   for (const entry of editLog) {
     if (entry.planReviewed === true || entry.planReview === 'finished') status = 'reviewed';
     else if (entry.planReview === 'started' && status !== 'reviewed') {
-      status = now - entry.at < PLAN_REVIEW_STALE_MS ? 'reviewing' : 'not_reviewed';
+      if (now - entry.at < PLAN_REVIEW_STALE_MS) {
+        status = 'reviewing';
+      } else {
+        staleStarts += 1;
+        status = staleStarts >= PLAN_REVIEW_MAX_STALE_STARTS ? 'reviewed' : 'not_reviewed';
+      }
     }
   }
   return status;
+}
+
+/**
+ * The status a checkpoint reports (P3 review MEDIUM 4): only an `awaiting` checkpoint
+ * in its outline phase can still be reviewed, so a scenes-phase, resumed or abandoned
+ * one is always `reviewed` (the admin page never sends `review_plan` to it, and an
+ * abandoned review never shows as running).
+ */
+export function checkpointPlanReviewStatus(
+  checkpoint: { state: string; phase: string; editLog: readonly PlanReviewLogEntry[] },
+  now: number = Date.now(),
+): PlanReviewStatus {
+  if (checkpoint.state !== 'awaiting' || checkpoint.phase !== 'outline') return 'reviewed';
+  return planReviewStatusOf(checkpoint.editLog, now);
 }
 
 /** Every fix recorded on a checkpoint's edit log, in order. */
@@ -287,12 +314,13 @@ function clamp(index: unknown, length: number): number {
  * The plan with one fix undone (P3 «تراجع»): a `set` gets its old value back (an
  * absent one is removed), a `move` goes back to its old index, a removed slide is
  * re-inserted at its old index (clamped), and an added slide is removed. Returns
- * `null` when the plan no longer holds what the undo needs (the slide is gone, or a
- * removed slide is back already). Never mutates its input.
+ * `null` when the plan no longer holds what the undo needs (the slide is gone, a
+ * removed slide is back already, or a `set` field no longer holds the value the fix
+ * wrote: a later change to it is never overwritten). Never mutates its input.
  */
 export function revertPlanFix(
   outlines: readonly SceneOutline[],
-  fix: Pick<PlanReviewFix, 'op' | 'outlineId' | 'field' | 'from'>,
+  fix: Pick<PlanReviewFix, 'op' | 'outlineId' | 'field' | 'from' | 'to'>,
 ): SceneOutline[] | null {
   const next = outlines.map((outline) => ({ ...outline }));
   const at = next.findIndex((outline) => outline.id === fix.outlineId);
@@ -318,7 +346,30 @@ export function revertPlanFix(
   }
   if (!fix.field) return null;
   const outline = next[at] as unknown as Record<string, unknown>;
+  if (!sameValue(outline[fix.field], fix.to)) return null;
   if (fix.from === undefined) delete outline[fix.field];
   else outline[fix.field] = structuredClone(fix.from);
   return next;
+}
+
+/**
+ * The snapshot's `planReview` without the fixes a person undid (P3 review HIGH 1), so a
+ * completed attempt never lists one. `undefined` when no fix is left (the key is then
+ * dropped: it is present only when the plan review fixed something); the input itself
+ * when none of `ids` was on it.
+ */
+export function withoutPlanFixIds(
+  existing: StoredPlanReview | undefined,
+  ids: ReadonlySet<string>,
+): StoredPlanReview | undefined {
+  const fixes = existing?.fixes ?? [];
+  if (!existing || !fixes.some((fix) => ids.has(fix.id))) return existing;
+  const kept = fixes.filter((fix) => !ids.has(fix.id));
+  return kept.length > 0 ? { ...existing, fixes: kept } : undefined;
+}
+
+/** The attempt snapshot's `planReview` as stored (with the values, for the server only). */
+export interface StoredPlanReview {
+  fixes?: PlanReviewFix[];
+  promptVersion?: string;
 }
