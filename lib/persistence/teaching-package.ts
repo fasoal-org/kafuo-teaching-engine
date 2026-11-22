@@ -1296,7 +1296,10 @@ function isStoredRouteTarget(value: unknown): value is GenerationRouteTarget {
  * value is treated as absent with a warning, never a crash: the later steps then
  * keep today's table. Catalogue membership is checked when it is resolved.
  */
-export function storedGenerationRouteOf(raw: unknown): GenerationModelRoute | null {
+export function storedGenerationRouteOf(
+  raw: unknown,
+  field: StoredRouteField = 'generationRoute',
+): GenerationModelRoute | null {
   if (raw === undefined) return null;
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     const { primary, fallback, settingKey } = raw as Record<string, unknown>;
@@ -1314,19 +1317,30 @@ export function storedGenerationRouteOf(raw: unknown): GenerationModelRoute | nu
     }
   }
   log.warn(
-    'input_snapshot.generationRoute is malformed and is treated as absent (the code table applies)',
+    field === 'generationRoute'
+      ? 'input_snapshot.generationRoute is malformed and is treated as absent (the code table applies)'
+      : 'input_snapshot.planRoute is malformed and is treated as absent (planning follows the generation route)',
   );
   return null;
 }
 
-/** The snapshot with its frozen `generationRoute` shape-checked (dropped when malformed). */
+/**
+ * The snapshot fields holding a frozen catalogue route: the generation route
+ * (D-10) and the planning and review route (package-planner-issue-resolve-plan-
+ * 2026-11-22 §3c).
+ */
+type StoredRouteField = 'generationRoute' | 'planRoute';
+
+/** The snapshot with its frozen routes shape-checked (each dropped when malformed). */
 function withStoredGenerationRoute(snapshot: GenerationInputSnapshot): GenerationInputSnapshot {
-  if (!snapshot || typeof snapshot !== 'object' || !('generationRoute' in snapshot)) {
-    return snapshot;
+  let checked = snapshot;
+  for (const field of ['generationRoute', 'planRoute'] as const) {
+    if (!checked || typeof checked !== 'object' || !(field in checked)) continue;
+    const { [field]: raw, ...rest } = checked;
+    const route = storedGenerationRouteOf(raw, field);
+    checked = (route ? { ...rest, [field]: route } : rest) as GenerationInputSnapshot;
   }
-  const { generationRoute: raw, ...rest } = snapshot;
-  const route = storedGenerationRouteOf(raw);
-  return route ? { ...rest, generationRoute: route } : (rest as GenerationInputSnapshot);
+  return checked;
 }
 
 /**

@@ -244,14 +244,32 @@ async function resolveAttemptSubjectRoute(
   attemptId: string,
   kafuo: KafuoGenerationContext,
   pool: ConnectableQueryable,
-): Promise<{ policy: ResolvedSubjectPolicy | null; failed: boolean }> {
-  if (readRoutingMode() === 'off') return { policy: null, failed: false };
+): Promise<{
+  policy: ResolvedSubjectPolicy | null;
+  /**
+   * The planning and review policy (package-planner-issue-resolve-plan-
+   * 2026-11-22 §3c): resolved from `kafuo.planRoute` when one is configured,
+   * otherwise the generation policy itself (D-5's default). It fails closed the
+   * same way as the generation policy.
+   */
+  planPolicy: ResolvedSubjectPolicy | null;
+  failed: boolean;
+}> {
+  if (readRoutingMode() === 'off') return { policy: null, planPolicy: null, failed: false };
   let policy: ResolvedSubjectPolicy;
+  let planPolicy: ResolvedSubjectPolicy;
   try {
     policy = await resolveGenerationRoute({
       subjectCode: kafuo.subjectCode,
       route: kafuo.modelRoute,
     });
+    planPolicy = kafuo.planRoute
+      ? await resolveGenerationRoute({
+          subjectCode: kafuo.subjectCode,
+          route: kafuo.planRoute,
+          field: 'planRoute',
+        })
+      : policy;
   } catch (error) {
     const refusal =
       error instanceof TeachingPackageError && error.code === 'SUBJECT_ROUTE_UNAVAILABLE'
@@ -268,7 +286,7 @@ async function resolveAttemptSubjectRoute(
       code: refusal.code,
       retryable: false,
     });
-    return { policy: null, failed: true };
+    return { policy: null, planPolicy: null, failed: true };
   }
   await recordSubjectRoute(pool, attemptId, {
     subjectCode: policy.subjectCode,
@@ -276,6 +294,7 @@ async function resolveAttemptSubjectRoute(
     primaryModel: policy.primary.modelString,
     fallbackModel: policy.fallback.modelString,
     ...(kafuo.modelRoute ? { generationRoute: kafuo.modelRoute } : {}),
+    ...(kafuo.planRoute ? { planRoute: kafuo.planRoute } : {}),
   });
   if (kafuo.modelRoute) {
     // D-16: the applied route per attempt — model strings and thinking values only.
@@ -283,7 +302,12 @@ async function resolveAttemptSubjectRoute(
       `Teaching package attempt ${attemptId} runs the configured route ${kafuo.modelRoute.settingKey}: primary ${kafuo.modelRoute.primary.model} (${kafuo.modelRoute.primary.thinking}), fallback ${kafuo.modelRoute.fallback.model} (${kafuo.modelRoute.fallback.thinking})`,
     );
   }
-  return { policy, failed: false };
+  if (kafuo.planRoute) {
+    log.info(
+      `Teaching package attempt ${attemptId} plans on the configured route ${kafuo.planRoute.settingKey}: primary ${kafuo.planRoute.primary.model} (${kafuo.planRoute.primary.thinking}), fallback ${kafuo.planRoute.fallback.model} (${kafuo.planRoute.fallback.thinking})`,
+    );
+  }
+  return { policy, planPolicy, failed: false };
 }
 
 /**
@@ -942,6 +966,10 @@ async function runKafuoAttempt(
     ...(route.policy
       ? {
           modelPolicy: route.policy,
+          // §3c: the planner's outline call and every call made through it.
+          ...(route.planPolicy && route.planPolicy !== route.policy
+            ? { planPolicy: route.planPolicy }
+            : {}),
           attribution: {
             tenantId: kafuo.aggregate.tenantId,
             generationAttemptId: attemptId,

@@ -338,6 +338,85 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     }
   });
 
+  it('runs the planner, the book repair and the refinement on the planning route, and every scene stage on the generation route (§3c)', async () => {
+    // package-planner-issue-resolve-plan-2026-11-22 §3c (owner, 22 Nov 2026).
+    const generation = await policyFor('MATH'); // Luna primary → Qwen fallback
+    const { resolveConfiguredGenerationPolicy } =
+      await import('@/lib/server/teaching-model/resolve-policy');
+    const planPolicy = await resolveConfiguredGenerationPolicy(
+      'MATH',
+      {
+        primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+        fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        settingKey: 'teaching_generation.plan_route.MATH',
+      },
+      'planRoute',
+    );
+    const repairCalls: string[] = [];
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const result = await generateClassroom(
+      {
+        requirement: 'Teach fractions',
+        modelPolicy: generation,
+        planPolicy,
+        attribution: ATTRIBUTION,
+        agentMode: 'generate',
+      },
+      {
+        baseUrl: '',
+        correction: {
+          // One open issue, so the run reaches the book repair before any pause.
+          collectOutlineIssues: async () => [
+            { code: 'BOOK_COVERAGE_INCOMPLETE', severity: 'error', message: 'gap' } as never,
+          ],
+          repairOutlines: async (outlines, _blocking, aiCall) => {
+            repairCalls.push(await aiCall('sys-repair', 'user-repair'));
+            return { outlines, blocking: [] };
+          },
+          refineOutlines: async (_outlines, aiCall) => {
+            repairCalls.push(await aiCall('sys-refine', 'user-refine'));
+            return null;
+          },
+        },
+      },
+    );
+    expect(result.scenesCount).toBe(1);
+    expect(repairCalls).toHaveLength(2);
+
+    const calls = callsBySource();
+    expect(calls.map((c) => [c.source, c.model])).toEqual([
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5'],
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5'],
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5'],
+      ['agent-profiles', 'openai:gpt-6-luna'],
+      ['scene-content:slide', 'openai:gpt-6-luna'],
+      ['scene-actions', 'openai:gpt-6-luna'],
+    ]);
+
+    // Each planning call is metered on its own row, under the planning route.
+    const rows = await ledgerRows();
+    expect(rows.map((row) => [row.stage, row.model_string, row.policy_version])).toEqual([
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5', 'configured-2026-11'],
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5', 'configured-2026-11'],
+      ['scene-outlines-stream', 'anthropic:claude-opus-5-5', 'configured-2026-11'],
+      ['agent-profiles', 'openai:gpt-6-luna', 'r1-2026-09'],
+      ['scene-content:slide', 'openai:gpt-6-luna', 'r1-2026-09'],
+      ['scene-actions', 'openai:gpt-6-luna', 'r1-2026-09'],
+    ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({ subject_code: 'MATH', generation_attempt_id: 'tpa-routed-1' });
+    }
+  });
+
+  it('without a planning policy, planning stays on the generation policy (D-5 default)', async () => {
+    const policy = await policyFor('MATH');
+    await generate({ modelPolicy: policy, attribution: ATTRIBUTION, agentMode: 'generate' });
+    const calls = callsBySource();
+    expect(calls.find((c) => c.source === 'scene-outlines-stream')).toMatchObject({
+      model: 'openai:gpt-6-luna',
+    });
+  });
+
   it('keeps web-search-query-rewrite on its stage route, off the ledger (contracts §0 L5)', async () => {
     vi.stubEnv('MODEL_ROUTES', JSON.stringify({ 'web-search-query-rewrite': 'openai:gpt-6-luna' }));
     mocks.resolveClassroomWebSearchConfig.mockReturnValue({ providerId: 'tavily', apiKey: 'k' });

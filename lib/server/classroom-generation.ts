@@ -571,6 +571,15 @@ export interface GenerateClassroomInput {
    * prompts, models and behaviour are byte-identical to the unrouted path.
    */
   modelPolicy?: ResolvedSubjectPolicy;
+  /**
+   * The planning and review policy (package-planner-issue-resolve-plan-
+   * 2026-11-22 §3c), used only with `modelPolicy`: the planner's outline call
+   * (`scene-outlines-stream`) and every call made through `outlineAiCall`
+   * (the book-coverage repair, the outline refinement and the plan review
+   * layer) run on it; every other stage keeps `modelPolicy`. Absent ⇒
+   * `modelPolicy` for planning too.
+   */
+  planPolicy?: ResolvedSubjectPolicy;
   /** Required with `modelPolicy`: what the ledger rows are attributed to. */
   attribution?: GenerationAttribution;
   pdfContent?: { text: string; images: string[]; pdfImages?: PdfImage[] };
@@ -1114,7 +1123,11 @@ export async function generateClassroom(
   }
   const routed =
     input.modelPolicy && input.attribution
-      ? { policy: input.modelPolicy, attribution: input.attribution }
+      ? {
+          policy: input.modelPolicy,
+          planPolicy: input.planPolicy ?? input.modelPolicy,
+          attribution: input.attribution,
+        }
       : null;
 
   // The base ("generate-classroom") model still serves the non-teaching
@@ -1151,6 +1164,11 @@ export async function generateClassroom(
     log.info(
       `Subject route ${routed.policy.subjectCode} (${routed.policy.policyVersion}): ${routed.policy.primary.modelString} → ${routed.policy.fallback.modelString}`,
     );
+    if (routed.planPolicy !== routed.policy) {
+      log.info(
+        `Planning route ${routed.planPolicy.subjectCode} (${routed.planPolicy.policyVersion}): ${routed.planPolicy.primary.modelString} → ${routed.planPolicy.fallback.modelString}`,
+      );
+    }
   }
 
   // The routed teaching call (plan §7.3): one executor invocation per AICallFn
@@ -1201,11 +1219,13 @@ export async function generateClassroom(
     systemPrompt: string,
     userPrompt: string,
     images?: Array<{ id: string; src: string; width?: number; height?: number }>,
+    // §3c: the planning calls pass `routed.planPolicy`; every other stage the generation policy.
+    policy: ResolvedSubjectPolicy = routed!.policy,
   ): Promise<string> => {
     const withImages = images !== undefined && images.length > 0;
     try {
       const result = await executeTeachingCall(
-        routed!.policy,
+        policy,
         teachingContext(stage),
         {
           messages: [
@@ -1337,7 +1357,18 @@ export async function generateClassroom(
   }
   const outlineAiCall: AICallFn = async (systemPrompt, userPrompt, images) => {
     // Routed: the executor plans the vision-capable target itself (AMB-08).
-    if (routed) return routedCall('scene-outlines-stream', systemPrompt, userPrompt, images);
+    // The planning and review route (§3c): the outline call itself and every
+    // call made through `outlineAiCall` — `correction.repairOutlines`,
+    // `correction.refineOutlines` and the plan review layer.
+    if (routed) {
+      return routedCall(
+        'scene-outlines-stream',
+        systemPrompt,
+        userPrompt,
+        images,
+        routed.planPolicy,
+      );
+    }
     if (hasSourceVisuals) {
       requireVisionCapableOutline();
     }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  assertConfiguredGenerationRouteAvailable,
   buildKafuoStartRequest,
   canonicalRequestDigest,
   canonicalRequestPayload,
@@ -362,6 +363,30 @@ describe('canonicalRequestDigest', () => {
     ).toBe(vector.digest);
   });
 
+  it('covers the planning and review route only when sent (vector 10, plan §3c)', () => {
+    // package-planner-issue-resolve-plan-2026-11-22 §3c: vector 10 is vector 1
+    // plus `planRoute` (requestId is outside the digest). Vector 9 stays as is.
+    const vector = vectors.vectors[9]!;
+    const route = vector.request.planRoute as Record<string, unknown>;
+    expect(route).toEqual({
+      primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+      fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      settingKey: 'teaching_generation.plan_route.BIOLOGY',
+    });
+    expect(vector.request).not.toHaveProperty('modelRoute');
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    expect(canonicalRequestDigest(request)).toBe(vector.digest);
+    expect(vector.digest).not.toBe(vectors.vectors[0]!.digest);
+    expect(vector.digest).not.toBe(vectors.vectors[8]!.digest);
+    // Dropping the field gives back vector 1's pinned legacy digest byte for byte.
+    const { planRoute: _route, ...withoutRoute } = JSON.parse(
+      JSON.stringify(vector.request),
+    ) as Record<string, unknown>;
+    expect(canonicalRequestDigest(parseKafuoGenerationRequest(withoutRoute).request)).toBe(
+      vectors.vectors[0]!.digest,
+    );
+  });
+
   it('is independent of the signed retrieval URL', () => {
     const first = parseKafuoGenerationRequest(body()).request;
     const second = parseKafuoGenerationRequest(
@@ -660,6 +685,133 @@ describe('modelRoute (superadmin-configured generation route, teaching-generatio
       expect(
         parseKafuoGenerationRequest(mathBody({ modelRoute: ROUTE })).request.modelRoute,
       ).toEqual(ROUTE);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('planRoute (planning and review model, package-planner-issue-resolve-plan §3c)', () => {
+  const PLAN = {
+    primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+    fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+    settingKey: 'teaching_generation.plan_route.MATH',
+  };
+  const GENERATION = {
+    primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+    fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+    settingKey: 'teaching_generation.route.MATH',
+  };
+  const mathBody = (overrides: Record<string, unknown> = {}) => {
+    const base = body(overrides);
+    return { ...base, learningItem: { ...base.learningItem, subjectOffering: { code: 'MATH' } } };
+  };
+
+  it('absent stays absent: no field on the request, no route on the context, digest unchanged', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(mathBody());
+    expect(request).not.toHaveProperty('planRoute');
+    expect(canonicalRequestPayload(request)).not.toHaveProperty('planRoute');
+    expect(buildKafuoStartRequest(request, aggregate).kafuo).not.toHaveProperty('planRoute');
+  });
+
+  it('parses a catalogue route onto the request and the run context, and covers it in the digest', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(mathBody({ planRoute: PLAN }));
+    expect(request.planRoute).toEqual(PLAN);
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(kafuo.planRoute).toEqual(PLAN);
+    expect(kafuo).not.toHaveProperty('modelRoute');
+    // The runner freezes it on the attempt, not the start snapshot.
+    expect(start).not.toHaveProperty('planRoute');
+    const payload = canonicalRequestPayload(request);
+    expect(Object.keys(payload.planRoute as object)).toEqual(['primary', 'fallback', 'settingKey']);
+    expect(payload.planRoute).toEqual(PLAN);
+  });
+
+  it('is independent of modelRoute: either, both or neither, each a different digest', () => {
+    const digest = (overrides: Record<string, unknown>) =>
+      canonicalRequestDigest(parseKafuoGenerationRequest(mathBody(overrides)).request);
+    const both = parseKafuoGenerationRequest(
+      mathBody({ modelRoute: GENERATION, planRoute: PLAN }),
+    ).request;
+    expect(both.modelRoute).toEqual(GENERATION);
+    expect(both.planRoute).toEqual(PLAN);
+    const all = [
+      digest({}),
+      digest({ planRoute: PLAN }),
+      digest({ modelRoute: GENERATION }),
+      digest({ modelRoute: GENERATION, planRoute: PLAN }),
+      digest({ planRoute: { ...PLAN, primary: { ...PLAN.primary, thinking: 'max' } } }),
+      digest({ planRoute: { ...PLAN, fallback: { model: 'qwen:qwen4-max', thinking: 'on' } } }),
+    ];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it.each([
+    ['null (only an absent field means the generation route)', null],
+    ['not an object', 'anthropic:claude-opus-5-5'],
+    [
+      'a model outside the catalogue',
+      { ...PLAN, primary: { model: 'openai:gpt-5-nano', thinking: 'low' } },
+    ],
+    [
+      'a thinking value the model does not offer',
+      { ...PLAN, primary: { ...PLAN.primary, thinking: 'on' } },
+    ],
+    [
+      'primary = fallback',
+      { ...PLAN, fallback: { model: 'anthropic:claude-opus-5-5', thinking: 'low' } },
+    ],
+    [
+      'a generation-route key (the wrong key family)',
+      { ...PLAN, settingKey: 'teaching_generation.route.MATH' },
+    ],
+    [
+      "another subject's setting key",
+      { ...PLAN, settingKey: 'teaching_generation.plan_route.PHYSICS' },
+    ],
+  ])('refuses %s with GENERATION_ROUTE_INVALID (400)', (_label, planRoute) => {
+    expect(() => parseKafuoGenerationRequest(mathBody({ planRoute }))).toThrowError(
+      expect.objectContaining({ code: 'GENERATION_ROUTE_INVALID', status: 400 }),
+    );
+  });
+
+  it('refuses a plan-route key sent as the generation route (the wrong key family)', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(
+        mathBody({ modelRoute: { ...GENERATION, settingKey: PLAN.settingKey } }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'GENERATION_ROUTE_INVALID' }));
+  });
+
+  it('refuses a planRoute sent inside `generation` instead of dropping it', () => {
+    expect(() =>
+      parseKafuoGenerationRequest(mathBody({ generation: { enableTTS: true, planRoute: PLAN } })),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'GENERATION_ROUTE_INVALID',
+        message: expect.stringContaining('generation.planRoute is not accepted'),
+      }),
+    );
+  });
+
+  it('a plan target without a server key is refused with GENERATION_ROUTE_UNAVAILABLE (409), naming the env var only', () => {
+    vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'enforced');
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    try {
+      const { request, aggregate } = parseKafuoGenerationRequest(mathBody({ planRoute: PLAN }));
+      const { kafuo } = buildKafuoStartRequest(request, aggregate);
+      expect(() => assertConfiguredGenerationRouteAvailable(kafuo)).toThrowError(
+        expect.objectContaining({
+          code: 'GENERATION_ROUTE_UNAVAILABLE',
+          status: 409,
+          details: expect.objectContaining({
+            role: 'primary',
+            model: 'anthropic:claude-opus-5-5',
+            settingKey: 'teaching_generation.plan_route.MATH',
+            keyEnvVar: 'ANTHROPIC_API_KEY',
+          }),
+        }),
+      );
     } finally {
       vi.unstubAllEnvs();
     }

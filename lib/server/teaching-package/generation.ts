@@ -602,25 +602,24 @@ export async function recordSubjectRoute(
     primaryModel: string;
     fallbackModel: string;
     generationRoute?: GenerationModelRoute;
+    /**
+     * The planning and review route (package-planner-issue-resolve-plan-
+     * 2026-11-22 §3c), frozen beside `generationRoute` the same way.
+     */
+    planRoute?: GenerationModelRoute;
   },
 ): Promise<void> {
-  const { generationRoute, ...table } = route;
-  const patch = generationRoute
-    ? {
-        ...table,
-        generationRoute: {
-          primary: {
-            model: generationRoute.primary.model,
-            thinking: generationRoute.primary.thinking,
-          },
-          fallback: {
-            model: generationRoute.fallback.model,
-            thinking: generationRoute.fallback.thinking,
-          },
-          settingKey: generationRoute.settingKey,
-        },
-      }
-    : table;
+  const { generationRoute, planRoute, ...table } = route;
+  const frozen = (value: GenerationModelRoute): GenerationModelRoute => ({
+    primary: { model: value.primary.model, thinking: value.primary.thinking },
+    fallback: { model: value.fallback.model, thinking: value.fallback.thinking },
+    settingKey: value.settingKey,
+  });
+  const patch = {
+    ...table,
+    ...(generationRoute ? { generationRoute: frozen(generationRoute) } : {}),
+    ...(planRoute ? { planRoute: frozen(planRoute) } : {}),
+  };
   await pool.query(
     `UPDATE teaching_package_generation_attempts
         SET input_snapshot = input_snapshot || $2::jsonb,

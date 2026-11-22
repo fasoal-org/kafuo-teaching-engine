@@ -22,6 +22,7 @@ import {
   GENERATION_POLICY_VERSION,
   parseGenerationModelRoute,
   thinkingConfigFor,
+  type GenerationRouteField,
 } from '@/lib/server/teaching-model/generation-catalog';
 import {
   counterKindForProvider,
@@ -141,6 +142,10 @@ export async function resolveSubjectModelPolicy(code: unknown): Promise<Resolved
 export async function resolveConfiguredGenerationPolicy(
   code: unknown,
   route: GenerationModelRoute,
+  // A planning route (`planRoute`, package-planner-issue-resolve-plan-2026-11-22
+  // §3c) resolves exactly like a generation route, under its own key family. The
+  // caller names the field, so a key of the other family is still refused.
+  field: GenerationRouteField = 'modelRoute',
 ): Promise<ResolvedSubjectPolicy> {
   if (!isSubjectCode(code)) {
     throw new TeachingPackageError(
@@ -150,9 +155,10 @@ export async function resolveConfiguredGenerationPolicy(
     );
   }
   const settingKey = (route as Partial<GenerationModelRoute> | null | undefined)?.settingKey;
+  const routeLabel = field === 'planRoute' ? 'planning' : 'generation';
   let targets: Record<TargetRole, ResolvableTarget>;
   try {
-    const valid = parseGenerationModelRoute(route);
+    const valid = parseGenerationModelRoute(route, field);
     const targetOf = (role: TargetRole): ResolvableTarget => ({
       model: valid[role].model,
       thinking: thinkingConfigFor(valid[role].model, valid[role].thinking),
@@ -163,7 +169,7 @@ export async function resolveConfiguredGenerationPolicy(
     const detail = error instanceof Error ? error.message : String(error);
     throw new TeachingPackageError(
       'SUBJECT_ROUTE_UNAVAILABLE',
-      `subject ${code}: the configured generation route ${JSON.stringify(settingKey)} cannot be resolved (${detail})`,
+      `subject ${code}: the configured ${routeLabel} route ${JSON.stringify(settingKey)} cannot be resolved (${detail})`,
       { subjectCode: code, settingKey },
     );
   }
@@ -182,8 +188,10 @@ export async function resolveConfiguredGenerationPolicy(
 export async function resolveGenerationRoute(input: {
   subjectCode: unknown;
   route?: GenerationModelRoute | null;
+  /** `planRoute` for the planning and review route (§3c); default `modelRoute`. */
+  field?: GenerationRouteField;
 }): Promise<ResolvedSubjectPolicy> {
   return input.route
-    ? resolveConfiguredGenerationPolicy(input.subjectCode, input.route)
+    ? resolveConfiguredGenerationPolicy(input.subjectCode, input.route, input.field)
     : resolveSubjectModelPolicy(input.subjectCode);
 }

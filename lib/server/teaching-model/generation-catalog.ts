@@ -44,6 +44,33 @@ export const GENERATION_POLICY_VERSION = 'configured-2026-11';
 /** `modelRoute.settingKey`: the Kafuo runtime setting the route came from (D-8, D-9). */
 export const GENERATION_ROUTE_SETTING_KEY = /^teaching_generation\.route\.[A-Z][A-Z_]*$/;
 
+/**
+ * `planRoute.settingKey`: the per-subject planning and review model setting
+ * (package-planner-issue-resolve-plan-2026-11-22 §3c, D-5/D-10, owner 22 Nov
+ * 2026). Same value shape and catalogue as the generation route.
+ */
+export const PLAN_ROUTE_SETTING_KEY = /^teaching_generation\.plan_route\.[A-Z][A-Z_]*$/;
+
+/**
+ * The two wire fields that carry a catalogue route: `modelRoute` (the
+ * generation model) and `planRoute` (the planning and review model, §3c).
+ */
+export type GenerationRouteField = 'modelRoute' | 'planRoute';
+
+const ROUTE_SETTING_KEY_FAMILY: Record<GenerationRouteField, { pattern: RegExp; prefix: string }> =
+  {
+    modelRoute: { pattern: GENERATION_ROUTE_SETTING_KEY, prefix: 'teaching_generation.route.' },
+    planRoute: { pattern: PLAN_ROUTE_SETTING_KEY, prefix: 'teaching_generation.plan_route.' },
+  };
+
+/** The subject code a route's `settingKey` names: the `<CODE>` of its key family. */
+export function routeSettingKeySubjectCode(
+  field: GenerationRouteField,
+  settingKey: string,
+): string {
+  return settingKey.slice(ROUTE_SETTING_KEY_FAMILY[field].prefix.length);
+}
+
 export interface GenerationCatalogEntry {
   /** Canonical `provider:model` string. */
   readonly model: string;
@@ -137,53 +164,63 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseRouteTarget(raw: unknown, role: 'primary' | 'fallback'): GenerationRouteTarget {
+function parseRouteTarget(
+  raw: unknown,
+  role: 'primary' | 'fallback',
+  field: GenerationRouteField,
+): GenerationRouteTarget {
   const invalid = (message: string) =>
     new TeachingPackageError('GENERATION_ROUTE_INVALID', message);
-  if (!isPlainObject(raw)) throw invalid(`modelRoute.${role} must be an object`);
+  if (!isPlainObject(raw)) throw invalid(`${field}.${role} must be an object`);
   const { model, thinking } = raw;
   if (typeof model !== 'string' || !generationCatalogEntry(model)) {
     throw invalid(
-      `modelRoute.${role}.model ${JSON.stringify(model)} is not a Teaching Engine generation catalogue model`,
+      `${field}.${role}.model ${JSON.stringify(model)} is not a Teaching Engine generation catalogue model`,
     );
   }
   const options = generationThinkingOptions(model);
   if (typeof thinking !== 'string' || !options.includes(thinking)) {
     throw invalid(
-      `modelRoute.${role}.thinking ${JSON.stringify(thinking)} is not a thinking value of ${model} (allowed: ${options.join(', ')})`,
+      `${field}.${role}.thinking ${JSON.stringify(thinking)} is not a thinking value of ${model} (allowed: ${options.join(', ')})`,
     );
   }
   return { model, thinking };
 }
 
 /**
- * The pure validator behind the request's optional `modelRoute` (D-9, D-11):
- * both targets name a catalogue model and one of its thinking values, the two
- * models differ (D-5), and `settingKey` is a `teaching_generation.route.<CODE>`
- * key. Anything else is refused with `GENERATION_ROUTE_INVALID` (400) before
- * any attempt exists. Returns a fresh value with exactly the wire fields, so
- * an extra key can never reach the digest or the frozen route.
+ * The pure validator behind the request's optional `modelRoute` (D-9, D-11)
+ * and `planRoute` (package-planner-issue-resolve-plan-2026-11-22 §3c): both
+ * targets name a catalogue model and one of its thinking values, the two
+ * models differ (D-5), and `settingKey` is a key of the field's own family
+ * (`teaching_generation.route.<CODE>` or `teaching_generation.plan_route.<CODE>`).
+ * Anything else is refused with `GENERATION_ROUTE_INVALID` (400) before any
+ * attempt exists. Returns a fresh value with exactly the wire fields, so an
+ * extra key can never reach the digest or the frozen route.
  */
-export function parseGenerationModelRoute(raw: unknown): GenerationModelRoute {
+export function parseGenerationModelRoute(
+  raw: unknown,
+  field: GenerationRouteField = 'modelRoute',
+): GenerationModelRoute {
   if (!isPlainObject(raw)) {
     throw new TeachingPackageError(
       'GENERATION_ROUTE_INVALID',
-      'modelRoute must be an object when present',
+      `${field} must be an object when present`,
     );
   }
-  const primary = parseRouteTarget(raw.primary, 'primary');
-  const fallback = parseRouteTarget(raw.fallback, 'fallback');
+  const primary = parseRouteTarget(raw.primary, 'primary', field);
+  const fallback = parseRouteTarget(raw.fallback, 'fallback', field);
   if (primary.model === fallback.model) {
     throw new TeachingPackageError(
       'GENERATION_ROUTE_INVALID',
-      `modelRoute.fallback.model must differ from modelRoute.primary.model (${primary.model})`,
+      `${field}.fallback.model must differ from ${field}.primary.model (${primary.model})`,
     );
   }
   const { settingKey } = raw;
-  if (typeof settingKey !== 'string' || !GENERATION_ROUTE_SETTING_KEY.test(settingKey)) {
+  const family = ROUTE_SETTING_KEY_FAMILY[field];
+  if (typeof settingKey !== 'string' || !family.pattern.test(settingKey)) {
     throw new TeachingPackageError(
       'GENERATION_ROUTE_INVALID',
-      'modelRoute.settingKey must be a teaching_generation.route.<CODE> setting key',
+      `${field}.settingKey must be a ${family.prefix}<CODE> setting key`,
     );
   }
   return { primary, fallback, settingKey };
@@ -229,8 +266,9 @@ export function generationModelUnavailableMessage(
   role: 'primary' | 'fallback',
   model: string,
   availability: GenerationModelAvailability,
+  label: 'generation' | 'planning' = 'generation',
 ): string {
-  const where = `Teaching Engine generation route ${route.settingKey}: ${role} model ${model}`;
+  const where = `Teaching Engine ${label} route ${route.settingKey}: ${role} model ${model}`;
   if (availability.unavailableReason === 'unregistered') {
     return `${where} is not registered in the provider catalog`;
   }

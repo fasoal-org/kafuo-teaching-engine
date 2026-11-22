@@ -448,6 +448,12 @@ export interface GenerationInputSnapshot {
    * regeneration, slide insertion and package questions read it back (D-6, D-7).
    */
   generationRoute?: GenerationModelRoute;
+  /**
+   * The planning and review model route the attempt ran its planner under
+   * (package-planner-issue-resolve-plan-2026-11-22 §3c), frozen beside
+   * `generationRoute`. Absent ⇒ planning followed the generation route.
+   */
+  planRoute?: GenerationModelRoute;
   /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
   ledgerIncomplete?: boolean;
   /**
@@ -919,6 +925,14 @@ export interface KafuoGenerationRequest {
    * code-owned subject table, and the canonical digest is byte-identical to before.
    */
   modelRoute?: GenerationModelRoute;
+  /**
+   * The superadmin-configured planning and review model route for the lesson's
+   * subject (package-planner-issue-resolve-plan-2026-11-22 §3c, D-5/D-10), with
+   * `settingKey` `teaching_generation.plan_route.<CODE>`. It drives the
+   * planner's outline call and every call made through it. Absent ⇒ planning
+   * runs on the generation route, and the canonical digest is byte-identical.
+   */
+  planRoute?: GenerationModelRoute;
   /**
    * g5.v7 only: the lesson's book map and Lesson Template. Absent ⇒ every
    * earlier version's planning and digest are unchanged.
