@@ -45,7 +45,6 @@ import {
   requeueAttemptForResume,
 } from '@/lib/persistence/teaching-package';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
-import { VISUAL_TEACHING_NOTE_MISSING } from '@openmaic/generation';
 
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { assertActorRef, itemLockKey } from '@/lib/server/teaching-package/lifecycle';
@@ -57,6 +56,7 @@ import {
   diagnosticKey,
   ignoredIssueKeys,
   isIgnorableIssue,
+  isResolvedByResume,
   withoutIgnoredIssues,
   type CorrectionCandidate,
   type CorrectionOperation,
@@ -774,10 +774,13 @@ export async function resumeGenerationAttempt(
     // (slide image plan D-1/D-3), so it never holds a resume back — an older
     // checkpoint saved before notes existed resumes like any other.
     // An issue a person ignored on this checkpoint no longer holds it back.
+    // A missing book slide (outline phase) is the resumed run's too (owner, 22 Nov
+    // 2026): it re-reads the book and the book repair writes the slide, or the run
+    // pauses again with only that issue (`isResolvedByResume`).
     const blocking = withoutIgnoredIssues(
       diagnosis.blocking,
       ignoredIssueKeys(checkpoint.editLog),
-    ).filter((issue) => issue.code !== VISUAL_TEACHING_NOTE_MISSING);
+    ).filter((issue) => !isResolvedByResume(issue, checkpoint.phase));
     if (blocking.length > 0) {
       throw new TeachingPackageError(
         'CORRECTION_INCOMPLETE',

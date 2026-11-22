@@ -32,6 +32,7 @@ import {
 } from '@openmaic/generation';
 
 import {
+  BOOK_COVERAGE_INCOMPLETE,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
   isGuideAnswerModel,
@@ -427,6 +428,24 @@ const NOT_IGNORABLE_CODES: ReadonlySet<string> = new Set([
   'WIDGET_TYPE_PROHIBITED',
   'NO_OUTLINES',
 ]);
+
+/**
+ * Whether the resumed run resolves an open issue by itself, so it never holds a
+ * resume back: a missing visual teaching note (the resume re-plans that visual), a
+ * Scene the resume regenerates, and, in the outline phase, a missing book slide
+ * (owner, 22 Nov 2026): the resumed run re-reads the book and the book repair
+ * writes the slide; if it cannot, the run pauses again with only that issue.
+ */
+export function isResolvedByResume(
+  diagnostic: OutlineDiagnostic,
+  phase: GenerationCheckpointPhase,
+): boolean {
+  return (
+    diagnostic.field === SCENE_REGENERATION_FIELD ||
+    diagnostic.code === VISUAL_TEACHING_NOTE_MISSING ||
+    (phase === 'outline' && diagnostic.code === BOOK_COVERAGE_INCOMPLETE)
+  );
+}
 
 /**
  * Whether a person may ignore an issue: not a structure/order issue, and not
@@ -1095,10 +1114,8 @@ export function buildCorrectionView(
       checkpoint.state === 'awaiting' &&
       attempt.status === 'awaiting_admin_correction' &&
       reviewStatus !== 'reviewing' &&
-      checkpoint.diagnostics.every(
-        (diagnostic) =>
-          diagnostic.field === SCENE_REGENERATION_FIELD ||
-          diagnostic.code === VISUAL_TEACHING_NOTE_MISSING,
+      checkpoint.diagnostics.every((diagnostic) =>
+        isResolvedByResume(diagnostic, checkpoint.phase),
       ),
     pausedAt: checkpoint.pausedAt,
     updatedAt: checkpoint.updatedAt,
