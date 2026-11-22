@@ -810,6 +810,10 @@ function diagnoseRound(
     flow: context.flow,
     diagnose: context.diagnose,
   });
+  // No rule fix: keep the diagnosed list itself (the caller keys its repairs on it).
+  if (auto.fixes.length === 0) {
+    return { ...diagnosed, fixes: withDiagnosedValues(fixes, diagnosed.outlines) };
+  }
   return {
     outlines: auto.outlines,
     blocking: auto.blocking,
@@ -829,8 +833,15 @@ function withDiagnosedValues(
   fixes: readonly PlanFixDraft[],
   outlines: readonly SceneOutline[],
 ): PlanFixDraft[] {
-  return fixes.map((fix) => {
+  // Only the LAST set of a slide's field takes the diagnosed value: an earlier set of
+  // the same field keeps the value it wrote, so its undo is refused (follow-up review).
+  const last = new Map<string, number>();
+  fixes.forEach((fix, index) => {
+    if (fix.op === 'set' && fix.field) last.set(`${fix.outlineId}\u0000${fix.field}`, index);
+  });
+  return fixes.map((fix, index) => {
     if (fix.op !== 'set' || !fix.field) return fix;
+    if (last.get(`${fix.outlineId}\u0000${fix.field}`) !== index) return fix;
     const outline = outlines.find((entry) => entry.id === fix.outlineId);
     if (!outline) return fix;
     return { ...fix, to: (outline as unknown as Record<string, unknown>)[fix.field] };

@@ -15,7 +15,7 @@ import {
   OUTLINE_PHASE_EDITABLE_FIELDS,
   type CorrectionEditContext,
 } from '@/lib/server/teaching-package/outline-correction';
-import { PLAN_REVIEWER_ACTOR } from '@/lib/server/teaching-package/plan-fix-records';
+import { PLAN_REVIEWER_ACTOR, revertPlanFix } from '@/lib/server/teaching-package/plan-fix-records';
 import {
   CARDINALITY_FALLBACK_REASON,
   PLAN_REVIEW_MAX_REMOVES,
@@ -1594,5 +1594,49 @@ describe('the plan review prompt', () => {
     expect(user.match(/\[\[UNIT /g)).toHaveLength(1);
     expect(user.match(/\[\[\/UNIT\]\]/g)).toHaveLength(1);
     expect(user).toContain('[[UNIT id=u-1 element=teaching UNIT]]');
+  });
+});
+
+describe('the recorded new value, for the P3 undo (follow-up review, 22 Nov 2026)', () => {
+  it('records the value the kept diagnosis holds, and only on the last set of a field, so each undo is exact', async () => {
+    const outlines = [slide('o-1', 0), slide('o-2', 1), slide('o-4', 3)];
+    const open = [issue('CONTENT_ROLE_NOT_ALLOWED', { outlineId: 'o-2' })];
+    // The diagnosis normalises the kind an op wrote (as slide semantics may).
+    const diagnose = vi.fn((candidate: SceneOutline[]) => ({
+      outlines: candidate.map((outline, index) => ({
+        ...outline,
+        order: index + 1,
+        ...(outline.id === 'o-2' && outline.contentKind === 'rule'
+          ? { contentKind: 'observation' as const }
+          : {}),
+      })),
+      blocking: [] as OutlineDiagnostic[],
+    }));
+    const set = (value: string) => ({
+      op: 'set',
+      outlineId: 'o-2',
+      field: 'contentKind',
+      value,
+      reason: 'r',
+    });
+
+    const result = await reviewPlan(
+      outlines,
+      open,
+      model(answer(set('definition'), set('rule'))),
+      contextFor({ diagnose }),
+    );
+
+    const kinds = result.fixes.filter((fix) => fix.field === 'contentKind');
+    // The first keeps what it wrote; the last takes the normalised, stored value.
+    expect(kinds.map((fix) => [fix.from, fix.to])).toEqual([
+      ['concept', 'definition'],
+      ['definition', 'observation'],
+    ]);
+    expect(result.outlines[1]!.contentKind).toBe('observation');
+    // The last set's undo matches the stored value; the earlier one no longer does,
+    // so it can never wipe the later change.
+    expect(revertPlanFix(result.outlines, kinds[1]!)?.[1]?.contentKind).toBe('definition');
+    expect(revertPlanFix(result.outlines, kinds[0]!)).toBeNull();
   });
 });
