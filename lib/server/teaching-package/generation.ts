@@ -452,6 +452,33 @@ async function queuePackageReview(
 }
 
 /** Emit `teaching_package.generation_succeeded` inside the binding transaction. */
+/** The attempt's plan-review fixes as the succeeded webhook carries them (op, slide, reason; no values). */
+function planReviewFixesOf(attempt: GenerationAttempt): {
+  planReviewFixes?: Array<{
+    id: string;
+    op: string;
+    outlineId: string;
+    field?: string;
+    reason: string;
+    round: number;
+    at: number;
+  }>;
+} {
+  const fixes = attempt.inputSnapshot.planReview?.fixes ?? [];
+  if (fixes.length === 0) return {};
+  return {
+    planReviewFixes: fixes.map((fix) => ({
+      id: fix.id,
+      op: fix.op,
+      outlineId: fix.outlineId,
+      ...(fix.field !== undefined ? { field: fix.field } : {}),
+      reason: fix.reason,
+      round: fix.round,
+      at: fix.at,
+    })),
+  };
+}
+
 async function emitGenerationSucceeded(
   tx: import('@openmaic/storage/document/pg').Queryable,
   attempt: GenerationAttempt,
@@ -478,6 +505,10 @@ async function emitGenerationSucceeded(
       // this Stage just saved, and nothing edits them before this binding
       // transaction. Later reads count the live Stage (`scenes-needing-review.ts`).
       scenesNeedingReview: storedScenesNeedingReview(attempt),
+      // P3 (package-plan-review-p3-contract-2026-11-22, additive): what the plan
+      // review changed before this package was built, for the read-only list on
+      // Kafuo's Teaching Package tab. Never the values; absent when nothing was fixed.
+      ...planReviewFixesOf(attempt),
     },
     version: {
       id: version.id,

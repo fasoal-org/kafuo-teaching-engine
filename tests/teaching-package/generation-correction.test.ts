@@ -587,6 +587,24 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
         outlineId: 'o-visual',
         actor: 'system:plan-reviewer',
       });
+      // P3: the succeeded webhook carries them too, for Kafuo's Teaching Package tab.
+      const delivered = await pool.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM teaching_package_webhook_deliveries
+          WHERE event_type = 'teaching_package.generation_succeeded'`,
+      );
+      const event = delivered.rows.at(-1)!.payload as { data?: Record<string, unknown> };
+      const sent = ((event.data ?? event) as { attempt: Record<string, unknown> }).attempt
+        .planReviewFixes as Array<Record<string, unknown>>;
+      expect(sent).toEqual([
+        {
+          id: expect.stringMatching(/^tpf-/),
+          op: 'move',
+          outlineId: 'o-visual',
+          reason: expect.stringMatching(/[؀-ۿ]/),
+          round: 0,
+          at: expect.any(Number),
+        },
+      ]);
     });
 
     it('what the rules cannot fix still pauses: the move is kept and listed on the pause, without its undo state in the view', async () => {
