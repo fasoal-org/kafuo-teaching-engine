@@ -114,6 +114,11 @@ import {
 } from '@/lib/server/teaching-package/book-coverage-repair';
 import { applyPlanAutoFixes } from '@/lib/server/teaching-package/plan-auto-fixes';
 import {
+  PLAN_REVIEW_PROMPT_VERSION,
+  reviewPlan,
+  type PlanReviewContext,
+} from '@/lib/server/teaching-package/plan-review';
+import {
   bookRepairFixes,
   MAX_PLAN_FIXES,
   recordedPlanFixes,
@@ -1017,21 +1022,33 @@ async function runKafuoAttempt(
     // began. Each is kept on the attempt snapshot as it happens (a discarded
     // run's fixes are dropped there), and the whole list goes on a pause's entry.
     const planFixes: PlanReviewFix[] = [];
-    const recordPlanFixes = async (drafts: readonly PlanFixDraft[]): Promise<void> => {
+    const recordPlanFixes = async (
+      drafts: readonly PlanFixDraft[],
+      /** The AI review's prompt version, recorded with its fixes (P2). */
+      promptVersion?: string,
+    ): Promise<void> => {
       if (drafts.length === 0) return;
       const recorded = recordedPlanFixes(drafts, run);
       planFixes.push(...recorded);
       log.info(
         `Teaching package attempt ${attemptId} run ${run}: the plan review fixed ${recorded.length} thing(s) in the plan (${[...new Set(recorded.map((fix) => fix.op))].join(', ')})`,
       );
-      await patchSnapshot(pool, attemptId, (snapshot) => ({
-        ...snapshot,
-        planReview: withPlanFixes(
-          snapshot.planReview as { fixes?: PlanReviewFix[] } | undefined,
-          recorded,
-          run,
-        ),
-      }));
+      await patchSnapshot(pool, attemptId, (snapshot) => {
+        const previous = snapshot.planReview as
+          | { fixes?: PlanReviewFix[]; promptVersion?: string }
+          | undefined;
+        return {
+          ...snapshot,
+          planReview: {
+            ...withPlanFixes(previous, recorded, run),
+            ...(promptVersion
+              ? { promptVersion }
+              : previous?.promptVersion
+                ? { promptVersion: previous.promptVersion }
+                : {}),
+          },
+        };
+      });
     };
     // The re-diagnosis the free rule fixes are accepted by: the same diagnosis as
     // the book repair, without the issues a person ignored on the resumed checkpoint.
@@ -1043,6 +1060,58 @@ async function runKafuoAttempt(
         blocking: ignoredOnResume
           ? diagnosed.blocking.filter((issue) => !ignoredOnResume.has(diagnosticKey(issue)))
           : diagnosed.blocking,
+      };
+    };
+    // §3b step 2 (P2): what the plan review layer reads. The approved units carry
+    // the planner's own prompt text (`promptUnitText`: no verse or hadith item on
+    // a g5.v8 run); the book lines name ids, elements and the required mark only.
+    const planReviewContext = (): PlanReviewContext => {
+      const bookUnits = coverageBook?.units ?? [];
+      return {
+        phase: 'outline',
+        flow: kafuo.teachingFlow,
+        units: normalizedSource
+          ? retainableContentUnits({
+              contentUnits: normalizedSource.manifest.contentUnits,
+            }).map((unit) => ({
+              id: String(unit.unitId),
+              role: unit.role,
+              element:
+                bookUnits.find((entry) => String(entry.contentUnitId) === String(unit.unitId))
+                  ?.element ?? null,
+              title: unit.title ?? null,
+              text: promptUnitText(unit),
+            }))
+          : [],
+        // Each under its own coverage rule: the book's required units, and the
+        // essential sections the submit gate checks.
+        requiredUnitIds: bookUnits
+          .filter((unit) => unit.required)
+          .map((unit) => String(unit.contentUnitId)),
+        essentialUnitIds: (essentialUnitIds ?? []).map(String),
+        bookSummary:
+          bookUnits.length > 0
+            ? bookUnits
+                .map(
+                  (unit) =>
+                    `${unit.contentUnitId}: ${unit.element}${unit.required ? ' (required)' : ''}`,
+                )
+                .join('\n')
+            : null,
+        language: kafuo.language ?? 'ar-SA',
+        languageDirective: speechRegister?.directive ?? '',
+        // The run's protected quotes and the S-9 policy mode the planner prompt uses,
+        // so an appended key point never rewords or quotes a verse or hadith.
+        sacredQuotes,
+        sacredMode: sacredPolicyMode(sacredQuotes, kafuo.subjectCode),
+        diagnose: diagnoseOpen,
+        editContext: {
+          phase: 'outline',
+          flow: kafuo.teachingFlow,
+          sourceRefs: sourceRefsFor(run),
+          pendingOutlineIds: null,
+          ...(coverageBook ? { bookStructure: coverageBook } : {}),
+        },
       };
     };
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
@@ -1290,6 +1359,23 @@ async function runKafuoAttempt(
                 },
               }
             : {}),
+          // §3b step 2 (P2, owner 22 Nov 2026): the AI plan review layer, on the
+          // planning route (`aiCall` is `outlineAiCall`), on what the rule fixes
+          // and the book repair left open. Up to 2 rounds, applied with no pause;
+          // each kept op is recorded (rounds 1–2) and can be undone.
+          reviewPlan: async (
+            outlines: SceneOutline[],
+            blocking: OutlineDiagnostic[],
+            aiCall: AICallFn,
+          ) => {
+            const reviewed = await reviewPlan(outlines, blocking, aiCall, planReviewContext());
+            if (reviewed.fixes.length === 0) return null;
+            // An essential section the reviewed plan no longer teaches is tracked like
+            // any other plan's, so the run's coverage gaps stay true (review MEDIUM-3).
+            recordCoverageGaps(reviewed.outlines);
+            await recordPlanFixes(reviewed.fixes, PLAN_REVIEW_PROMPT_VERSION);
+            return { outlines: reviewed.outlines, blocking: reviewed.blocking };
+          },
           ...(resume
             ? {
                 resumeOutlines: {
@@ -1376,6 +1462,8 @@ async function runKafuoAttempt(
               pendingOutlineIds: pending,
             },
             sourceRefsFor(run),
+            // §3b: the plan review's fixes of this run's plan travel with any pause.
+            planFixes.slice(-MAX_PLAN_FIXES),
           );
           if (paused) {
             log.warn(
@@ -1446,6 +1534,7 @@ async function runKafuoAttempt(
                 pendingOutlineIds: pending,
               },
               sourceRefsFor(run),
+              planFixes.slice(-MAX_PLAN_FIXES),
             );
             if (paused) {
               log.warn(
@@ -1526,6 +1615,7 @@ async function runKafuoAttempt(
               pendingOutlineIds: pending,
             },
             sourceRefsFor(run),
+            planFixes.slice(-MAX_PLAN_FIXES),
           );
           if (paused) {
             log.warn(

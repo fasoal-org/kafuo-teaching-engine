@@ -62,14 +62,16 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 /**
- * The book repair's changes as fix drafts (round 0), in an order an undo can
- * walk backwards (last entry first):
+ * The book repair's changes as fix drafts (round 0), as steps that replay the
+ * repair from the old plan to the new one. Every index is the slide's index in
+ * the plan as it stands at that step, so an undo walked backwards (last entry
+ * first) restores the old plan exactly:
  * 1. every outline it removed, highest old index first (kept in full with its
- *    old index, so the backward walk re-inserts them lowest index first);
- * 2. every outline it added, with its new index;
- * 3. every kept outline whose place among the kept ones changed (e.g. the g5.v8
- *    recall moved first), as a `move` from its old to its new index; a slide
- *    that only shifted because others were added or removed is not a move;
+ *    index, so the backward walk re-inserts them lowest index first);
+ * 2. every kept outline whose place among the kept ones changed (e.g. the g5.v8
+ *    recall moved first), as a `move` within the kept slides; a slide that only
+ *    shifted because others were added or removed is not a move;
+ * 3. every outline it added, lowest new index first, at its new index;
  * 4. every top-level field of a kept outline whose value changed.
  */
 export function bookRepairFixes(
@@ -93,6 +95,34 @@ export function bookRepairFixes(
       round: 0,
     });
   }
+
+  // The kept slides: in their old order (the plan once the removes are done) and
+  // in their new order (the plan before the inserts). Those outside one longest
+  // run already in order moved. Each is placed, in new-order sequence, right after
+  // the slide that precedes it in the new order; that slide is already in its final
+  // place among the slides placed so far, so the list ends in the new order.
+  const current = before.filter((outline) => afterIds.has(outline.id)).map((o) => o.id);
+  const target = after.filter((outline) => beforeById.has(outline.id)).map((o) => o.id);
+  const oldIndexOf = new Map(current.map((id, index) => [id, index] as const));
+  const inOrder = longestIncreasingRun(target.map((id) => oldIndexOf.get(id)!));
+  target.forEach((id, position) => {
+    if (inOrder.has(position)) return;
+    const from = current.indexOf(id);
+    current.splice(from, 1);
+    const predecessor = position === 0 ? null : target[position - 1]!;
+    const to = predecessor === null ? 0 : current.indexOf(predecessor) + 1;
+    current.splice(to, 0, id);
+    fixes.push({
+      op: 'move',
+      outlineId: id,
+      from,
+      to,
+      reason: BOOK_REPAIR_REASON.move,
+      actor: PLAN_REVIEWER_ACTOR,
+      round: 0,
+    });
+  });
+
   after.forEach((outline, index) => {
     if (beforeById.has(outline.id)) return;
     fixes.push({
@@ -100,27 +130,6 @@ export function bookRepairFixes(
       outlineId: outline.id,
       to: index,
       reason: BOOK_REPAIR_REASON.insert,
-      actor: PLAN_REVIEWER_ACTOR,
-      round: 0,
-    });
-  });
-  // The kept slides, in their new order, with their old indexes: those outside one
-  // longest increasing run of old indexes are the ones that moved.
-  const kept = after
-    .map((outline, index) => ({ outline, index, from: beforeById.get(outline.id)?.index }))
-    .filter(
-      (entry): entry is { outline: SceneOutline; index: number; from: number } =>
-        entry.from !== undefined,
-    );
-  const inOrder = longestIncreasingRun(kept.map((entry) => entry.from));
-  kept.forEach((entry, position) => {
-    if (inOrder.has(position)) return;
-    fixes.push({
-      op: 'move',
-      outlineId: entry.outline.id,
-      from: entry.from,
-      to: entry.index,
-      reason: BOOK_REPAIR_REASON.move,
       actor: PLAN_REVIEWER_ACTOR,
       round: 0,
     });

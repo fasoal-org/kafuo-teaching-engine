@@ -661,6 +661,70 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
       expect(pauses[2]).not.toHaveProperty('planFixes');
     });
 
+    it('P2: the rule fixes move the slide, the plan reviewer fixes the role, and the run completes with every fix recorded', async () => {
+      // The visual slide is out of order (a rule fix) AND has a role its stage does not
+      // allow (only the reviewer can fix it): together they used to pause for a person.
+      answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+      // The reviewer's one call (the outline call, on the planning route): a `set`.
+      const reviewCalls: string[] = [];
+      mocks.callLLM.mockImplementation(
+        async (params: { messages: Array<{ role: string; content: unknown }> }) => {
+          const system = String(params.messages[0]?.content ?? '');
+          if (!system.startsWith('You are the plan reviewer')) {
+            throw new Error('no other direct LLM call is expected in this suite');
+          }
+          reviewCalls.push(String(params.messages[1]?.content ?? ''));
+          return {
+            text: JSON.stringify({
+              ops: [
+                {
+                  op: 'set',
+                  outlineId: 'o-visual',
+                  field: 'contentRole',
+                  value: 'explanation',
+                  reason: 'الدور ده مش مسموح في المرحلة دي',
+                },
+              ],
+            }),
+          };
+        },
+      );
+
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      expect((await attempt(attemptId)).status).toBe('succeeded');
+      expect(reviewCalls).toHaveLength(1);
+      // The reviewer saw the plan after the rule fix, with only the role issue open.
+      expect(reviewCalls[0]).toContain('CONTENT_ROLE_NOT_ALLOWED');
+      expect(reviewCalls[0]).not.toContain('FLOW_SEQUENCE_INVALID');
+      const { document } = await currentStageOf(attemptId);
+      expect(outlinesOf(document).map((outline) => [outline.id, outline.contentRole])).toEqual([
+        ['o-intro', 'explanation'],
+        ['o-visual', 'explanation'],
+      ]);
+      const snapshot = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+        `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      const fixes = (snapshot.rows[0]!.input_snapshot.planReview as { fixes: unknown[] }).fixes;
+      expect(fixes).toEqual([
+        expect.objectContaining({ op: 'move', outlineId: 'o-visual', round: 0 }),
+        expect.objectContaining({
+          op: 'set',
+          outlineId: 'o-visual',
+          field: 'contentRole',
+          from: 'procedure',
+          to: 'explanation',
+          reason: 'الدور ده مش مسموح في المرحلة دي',
+          actor: 'system:plan-reviewer',
+          round: 1,
+        }),
+      ]);
+    });
+
     // The rollback case (the key's position would break the order, so the run still
     // pauses with the mismatch) is test (d) "flow correction" below, unchanged.
     it('a stage key that names one flow position fixes its index and the run completes', async () => {

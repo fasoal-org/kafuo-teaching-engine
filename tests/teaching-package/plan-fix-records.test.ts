@@ -106,6 +106,49 @@ describe('bookRepairFixes', () => {
     ).toEqual(['insert_book_slide']);
   });
 
+  /** Undo `fixes` walking backwards, as the P3 «تراجع» will, and return the slide ids. */
+  function undoAll(after: readonly SceneOutline[], fixes: ReturnType<typeof bookRepairFixes>) {
+    const plan = after.map((outline) => outline.id);
+    for (const fix of [...fixes].reverse()) {
+      if (fix.op === 'insert_book_slide') plan.splice(fix.to as number, 1);
+      if (fix.op === 'move') {
+        plan.splice(fix.to as number, 1);
+        plan.splice(fix.from as number, 0, fix.outlineId);
+      }
+      if (fix.op === 'remove') {
+        plan.splice((fix.from as { index: number }).index, 0, fix.outlineId);
+      }
+    }
+    return plan;
+  }
+
+  it.each([
+    ['insert + move', ['a', 'b', 'recall'], ['recall', 'new', 'a', 'b']],
+    ['remove + move', ['a', 'dup', 'b', 'recall'], ['recall', 'a', 'b']],
+    ['remove + move + insert', ['x', 'a', 'dup', 'b', 'recall'], ['recall', 'a', 'n1', 'b', 'n2']],
+    ['two moves around unplaced slides', ['p', 'q', 'a', 'b'], ['a', 'p', 'b', 'q']],
+    ['moves only', ['a', 'b', 'c', 'd'], ['d', 'c', 'a', 'b']],
+  ])(
+    'an undo walked backwards restores the old plan exactly (%s)',
+    (_label, beforeIds, afterIds) => {
+      const before = beforeIds.map((id) => slide(id));
+      const after = afterIds.map((id) => slide(id));
+      const fixes = bookRepairFixes(before, after);
+      expect(undoAll(after, fixes)).toEqual(beforeIds);
+      // Each step replayed forwards from the old plan gives the new one.
+      const forward = [...beforeIds];
+      for (const fix of fixes) {
+        if (fix.op === 'remove') forward.splice((fix.from as { index: number }).index, 1);
+        if (fix.op === 'move') {
+          forward.splice(fix.from as number, 1);
+          forward.splice(fix.to as number, 0, fix.outlineId);
+        }
+        if (fix.op === 'insert_book_slide') forward.splice(fix.to as number, 0, fix.outlineId);
+      }
+      expect(forward).toEqual(afterIds);
+    },
+  );
+
   it('a renumbered order alone is no change', () => {
     expect(bookRepairFixes([slide('a', { order: 4 })], [slide('a', { order: 1 })])).toEqual([]);
   });

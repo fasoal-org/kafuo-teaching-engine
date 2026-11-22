@@ -546,7 +546,11 @@ export interface GenerationInputSnapshot {
    * the free rule fixes and the book repair now, the AI plan review (P2) next.
    * Only the current generation run's fixes are kept, oldest first, capped.
    */
-  planReview?: { fixes: PlanReviewFix[] };
+  planReview?: {
+    fixes: PlanReviewFix[];
+    /** The AI plan review's prompt version, once it recorded a fix (P2). */
+    promptVersion?: string;
+  };
 }
 
 /**

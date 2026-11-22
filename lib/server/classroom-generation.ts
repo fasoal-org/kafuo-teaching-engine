@@ -17,6 +17,7 @@ import {
   generateSceneActions,
   generateSceneContent,
   NATIVE_VISUAL_DIRECTIVE,
+  OUTLINE_TEACHING_FLOW_ERROR,
   OrientationVisualMissingError,
   plannedVisualIssue,
   PBLGenerationError,
@@ -143,6 +144,7 @@ import {
 } from '@/lib/server/teaching-package/source-images';
 import { resolveFlowSkillPolicies } from '@/lib/server/teaching-package/skill-policy';
 import { GenerationCorrectionRequiredError } from '@/lib/server/teaching-package/outline-correction';
+import { BOOK_REPAIR_BLOCKING_CODES } from '@/lib/server/teaching-package/book-coverage-repair';
 import { replanSlideVisuals } from '@/lib/server/teaching-package/replan-slide-visuals';
 import { chooseSplitUnitImageKeepers } from '@/lib/server/teaching-package/split-unit-images';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
@@ -468,8 +470,13 @@ const VISUAL_REPLAN_CODES: ReadonlySet<string> = new Set([
 ]);
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
-/** The outline generator's answer to an empty plan for an authoritative flow (P1, §3b). */
-const EMPTY_PLAN_ERROR = /^OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned\b/;
+/**
+ * The outline generator's answer to an empty plan for an authoritative flow (P1,
+ * §3b): `${OUTLINE_TEACHING_FLOW_ERROR}: no outlines were returned …`.
+ */
+const EMPTY_PLAN_ERROR = new RegExp(
+  `^${OUTLINE_TEACHING_FLOW_ERROR}: no outlines were returned\\b`,
+);
 
 /** The routed lesson-plan (outline) stage and its own time limit per model attempt. */
 const OUTLINE_STAGE = 'scene-outlines-stream';
@@ -1039,6 +1046,18 @@ export interface GenerationCorrectionOptions {
    * off while a stage or order issue is open (`BOOK_REPAIR_BLOCKING_CODES`).
    */
   repairOutlines?: (
+    outlines: SceneOutline[],
+    blocking: OutlineDiagnostic[],
+    aiCall: AICallFn,
+  ) => Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
+  /**
+   * P2 (package-planner-issue-resolve-plan-2026-11-22 §3b step 2, owner 22 Nov
+   * 2026): the AI plan review layer, after the rule fixes and the book repair,
+   * on what is still open. It is handed `outlineAiCall`, so it runs on the
+   * planning route. Returns the re-diagnosed candidate, or `null` when no round
+   * was kept. The caller records each fix.
+   */
+  reviewPlan?: (
     outlines: SceneOutline[],
     blocking: OutlineDiagnostic[],
     aiCall: AICallFn,
@@ -2262,6 +2281,35 @@ export async function generateClassroom(
       if (repaired) {
         outlines = repaired.outlines;
         blocking = open(repaired.blocking);
+      }
+    }
+    if (blocking.length > 0 && correction.reviewPlan) {
+      // A stage or order issue keeps the book repair off; when the review clears
+      // them, the book gaps it could not place before are planned once more.
+      const stageOrOrderOpen = (issues: OutlineDiagnostic[]) =>
+        issues.some((issue) => BOOK_REPAIR_BLOCKING_CODES.has(issue.code));
+      const hadStageOrOrder = stageOrOrderOpen(blocking);
+      const reviewed = await correction.reviewPlan(outlines, blocking, outlineAiCall);
+      // A planning route whose both targets failed during the review fails THIS
+      // run here (the runner re-rolls it), before any pause or Stage reservation:
+      // the review itself never rethrows a failed call.
+      assertRouteAvailable();
+      if (reviewed) {
+        outlines = reviewed.outlines;
+        blocking = open(reviewed.blocking);
+        if (
+          hadStageOrOrder &&
+          !stageOrOrderOpen(blocking) &&
+          blocking.length > 0 &&
+          correction.repairOutlines
+        ) {
+          const repairedAgain = await correction.repairOutlines(outlines, blocking, outlineAiCall);
+          assertRouteAvailable();
+          if (repairedAgain) {
+            outlines = repairedAgain.outlines;
+            blocking = open(repairedAgain.blocking);
+          }
+        }
       }
     }
     if (blocking.length > 0) {

@@ -409,6 +409,7 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
   });
 
   describe('the correction order before any pause (P1, plan §3b)', () => {
+    type AICallFnLike = (system: string, user: string) => Promise<string>;
     const issue = (code: string) =>
       ({ code, disposition: 'admin_correctable', message: code }) as never;
 
@@ -466,6 +467,99 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
 
       expect(order).toEqual(['autoFix', 'bookRepair']);
       expect(result.scenesCount).toBe(1);
+    });
+
+    it('P2: the plan review runs after the book repair on what is left, with the outline (planning) call, and nothing pauses when it clears it', async () => {
+      const order: string[] = [];
+      const reviewed = [{ ...outline, title: 'reviewed' }];
+      const result = await runWithCorrection({
+        collectOutlineIssues: async () => [issue('TEACHING_SKILL_NOT_ALLOWED')],
+        autoFixOutlines: async () => {
+          order.push('autoFix');
+          return null;
+        },
+        repairOutlines: async () => {
+          order.push('bookRepair');
+          return null;
+        },
+        reviewPlan: async (_outlines: unknown[], blocking: unknown[], aiCall: AICallFnLike) => {
+          order.push('review');
+          expect(blocking).toEqual([issue('TEACHING_SKILL_NOT_ALLOWED')]);
+          await aiCall('sys-review', 'user-review');
+          return { outlines: reviewed, blocking: [] };
+        },
+      });
+      expect(order).toEqual(['autoFix', 'bookRepair', 'review']);
+      expect(result.scenesCount).toBe(1);
+      // The review's call is an outline-stage (planning route) call.
+      expect(callsBySource().map((call) => call.source)).toEqual([
+        'scene-outlines-stream',
+        'scene-outlines-stream',
+        'scene-content:slide',
+        'scene-actions',
+      ]);
+    });
+
+    it('P2: when the review clears a stage or order issue, the book repair runs once more on the gaps it could not place', async () => {
+      const order: string[] = [];
+      const result = await runWithCorrection({
+        collectOutlineIssues: async () => [
+          issue('TEACHING_STAGE_MISMATCH'),
+          issue('BOOK_COVERAGE_INCOMPLETE'),
+        ],
+        repairOutlines: async (outlines: unknown[], blocking: Array<{ code: string }>) => {
+          order.push(`bookRepair:${blocking.map((entry) => entry.code).join('+')}`);
+          // Off while the stage issue is open; plans the gap once it is gone.
+          return blocking.some((entry) => entry.code === 'TEACHING_STAGE_MISMATCH')
+            ? null
+            : { outlines: outlines as never, blocking: [] };
+        },
+        reviewPlan: async (outlines: unknown[]) => {
+          order.push('review');
+          return { outlines: outlines as never, blocking: [issue('BOOK_COVERAGE_INCOMPLETE')] };
+        },
+      });
+      expect(order).toEqual([
+        'bookRepair:TEACHING_STAGE_MISMATCH+BOOK_COVERAGE_INCOMPLETE',
+        'review',
+        'bookRepair:BOOK_COVERAGE_INCOMPLETE',
+      ]);
+      expect(result.scenesCount).toBe(1);
+    });
+
+    it('P2: a planning route that fails during the review fails the run (re-rolled), never a pause', async () => {
+      mocks.callLLM.mockImplementation(
+        async (params: { messages: Array<{ content: unknown }> }, source: string) => {
+          if (source === 'scene-outlines-stream' && params.messages[0]?.content === 'sys-review') {
+            throw apiError(503);
+          }
+          return ok(source === 'agent-profiles' ? AGENTS_JSON : `generated for ${source}`);
+        },
+      );
+      const { TeachingModelUnavailableError } = await import('@/lib/server/teaching-model/execute');
+      const reserveCalls = mocks.reserveClassroom.mock.calls.length;
+      await expect(
+        runWithCorrection({
+          collectOutlineIssues: async () => [issue('TEACHING_SKILL_NOT_ALLOWED')],
+          // Like reviewPlan: the failed call is swallowed and nothing is kept.
+          reviewPlan: async (_outlines: unknown[], _blocking: unknown[], aiCall: AICallFnLike) => {
+            await aiCall('sys-review', 'user-review').catch(() => undefined);
+            return null;
+          },
+        }),
+      ).rejects.toBeInstanceOf(TeachingModelUnavailableError);
+      // Before any Stage reservation.
+      expect(mocks.reserveClassroom.mock.calls.length).toBe(reserveCalls);
+    });
+
+    it('P2: a review that keeps nothing leaves the issues to pause with', async () => {
+      const { isGenerationCorrectionRequired } =
+        await import('@/lib/server/teaching-package/outline-correction');
+      const error = await runWithCorrection({
+        collectOutlineIssues: async () => [issue('TEACHING_SKILL_NOT_ALLOWED')],
+        reviewPlan: async () => null,
+      }).catch((caught: unknown) => caught);
+      expect(isGenerationCorrectionRequired(error)).toBe(true);
     });
 
     it('when the free fixes leave nothing open, the book repair is not called and nothing pauses', async () => {

@@ -1358,6 +1358,9 @@ function attemptSnapshotOf(raw: unknown): GenerationInputSnapshot {
     snapshot = {
       ...snapshot,
       planReview: {
+        ...(snapshot.planReview.promptVersion
+          ? { promptVersion: snapshot.planReview.promptVersion }
+          : {}),
         fixes: snapshot.planReview.fixes.map(
           ({ from: _undoState, to: _newValue, ...visible }) => visible,
         ),
