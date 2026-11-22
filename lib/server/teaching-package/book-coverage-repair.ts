@@ -800,19 +800,19 @@ export async function repairBookCoverageGaps(
           ),
         );
       const linked = shownElsewhere ? [] : unitVisuals;
-      const check = (outline: SceneOutline): PlanCheck => {
+      const check = (planned: SceneOutline): PlanCheck => {
         const messages: string[] = [];
-        if (outline.contentRole !== role || outline.slideType !== 'content') {
+        if (planned.contentRole !== role || planned.slideType !== 'content') {
           messages.push(`the slide must be a content slide with contentRole ${role}`);
         }
-        const selected = new Set(outline.suggestedImageIds ?? []);
-        if (linked.length > 0 && !linked.some((visual) => selected.has(visual.id))) {
-          messages.push(
-            `set visualPlan.mode "image" and include one of these textbook visuals in suggestedImageIds: ${linked
-              .map((visual) => visual.id)
-              .join(', ')}`,
-          );
-        }
+        // Owner, 22 Nov 2026: the unit's own textbook visual is known, so a slide that
+        // leaves it out gets it from the server, with its teaching note, instead of
+        // failing the slide (lesson 227: the planner left out the image twice).
+        const selected = new Set(planned.suggestedImageIds ?? []);
+        const outline =
+          linked.length > 0 && !linked.some((visual) => selected.has(visual.id))
+            ? withLinkedVisual(planned, linked[0]!)
+            : planned;
         // An inserted slide must never block on its own visual plan (lesson 318).
         if (outline.visualPlan?.mode === 'native' && !isTeachingNote(outline.visualPlan.diagram)) {
           messages.push(
@@ -897,6 +897,31 @@ export async function repairBookCoverageGaps(
       return checked.outline;
     }
   }
+}
+
+/**
+ * A planned book slide with the unit's own textbook visual attached (owner, 22 Nov
+ * 2026): the image is selected, the visual mode is `image`, and the image gets its one
+ * teaching note, from the visual's book description (what it shows) and the slide's
+ * first key point or title (what the learner notices). Any other image plan is dropped,
+ * so no note is left without its image.
+ */
+export function withLinkedVisual(
+  outline: SceneOutline,
+  visual: { id: string; description?: string | null },
+): SceneOutline {
+  const firstPoint = (outline.keyPoints ?? []).find(
+    (point) => typeof point === 'string' && point.trim() !== '',
+  );
+  const title = typeof outline.title === 'string' ? outline.title.trim() : '';
+  const shows = visual.description?.trim() || title || 'صورة الكتاب لهذا الجزء';
+  const teachingPoint = firstPoint?.trim() || title || shows;
+  return {
+    ...outline,
+    suggestedImageIds: [visual.id],
+    visualPlan: { mode: 'image' },
+    imagePlans: [{ imageId: visual.id, shows, teachingPoint }],
+  } as SceneOutline;
 }
 
 /** Both fields of a visual teaching note are non-empty strings. */

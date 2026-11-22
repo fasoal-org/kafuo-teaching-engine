@@ -7,6 +7,7 @@ import {
 import {
   BOOK_COVERAGE_REPAIR_ROUNDS,
   repairBookCoverageGaps,
+  withLinkedVisual,
   type BookCoverageRepairContext,
 } from '@/lib/server/teaching-package/book-coverage-repair';
 import { teacherParityBook } from '@/lib/server/teaching-package/book-coverage';
@@ -172,8 +173,16 @@ describe('g5.v7 book coverage repair', () => {
     expect(result.blocking).toEqual([]);
   });
 
-  it('offers the textbook visual linked to the unit and requires selecting it', async () => {
-    const visual = { id: 'src-7', src: 'data:image/png;base64,AA', sourceContentUnitIds: ['4032'] };
+  // Owner change (22 Nov 2026, lesson 227): this test used to pin "the check asks for the
+  // linked visual and nothing is inserted". The visual is known, so the server attaches it
+  // with its teaching note instead of failing the slide.
+  it('offers the textbook visual linked to the unit, and attaches it with its note when the plan leaves it out', async () => {
+    const visual = {
+      id: 'src-7',
+      src: 'data:image/png;base64,AA',
+      description: 'صورة الحل في الكتاب',
+      sourceContentUnitIds: ['4032'],
+    };
     const other = { id: 'src-9', src: 'data:image/png;base64,AA', sourceContentUnitIds: ['5000'] };
     const plan = planning('worked_example');
     const ctx = { ...context(plan), visuals: [visual, other] };
@@ -184,9 +193,37 @@ describe('g5.v7 book coverage repair', () => {
     const input = plan.mock.calls[0]![0];
     expect(input.eligibleVisuals.map((v) => v.id)).toEqual(['src-7']);
     expect(input.visionImages?.map((v) => v.id)).toEqual(['src-7']);
-    // The fake selects no visual, so the check asks for it and nothing is inserted.
+    // A wrong role still asks the planner again.
     expect(input.check(CANDIDATE[1]!)).toMatchObject({ ok: false, fixable: true });
-    expect(result.inserted).toBe(0);
+    // The fake selects no visual: the slide goes in with the unit's visual and its note.
+    expect(result.inserted).toBeGreaterThan(0);
+    const inserted = result.outlines.find((o) => o.id.includes('-book-'))!;
+    expect(inserted.suggestedImageIds).toEqual(['src-7']);
+    expect(inserted.visualPlan).toEqual({ mode: 'image' });
+    expect(inserted.imagePlans).toEqual([
+      {
+        imageId: 'src-7',
+        shows: 'صورة الحل في الكتاب',
+        teachingPoint: expect.any(String),
+      },
+    ]);
+  });
+
+  it('withLinkedVisual: one note per attached image, from the book description and the first point', () => {
+    const outline = slide('n1', ['4032'], {
+      keyPoints: ['', 'النقطة الأولى'],
+      suggestedImageIds: ['src-other'],
+      imagePlans: [{ imageId: 'src-other', shows: 'x', teachingPoint: 'y' }],
+    } as never);
+    expect(withLinkedVisual(outline, { id: 'src-7', description: ' وصف ' })).toMatchObject({
+      suggestedImageIds: ['src-7'],
+      visualPlan: { mode: 'image' },
+      imagePlans: [{ imageId: 'src-7', shows: 'وصف', teachingPoint: 'النقطة الأولى' }],
+    });
+    // No description: the slide title stands in.
+    expect(withLinkedVisual(outline, { id: 'src-7' }).imagePlans).toEqual([
+      { imageId: 'src-7', shows: outline.title, teachingPoint: 'النقطة الأولى' },
+    ]);
   });
 
   it('leaves a check solved before its try-it to a person', async () => {
