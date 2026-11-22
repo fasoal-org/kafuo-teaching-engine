@@ -29,24 +29,14 @@ import {
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { cn } from '@/lib/utils';
 import type { ContentUnitSummary, ContentUnitsResponse } from '@/lib/edit/scene-insertion-client';
+import { canGenerateForUnit, unitBadge, type UnitBadge } from '@/lib/edit/lesson-part-badge';
 
 /** `units`: the gate allows insertion; `no-parts`: it refused for `no_content_units`. */
 export type LessonPartsMode = 'units' | 'no-parts';
 
-export type UnitBadge = 'covered' | 'quiz-only' | 'no-slide' | 'reference';
-
-/** Plan §8.2: covered = a live slide cites it; "quiz only" = cited only by other scenes. */
-export function unitBadge(unit: ContentUnitSummary): UnitBadge {
-  if (!unit.instructional) return 'reference';
-  if (unit.covered) return 'covered';
-  if (unit.citedByOtherSceneIds.length > 0) return 'quiz-only';
-  return 'no-slide';
-}
-
-/** A slide can be generated for it: instructional, with retained text, no live slide. */
-export function canGenerateForUnit(unit: ContentUnitSummary): boolean {
-  return unit.instructional && !unit.covered && unit.textLength > 0;
-}
+// The badge and "Generate slide" rules live in a shared server-safe module, so the
+// agent read API (Kafuo Agent API A3) and this panel never disagree.
+export { canGenerateForUnit, unitBadge, type UnitBadge };
 
 /** No usable lesson parts (plan §5 step 1): the version predates stored units. */
 export function hasNoLessonParts(data: ContentUnitsResponse): boolean {

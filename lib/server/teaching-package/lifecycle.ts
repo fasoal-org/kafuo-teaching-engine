@@ -620,6 +620,204 @@ async function prepareSubmitValidation(
   };
 }
 
+/** One reason Submit would refuse, as the refusal's own code, message and details. */
+export interface SubmitBlocker {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
+/**
+ * Every Submit blocker of a version, collected instead of thrown (Kafuo Agent
+ * API plan §1.5, A3) — the read behind `agent-read/readiness`. It mirrors
+ * `prepareSubmitValidation` branch for branch and calls the SAME predicates in
+ * the SAME order (the generation-issue gate, the governed-without-flow refusal,
+ * the legacy tier-A path, STAGE_NOT_LIVE, exact flow, game deferral, essential
+ * coverage, legacy successor clone-only, the governed Action, visual and Skill
+ * gates) plus the locked transaction's status and live-stage checks, so its
+ * FIRST blocker is the refusal `submitForReview` throws. Gate granularity: each
+ * gate contributes at most one blocker (the Skill gate its first failure).
+ * `submitForReview` and `prepareSubmitValidation` are not changed by it.
+ *
+ * Read-only: no lock, no transaction, no write. The one divergence: the visual
+ * gate reads stored compliance verdicts only (no vision call, no verdict write),
+ * so a never-screened image reads as unresolved here — fail closed.
+ */
+export async function submitBlockers(
+  pool: ConnectableQueryable,
+  versionId: string,
+  tenantId: string,
+): Promise<SubmitBlocker[]> {
+  const version = await readVersion(pool, versionId, { tenantId });
+  if (!version) {
+    throw new TeachingPackageError('NOT_FOUND', `teaching package ${versionId} not found`);
+  }
+  if (version.status !== 'draft' && version.status !== 'rejected') {
+    const refusal = invalidTransition(version.status, 'submit for review');
+    return [{ code: refusal.code, message: refusal.message, details: refusal.details }];
+  }
+  const blockers: SubmitBlocker[] = [];
+  const collect = async (gate: () => unknown): Promise<void> => {
+    try {
+      await gate();
+    } catch (error) {
+      if (!(error instanceof TeachingPackageError)) throw error;
+      blockers.push({
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      });
+    }
+  };
+  const stageNotLive = () =>
+    new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');
+  // The transaction's `lockStageMetaLive`, as a plain read (no FOR UPDATE).
+  const stageMetaLive = async () => {
+    const result = await pool.query<StageMetaLockRow>(
+      `SELECT owner_id, deleted_at FROM stage_meta WHERE stage_id = $1`,
+      [version.currentStageId],
+    );
+    const row = result.rows[0];
+    if (!row || row.deleted_at !== null) {
+      throw new TeachingPackageError(
+        'STAGE_NOT_LIVE',
+        `stage ${version.currentStageId} is not live`,
+      );
+    }
+  };
+
+  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+  const document = await store.loadDocument(version.currentStageId);
+  if (document) await collect(() => refuseSlidesNeedingRegeneration(document.scenes));
+  const flow = await readFlowForVersion(pool, version.id);
+  const governance = await readTeachingSkillsGovernanceForVersion(pool, version.id);
+  const governed = !!governance?.contract;
+  if (governed && (!flow || flow.length === 0)) {
+    blockers.push({
+      code: 'SKILL_POLICY_REQUIRED',
+      message: 'the governed version records no Teaching Model Flow to validate Skills against',
+      details: { versionId: version.id },
+    });
+    return blockers;
+  }
+  const legacySuccessor = !governed && version.predecessorVersionId !== null;
+
+  if (!flow || flow.length === 0) {
+    if (legacySuccessor) {
+      if (!document) {
+        await collect(() => {
+          throw stageNotLive();
+        });
+        return blockers;
+      }
+      await collect(() => assertLegacySuccessorCloneOnly(pool, version, document.scenes));
+    }
+    await collect(stageMetaLive);
+    return blockers;
+  }
+  if (!document) {
+    await collect(() => {
+      throw stageNotLive();
+    });
+    return blockers;
+  }
+  const outlineRecord = document.outline as
+    | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
+    | undefined;
+  await collect(() => {
+    const check = validateExactTeachingFlow(document.scenes, flow, outlineRecord?.outlines);
+    if (!check.valid) {
+      throw new TeachingPackageError(
+        'TEACHING_MODEL_FLOW_MISMATCH',
+        `the scene sequence does not cover the exact Teaching Model Flow (${check.violation.reason})`,
+        { offendingSceneIds: check.violation.offendingSceneIds },
+      );
+    }
+  });
+  await collect(() => {
+    const misplacedGames = findGameScenesOutsideFlow(document.scenes, flow);
+    if (misplacedGames.length > 0) {
+      throw new TeachingPackageError(
+        'GAME_GENERATION_DEFERRED',
+        `${misplacedGames.length} learning game Scene(s) sit at a Teaching Model Flow position that does not allow a game; Kafuo Release 1 does not include learning games, so remove them before submitting`,
+        { offendingSceneIds: misplacedGames },
+      );
+    }
+  });
+  await collect(() =>
+    assertEssentialSectionsCovered(pool, version.id, document.scenes, document.outline),
+  );
+  if (legacySuccessor) {
+    await collect(() => assertLegacySuccessorCloneOnly(pool, version, document.scenes));
+  }
+  if (governed) {
+    await collect(() => {
+      const actionFindings = validateSceneActionStructure(document.scenes, {
+        stage: document.stage,
+      });
+      if (actionFindings.length > 0) {
+        const first = actionFindings[0]!;
+        throw new TeachingPackageError(
+          first.code,
+          `${first.message} (+${actionFindings.length - 1} more Action finding(s))`,
+          {
+            offendingSceneIds: [...new Set(actionFindings.map((finding) => finding.sceneId))],
+            findings: actionFindings.map((finding) => ({
+              sceneId: finding.sceneId,
+              actionId: finding.actionId,
+              actionType: finding.actionType,
+              path: finding.path,
+              category: finding.category,
+              code: finding.code,
+            })),
+          },
+        );
+      }
+    });
+    await collect(async () => {
+      const { getVerdictStore, screenVisualWithDefaults } =
+        await import('@/lib/server/visual-compliance');
+      // Stored verdicts only: never a vision call, never a verdict write, and no
+      // schema DDL (`peek` skips the store's ensure). An image with no stored
+      // verdict is reported `unscreened`: the real Submit would screen it now
+      // and might approve it, so this blocker is advisory for those images.
+      let unscreened = 0;
+      const readOnlyStore = {
+        get: async (profileId: string, checksum: string) => {
+          const verdicts = await getVerdictStore();
+          const peek = (verdicts as { peek?: typeof verdicts.get }).peek;
+          const stored = await (peek
+            ? peek.call(verdicts, profileId, checksum)
+            : verdicts.get(profileId, checksum));
+          if (!stored || stored.verdict === 'unresolved') unscreened += 1;
+          return stored;
+        },
+        put: async () => {},
+      };
+      const visualFindings = await collectStageVisualFindings(document.scenes, {
+        textPolicy: resolveImageTextPolicy(document.stage.textDirection),
+        screen: (bytes, options) =>
+          screenVisualWithDefaults(bytes, options, { store: readOnlyStore, vision: undefined }),
+      });
+      if (visualFindings.length > 0) {
+        throw new TeachingPackageError(
+          'VISUAL_COMPLIANCE_UNAPPROVED',
+          `${visualFindings.length} learner-visible image(s) do not hold an approved visual-compliance verdict; replace or regenerate them before submitting`,
+          {
+            offendingSceneIds: [...new Set(visualFindings.map((finding) => finding.sceneId))],
+            findings: visualFindings,
+            verdict_source: 'stored_only',
+            ...(unscreened > 0 ? { unscreened: true, unscreened_count: unscreened } : {}),
+          },
+        );
+      }
+    });
+    await collect(() => enforceGovernedSkillGate(document.scenes, flow, version, pool));
+  }
+  await collect(stageMetaLive);
+  return blockers;
+}
+
 /**
  * The governed Submit gate — §L checks 4–11, INVOKED from the W12 validators
  * (never re-implemented) in the plan's fixed order. Runs only behind the W6

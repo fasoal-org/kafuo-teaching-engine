@@ -64,6 +64,22 @@ export class PgVerdictStore implements VerdictStore {
   }
 
   /**
+   * Read-only lookup for GET paths (agent readiness): no schema ensure, so no DDL.
+   * A missing table reads as "no stored verdict".
+   */
+  async peek(profileId: string, checksum: string): Promise<ComplianceVerdict | undefined> {
+    try {
+      const { rows } = await this.queryable.query(
+        'SELECT * FROM visual_compliance_verdicts WHERE profile_id = $1 AND checksum = $2',
+        [profileId, checksum],
+      );
+      return rows[0] ? fromRow(rows[0]) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Upsert. An operator-confirmed verdict outranks automated ones: an automated
    * write never overwrites a row that carries `confirmed_by`.
    */
