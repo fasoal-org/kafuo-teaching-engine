@@ -550,6 +550,869 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
     });
   });
 
+  describe('P1 free rule fixes before any pause (package-planner-issue-resolve-plan §3b)', () => {
+    it('a slide out of stage order is moved into place, recorded, and the run completes with no pause', async () => {
+      // The planner put the visual slide (stage 1) before the introduction (stage 0).
+      answerWith([visualOutline(), introOutline()]);
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      const row = await attempt(attemptId);
+      expect(row.status).toBe('succeeded');
+      const { document } = await currentStageOf(attemptId);
+      expect(document.scenes.map((scene) => scene.teachingStage?.flowIndex)).toEqual([0, 1]);
+      const snapshot = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+        `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      const fixes = (snapshot.rows[0]!.input_snapshot.planReview as { fixes: unknown[] }).fixes;
+      expect(fixes).toEqual([
+        expect.objectContaining({
+          op: 'move',
+          outlineId: 'o-visual',
+          from: 0,
+          to: 1,
+          actor: 'system:plan-reviewer',
+          round: 0,
+          generationRun: 1,
+        }),
+      ]);
+      // The attempt record a backend reads carries the fix without its values.
+      expect(row.inputSnapshot.planReview?.fixes[0]).not.toHaveProperty('from');
+      expect(row.inputSnapshot.planReview?.fixes[0]).not.toHaveProperty('to');
+      expect(row.inputSnapshot.planReview?.fixes[0]).toMatchObject({
+        op: 'move',
+        outlineId: 'o-visual',
+        actor: 'system:plan-reviewer',
+      });
+      // P3: the succeeded webhook carries them too, for Kafuo's Teaching Package tab.
+      const delivered = await pool.query<{ payload: Record<string, unknown> }>(
+        `SELECT payload FROM teaching_package_webhook_deliveries
+          WHERE event_type = 'teaching_package.generation_succeeded'`,
+      );
+      const event = delivered.rows.at(-1)!.payload as { data?: Record<string, unknown> };
+      const sent = ((event.data ?? event) as { attempt: Record<string, unknown> }).attempt
+        .planReviewFixes as Array<Record<string, unknown>>;
+      expect(sent).toEqual([
+        {
+          id: expect.stringMatching(/^tpf-/),
+          op: 'move',
+          outlineId: 'o-visual',
+          reason: expect.stringMatching(/[؀-ۿ]/),
+          round: 0,
+          at: expect.any(Number),
+        },
+      ]);
+    });
+
+    it('what the rules cannot fix still pauses: the move is kept and listed on the pause, without its undo state in the view', async () => {
+      answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      expect((await attempt(attemptId)).status).toBe('awaiting_admin_correction');
+      const { getGenerationCorrection } = await correction();
+      const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+      expect(view.blockingIssues.map((issue) => issue.code)).toEqual(['CONTENT_ROLE_NOT_ALLOWED']);
+      expect(view.outlines.map((outline) => outline.id)).toEqual(['o-intro', 'o-visual']);
+      const paused = view.editLog.find((entry) => entry.event === 'paused')!;
+      expect(paused.planFixes).toEqual([
+        expect.objectContaining({ op: 'move', outlineId: 'o-visual', round: 0 }),
+      ]);
+      expect(paused.planFixes![0]).not.toHaveProperty('from');
+      expect(paused.planFixes![0]).not.toHaveProperty('to');
+      // The checkpoint itself keeps the undo state for a later «تراجع».
+      const stored = await pool.query<{ edit_log: Array<{ planFixes?: unknown[] }> }>(
+        `SELECT edit_log FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      expect(stored.rows[0]!.edit_log[0]!.planFixes).toEqual([
+        expect.objectContaining({ op: 'move', from: 0, to: 1 }),
+      ]);
+
+      // A later pause of the same attempt (the ON CONFLICT branch) appends its own
+      // entry with its own fixes; a pause with none adds no `planFixes` key.
+      const { upsertCheckpointForPause, readCheckpointByAttemptId } =
+        await import('@/lib/persistence/generation-checkpoint');
+      const checkpoint = (await readCheckpointByAttemptId(qp(), attemptId))!;
+      const repause = {
+        attemptId,
+        tenantId: TENANT,
+        phase: checkpoint.phase,
+        outlines: checkpoint.outlines,
+        courseTitle: checkpoint.courseTitle,
+        languageDirective: checkpoint.languageDirective,
+        diagnostics: checkpoint.diagnostics,
+        repairs: checkpoint.repairs,
+        sourceRefs: checkpoint.sourceRefs,
+        reservedStageId: null,
+        pendingOutlineIds: null,
+        actorRef: 'runner',
+        now: Date.now(),
+      };
+      const secondFix = {
+        id: 'tpf-second',
+        op: 'set' as const,
+        outlineId: 'o-visual',
+        field: 'teachingStage',
+        from: { key: 'x', flowIndex: 0 },
+        to: { key: 'outcome_visual_explanations', flowIndex: 1 },
+        reason: 'تصحيح',
+        actor: 'system:plan-reviewer' as const,
+        round: 0,
+        generationRun: 1,
+        at: Date.now(),
+      };
+      await upsertCheckpointForPause(qp(), { ...repause, planFixes: [secondFix] });
+      await upsertCheckpointForPause(qp(), repause);
+      const after = await pool.query<{ edit_log: Array<Record<string, unknown>> }>(
+        `SELECT edit_log FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const pauses = after.rows[0]!.edit_log.filter((entry) => entry.event === 'paused');
+      expect(pauses).toHaveLength(3);
+      expect(pauses[1]!.planFixes).toEqual([secondFix]);
+      expect(pauses[2]).not.toHaveProperty('planFixes');
+    });
+
+    it('P2: the rule fixes move the slide, the plan reviewer fixes the role, and the run completes with every fix recorded', async () => {
+      // The visual slide is out of order (a rule fix) AND has a role its stage does not
+      // allow (only the reviewer can fix it): together they used to pause for a person.
+      answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+      // The reviewer's one call (the outline call, on the planning route): a `set`.
+      const reviewCalls: string[] = [];
+      mocks.callLLM.mockImplementation(
+        async (params: { messages: Array<{ role: string; content: unknown }> }) => {
+          const system = String(params.messages[0]?.content ?? '');
+          if (!system.startsWith('You are the plan reviewer')) {
+            throw new Error('no other direct LLM call is expected in this suite');
+          }
+          reviewCalls.push(String(params.messages[1]?.content ?? ''));
+          return {
+            text: JSON.stringify({
+              ops: [
+                {
+                  op: 'set',
+                  outlineId: 'o-visual',
+                  field: 'contentRole',
+                  value: 'explanation',
+                  reason: 'الدور ده مش مسموح في المرحلة دي',
+                },
+              ],
+            }),
+          };
+        },
+      );
+
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      expect((await attempt(attemptId)).status).toBe('succeeded');
+      expect(reviewCalls).toHaveLength(1);
+      // The reviewer saw the plan after the rule fix, with only the role issue open.
+      expect(reviewCalls[0]).toContain('CONTENT_ROLE_NOT_ALLOWED');
+      expect(reviewCalls[0]).not.toContain('FLOW_SEQUENCE_INVALID');
+      const { document } = await currentStageOf(attemptId);
+      expect(outlinesOf(document).map((outline) => [outline.id, outline.contentRole])).toEqual([
+        ['o-intro', 'explanation'],
+        ['o-visual', 'explanation'],
+      ]);
+      const snapshot = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+        `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      const fixes = (snapshot.rows[0]!.input_snapshot.planReview as { fixes: unknown[] }).fixes;
+      expect(fixes).toEqual([
+        expect.objectContaining({ op: 'move', outlineId: 'o-visual', round: 0 }),
+        expect.objectContaining({
+          op: 'set',
+          outlineId: 'o-visual',
+          field: 'contentRole',
+          from: 'procedure',
+          to: 'explanation',
+          reason: 'الدور ده مش مسموح في المرحلة دي',
+          actor: 'system:plan-reviewer',
+          round: 1,
+        }),
+      ]);
+    });
+
+    describe('P3: what a person sees and undoes (package-plan-review-p3-contract)', () => {
+      async function pausedWithMove() {
+        answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+        const started = await startAndRun({
+          flow: flowV4(),
+          teachingModel: { key: 'g5', version: 'g5.v4' },
+        });
+        expect((await attempt(started.attemptId)).status).toBe('awaiting_admin_correction');
+        return started;
+      }
+
+      /**
+       * Make the paused attempt look like one from before the plan review: no marks and
+       * no fixes on the checkpoint or the attempt record, and (by default) the slides
+       * back out of order, as the old runner left them.
+       */
+      async function asOldPause(attemptId: string, options: { reorder?: boolean } = {}) {
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET edit_log = (SELECT jsonb_agg(entry - 'planReviewed' - 'planFixes')
+                                FROM jsonb_array_elements(edit_log) AS entry)
+            WHERE attempt_id = $1`,
+          [attemptId],
+        );
+        if (options.reorder !== false) {
+          await pool.query(
+            `UPDATE teaching_package_generation_checkpoints
+                SET outlines = (SELECT jsonb_agg(o ORDER BY (o->>'id') DESC)
+                                  FROM jsonb_array_elements(outlines) AS o)
+              WHERE attempt_id = $1`,
+            [attemptId],
+          );
+        }
+        await pool.query(
+          `UPDATE teaching_package_generation_attempts
+              SET input_snapshot = input_snapshot - 'planReview'
+            WHERE id = $1`,
+          [attemptId],
+        );
+      }
+
+      /** The attempt record's `planReview`, as stored (with the values). */
+      async function storedPlanReview(attemptId: string) {
+        const result = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+          `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+          [attemptId],
+        );
+        return result.rows[0]!.input_snapshot.planReview as
+          | { fixes: Array<Record<string, unknown>>; promptVersion?: string }
+          | undefined;
+      }
+
+      /** The suite's pool, whose first statement matching `pattern` fails (pool or transaction). */
+      function failingOnce(pattern: RegExp) {
+        let failures = 0;
+        const fails = (text: string) => {
+          if (failures > 0 || !pattern.test(text)) return false;
+          failures += 1;
+          return true;
+        };
+        const wrapped = {
+          query: (text: string, params?: unknown[]) =>
+            fails(text) ? Promise.reject(new Error('write failed')) : pool.query(text, params),
+          connect: async () => {
+            const client = await pool.connect();
+            return {
+              query: (text: string, params?: unknown[]) =>
+                fails(text)
+                  ? Promise.reject(new Error('write failed'))
+                  : client.query(text, params),
+              release: () => client.release(),
+            };
+          },
+        } as unknown as ConnectableQueryable;
+        return { pool: wrapped, failures: () => failures };
+      }
+
+      async function startReview(attemptId: string) {
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const before = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(before.planReview).toEqual({ status: 'not_reviewed' });
+        return editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: before.revision,
+          operations: [{ op: 'review_plan' }],
+        });
+      }
+
+      /** The reviewer's answer: the role its stage allows. */
+      const roleReviewer = () =>
+        vi.fn(async () =>
+          JSON.stringify({
+            ops: [
+              {
+                op: 'set',
+                outlineId: 'o-visual',
+                field: 'contentRole',
+                value: 'explanation',
+                reason: 'الدور مش مسموح هنا',
+              },
+            ],
+          }),
+        );
+
+      it('lists the fixes without their values, and «تراجع» puts one back, once', async () => {
+        const { attemptId } = await pausedWithMove();
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(view.planReview).toEqual({ status: 'reviewed' });
+        expect(view.autoFixes).toEqual([
+          {
+            id: expect.stringMatching(/^tpf-/),
+            op: 'move',
+            outlineId: 'o-visual',
+            reason: expect.stringMatching(/[؀-ۿ]/),
+            round: 0,
+            at: expect.any(Number),
+            reverted: false,
+          },
+        ]);
+        const fixId = view.autoFixes[0]!.id;
+        expect((await storedPlanReview(attemptId))?.fixes.map((fix) => fix.id)).toEqual([fixId]);
+
+        const undone = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: view.revision,
+          operations: [{ op: 'revert_fix', fixId }],
+        });
+        expect(undone.outlines.map((outline) => outline.id)).toEqual(['o-visual', 'o-intro']);
+        expect(undone.autoFixes[0]!.reverted).toBe(true);
+        // Re-diagnosed like any edit: the order issue is back.
+        expect(undone.blockingIssues.map((issue) => issue.code)).toContain('FLOW_SEQUENCE_INVALID');
+        // HIGH 1: the undone fix left the attempt record in the same edit; none is left.
+        expect(await storedPlanReview(attemptId)).toBeUndefined();
+
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: undone.revision,
+            operations: [{ op: 'revert_fix', fixId }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: undone.revision,
+            operations: [{ op: 'revert_fix', fixId: 'tpf-unknown' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      });
+
+      it('undoes a removed slide and an added one through the edit', async () => {
+        const { attemptId } = await pausedWithMove();
+        const extra = { ...visualOutline({ id: 'o-extra', title: 'Extra' }), order: 2 };
+        const fix = (entry: Record<string, unknown>) => ({
+          reason: 'إصلاح',
+          actor: 'system:plan-reviewer',
+          round: 1,
+          generationRun: 1,
+          at: Date.now(),
+          ...entry,
+        });
+        // Two recorded fixes: the reviewer removed `o-extra` at index 1, and (as if
+        // later) added it. Undone in that order, the slide comes back, then goes again.
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET edit_log = edit_log || $2::jsonb
+            WHERE attempt_id = $1`,
+          [
+            attemptId,
+            JSON.stringify([
+              {
+                event: 'edited',
+                actorRef: 'system:plan-reviewer',
+                at: Date.now(),
+                operations: [],
+                blockingCount: 1,
+                revision: 1,
+                planFixes: [
+                  fix({
+                    id: 'tpf-rm',
+                    op: 'remove',
+                    outlineId: 'o-extra',
+                    from: { index: 1, outline: extra },
+                  }),
+                  fix({ id: 'tpf-add', op: 'insert_book_slide', outlineId: 'o-extra', to: 1 }),
+                ],
+              },
+            ]),
+          ],
+        );
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(view.outlines.map((outline) => outline.id)).toEqual(['o-intro', 'o-visual']);
+
+        const restored = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: view.revision,
+          operations: [{ op: 'revert_fix', fixId: 'tpf-rm' }],
+        });
+        expect(restored.outlines.map((outline) => outline.id)).toEqual([
+          'o-intro',
+          'o-extra',
+          'o-visual',
+        ]);
+        expect(restored.outlines[1]!.title).toBe('Extra');
+
+        const removedAgain = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: restored.revision,
+          operations: [{ op: 'revert_fix', fixId: 'tpf-add' }],
+        });
+        expect(removedAgain.outlines.map((outline) => outline.id)).toEqual(['o-intro', 'o-visual']);
+        expect(
+          removedAgain.autoFixes.filter((entry) => entry.reverted).map((entry) => entry.id),
+        ).toEqual(['tpf-rm', 'tpf-add']);
+      });
+
+      it('a plan that paused before the review existed is reviewed once, in the background, and edits wait for it', async () => {
+        const { attemptId, context } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const {
+          getGenerationCorrection,
+          editGenerationCorrection,
+          resumeGenerationAttempt,
+          runCheckpointPlanReview,
+        } = await correction();
+        const before = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(before.planReview).toEqual({ status: 'not_reviewed' });
+        expect(before.autoFixes).toEqual([]);
+
+        const started = await startReview(attemptId);
+        expect(started.planReview).toEqual({ status: 'reviewing' });
+        expect(started.canResume).toBe(false);
+        // Nothing else may change the plan, or resume it, or start it again, while the
+        // review runs.
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: started.revision,
+            operations: [{ op: 'remove', outlineId: 'o-intro' }],
+          }),
+        ).rejects.toMatchObject({ code: 'STALE_STATE' });
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: started.revision,
+            operations: [{ op: 'review_plan' }],
+          }),
+        ).rejects.toMatchObject({ code: 'STALE_STATE' });
+        await expect(
+          resumeGenerationAttempt(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: started.revision,
+            requestDigest: DIGEST,
+            learningItem: context.aggregate.learningItem,
+          }),
+        ).rejects.toMatchObject({ code: 'STALE_STATE' });
+
+        // The background half: the rule fix moves the slide; the reviewer sets the role.
+        const aiCall = roleReviewer();
+        await runCheckpointPlanReview(txPool(), attemptId, { tenantId: TENANT }, { aiCall });
+        expect(aiCall).toHaveBeenCalledTimes(1);
+        // HIGH 2: no slide is offered for a new working step on this review.
+        expect(String((aiCall.mock.calls[0] as unknown[])[1])).toContain('- keyPoints: none');
+
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.blockingIssues).toEqual([]);
+        expect(after.canResume).toBe(true);
+        expect(after.outlines.map((outline) => [outline.id, outline.contentRole])).toEqual([
+          ['o-intro', 'explanation'],
+          ['o-visual', 'explanation'],
+        ]);
+        expect(after.autoFixes.map((fix) => [fix.op, fix.outlineId, fix.round])).toEqual([
+          ['move', 'o-visual', 0],
+          ['set', 'o-visual', 1],
+        ]);
+        // Once per checkpoint.
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: after.revision,
+            operations: [{ op: 'review_plan' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      });
+
+      it('HIGH 1: the background review’s fixes reach the attempt record and the succeeded webhook; an undone one never does', async () => {
+        const { attemptId, execution, context } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const {
+          getGenerationCorrection,
+          editGenerationCorrection,
+          resumeGenerationAttempt,
+          runCheckpointPlanReview,
+        } = await correction();
+        const { PLAN_REVIEW_PROMPT_VERSION } =
+          await import('@/lib/server/teaching-package/plan-review');
+        await startReview(attemptId);
+        await runCheckpointPlanReview(
+          txPool(),
+          attemptId,
+          { tenantId: TENANT },
+          { aiCall: roleReviewer() },
+        );
+
+        const reviewed = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        const [move, set] = reviewed.autoFixes;
+        // The attempt record keeps them as a run's own: with their undo state, the run's
+        // number and the reviewer's prompt version.
+        expect(await storedPlanReview(attemptId)).toEqual({
+          fixes: [
+            expect.objectContaining({ id: move!.id, op: 'move', from: 0, to: 1, generationRun: 1 }),
+            expect.objectContaining({
+              id: set!.id,
+              op: 'set',
+              field: 'contentRole',
+              from: 'procedure',
+              to: 'explanation',
+              round: 1,
+              generationRun: 1,
+            }),
+          ],
+          promptVersion: PLAN_REVIEW_PROMPT_VERSION,
+        });
+
+        // «تراجع» on the role: the attempt record drops it in the same edit.
+        const undone = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: reviewed.revision,
+          operations: [{ op: 'revert_fix', fixId: set!.id }],
+        });
+        expect(undone.outlines.find((outline) => outline.id === 'o-visual')!.contentRole).toBe(
+          'procedure',
+        );
+        expect((await storedPlanReview(attemptId))?.fixes.map((fix) => fix.id)).toEqual([move!.id]);
+        const roleIssue = undone.blockingIssues.find(
+          (issue) => issue.code === 'CONTENT_ROLE_NOT_ALLOWED',
+        )!;
+        const ignored = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: undone.revision,
+          operations: [{ op: 'ignore_issue', issueKey: roleIssue.key }],
+        });
+        expect(ignored.canResume).toBe(true);
+
+        await resumeGenerationAttempt(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: ignored.revision,
+          requestDigest: DIGEST,
+          learningItem: context.aggregate.learningItem,
+        });
+        const runner = await import('@/lib/server/teaching-package/generation-runner');
+        await runner.runGenerationAttempt(attemptId, execution, context, { resume: true });
+        expect((await attempt(attemptId)).status).toBe('succeeded');
+
+        const delivered = await pool.query<{ payload: Record<string, unknown> }>(
+          `SELECT payload FROM teaching_package_webhook_deliveries
+            WHERE event_type = 'teaching_package.generation_succeeded'`,
+        );
+        const event = delivered.rows.at(-1)!.payload as { data?: Record<string, unknown> };
+        const sent = ((event.data ?? event) as { attempt: Record<string, unknown> }).attempt
+          .planReviewFixes as Array<Record<string, unknown>>;
+        expect(sent).toEqual([
+          {
+            id: move!.id,
+            op: 'move',
+            outlineId: 'o-visual',
+            reason: expect.stringMatching(/[؀-ۿ]/),
+            round: 0,
+            at: expect.any(Number),
+          },
+        ]);
+      });
+
+      it('a review whose route fails keeps only the rule fixes, and still finishes', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        await startReview(attemptId);
+        // No injected call: the stage route (routing is off in this suite) resolves its
+        // model on the first call, and that fails.
+        mocks.resolveModel.mockRejectedValue(new Error('no model for this stage'));
+        await runCheckpointPlanReview(txPool(), attemptId, { tenantId: TENANT });
+
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        // The free move is kept; nothing of the AI review is.
+        expect(after.outlines.map((outline) => outline.id)).toEqual(['o-intro', 'o-visual']);
+        expect(after.autoFixes.map((fix) => [fix.op, fix.round])).toEqual([['move', 0]]);
+        expect(after.blockingIssues.map((issue) => issue.code)).toEqual([
+          'CONTENT_ROLE_NOT_ALLOWED',
+        ]);
+        const stored = await storedPlanReview(attemptId);
+        expect(stored?.fixes.map((fix) => fix.op)).toEqual(['move']);
+        // No reviewer fix was kept, so no reviewer prompt version is recorded.
+        expect(stored).not.toHaveProperty('promptVersion');
+      });
+
+      it('a review whose call fails still finishes, with the plan as it was', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId, { reorder: false });
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        await startReview(attemptId);
+        await runCheckpointPlanReview(
+          txPool(),
+          attemptId,
+          { tenantId: TENANT },
+          {
+            aiCall: async () => {
+              throw new Error('route down');
+            },
+          },
+        );
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.blockingIssues.map((issue) => issue.code)).toEqual([
+          'CONTENT_ROLE_NOT_ALLOWED',
+        ]);
+        expect(after.autoFixes).toEqual([]);
+        expect(await storedPlanReview(attemptId)).toBeUndefined();
+      });
+
+      it('a failure while storing finishes the review unchanged, from the revision it started at', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        const started = await startReview(attemptId);
+        // The attempt-record write inside the finish transaction fails once: the whole
+        // transaction rolls back, and the catch finishes the review with the plan as it was.
+        const flaky = failingOnce(
+          /UPDATE teaching_package_generation_attempts\s+SET input_snapshot/,
+        );
+
+        await runCheckpointPlanReview(
+          flaky.pool,
+          attemptId,
+          { tenantId: TENANT },
+          { aiCall: roleReviewer() },
+        );
+
+        expect(flaky.failures()).toBe(1);
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.revision).toBe(started.revision + 1);
+        expect(after.outlines.map((outline) => outline.id)).toEqual(['o-visual', 'o-intro']);
+        expect(after.autoFixes).toEqual([]);
+        expect(await storedPlanReview(attemptId)).toBeUndefined();
+      });
+
+      it('a failed review never finishes a newer one: the unchanged finish is written against the revision it started at', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        const started = await startReview(attemptId);
+        // While this review waits on its model, the checkpoint moves on: it went stale
+        // and a newer review started (a fresh `started` entry at the next revision).
+        const aiCall = vi.fn(async () => {
+          await pool.query(
+            `UPDATE teaching_package_generation_checkpoints
+                SET revision = revision + 1,
+                    edit_log = edit_log || $2::jsonb
+              WHERE attempt_id = $1`,
+            [
+              attemptId,
+              JSON.stringify([
+                {
+                  event: 'edited',
+                  actorRef: 'kafuo:admin-2',
+                  at: Date.now(),
+                  operations: [{ op: 'review_plan' }],
+                  blockingCount: 1,
+                  planReview: 'started',
+                  revision: started.revision + 1,
+                },
+              ]),
+            ],
+          );
+          return roleReviewer()();
+        });
+        // Then this review's own store fails, so it takes the unchanged-finish path.
+        const flaky = failingOnce(/UPDATE teaching_package_generation_checkpoints\s+SET outlines/);
+
+        await runCheckpointPlanReview(flaky.pool, attemptId, { tenantId: TENANT }, { aiCall });
+
+        expect(flaky.failures()).toBe(1);
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        // The newer review is still running: nothing finished it.
+        expect(after.revision).toBe(started.revision + 1);
+        expect(after.planReview).toEqual({ status: 'reviewing' });
+        expect(after.autoFixes).toEqual([]);
+      });
+
+      it('a call that fails in round 2 keeps nothing of the AI review, not even round 1', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId, { reorder: false });
+        // A second slide with the same role problem: round 1 fixes one, round 2 fails.
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET outlines = outlines || $2::jsonb
+            WHERE attempt_id = $1`,
+          [
+            attemptId,
+            JSON.stringify([
+              {
+                ...visualOutline({ id: 'o-visual-2', title: 'Second', contentRole: 'procedure' }),
+                order: 3,
+              },
+            ]),
+          ],
+        );
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        await startReview(attemptId);
+        const aiCall = vi
+          .fn<() => Promise<string>>()
+          .mockImplementationOnce(roleReviewer())
+          .mockImplementationOnce(async () => {
+            throw new Error('route spent');
+          });
+
+        await runCheckpointPlanReview(txPool(), attemptId, { tenantId: TENANT }, { aiCall });
+
+        expect(aiCall).toHaveBeenCalledTimes(2);
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.autoFixes).toEqual([]);
+        expect(after.blockingIssues.map((issue) => [issue.code, issue.outlineId]).sort()).toEqual([
+          ['CONTENT_ROLE_NOT_ALLOWED', 'o-visual'],
+          ['CONTENT_ROLE_NOT_ALLOWED', 'o-visual-2'],
+        ]);
+        expect(after.outlines.find((outline) => outline.id === 'o-visual')!.contentRole).toBe(
+          'procedure',
+        );
+        expect(await storedPlanReview(attemptId)).toBeUndefined();
+      });
+
+      it("stores the fresh diagnosis's repairs with the checkpoint's, like an edit", async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId, { reorder: false });
+        // A structural slide carrying a role its position does not allow: today's
+        // diagnosis drops the role and records the repair.
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints
+              SET outlines = outlines || $2::jsonb
+            WHERE attempt_id = $1`,
+          [
+            attemptId,
+            JSON.stringify([
+              {
+                ...visualOutline({
+                  id: 'o-bridge',
+                  title: 'Next up',
+                  slideType: 'transition',
+                  contentRole: 'procedure',
+                }),
+                order: 3,
+              },
+            ]),
+          ],
+        );
+        const { getGenerationCorrection, runCheckpointPlanReview } = await correction();
+        const started = await startReview(attemptId);
+        expect(started.repairs.map((repair) => repair.code)).not.toContain(
+          'STRUCTURAL_CONTENT_ROLE_DROPPED',
+        );
+
+        await runCheckpointPlanReview(
+          txPool(),
+          attemptId,
+          { tenantId: TENANT },
+          { aiCall: roleReviewer() },
+        );
+
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.planReview).toEqual({ status: 'reviewed' });
+        expect(after.repairs.slice(0, started.repairs.length)).toEqual(started.repairs);
+        expect(after.repairs).toContainEqual(
+          expect.objectContaining({
+            code: 'STRUCTURAL_CONTENT_ROLE_DROPPED',
+            outlineId: 'o-bridge',
+          }),
+        );
+      });
+
+      it('review_plan is refused with other ops, and in the scenes phase (which reports reviewed)', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(view.planReview).toEqual({ status: 'not_reviewed' });
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: view.revision,
+            operations: [{ op: 'review_plan' }, { op: 'remove', outlineId: 'o-intro' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+
+        await pool.query(
+          `UPDATE teaching_package_generation_checkpoints SET phase = 'scenes' WHERE attempt_id = $1`,
+          [attemptId],
+        );
+        const scenes = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(scenes.planReview).toEqual({ status: 'reviewed' });
+        await expect(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'kafuo:admin-1',
+            expectedRevision: scenes.revision,
+            operations: [{ op: 'review_plan' }],
+          }),
+        ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      });
+
+      it('an abandon during the review never shows it running, and the review then stores nothing', async () => {
+        const { attemptId } = await pausedWithMove();
+        await asOldPause(attemptId);
+        const { getGenerationCorrection, abandonGenerationAttempt, runCheckpointPlanReview } =
+          await correction();
+        const started = await startReview(attemptId);
+        expect(started.planReview).toEqual({ status: 'reviewing' });
+        await abandonGenerationAttempt(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          reason: 'start over',
+        });
+        const abandoned = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(abandoned.planReview).toEqual({ status: 'reviewed' });
+
+        const aiCall = roleReviewer();
+        await runCheckpointPlanReview(txPool(), attemptId, { tenantId: TENANT }, { aiCall });
+        expect(aiCall).not.toHaveBeenCalled();
+        const after = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(after.revision).toBe(abandoned.revision);
+        expect(after.autoFixes).toEqual([]);
+      });
+    });
+
+    // The rollback case (the key's position would break the order, so the run still
+    // pauses with the mismatch) is test (d) "flow correction" below, unchanged.
+    it('a stage key that names one flow position fixes its index and the run completes', async () => {
+      // Key and index disagree; the key names position 1, and moving the index there
+      // keeps the order valid, so it is fixed.
+      answerWith([
+        introOutline(),
+        visualOutline({ teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 } }),
+      ]);
+      const fixed = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+      expect((await attempt(fixed.attemptId)).status).toBe('succeeded');
+    });
+  });
+
   it('(b) an ignored issue no longer blocks: the edit, the resume and the resumed run accept it', async () => {
     answerWith([introOutline(), visualOutline({ contentRole: 'procedure' })]);
     const { attemptId, execution, context } = await startAndRun({

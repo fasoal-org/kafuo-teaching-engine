@@ -626,6 +626,56 @@ describe('POST /api/teaching-packages/generate', () => {
       expect(mocks.afterCallbacks).toHaveLength(0);
     });
 
+    it('a planning route (§3c) target without a server key → 409 GENERATION_ROUTE_UNAVAILABLE, before any attempt', async () => {
+      // package-planner-issue-resolve-plan-2026-11-22 §3c: the same refusal as
+      // the generation route, with the planning setting key in the details.
+      const PLAN = {
+        primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+        fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        settingKey: 'teaching_generation.plan_route.BIOLOGY',
+      };
+      mocks.modelAvailability.mockImplementation((model: string) =>
+        model === 'anthropic:claude-opus-5-5' ? missing('ANTHROPIC_API_KEY') : available,
+      );
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE, planRoute: PLAN }));
+      expect(response.status).toBe(409);
+      const json = (await response.json()) as {
+        error: { code: string; message: string; details: Record<string, unknown> };
+      };
+      expect(json.error.code).toBe('GENERATION_ROUTE_UNAVAILABLE');
+      expect(json.error.message).toContain('Teaching Engine planning route');
+      expect(json.error.details).toEqual({
+        model: 'anthropic:claude-opus-5-5',
+        role: 'primary',
+        reason: 'missing-key',
+        keyEnvVar: 'ANTHROPIC_API_KEY',
+        settingKey: 'teaching_generation.plan_route.BIOLOGY',
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('both routes available: the planning route reaches the runner beside the generation route', async () => {
+      const PLAN = {
+        primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+        fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        settingKey: 'teaching_generation.plan_route.BIOLOGY',
+      };
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody({ modelRoute: ROUTE, planRoute: PLAN }));
+      expect(response.status).toBe(202);
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        modelRoute: ROUTE,
+        planRoute: PLAN,
+      });
+    });
+
     it('the primary is checked first', async () => {
       mocks.modelAvailability.mockReturnValue(missing('OPENAI_API_KEY'));
       const response = await post(kafuoShapedBody({ modelRoute: ROUTE }));

@@ -28,6 +28,8 @@ import {
   generationModelAvailability,
   generationModelUnavailableMessage,
   parseGenerationModelRoute,
+  routeSettingKeySubjectCode,
+  type GenerationRouteField,
 } from '@/lib/server/teaching-model/generation-catalog';
 import { readRoutingMode } from '@/lib/server/teaching-model/subject-policy';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -646,11 +648,20 @@ export function assertConfiguredTtsRouteAvailable(kafuo: KafuoGenerationContext)
  * policy at all, so the route is ignored (logged once here) and not checked.
  */
 export function assertConfiguredGenerationRouteAvailable(kafuo: KafuoGenerationContext): void {
-  const route = kafuo.modelRoute;
+  assertConfiguredRouteAvailable(kafuo.modelRoute, 'generation');
+  // The planning and review route (package-planner-issue-resolve-plan-2026-11-22
+  // §3c) is refused the same way: its models must be keyed now, never swapped.
+  assertConfiguredRouteAvailable(kafuo.planRoute, 'planning');
+}
+
+function assertConfiguredRouteAvailable(
+  route: GenerationModelRoute | undefined,
+  label: 'generation' | 'planning',
+): void {
   if (!route) return;
   if (readRoutingMode() === 'off') {
     log.warn(
-      `configured generation route ${route.settingKey} ignored: TEACHING_SUBJECT_ROUTING=off (stage routes apply)`,
+      `configured ${label} route ${route.settingKey} ignored: TEACHING_SUBJECT_ROUTING=off (stage routes apply)`,
     );
     return;
   }
@@ -660,7 +671,7 @@ export function assertConfiguredGenerationRouteAvailable(kafuo: KafuoGenerationC
     if (availability.available) continue;
     throw new TeachingPackageError(
       'GENERATION_ROUTE_UNAVAILABLE',
-      generationModelUnavailableMessage(route, role, model, availability),
+      generationModelUnavailableMessage(route, role, model, availability, label),
       {
         model,
         role,
@@ -886,11 +897,13 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   // The configured model route is a top-level field (plan D-9), never a
   // `generation` switch: a misplaced one is refused instead of being dropped
   // silently onto today's table.
-  if ('modelRoute' in generationRaw) {
-    throw new TeachingPackageError(
-      'GENERATION_ROUTE_INVALID',
-      'generation.modelRoute is not accepted: send modelRoute at the top level of the request',
-    );
+  for (const field of ['modelRoute', 'planRoute'] as const) {
+    if (field in generationRaw) {
+      throw new TeachingPackageError(
+        'GENERATION_ROUTE_INVALID',
+        `generation.${field} is not accepted: send ${field} at the top level of the request`,
+      );
+    }
   }
   const generation: KafuoGenerationRequest['generation'] = {
     ...(typeof generationRaw.enableWebSearch === 'boolean'
@@ -916,6 +929,13 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   // checked by the generate and resume routes, not here.
   const modelRoute =
     body.modelRoute === undefined ? undefined : parseGenerationModelRoute(body.modelRoute);
+  // The optional planning and review model route (package-planner-issue-
+  // resolve-plan-2026-11-22 §3c, D-5/D-10): the same rules as `modelRoute`,
+  // with its own `teaching_generation.plan_route.<CODE>` key family.
+  const planRoute =
+    body.planRoute === undefined
+      ? undefined
+      : parseGenerationModelRoute(body.planRoute, 'planRoute');
   const bookStructure = parseBookStructure(body.bookStructure);
   // g5.v11 only (D-20, 16 Nov 2026): parsed, digested and kept on a g5.v11 request
   // alone. Every other Teaching Model ignores the block entirely, so a malformed one
@@ -940,6 +960,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     ...(teachingSkillsContract ? { teachingSkillsContract } : {}),
     ...(narration ? { narration } : {}),
     ...(modelRoute ? { modelRoute } : {}),
+    ...(planRoute ? { planRoute } : {}),
     ...(bookStructure ? { bookStructure } : {}),
     ...(teacherGuide ? { teacherGuide } : {}),
   };
@@ -949,12 +970,17 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
   assertSubjectTeachingSkillPolicy(teachingModel.flow, subjectCodeOf(request));
   // A configured route is the lesson's own subject's setting (plan D-8): a key for
   // another subject would run the wrong choice under a wrong audit lineage.
-  if (modelRoute) {
-    const routeCode = modelRoute.settingKey.slice('teaching_generation.route.'.length);
+  const ownSubjectRoutes: Array<[GenerationRouteField, GenerationModelRoute | undefined]> = [
+    ['modelRoute', modelRoute],
+    ['planRoute', planRoute],
+  ];
+  for (const [field, route] of ownSubjectRoutes) {
+    if (!route) continue;
+    const routeCode = routeSettingKeySubjectCode(field, route.settingKey);
     if (routeCode !== subjectCodeOf(request)) {
       throw new TeachingPackageError(
         'GENERATION_ROUTE_INVALID',
-        `modelRoute.settingKey ${modelRoute.settingKey} is not the setting of this lesson's subject ${JSON.stringify(subjectCodeOf(request))}`,
+        `${field}.settingKey ${route.settingKey} is not the setting of this lesson's subject ${JSON.stringify(subjectCodeOf(request))}`,
       );
     }
   }
@@ -1025,6 +1051,17 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
   if (request.modelRoute !== undefined) {
     const { primary, fallback, settingKey } = request.modelRoute;
     payload.modelRoute = {
+      primary: { model: primary.model, thinking: primary.thinking },
+      fallback: { model: fallback.model, thinking: fallback.thinking },
+      settingKey,
+    };
+  }
+  // The planning and review model route decides which models plan the package
+  // (package-planner-issue-resolve-plan-2026-11-22 §3c), so it is covered the
+  // same way (vector 10), mirrored by the Backend. Absent stays absent.
+  if (request.planRoute !== undefined) {
+    const { primary, fallback, settingKey } = request.planRoute;
+    payload.planRoute = {
       primary: { model: primary.model, thinking: primary.thinking },
       fallback: { model: fallback.model, thinking: fallback.thinking },
       settingKey,
@@ -1558,6 +1595,13 @@ export interface KafuoGenerationContext {
    * the code table and frozen on the attempt (D-10). Absent ⇒ the table.
    */
   modelRoute?: GenerationModelRoute;
+  /**
+   * The configured planning and review model route (`planRoute`, package-
+   * planner-issue-resolve-plan-2026-11-22 §3c), resolved by the runner for the
+   * planner's outline call and frozen on the attempt. Absent ⇒ planning runs
+   * on the generation policy itself.
+   */
+  planRoute?: GenerationModelRoute;
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
   /**
@@ -1645,6 +1689,7 @@ export function buildKafuoStartRequest(
       subjectOffering: request.learningItem.subjectOffering ?? null,
       ...(ttsRoute ? { ttsRoute } : {}),
       ...(request.modelRoute ? { modelRoute: request.modelRoute } : {}),
+      ...(request.planRoute ? { planRoute: request.planRoute } : {}),
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
       ...(teacherGuide ? { teacherGuide } : {}),
     },

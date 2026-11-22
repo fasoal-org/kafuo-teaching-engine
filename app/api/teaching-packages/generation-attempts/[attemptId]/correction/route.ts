@@ -9,13 +9,14 @@
  *       the edited candidate is revalidated with the run's own diagnosis.
  */
 import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import {
   editGenerationCorrection,
   getGenerationCorrection,
+  runCheckpointPlanReview,
 } from '@/lib/server/teaching-package/generation-correction';
 import { parseCorrectionOperations } from '@/lib/server/teaching-package/outline-correction';
 import {
@@ -89,6 +90,12 @@ export async function PATCH(
       expectedRevision,
       operations,
     });
+    // P3 (package-plan-review-p3-contract-2026-11-22): the review of a plan paused
+    // before the plan review existed runs after this response, in the background:
+    // two rounds on a planning model can take minutes, longer than the request path.
+    if (operations.some((operation) => operation.op === 'review_plan')) {
+      after(() => runCheckpointPlanReview(pool, attemptId, { tenantId }));
+    }
     return NextResponse.json({ correction });
   } catch (error) {
     const mapped = teachingPackageErrorResponse(error);

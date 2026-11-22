@@ -7,6 +7,7 @@ import {
 import {
   applyCorrectionOperations,
   buildCorrectionView,
+  isResolvedByResume,
   diagnoseCandidateOutlines,
   insertableBookGaps,
   parseCorrectionOperations,
@@ -394,5 +395,53 @@ describe('insert_book_slide correction', () => {
     expect(
       buildCorrectionView(attempt, { ...checkpoint, phase: 'scenes' }, FLOW).insertableBookSlides,
     ).toEqual([]);
+  });
+
+  // Owner, 22 Nov 2026: the resumed run re-reads the book and the book repair writes a
+  // missing book slide itself (or pauses again), so a book gap never holds a resume back.
+  it('a book gap alone lets the attempt resume (outline phase), and is resolved by the resume', () => {
+    const attempt = {
+      id: 'tpa-1',
+      status: 'awaiting_admin_correction',
+      teachingModel: null,
+      inputSnapshot: { bookStructure: BOOK },
+    } as unknown as GenerationAttempt;
+    const gaps = findBookCoverageDiagnostics(CANDIDATE, BOOK);
+    expect(gaps.length).toBeGreaterThan(0);
+    const checkpoint = {
+      phase: 'outline',
+      state: 'awaiting',
+      revision: 1,
+      pausedAt: 0,
+      updatedAt: 0,
+      pendingOutlineIds: null,
+      outlines: CANDIDATE,
+      diagnostics: gaps,
+      repairs: [],
+      sourceRefs: SOURCE_REFS,
+      editLog: [{ revision: 1, event: 'paused', actorRef: 'system', at: 1, planReviewed: true }],
+    } as unknown as GenerationCheckpoint;
+
+    expect(buildCorrectionView(attempt, checkpoint, FLOW).canResume).toBe(true);
+    for (const gap of gaps) {
+      expect(isResolvedByResume(gap, 'outline')).toBe(true);
+      // Past the outline phase no resumed run re-plans the outline.
+      expect(isResolvedByResume(gap, 'scenes')).toBe(false);
+    }
+    // Another open issue still holds it back.
+    const withOther = {
+      ...checkpoint,
+      diagnostics: [
+        ...gaps,
+        {
+          code: 'CONTENT_ROLE_NOT_ALLOWED',
+          disposition: 'admin_correctable' as const,
+          outlineId: 'try2',
+          field: 'contentRole',
+          message: 'x',
+        },
+      ],
+    } as unknown as GenerationCheckpoint;
+    expect(buildCorrectionView(attempt, withOther, FLOW).canResume).toBe(false);
   });
 });

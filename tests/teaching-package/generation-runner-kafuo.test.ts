@@ -2020,6 +2020,78 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         expect(retained?.inputSnapshot.generationRoute).toEqual(ROUTE);
       });
 
+      it('a planning route (§3c) is resolved as its own policy, handed down as planPolicy, and frozen beside the generation route', async () => {
+        const PLAN = {
+          primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+          fallback: { model: 'openai:gpt-6-luna', thinking: 'low' },
+          settingKey: 'teaching_generation.plan_route.MATH',
+        };
+        const attemptId = await startKafuo({
+          ...kafuoContext(),
+          modelRoute: ROUTE,
+          planRoute: PLAN,
+        });
+        const { readAttemptById, readRetainedVersionContext } =
+          await import('@/lib/persistence/teaching-package');
+        const attempt = (await readAttemptById(qp(), attemptId))!;
+        expect(attempt.status).toBe('succeeded');
+        expect(POLICY_CALLS()).toEqual([
+          { modelString: 'openai:gpt-6.1-terra' },
+          { modelString: 'qwen:qwen4-max' },
+          { modelString: 'anthropic:claude-opus-5-5' },
+          { modelString: 'openai:gpt-6-luna' },
+        ]);
+        const execution = mocks.generateClassroom.mock.calls[0]![0];
+        expect(execution.modelPolicy.primary.modelString).toBe('openai:gpt-6.1-terra');
+        expect(execution.planPolicy).toMatchObject({
+          subjectCode: 'MATH',
+          policyVersion: 'configured-2026-11',
+          primary: {
+            modelString: 'anthropic:claude-opus-5-5',
+            thinking: { mode: 'enabled', effort: 'high' },
+            thinkingLabel: 'high',
+          },
+          fallback: { modelString: 'openai:gpt-6-luna', thinkingLabel: 'low' },
+        });
+        const row = await snapshotOf(attemptId);
+        expect(row.input_snapshot).toMatchObject({ generationRoute: ROUTE, planRoute: PLAN });
+        expect(attempt.inputSnapshot.planRoute).toEqual(PLAN);
+        const retained = await readRetainedVersionContext(qp(), attempt.versionId!, {
+          tenantId: 'tenant-k',
+        });
+        expect(retained?.inputSnapshot.planRoute).toEqual(PLAN);
+      });
+
+      it('no planning route: no planPolicy is handed down and nothing is frozen (planning follows the generation route)', async () => {
+        const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
+        const execution = mocks.generateClassroom.mock.calls[0]![0];
+        expect(execution).not.toHaveProperty('planPolicy');
+        expect((await snapshotOf(attemptId)).input_snapshot).not.toHaveProperty('planRoute');
+      });
+
+      it('a planning target the registry cannot resolve fails the attempt closed, like the generation route', async () => {
+        mocks.resolveModel.mockImplementation(async (params: { modelString?: string }) => {
+          if (params.modelString === 'anthropic:claude-opus-5-5') {
+            throw new Error('anthropic: no API key configured');
+          }
+          return { model: { id: 'm' }, modelInfo: { capabilities: { vision: true } } };
+        });
+        const attemptId = await startKafuo({
+          ...kafuoContext(),
+          planRoute: {
+            primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+            fallback: { model: 'openai:gpt-6-luna', thinking: 'low' },
+            settingKey: 'teaching_generation.plan_route.MATH',
+          },
+        });
+        const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+        const after = (await readAttemptById(qp(), attemptId))!;
+        expect(after.status).toBe('failed');
+        expect(after.errorCode).toBe('SUBJECT_ROUTE_UNAVAILABLE');
+        expect(mocks.generateClassroom).not.toHaveBeenCalled();
+        expect((await snapshotOf(attemptId)).input_snapshot).not.toHaveProperty('planRoute');
+      });
+
       it('a stored route of the wrong shape reads as absent with a warning, never a crash', async () => {
         const attemptId = await startKafuo({ ...kafuoContext(), modelRoute: ROUTE });
         await pool.query(

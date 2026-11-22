@@ -854,6 +854,87 @@
         "actorRef": "42"
       },
       "digest": "55eaeb8fbeba47a4b6c547b984ff9cecf6ac196517cae7efcdfc3cb76e648a6c"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-10",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "10",
+            "name": "Science",
+            "code": "BIOLOGY",
+            "nameAr": "العلوم",
+            "nameEn": "Science",
+            "academicLanguage": "ar"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once."
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1."
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "planRoute": {
+          "primary": {
+            "model": "anthropic:claude-opus-5-5",
+            "thinking": "high"
+          },
+          "fallback": {
+            "model": "openai:gpt-6.1-terra",
+            "thinking": "medium"
+          },
+          "settingKey": "teaching_generation.plan_route.BIOLOGY"
+        },
+        "actorRef": "42"
+      },
+      "digest": "df6720ffb6a3672bfb4608a407289f998cdd2eb3cb288154bbe0bc8c7a014d02"
     }
   ]
 }

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   editGenerationCorrection: vi.fn(),
   resumeGenerationAttempt: vi.fn(),
   abandonGenerationAttempt: vi.fn(),
+  runCheckpointPlanReview: vi.fn(),
   runGenerationAttempt: vi.fn(),
   afterCallbacks: [] as Array<() => unknown>,
   pool: { query: () => undefined },
@@ -53,6 +54,7 @@ vi.mock('@/lib/server/teaching-package/generation-correction', () => ({
   editGenerationCorrection: mocks.editGenerationCorrection,
   resumeGenerationAttempt: mocks.resumeGenerationAttempt,
   abandonGenerationAttempt: mocks.abandonGenerationAttempt,
+  runCheckpointPlanReview: mocks.runCheckpointPlanReview,
 }));
 vi.mock('@/lib/server/teaching-package/generation-runner', () => ({
   runGenerationAttempt: mocks.runGenerationAttempt,
@@ -414,6 +416,54 @@ describe('PATCH …/correction', () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'STALE_STATE', details: { currentRevision: 5 } },
+    });
+  });
+
+  describe('P3 review_plan (package-plan-review-p3-contract)', () => {
+    const reviewPlan = { ...valid, operations: [{ op: 'review_plan' }] };
+
+    it('answers the reviewing view at once and runs the review after the response', async () => {
+      const reviewing = { ...correctionView, revision: 4, planReview: { status: 'reviewing' } };
+      mocks.editGenerationCorrection.mockResolvedValue(reviewing);
+      mocks.runCheckpointPlanReview.mockResolvedValue(undefined);
+
+      const response = await send(correctionPatch, '/correction', 'PATCH', reviewPlan);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ correction: reviewing });
+      expect(mocks.editGenerationCorrection).toHaveBeenCalledWith(mocks.pool, ATTEMPT_ID, {
+        tenantId: TENANT,
+        actorRef: 'admin-9',
+        expectedRevision: 3,
+        operations: [{ op: 'review_plan' }],
+      });
+      // Scheduled, not run on the request path.
+      expect(mocks.runCheckpointPlanReview).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(1);
+      await mocks.afterCallbacks[0]!();
+      expect(mocks.runCheckpointPlanReview).toHaveBeenCalledTimes(1);
+      expect(mocks.runCheckpointPlanReview).toHaveBeenCalledWith(mocks.pool, ATTEMPT_ID, {
+        tenantId: TENANT,
+      });
+    });
+
+    it('schedules nothing for an ordinary edit', async () => {
+      mocks.editGenerationCorrection.mockResolvedValue({ ...correctionView, revision: 4 });
+      const response = await send(correctionPatch, '/correction', 'PATCH', valid);
+      expect(response.status).toBe(200);
+      expect(mocks.afterCallbacks).toHaveLength(0);
+      expect(mocks.runCheckpointPlanReview).not.toHaveBeenCalled();
+    });
+
+    it('schedules nothing when the service refuses the review', async () => {
+      mocks.editGenerationCorrection.mockRejectedValue(
+        new TeachingPackageError('STALE_STATE', 'the plan reviewer is working on this plan', {
+          currentRevision: 4,
+        }),
+      );
+      const response = await send(correctionPatch, '/correction', 'PATCH', reviewPlan);
+      expect(response.status).toBe(409);
+      expect(mocks.afterCallbacks).toHaveLength(0);
+      expect(mocks.runCheckpointPlanReview).not.toHaveBeenCalled();
     });
   });
 });

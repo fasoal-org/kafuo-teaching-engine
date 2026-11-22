@@ -22,6 +22,7 @@ import type {
   GenerationCheckpointPhase,
   GenerationCheckpointSourceRefs,
   GenerationCheckpointState,
+  PlanReviewFix,
 } from '@/lib/types/teaching-package';
 
 interface RawCheckpointRow extends Record<string, unknown> {
@@ -112,12 +113,19 @@ export interface PauseCheckpointInput {
   pendingOutlineIds: string[] | null;
   actorRef: string;
   now: number;
+  /**
+   * The plan review's automatic fixes since the run (or the resume) began
+   * (package-planner-issue-resolve-plan-2026-11-22 §3b, P1): kept on this
+   * pause's edit-log entry as `planFixes`, so a person can see and undo them.
+   */
+  planFixes?: readonly PlanReviewFix[];
 }
 
 /**
  * Record a pause: insert the checkpoint, or — for an attempt that paused before
  * and resumed — overwrite the candidate, bump `revision` and `pause_count`, and
- * return it to `awaiting`. The pause is appended to the edit log.
+ * return it to `awaiting`. The pause is appended to the edit log, with the
+ * plan review's fixes (`planFixes`) when there are any.
  */
 export async function upsertCheckpointForPause(
   queryable: Queryable,
@@ -128,6 +136,8 @@ export async function upsertCheckpointForPause(
     diagnostics: input.diagnostics,
     repairs: input.repairs,
     sourceRefs: input.sourceRefs,
+    // A removed slide kept for an undo is checked like any outline.
+    planFixes: input.planFixes ?? [],
   };
   assertCheckpointPersistable(persisted);
   const blockingCount = input.diagnostics.filter(
@@ -142,7 +152,7 @@ export async function upsertCheckpointForPause(
              $10, $11::jsonb,
              jsonb_build_array(jsonb_build_object(
                'revision', 1, 'event', 'paused', 'actorRef', $12::text, 'at', $13::double precision,
-               'phase', $3::text, 'blockingCount', $14::int)),
+               'phase', $3::text, 'blockingCount', $14::int) || COALESCE($15::jsonb, '{}'::jsonb)),
              1, $13, $13)
      ON CONFLICT (attempt_id) DO UPDATE
        SET phase = EXCLUDED.phase,
@@ -160,7 +170,7 @@ export async function upsertCheckpointForPause(
              jsonb_build_object(
                'revision', teaching_package_generation_checkpoints.revision + 1,
                'event', 'paused', 'actorRef', $12::text, 'at', $13::double precision,
-               'phase', $3::text, 'blockingCount', $14::int)),
+               'phase', $3::text, 'blockingCount', $14::int) || COALESCE($15::jsonb, '{}'::jsonb)),
            pause_count = teaching_package_generation_checkpoints.pause_count + 1,
            paused_at = EXCLUDED.paused_at,
            updated_at = EXCLUDED.updated_at,
@@ -183,6 +193,12 @@ export async function upsertCheckpointForPause(
       input.actorRef,
       input.now,
       blockingCount,
+      // Every pause of a runner with the plan review is marked (P3), so a checkpoint
+      // paused before it existed is told apart and reviewed once.
+      JSON.stringify({
+        planReviewed: true,
+        ...(input.planFixes && input.planFixes.length > 0 ? { planFixes: input.planFixes } : {}),
+      }),
     ],
   );
   const row = result.rows[0];
@@ -258,7 +274,12 @@ export async function applyCheckpointEdit(
     now: number;
   },
 ): Promise<GenerationCheckpoint | null> {
-  assertCheckpointPersistable({ outlines: edit.outlines, diagnostics: edit.diagnostics });
+  // The log entry too: a plan review's fixes (P3) keep removed slides for an undo.
+  assertCheckpointPersistable({
+    outlines: edit.outlines,
+    diagnostics: edit.diagnostics,
+    logEntry: edit.logEntry,
+  });
   const result = await queryable.query<RawCheckpointRow>(
     `UPDATE teaching_package_generation_checkpoints
         SET outlines = $4::jsonb,
