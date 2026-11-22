@@ -215,6 +215,11 @@ export interface SettingsState {
 
   // Global TTS/ASR toggles
   ttsEnabled: boolean;
+  // True only after the user switched narration OFF themselves (`setTTSEnabled(false)`).
+  // Every server sync turns narration on while the server has a TTS provider and this is
+  // false, so a browser that missed first-run auto-config is not left without narration
+  // (Kafuo, 22 Nov 2026: teachers saw no voice controls on speech lines).
+  ttsUserDisabled: boolean;
   asrEnabled: boolean;
 
   // Server-configured opt-in parallel scene-content concurrency (#572).
@@ -961,6 +966,7 @@ export const useSettingsStore = create<SettingsState>()(
         // provider is configured (mirrors image/video). Fresh installs with no
         // provider stay off and show an "enable browser-native" CTA (#665).
         ttsEnabled: false,
+        ttsUserDisabled: false,
         asrEnabled: true,
 
         // Off until the server reports a concurrency via fetchServerProviders.
@@ -1364,7 +1370,9 @@ export const useSettingsStore = create<SettingsState>()(
           set({ videoGenerationEnabled: enabled });
         },
         setReviewOutlineEnabled: (enabled) => set({ reviewOutlineEnabled: enabled }),
-        setTTSEnabled: (enabled) => set({ ttsEnabled: enabled }),
+        // The user's own switch: OFF is remembered so a later server sync never turns
+        // narration back on against their choice; ON clears it.
+        setTTSEnabled: (enabled) => set({ ttsEnabled: enabled, ttsUserDisabled: !enabled }),
         setASREnabled: (enabled) => set({ asrEnabled: enabled }),
 
         // Custom audio provider actions
@@ -1903,6 +1911,28 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
+              // Narration catch-up, on every sync (Kafuo, 22 Nov 2026). First-run
+              // auto-config above runs once per browser, and a browser whose settings
+              // predate it is marked as already configured (see `migrate`), so it could
+              // stay with narration off -- and the editor then shows no voice status,
+              // preview or regenerate on speech lines although the server voices every
+              // lesson. While the server has a TTS provider and the user has not switched
+              // narration off themselves, narration is turned on, on a server provider
+              // when the selected one is not server-configured.
+              if (autoTtsEnabled === undefined && !state.ttsEnabled && !state.ttsUserDisabled) {
+                const serverTts = Object.entries(data.tts)
+                  .filter(([, info]) => !info.disabled)
+                  .map(([id]) => id) as TTSProviderId[];
+                if (serverTts.length > 0) {
+                  autoTtsEnabled = true;
+                  if (!autoTtsProvider && !newTTSConfig[state.ttsProviderId]?.isServerConfigured) {
+                    autoTtsProvider = serverTts[0];
+                    autoTtsVoice =
+                      DEFAULT_TTS_VOICES[autoTtsProvider as BuiltInTTSProviderId] || 'default';
+                  }
+                }
+              }
+
               // (LLM first-load auto-select removed: the symmetric provider
               // recovery + resolveSelectedModel above now resolve LLM provider
               // and model atomically at the source, covering server-configured
@@ -2115,6 +2145,11 @@ export const useSettingsStore = create<SettingsState>()(
         // first server-sync auto-enables it when a provider is configured (#665).
         if ((state as Record<string, unknown>).ttsEnabled === undefined) {
           (state as Record<string, unknown>).ttsEnabled = false;
+        }
+        // No recorded choice: the next server sync may turn narration on (see the
+        // narration catch-up in fetchServerProviders).
+        if ((state as Record<string, unknown>).ttsUserDisabled === undefined) {
+          (state as Record<string, unknown>).ttsUserDisabled = false;
         }
         if ((state as Record<string, unknown>).asrEnabled === undefined) {
           (state as Record<string, unknown>).asrEnabled = true;

@@ -1781,6 +1781,71 @@ describe('TTS provider enablement (#665)', () => {
     expect(store.getState().ttsEnabled).toBe(false);
   });
 
+  // Kafuo, 22 Nov 2026: a teacher's browser that missed first-run auto-config (settings
+  // older than it, or a first sync before the server had TTS) kept narration off, so the
+  // editor showed no voice status, preview or regenerate on speech lines.
+  it('a later sync turns narration on for a browser that missed first-run auto-config', async () => {
+    const store = await getStore();
+    store.setState({
+      autoConfigApplied: true,
+      ttsEnabled: false,
+      ttsProviderId: 'browser-native-tts',
+    });
+
+    mockServerResponse({ tts: { 'openai-tts': {} } });
+    await store.getState().fetchServerProviders();
+
+    expect(store.getState().ttsEnabled).toBe(true);
+    expect(store.getState().ttsProviderId).toBe('openai-tts');
+  });
+
+  it('a later sync never turns narration back on after the user switched it off', async () => {
+    mockServerResponse({ tts: { 'openai-tts': {} } });
+    const store = await getStore();
+    await store.getState().fetchServerProviders();
+    expect(store.getState().ttsEnabled).toBe(true);
+
+    store.getState().setTTSEnabled(false);
+    expect(store.getState().ttsUserDisabled).toBe(true);
+
+    mockServerResponse({ tts: { 'openai-tts': {} } });
+    await store.getState().fetchServerProviders();
+    expect(store.getState().ttsEnabled).toBe(false);
+
+    store.getState().setTTSEnabled(true);
+    expect(store.getState().ttsUserDisabled).toBe(false);
+  });
+
+  it('the catch-up keeps a server-configured selection and does nothing without server TTS', async () => {
+    const store = await getStore();
+    store.setState({ autoConfigApplied: true, ttsEnabled: false });
+
+    mockServerResponse({ tts: {} });
+    await store.getState().fetchServerProviders();
+    expect(store.getState().ttsEnabled).toBe(false);
+
+    mockServerResponse({ tts: { 'openai-tts': {}, 'azure-tts': {} } });
+    await store.getState().fetchServerProviders();
+    store.setState({ ttsEnabled: false, ttsProviderId: 'azure-tts' });
+    mockServerResponse({ tts: { 'openai-tts': {}, 'azure-tts': {} } });
+    await store.getState().fetchServerProviders();
+    expect(store.getState().ttsEnabled).toBe(true);
+    expect(store.getState().ttsProviderId).toBe('azure-tts');
+  });
+
+  it('settings saved before the flag existed migrate with no recorded choice', async () => {
+    storage.set(
+      SETTINGS_KV_KEY,
+      JSON.stringify({ version: 3, state: { ttsEnabled: false, autoConfigApplied: true } }),
+    );
+    const store = await getStore();
+    expect(store.getState().ttsUserDisabled).toBe(false);
+
+    mockServerResponse({ tts: { 'openai-tts': {} } });
+    await store.getState().fetchServerProviders();
+    expect(store.getState().ttsEnabled).toBe(true);
+  });
+
   it('non-browser-native built-ins default enabled:true (configured ⇒ visible)', async () => {
     const store = await getStore();
     // azure-tts is in the mocked registry; it must default ON so a configured /
