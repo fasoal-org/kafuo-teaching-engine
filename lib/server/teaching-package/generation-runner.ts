@@ -112,6 +112,14 @@ import {
   repairBookCoverageGaps,
   type BookCoverageRepairContext,
 } from '@/lib/server/teaching-package/book-coverage-repair';
+import { applyPlanAutoFixes } from '@/lib/server/teaching-package/plan-auto-fixes';
+import {
+  bookRepairFixes,
+  MAX_PLAN_FIXES,
+  recordedPlanFixes,
+  withPlanFixes,
+  type PlanFixDraft,
+} from '@/lib/server/teaching-package/plan-fix-records';
 import {
   providerSafeImageDescription,
   stripProviderImageDescriptions,
@@ -171,6 +179,7 @@ import type {
   GenerationCheckpoint,
   GenerationCheckpointSourceRefs,
   GuideAnswerSettlementRecord,
+  PlanReviewFix,
   SourceVisualManifestEntry,
 } from '@/lib/types/teaching-package';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -999,6 +1008,43 @@ async function runKafuoAttempt(
       ? droppedGuideOutlineIds(pinnedGuideSettlements, run)
       : new Set<string>();
     if (!resume) await incrementGenerationRuns(pool, attemptId);
+    // §3b (P1): a re-rolled run plans afresh, so a discarded run's fixes leave the
+    // snapshot now, even when this run fixes nothing.
+    if (!resume && run > 1) {
+      await patchSnapshot(pool, attemptId, ({ planReview: _discarded, ...snapshot }) => snapshot);
+    }
+    // §3b (P1): the plan review's automatic fixes since this run (or this resume)
+    // began. Each is kept on the attempt snapshot as it happens (a discarded
+    // run's fixes are dropped there), and the whole list goes on a pause's entry.
+    const planFixes: PlanReviewFix[] = [];
+    const recordPlanFixes = async (drafts: readonly PlanFixDraft[]): Promise<void> => {
+      if (drafts.length === 0) return;
+      const recorded = recordedPlanFixes(drafts, run);
+      planFixes.push(...recorded);
+      log.info(
+        `Teaching package attempt ${attemptId} run ${run}: the plan review fixed ${recorded.length} thing(s) in the plan (${[...new Set(recorded.map((fix) => fix.op))].join(', ')})`,
+      );
+      await patchSnapshot(pool, attemptId, (snapshot) => ({
+        ...snapshot,
+        planReview: withPlanFixes(
+          snapshot.planReview as { fixes?: PlanReviewFix[] } | undefined,
+          recorded,
+          run,
+        ),
+      }));
+    };
+    // The re-diagnosis the free rule fixes are accepted by: the same diagnosis as
+    // the book repair, without the issues a person ignored on the resumed checkpoint.
+    const ignoredOnResume = resume ? ignoredIssueKeys(resume.editLog) : null;
+    const diagnoseOpen = (candidate: SceneOutline[]) => {
+      const diagnosed = diagnoseCandidateOutlines(candidate, diagnosisContext);
+      return {
+        outlines: diagnosed.outlines,
+        blocking: ignoredOnResume
+          ? diagnosed.blocking.filter((issue) => !ignoredOnResume.has(diagnosticKey(issue)))
+          : diagnosed.blocking,
+      };
+    };
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
     const sink = createTeachingPackagePersistenceSink(attemptId);
     const trackingSink = {
@@ -1158,6 +1204,19 @@ async function runKafuoAttempt(
             // g5.v7's book-coverage check rides `diagnosisContext.bookStructure`.
             return appOutlineDiagnostics(outlines, diagnosisContext);
           },
+          // §3b step 1 (P1, owner 22 Nov 2026): the free rule fixes, with no model
+          // call, before the book repair: a slide moved to the place the flow
+          // dictates, a teaching stage whose key names one flow position. Each
+          // step is kept only when it adds no new finding, and each fix is recorded.
+          autoFixOutlines: async (outlines: SceneOutline[], blocking: OutlineDiagnostic[]) => {
+            const fixed = applyPlanAutoFixes(outlines, blocking, {
+              flow: kafuo.teachingFlow,
+              diagnose: diagnoseOpen,
+            });
+            if (fixed.fixes.length === 0) return null;
+            await recordPlanFixes(fixed.fixes);
+            return { outlines: fixed.outlines, blocking: fixed.blocking };
+          },
           // g5.v7 (P-6): a slide the book-coverage gate found missing is
           // re-planned before the run pauses for a person; anything still
           // open after two rounds pauses exactly as before.
@@ -1202,6 +1261,8 @@ async function runKafuoAttempt(
                     log.info(
                       `Teaching package attempt ${attemptId}: ${repaired.inserted} book example slide(s) planned before their check`,
                     );
+                    // §3b (P1): recorded like every other automatic change to the plan.
+                    await recordPlanFixes(bookRepairFixes(outlines, repaired.outlines));
                   }
                   return kept ? repaired.outlines : null;
                 },
@@ -1221,9 +1282,11 @@ async function runKafuoAttempt(
                     coverageRepairContext(),
                   );
                   // g5.v8: a merge or a recall move changes the plan without an insert.
-                  return repaired.inserted + repaired.restructured > 0
-                    ? { outlines: repaired.outlines, blocking: repaired.blocking }
-                    : null;
+                  if (repaired.inserted + repaired.restructured === 0) return null;
+                  // §3b (P1): each slide it added or removed, and each field it
+                  // changed, is recorded like the rule fixes, so it can be undone.
+                  await recordPlanFixes(bookRepairFixes(outlines, repaired.outlines));
+                  return { outlines: repaired.outlines, blocking: repaired.blocking };
                 },
               }
             : {}),
@@ -1544,6 +1607,8 @@ async function runKafuoAttempt(
           attemptId,
           error.candidate,
           sourceRefsFor(run),
+          // The same cap as the snapshot's list.
+          planFixes.slice(-MAX_PLAN_FIXES),
         );
         log.warn(
           paused

@@ -468,6 +468,8 @@ const VISUAL_REPLAN_CODES: ReadonlySet<string> = new Set([
 ]);
 const OUTLINE_GATE_ERROR =
   /^(OUTLINE_SLIDE_SEMANTICS_INVALID|OUTLINE_SCENE_CONFIG_INVALID|OUTLINE_TEACHING_FLOW_INVALID)\b/;
+/** The outline generator's answer to an empty plan for an authoritative flow (P1, §3b). */
+const EMPTY_PLAN_ERROR = /^OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned\b/;
 
 /** The routed lesson-plan (outline) stage and its own time limit per model attempt. */
 const OUTLINE_STAGE = 'scene-outlines-stream';
@@ -1017,9 +1019,24 @@ export interface GenerationCorrectionOptions {
    */
   onOutlineAnswer?: (capture: OutlineAnswerCapture) => void | Promise<void>;
   /**
+   * P1 (package-planner-issue-resolve-plan-2026-11-22 §3b step 1): the free
+   * rule fixes (no model call) run on the blocking candidate FIRST, before
+   * `repairOutlines`. Returns the re-diagnosed candidate, or `null` when
+   * nothing was changed. The caller records each fix.
+   */
+  autoFixOutlines?: (
+    outlines: SceneOutline[],
+    blocking: OutlineDiagnostic[],
+  ) =>
+    | { outlines: SceneOutline[]; blocking: OutlineDiagnostic[] }
+    | null
+    | Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
+  /**
    * g5.v7 (P-6): given the blocking findings, re-plan what the plan left out
    * with the outline model and return the re-diagnosed candidate, or `null` to
-   * pause unchanged. Called once, before the run pauses for a person.
+   * pause unchanged. Called once, before the run pauses for a person. Since 22
+   * Nov 2026 it runs after `autoFixOutlines`, and its own precondition keeps it
+   * off while a stage or order issue is open (`BOOK_REPAIR_BLOCKING_CODES`).
    */
   repairOutlines?: (
     outlines: SceneOutline[],
@@ -1856,6 +1873,41 @@ export async function generateClassroom(
       correctiveContext = rejection;
     }
 
+    // P1 (package-planner-issue-resolve-plan-2026-11-22 §3b step 1, owner 22 Nov
+    // 2026: "NO_OUTLINES → re-plan once"): an empty plan for an authoritative flow
+    // comes back from the outline generator as a failure
+    // (`OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned …`), which fails
+    // this run. It is re-planned ONCE first, on the same routed outline call (the
+    // planning route). A governed run is single-shot (`maxOutlineGateAttempts = 1`),
+    // so this is one deliberate extra outline call; an ungoverned run already
+    // re-rolled it in the loop above, and a plan the bad-answer re-roll already
+    // re-asked is not asked a third time. A second empty plan fails as before.
+    if (
+      correction &&
+      maxOutlineGateAttempts === 1 &&
+      !badAnswerRerollUsed &&
+      outlinesResult &&
+      !outlinesResult.success &&
+      EMPTY_PLAN_ERROR.test(outlinesResult.error ?? '')
+    ) {
+      log.warn('The outline call returned no slides; re-planning once');
+      await options.onProgress?.({
+        step: 'generating_outlines',
+        progress: 15,
+        message: 'Generating scene outlines again: the first plan had no slides',
+        scenesGenerated: 0,
+      });
+      outlinesResult = await callOutlines(recordingOutlineCall, checkAnswers);
+      assertRouteAvailable();
+      await noteOutlineAnswer(outlinesResult);
+      if (outlinesResult.badAnswer) {
+        // The same handling as a bad answer after the re-roll: read this answer
+        // through the unchecked path, with no further model call.
+        const lastAnswer = lastOutlineAnswer;
+        outlinesResult = await callOutlines(async () => lastAnswer, false);
+      }
+    }
+
     if (!outlinesResult?.success || !outlinesResult.data) {
       log.error('Failed to generate outlines:', outlinesResult?.error);
       throw new Error(outlinesResult?.error || 'Failed to generate scene outlines');
@@ -2194,6 +2246,17 @@ export async function generateClassroom(
     const open = (issues: OutlineDiagnostic[]) =>
       isIgnored ? issues.filter((issue) => !isIgnored(issue)) : issues;
     let blocking = open([...outlineBlocking, ...appIssues]);
+    // P1 order (package-planner-issue-resolve-plan-2026-11-22 §3b, owner 22 Nov
+    // 2026): 1. the free rule fixes; 2. the book repair, which keeps itself off
+    // while a stage or order issue is still open; 3. the plan review layer (P2);
+    // 4. pause with what is left.
+    if (blocking.length > 0 && correction.autoFixOutlines) {
+      const fixed = await correction.autoFixOutlines(outlines, blocking);
+      if (fixed) {
+        outlines = fixed.outlines;
+        blocking = open(fixed.blocking);
+      }
+    }
     if (blocking.length > 0 && correction.repairOutlines) {
       const repaired = await correction.repairOutlines(outlines, blocking, outlineAiCall);
       if (repaired) {

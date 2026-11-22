@@ -68,6 +68,7 @@ import type {
   GenerationCheckpoint,
   GenerationCheckpointSourceRefs,
   LearningItemRef,
+  PlanReviewFix,
   TeachingFlowEntry,
   TeachingPackageAggregateKey,
 } from '@/lib/types/teaching-package';
@@ -134,6 +135,8 @@ export async function pauseAttemptForCorrection(
   attemptId: string,
   candidate: CorrectionCandidate,
   sourceRefs: GenerationCheckpointSourceRefs,
+  /** The plan review's fixes since the run or resume began (§3b), kept on the pause entry. */
+  planFixes: readonly PlanReviewFix[] = [],
 ): Promise<{ paused: boolean; checkpoint?: GenerationCheckpoint }> {
   const attempt = await readAttemptById(pool, attemptId);
   if (!attempt) return { paused: false };
@@ -156,6 +159,7 @@ export async function pauseAttemptForCorrection(
       pendingOutlineIds: candidate.pendingOutlineIds ?? null,
       actorRef: RUNNER_ACTOR_REF,
       now,
+      planFixes,
     });
     const paused = await markAttemptAwaitingCorrection(tx, attemptId, {
       step: candidate.phase === 'outline' ? 'generating_outlines' : 'generating_scenes',

@@ -540,6 +540,34 @@ export interface GenerationInputSnapshot {
    * student data. Absent while every answer was read without a repair.
    */
   outlineAnswerDiagnostics?: Array<OutlineAnswerCapture & { generationRun: number; at: number }>;
+  /**
+   * Every automatic change the plan review made to this attempt's plan before
+   * any person saw it (package-planner-issue-resolve-plan-2026-11-22 §3b, P1):
+   * the free rule fixes and the book repair now, the AI plan review (P2) next.
+   * Only the current generation run's fixes are kept, oldest first, capped.
+   */
+  planReview?: { fixes: PlanReviewFix[] };
+}
+
+/**
+ * One automatic change to a plan (package-planner-issue-resolve-plan-2026-11-22
+ * §3b). `from` is the before-state an undo needs (a move's old index, a set's
+ * old value, a removed outline in full); it never reaches a browser.
+ */
+export interface PlanReviewFix {
+  id: string;
+  op: 'set' | 'move' | 'remove' | 'insert_book_slide';
+  outlineId: string;
+  field?: string;
+  from?: unknown;
+  to?: unknown;
+  /** A short plain Arabic sentence for the admin; never lesson text. */
+  reason: string;
+  actor: 'system:plan-reviewer';
+  /** 0 for the free rule fixes and the book repair; 1–2 for the AI review rounds. */
+  round: number;
+  generationRun: number;
+  at: number;
 }
 
 export interface TeachingPackageVersion {
@@ -734,6 +762,11 @@ export interface GenerationCheckpointLogEntry {
   blockingCount?: number;
   operations?: unknown[];
   reason?: string;
+  /**
+   * On a `paused` entry: the plan review's automatic fixes since the run (or
+   * the resume) began (package-planner-issue-resolve-plan-2026-11-22 §3b).
+   */
+  planFixes?: PlanReviewFix[];
 }
 
 export interface GenerationCheckpoint {

@@ -177,7 +177,28 @@ export function instructionFor(gap: PlacedGap, parity = false): string {
   return `Plan the slide (contentRole ${roleFor(gap)}) that teaches content unit ${id} as the book prints it.`;
 }
 
-/** Only gaps the plan can place, and only when nothing else blocks. */
+/**
+ * The issues that stop the book repair (package-planner-issue-resolve-plan-
+ * 2026-11-22 §3b, prompt P1 item 4): its anchors and `placeAnchorlessTeaching`
+ * read each slide's teaching stage and the slide order, so while a stage or an
+ * order issue is open a placed slide could land in the wrong stage.
+ */
+export const BOOK_REPAIR_BLOCKING_CODES: ReadonlySet<string> = new Set([
+  'TEACHING_STAGE_MISSING',
+  'TEACHING_STAGE_MISMATCH',
+  'TEACHING_STAGE_INVALID',
+  'FLOW_SEQUENCE_INVALID',
+  'POSITION_CARDINALITY',
+]);
+
+/**
+ * Only gaps the plan can place, and only when no stage or order issue is open.
+ *
+ * Owner change (22 Nov 2026, package-planner-issue-resolve-plan §3b): any other
+ * open issue (a Teaching Skill, a visual, a grounding finding) no longer stops
+ * the gaps the plan can place. Those issues stay open for the plan review layer
+ * or a person. Before it, one such issue switched the whole repair off.
+ */
 function repairableGaps(
   outlines: readonly SceneOutline[],
   blocking: readonly OutlineDiagnostic[],
@@ -185,14 +206,15 @@ function repairableGaps(
   flow: readonly TeachingFlowEntry[],
 ): PlacedGap[] | null {
   if (blocking.length === 0) return null;
-  // g5.v8: its own findings (caps, placement, visible working) are a person's to
-  // fix and stay open, but they never stop the slides the plan can place.
   const parity = book.teacherParity === true;
+  if (blocking.some((issue) => BOOK_REPAIR_BLOCKING_CODES.has(issue.code))) return null;
+  // Something of the book's must still be open: a book finding a person ignored
+  // is filtered out of `blocking`, and is never re-planned behind their back.
   if (
-    blocking.some(
+    !blocking.some(
       (issue) =>
-        issue.code !== BOOK_COVERAGE_INCOMPLETE &&
-        !(parity && TEACHER_PARITY_FINDINGS.has(issue.code)),
+        issue.code === BOOK_COVERAGE_INCOMPLETE ||
+        (parity && TEACHER_PARITY_FINDINGS.has(issue.code)),
     )
   ) {
     return null;

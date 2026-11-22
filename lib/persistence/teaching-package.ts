@@ -1347,10 +1347,23 @@ function withStoredGenerationRoute(snapshot: GenerationInputSnapshot): Generatio
  * The attempt record's snapshot WITHOUT the diagnosis-only
  * `outlineAnswerDiagnostics` (lesson 306, F-1): the raw model text stays on the
  * row for an operator and never travels in an attempt record (the aggregate
- * read and the generate replay return it to the backend).
+ * read and the generate replay return it to the backend). The plan review's
+ * fixes (`planReview.fixes`, package-planner-issue-resolve-plan-2026-11-22 §3b)
+ * travel without their values (`from`, the undo state with a whole removed
+ * slide; `to`, a book-repair slide's new text): op, slide, field and reason only.
  */
 function attemptSnapshotOf(raw: unknown): GenerationInputSnapshot {
-  const snapshot = withStoredGenerationRoute(raw as GenerationInputSnapshot);
+  let snapshot = withStoredGenerationRoute(raw as GenerationInputSnapshot);
+  if (snapshot && typeof snapshot === 'object' && Array.isArray(snapshot.planReview?.fixes)) {
+    snapshot = {
+      ...snapshot,
+      planReview: {
+        fixes: snapshot.planReview.fixes.map(
+          ({ from: _undoState, to: _newValue, ...visible }) => visible,
+        ),
+      },
+    };
+  }
   if (!snapshot || typeof snapshot !== 'object' || !('outlineAnswerDiagnostics' in snapshot)) {
     return snapshot;
   }

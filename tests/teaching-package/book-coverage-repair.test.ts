@@ -671,11 +671,68 @@ describe('g5.v7 book coverage repair', () => {
     });
   });
 
-  it('never repairs when another kind of issue also blocks', async () => {
+  // Owner change (22 Nov 2026, package-planner-issue-resolve-plan §3b): this test
+  // used to pin "never repairs when another kind of issue also blocks". Another
+  // kind of issue no longer switches the repair off; it stays open for the plan
+  // review layer or a person, and only a stage or order issue stops the repair.
+  it('plans the book gaps while another kind of issue (a skill finding) stays open', async () => {
+    const plan = planning('worked_example');
+    const skillIssue = {
+      code: 'TEACHING_SKILL_NOT_ALLOWED',
+      disposition: 'admin_correctable' as const,
+      outlineId: 'ex3',
+      field: 'teachingSkills',
+      message: 'x',
+    };
+    const blocking = [...findBookCoverageDiagnostics(CANDIDATE, BOOK), skillIssue];
+    const withSkillIssue: BookCoverageRepairContext = {
+      ...context(plan),
+      // The re-diagnosis still finds the skill issue: the repair does not fix it.
+      diagnose: (outlines) => ({
+        outlines,
+        blocking: [...findBookCoverageDiagnostics(outlines, BOOK), skillIssue],
+      }),
+    };
+
+    const result = await repairBookCoverageGaps(CANDIDATE, blocking, aiCall, withSkillIssue);
+
+    expect(plan).toHaveBeenCalled();
+    expect(result.inserted).toBeGreaterThan(0);
+    expect(findBookCoverageDiagnostics(result.outlines, BOOK)).toEqual([]);
+    expect(result.blocking).toEqual([skillIssue]);
+  });
+
+  it('plans nothing when no book finding is open (a gap a person ignored stays as it is)', async () => {
+    const plan = planning('worked_example');
+    // The gap's diagnostic was ignored, so only another kind of issue is open.
+    const blocking = [
+      {
+        code: 'VISUAL_TEACHING_NOTE_MISSING',
+        disposition: 'admin_correctable' as const,
+        outlineId: 'ex3',
+        field: 'visualPlan',
+        message: 'x',
+      },
+    ];
+
+    const result = await repairBookCoverageGaps(CANDIDATE, blocking, aiCall, context(plan));
+
+    expect(plan).not.toHaveBeenCalled();
+    expect(result.inserted).toBe(0);
+    expect(result.blocking).toEqual(blocking);
+  });
+
+  it.each([
+    'TEACHING_STAGE_MISSING',
+    'TEACHING_STAGE_MISMATCH',
+    'TEACHING_STAGE_INVALID',
+    'FLOW_SEQUENCE_INVALID',
+    'POSITION_CARDINALITY',
+  ])('never repairs while a stage or order issue (%s) is open', async (code) => {
     const plan = planning('worked_example');
     const blocking = [
       ...findBookCoverageDiagnostics(CANDIDATE, BOOK),
-      { code: 'CONTENT_UNIT_UNGROUNDED', disposition: 'admin_correctable' as const, message: 'x' },
+      { code, disposition: 'admin_correctable' as const, field: 'teachingStage', message: 'x' },
     ];
 
     const result = await repairBookCoverageGaps(CANDIDATE, blocking, aiCall, context(plan));

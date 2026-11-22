@@ -550,6 +550,134 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
     });
   });
 
+  describe('P1 free rule fixes before any pause (package-planner-issue-resolve-plan §3b)', () => {
+    it('a slide out of stage order is moved into place, recorded, and the run completes with no pause', async () => {
+      // The planner put the visual slide (stage 1) before the introduction (stage 0).
+      answerWith([visualOutline(), introOutline()]);
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      const row = await attempt(attemptId);
+      expect(row.status).toBe('succeeded');
+      const { document } = await currentStageOf(attemptId);
+      expect(document.scenes.map((scene) => scene.teachingStage?.flowIndex)).toEqual([0, 1]);
+      const snapshot = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+        `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      const fixes = (snapshot.rows[0]!.input_snapshot.planReview as { fixes: unknown[] }).fixes;
+      expect(fixes).toEqual([
+        expect.objectContaining({
+          op: 'move',
+          outlineId: 'o-visual',
+          from: 0,
+          to: 1,
+          actor: 'system:plan-reviewer',
+          round: 0,
+          generationRun: 1,
+        }),
+      ]);
+      // The attempt record a backend reads carries the fix without its values.
+      expect(row.inputSnapshot.planReview?.fixes[0]).not.toHaveProperty('from');
+      expect(row.inputSnapshot.planReview?.fixes[0]).not.toHaveProperty('to');
+      expect(row.inputSnapshot.planReview?.fixes[0]).toMatchObject({
+        op: 'move',
+        outlineId: 'o-visual',
+        actor: 'system:plan-reviewer',
+      });
+    });
+
+    it('what the rules cannot fix still pauses: the move is kept and listed on the pause, without its undo state in the view', async () => {
+      answerWith([visualOutline({ contentRole: 'procedure' }), introOutline()]);
+      const { attemptId } = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+
+      expect((await attempt(attemptId)).status).toBe('awaiting_admin_correction');
+      const { getGenerationCorrection } = await correction();
+      const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+      expect(view.blockingIssues.map((issue) => issue.code)).toEqual(['CONTENT_ROLE_NOT_ALLOWED']);
+      expect(view.outlines.map((outline) => outline.id)).toEqual(['o-intro', 'o-visual']);
+      const paused = view.editLog.find((entry) => entry.event === 'paused')!;
+      expect(paused.planFixes).toEqual([
+        expect.objectContaining({ op: 'move', outlineId: 'o-visual', round: 0 }),
+      ]);
+      expect(paused.planFixes![0]).not.toHaveProperty('from');
+      expect(paused.planFixes![0]).not.toHaveProperty('to');
+      // The checkpoint itself keeps the undo state for a later «تراجع».
+      const stored = await pool.query<{ edit_log: Array<{ planFixes?: unknown[] }> }>(
+        `SELECT edit_log FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      expect(stored.rows[0]!.edit_log[0]!.planFixes).toEqual([
+        expect.objectContaining({ op: 'move', from: 0, to: 1 }),
+      ]);
+
+      // A later pause of the same attempt (the ON CONFLICT branch) appends its own
+      // entry with its own fixes; a pause with none adds no `planFixes` key.
+      const { upsertCheckpointForPause, readCheckpointByAttemptId } =
+        await import('@/lib/persistence/generation-checkpoint');
+      const checkpoint = (await readCheckpointByAttemptId(qp(), attemptId))!;
+      const repause = {
+        attemptId,
+        tenantId: TENANT,
+        phase: checkpoint.phase,
+        outlines: checkpoint.outlines,
+        courseTitle: checkpoint.courseTitle,
+        languageDirective: checkpoint.languageDirective,
+        diagnostics: checkpoint.diagnostics,
+        repairs: checkpoint.repairs,
+        sourceRefs: checkpoint.sourceRefs,
+        reservedStageId: null,
+        pendingOutlineIds: null,
+        actorRef: 'runner',
+        now: Date.now(),
+      };
+      const secondFix = {
+        id: 'tpf-second',
+        op: 'set' as const,
+        outlineId: 'o-visual',
+        field: 'teachingStage',
+        from: { key: 'x', flowIndex: 0 },
+        to: { key: 'outcome_visual_explanations', flowIndex: 1 },
+        reason: 'تصحيح',
+        actor: 'system:plan-reviewer' as const,
+        round: 0,
+        generationRun: 1,
+        at: Date.now(),
+      };
+      await upsertCheckpointForPause(qp(), { ...repause, planFixes: [secondFix] });
+      await upsertCheckpointForPause(qp(), repause);
+      const after = await pool.query<{ edit_log: Array<Record<string, unknown>> }>(
+        `SELECT edit_log FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+        [attemptId],
+      );
+      const pauses = after.rows[0]!.edit_log.filter((entry) => entry.event === 'paused');
+      expect(pauses).toHaveLength(3);
+      expect(pauses[1]!.planFixes).toEqual([secondFix]);
+      expect(pauses[2]).not.toHaveProperty('planFixes');
+    });
+
+    // The rollback case (the key's position would break the order, so the run still
+    // pauses with the mismatch) is test (d) "flow correction" below, unchanged.
+    it('a stage key that names one flow position fixes its index and the run completes', async () => {
+      // Key and index disagree; the key names position 1, and moving the index there
+      // keeps the order valid, so it is fixed.
+      answerWith([
+        introOutline(),
+        visualOutline({ teachingStage: { key: 'outcome_visual_explanations', flowIndex: 0 } }),
+      ]);
+      const fixed = await startAndRun({
+        flow: flowV4(),
+        teachingModel: { key: 'g5', version: 'g5.v4' },
+      });
+      expect((await attempt(fixed.attemptId)).status).toBe('succeeded');
+    });
+  });
+
   it('(b) an ignored issue no longer blocks: the edit, the resume and the resumed run accept it', async () => {
     answerWith([introOutline(), visualOutline({ contentRole: 'procedure' })]);
     const { attemptId, execution, context } = await startAndRun({

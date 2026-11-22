@@ -51,6 +51,7 @@ import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { KAFUO_DEFERRED_WIDGET_TYPES } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import { findUngroundedOutlines } from '@/lib/server/teaching-package/outline-grounding';
+import { withoutUndoState } from '@/lib/server/teaching-package/plan-fix-records';
 import { findOutlineSkillSelectionIssues } from '@/lib/server/teaching-package/skill-policy';
 import { validateSceneClassifications } from '@/lib/server/teaching-package/skill-validators';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -1148,6 +1149,12 @@ export function buildCorrectionView(
         ...(image.sourceContentUnitIds ? { sourceContentUnitIds: image.sourceContentUnitIds } : {}),
       })),
     },
-    editLog: checkpoint.editLog.slice(-50),
+    // The plan review's fixes travel without their undo state (`from`, a whole
+    // removed slide included): the browser never needs it (§3b, P1).
+    editLog: checkpoint.editLog
+      .slice(-50)
+      .map((entry) =>
+        entry.planFixes ? { ...entry, planFixes: entry.planFixes.map(withoutUndoState) } : entry,
+      ),
   };
 }

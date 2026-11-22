@@ -408,6 +408,174 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     }
   });
 
+  describe('the correction order before any pause (P1, plan §3b)', () => {
+    const issue = (code: string) =>
+      ({ code, disposition: 'admin_correctable', message: code }) as never;
+
+    async function runWithCorrection(
+      correction: Record<string, unknown>,
+      extra: Record<string, unknown> = {},
+    ) {
+      const policy = await policyFor('MATH');
+      const { generateClassroom } = await import('@/lib/server/classroom-generation');
+      return generateClassroom(
+        {
+          requirement: 'Teach fractions',
+          modelPolicy: policy,
+          attribution: ATTRIBUTION,
+          ...extra,
+        } as never,
+        { baseUrl: '', correction: correction as never },
+      );
+    }
+    // A governed run plans once (`maxOutlineGateAttempts = 1`): the case the
+    // NO_OUTLINES re-plan is for.
+    const singleShot = {
+      governed: {
+        contract: 'kafuo.teaching-skills.v1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        flow: [{ stage: 'lesson_introduction', instructions: 'Open the lesson.' }],
+      },
+    };
+
+    it('runs the free rule fixes first, then the book repair on what they left, and does not pause when nothing is left', async () => {
+      const order: string[] = [];
+      const fixedOutlines = [{ ...outline, title: 'moved into place' }];
+      const autoFixOutlines = vi.fn(async (outlines: unknown[], blocking: unknown[]) => {
+        order.push('autoFix');
+        expect(outlines).toHaveLength(1);
+        expect(blocking).toHaveLength(2);
+        return { outlines: fixedOutlines, blocking: [issue('BOOK_COVERAGE_INCOMPLETE')] };
+      });
+      const repairOutlines = vi.fn(async (outlines: unknown[], blocking: unknown[]) => {
+        order.push('bookRepair');
+        // The book repair sees the fixed plan and only what the fixes left open.
+        expect(outlines).toBe(fixedOutlines);
+        expect(blocking).toEqual([issue('BOOK_COVERAGE_INCOMPLETE')]);
+        return { outlines: outlines as never, blocking: [] };
+      });
+
+      const result = await runWithCorrection({
+        collectOutlineIssues: async () => [
+          issue('FLOW_SEQUENCE_INVALID'),
+          issue('BOOK_COVERAGE_INCOMPLETE'),
+        ],
+        autoFixOutlines,
+        repairOutlines,
+      });
+
+      expect(order).toEqual(['autoFix', 'bookRepair']);
+      expect(result.scenesCount).toBe(1);
+    });
+
+    it('when the free fixes leave nothing open, the book repair is not called and nothing pauses', async () => {
+      const repairOutlines = vi.fn();
+      const result = await runWithCorrection({
+        collectOutlineIssues: async () => [issue('TEACHING_STAGE_MISMATCH')],
+        autoFixOutlines: async (outlines: unknown[]) => ({ outlines, blocking: [] }),
+        repairOutlines,
+      });
+      expect(repairOutlines).not.toHaveBeenCalled();
+      expect(result.scenesCount).toBe(1);
+    });
+
+    it('what is left after both pauses the run, with the fixed plan', async () => {
+      const { isGenerationCorrectionRequired } =
+        await import('@/lib/server/teaching-package/outline-correction');
+      const fixedOutlines = [{ ...outline, title: 'stage fixed' }];
+      const error = await runWithCorrection({
+        collectOutlineIssues: async () => [
+          issue('TEACHING_STAGE_MISMATCH'),
+          issue('TEACHING_SKILL_NOT_ALLOWED'),
+        ],
+        autoFixOutlines: async () => ({
+          outlines: fixedOutlines,
+          blocking: [issue('TEACHING_SKILL_NOT_ALLOWED')],
+        }),
+        repairOutlines: async () => null,
+      }).catch((caught: unknown) => caught);
+      expect(isGenerationCorrectionRequired(error)).toBe(true);
+      const candidate = (error as { candidate: { outlines: unknown[]; diagnostics: unknown[] } })
+        .candidate;
+      expect(candidate.outlines).toEqual([expect.objectContaining({ title: 'stage fixed' })]);
+      expect(candidate.diagnostics).toEqual([issue('TEACHING_SKILL_NOT_ALLOWED')]);
+    });
+
+    // The outline generator's real answer to an empty plan for an authoritative
+    // flow (outline-generator.ts): a failure, not a NO_OUTLINES diagnostic.
+    const EMPTY_PLAN = {
+      success: false,
+      error:
+        'OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned for a 1-position Teaching Model Flow',
+    };
+
+    it('a plan with no slides is re-planned once on the same outline call, and the run goes on', async () => {
+      let outlineCalls = 0;
+      mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+        async (_req, _pdf, images, aiCall) => {
+          outlineCalls += 1;
+          await aiCall('sys-outline', 'user-outline', images);
+          return outlineCalls === 1
+            ? EMPTY_PLAN
+            : {
+                success: true,
+                data: {
+                  languageDirective: 'Use English.',
+                  outlines: [
+                    {
+                      ...outline,
+                      teachingStage: { key: 'lesson_introduction', flowIndex: 0 },
+                      teachingSkills: { classification: 'non-instructional' as const },
+                    },
+                  ],
+                },
+              };
+        },
+      );
+      const result = await runWithCorrection(
+        { collectOutlineIssues: async () => [] },
+        { ...singleShot, teachingFlow: singleShot.governed.flow },
+      );
+      expect(outlineCalls).toBe(2);
+      expect(
+        callsBySource().filter((call) => call.source === 'scene-outlines-stream'),
+      ).toHaveLength(2);
+      // The re-planned slide went on to its scene, with no pause.
+      expect(result.scenesCount).toBe(1);
+    });
+
+    it('a second empty plan fails the run as before: no third outline call', async () => {
+      let outlineCalls = 0;
+      mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+        async (_req, _pdf, images, aiCall) => {
+          outlineCalls += 1;
+          await aiCall('sys-outline', 'user-outline', images);
+          return EMPTY_PLAN;
+        },
+      );
+      await expect(
+        runWithCorrection({ collectOutlineIssues: async () => [] }, singleShot),
+      ).rejects.toThrow(/no outlines were returned/);
+      expect(outlineCalls).toBe(2);
+    });
+
+    it('a run without correction support keeps today’s single outline call', async () => {
+      let outlineCalls = 0;
+      mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+        async (_req, _pdf, images, aiCall) => {
+          outlineCalls += 1;
+          await aiCall('sys-outline', 'user-outline', images);
+          return EMPTY_PLAN;
+        },
+      );
+      const policy = await policyFor('MATH');
+      await expect(
+        generate({ modelPolicy: policy, attribution: ATTRIBUTION, ...singleShot } as never),
+      ).rejects.toThrow(/no outlines were returned/);
+      expect(outlineCalls).toBe(1);
+    });
+  });
+
   it('without a planning policy, planning stays on the generation policy (D-5 default)', async () => {
     const policy = await policyFor('MATH');
     await generate({ modelPolicy: policy, attribution: ATTRIBUTION, agentMode: 'generate' });
