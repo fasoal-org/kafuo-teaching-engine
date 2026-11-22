@@ -12,6 +12,11 @@
 import { NextRequest } from 'next/server';
 
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import {
+  accessCodeRequiredResponse,
+  hasAccessCookieOrNoGate,
+} from '@/lib/server/teaching-package/editor-grant-tenant-access';
+import { resolveRegenerationGrant } from '@/lib/server/teaching-package/regeneration-grant';
 import { resolveTTSModel } from '@/lib/server/provider-config';
 import { readSpeechConfig } from '@/lib/server/speech/config';
 import { assessNarrationAudio } from '@/lib/server/speech/narration-synthesis';
@@ -46,6 +51,17 @@ export async function POST(req: NextRequest) {
     body = (await req.json()) as AssessBody;
   } catch {
     return apiError('INVALID_REQUEST', 400, 'invalid JSON body');
+  }
+  // Teacher voice (owner, 22 Nov 2026): without the access cookie, only a WRITE
+  // editor grant for the Stage named in the body -- the same rule as
+  // `generate/tts`, so "Voice all" can skip a teacher's lines that are current
+  // instead of paying to voice them again.
+  if (!hasAccessCookieOrNoGate(req.headers)) {
+    if (!body.stageId) return accessCodeRequiredResponse();
+    const resolved = await resolveRegenerationGrant(req.headers, body.stageId, {
+      requireWrite: true,
+    });
+    if (!resolved.ok) return resolved.response;
   }
   const actions = Array.isArray(body.actions) ? body.actions.slice(0, MAX_ACTIONS) : [];
   if (!body.ttsProviderId || !body.ttsVoice) {

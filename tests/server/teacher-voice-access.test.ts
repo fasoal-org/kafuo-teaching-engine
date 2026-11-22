@@ -137,3 +137,28 @@ describe('POST /api/generate/tts without the access cookie', () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe('POST /api/generate/tts/assess without the access cookie', () => {
+  it('needs a Stage and a write grant for it, like generate/tts', async () => {
+    vi.stubEnv('ACCESS_CODE', CODE);
+    vi.stubEnv('SCIENTIFIC_TTS_MODE', 'off');
+    vi.stubEnv('DATABASE_URL', '');
+    const { POST } = await import('@/app/api/generate/tts/assess/route');
+    const { NextRequest } = await import('next/server');
+    const send = (body: Record<string, unknown>) =>
+      POST(
+        new NextRequest('http://te.test/api/generate/tts/assess', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', cookie: grantCookie('write', 'edit') },
+          body: JSON.stringify({
+            ttsProviderId: 'openai-tts',
+            ttsVoice: 'alloy',
+            actions: [],
+            ...body,
+          }),
+        }),
+      );
+    expect((await send({})).status).toBe(401);
+    expect((await send({ stageId: STAGE })).status).toBe(404);
+  });
+});

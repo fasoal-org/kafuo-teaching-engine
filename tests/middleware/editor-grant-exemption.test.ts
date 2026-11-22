@@ -74,7 +74,9 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   // for `generate/tts`, anything but a write grant for the body's Stage.
   ['GET', '/api/server-providers'], // v1 provider availability
   ['POST', '/api/generate/tts'], // v2 voice one line (same-origin only)
-  ['POST', '/api/persistence/assets'], // v3 store its clip (same-origin only)
+  ['POST', '/api/generate/tts/assess'], // v3 which lines are current (same-origin only)
+  ['POST', '/api/persistence/assets'], // v4 store its clip (same-origin only)
+  ['GET', '/api/persistence/assets/:id/content'], // v5 probe/read a clip voiced before
 ];
 
 /** The handler file behind each reviewed Stage path (`app/api/…`). */
@@ -100,6 +102,7 @@ const STAGE_ROUTE_FILES: Readonly<Record<string, string>> = {
   // Teacher voice (owner, 22 Nov 2026): not Stage paths, but the same scan.
   '/api/server-providers': 'server-providers/route.ts',
   '/api/generate/tts': 'generate/tts/route.ts',
+  '/api/generate/tts/assess': 'generate/tts/assess/route.ts',
 };
 const PERSISTENCE_ROUTE_FILE = 'persistence/[...path]/route.ts';
 
@@ -193,7 +196,6 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['GET', `/api/stages/${S}/scenes`],
   ['POST', `/api/stages/${S}/generation-complete`],
   // Generation, chat, speech, provider and probe routes (server keys).
-  ['POST', '/api/generate/tts/assess'],
   ['POST', '/api/generate/scene-content'],
   ['POST', '/api/generate/image'],
   ['POST', '/api/generate-classroom'],
@@ -220,8 +222,8 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['DELETE', '/api/persistence/runtime'],
   ['DELETE', `/api/persistence/runtime/stages/${S}`],
   ['POST', '/api/persistence/runtime/learners/merge'],
-  // Assets (x7-x9). Allocation is the teacher-voice row v3.
-  ['GET', '/api/persistence/assets/asset-1/content'],
+  // Assets (x7-x9). Allocation and content GET are the teacher-voice rows v4-v5;
+  // HEAD keeps the 401 (the probe falls back to GET).
   ['HEAD', '/api/persistence/assets/asset-1/content'],
   ['PUT', '/api/persistence/assets/asset-1/content'],
   ['DELETE', '/api/persistence/assets/asset-1'],
@@ -496,6 +498,7 @@ describe('editor-grant exemption (O1)', () => {
           `/api/stages/${S}/scene-insertions`,
           `/api/stages/${S}/bank-quiz`,
           '/api/generate/tts',
+          '/api/generate/tts/assess',
           '/api/persistence/assets',
         ]);
       });
@@ -632,6 +635,7 @@ describe('editor-grant exemption (O1)', () => {
           ['PUT', `/api/persistence/documents/${S}/scenes/${CHILD}`],
           ['DELETE', `/api/persistence/documents/${S}/scenes/${CHILD}`],
           ['POST', '/api/persistence/assets'],
+          ['GET', `/api/persistence/assets/${S}/content`],
         ]);
       });
 

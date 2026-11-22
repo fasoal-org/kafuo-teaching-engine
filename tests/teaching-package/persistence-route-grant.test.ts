@@ -490,12 +490,28 @@ describe('persistence route editor grant', () => {
       body: form(),
     });
     expect(learner.status).toBe(401);
+    const preview = await call('/assets', {
+      method: 'POST',
+      headers: { cookie: grantCookie(STAGE_X, 'read', 'preview') },
+      body: form(),
+    });
+    expect(preview.status).toBe(401);
+    const teacherCookie = grantCookie(STAGE_X, 'write', 'edit');
     const teacher = await call('/assets', {
       method: 'POST',
-      headers: { cookie: grantCookie(STAGE_X, 'write', 'edit') },
+      headers: { cookie: teacherCookie },
       body: form(),
     });
     expect(teacher.status).toBe(201);
+    const { id } = (await teacher.json()) as { id: string };
+
+    // Re-voicing probes the existing clip: a teacher reads it, a learner does not.
+    const teacherRead = await call(`/assets/${id}/content`, { headers: { cookie: teacherCookie } });
+    expect(teacherRead.status).toBe(200);
+    const learnerRead = await call(`/assets/${id}/content`, {
+      headers: { cookie: grantCookie(STAGE_X, 'read', 'learner') },
+    });
+    expect(learnerRead.status).toBe(401);
   });
 
   it('keeps the grant-free behavior: 503 without the dev token', async () => {
