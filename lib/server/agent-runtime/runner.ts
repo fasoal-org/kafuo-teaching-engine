@@ -1307,6 +1307,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         await store.assertActiveLease(id, WORKER_ID, attempt, transaction);
         assertCurrentStageMutationActive();
       },
+      // A package stage's `scene_changed` webhook names this agent session.
+      { sceneEventActorRef: `agent-session:${id}` },
     )) as CourseStore;
     // The detached media jobs' document store: same owner binding and write
     // boundary as the run's store, but fenced only by the stage-mutation
@@ -1314,9 +1316,13 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // legitimately patches the document minutes after its run ended, when
     // the lease is already released; wiring the run's store there would make
     // every post-run patch throw AgentSessionLeaseLostError.
-    const mediaJobStore = (await getOwnerScopedDocumentStore(meta.ownerId, async () => {
-      assertCurrentStageMutationActive();
-    })) as CourseStore;
+    const mediaJobStore = (await getOwnerScopedDocumentStore(
+      meta.ownerId,
+      async () => {
+        assertCurrentStageMutationActive();
+      },
+      { sceneEventActorRef: `agent-session:${id}` },
+    )) as CourseStore;
     const resolveFollowUpElementContext = async (
       message: FollowUpMessage,
     ): Promise<FollowUpMessage> => {

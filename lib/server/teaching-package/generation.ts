@@ -37,6 +37,7 @@ import {
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
+import { enqueueStageNarrationAudioFailures } from '@/lib/server/teaching-package/scene-webhook-events';
 import {
   insertQueuedReview,
   newPackageReviewId,
@@ -522,6 +523,12 @@ async function emitGenerationSucceeded(
     // Additive (contract §3.1): only a reviewed (Kafuo) binding carries it.
     ...(review ? { review } : {}),
   }));
+  // Agent API wave B: one `narration_audio_failed` per scene the build kept with the
+  // mark, after the version it belongs to, in the same binding transaction.
+  await enqueueStageNarrationAudioFailures(tx, {
+    versionId: version.id,
+    stageId: version.currentStageId,
+  });
 }
 
 interface LiveStageRow extends Record<string, unknown> {

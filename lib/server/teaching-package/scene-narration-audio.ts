@@ -15,6 +15,7 @@
  * is saved and the mark keeps the new count. Nothing voiced → nothing written.
  */
 import { DocumentVersionError } from '@openmaic/storage';
+import type { Queryable } from '@openmaic/storage/document/pg';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 import { withPlainJsonDocumentWrites } from '@/lib/document-store/plain-json-store';
@@ -43,7 +44,14 @@ import {
   revisionPreconditionFence,
   type RevisionPreconditionState,
 } from '@/lib/server/teaching-package/revision-precondition-fence';
-import type { RegenerationGrant } from '@/lib/server/teaching-package/scene-regeneration';
+import {
+  sceneRegenerationActorRef,
+  type RegenerationGrant,
+} from '@/lib/server/teaching-package/scene-regeneration';
+import {
+  enqueueNarrationAudioFailedIfMarked,
+  enqueueSceneChanged,
+} from '@/lib/server/teaching-package/scene-webhook-events';
 import {
   listRunningSceneRegenerations,
   readLiveScene,
@@ -77,6 +85,8 @@ export interface NarrationAudioDeps {
    * and an aborted run writes no audio. Absent (the editor) → exactly as before.
    */
   signal?: AbortSignal;
+  /** Who asked, for the `scene_changed` webhook; absent → the editor's actor ref. */
+  actorRef?: string;
   /** Test seams. */
   synthesize?: typeof synthesizeSceneNarration;
   loadStage?: (pool: ConnectableQueryable, stageId: string) => Promise<AppStage | null>;
@@ -84,6 +94,7 @@ export interface NarrationAudioDeps {
     pool: ConnectableQueryable,
     target: { stageId: string; sceneId: string; baseRev: number },
     scene: AppScene,
+    onCommitted?: (tx: Queryable) => Promise<void>,
   ) => Promise<number>;
 }
 
@@ -162,11 +173,16 @@ async function loadStageFromStore(
   return document?.stage ?? null;
 }
 
-/** Write one Scene under its revision precondition and the stage guard; returns the new rev. */
+/**
+ * Write one Scene under its revision precondition and the stage guard; returns the new rev.
+ * `onCommitted` runs once, on the transaction that advanced the Scene's revision
+ * (before its COMMIT), so what it enqueues commits or rolls back with the write.
+ */
 async function writeSceneAtRev(
   pool: ConnectableQueryable,
   target: { stageId: string; sceneId: string; baseRev: number },
   scene: AppScene,
+  onCommitted?: (tx: Queryable) => Promise<void>,
 ): Promise<number> {
   const state: RevisionPreconditionState = {};
   const precondition = revisionPreconditionFence(
@@ -174,7 +190,9 @@ async function writeSceneAtRev(
     { [target.sceneId]: target.baseRev },
     state,
   );
-  const guard = teachingPackageStageGuardFence();
+  // This write sends its own `scene_changed: narration_audio_regenerated`.
+  const guard = teachingPackageStageGuardFence(undefined, { sceneEvents: false });
+  let notified = false;
   const store = withPlainJsonDocumentWrites(
     createOwnerBoundDocumentStore<AppScene, AppStage>({
       pool: pool as unknown as TransactionSource,
@@ -184,6 +202,23 @@ async function writeSceneAtRev(
       mutationFence: async (queryable, operation, phase) => {
         await precondition(queryable, operation, phase);
         await guard(queryable, operation, phase);
+        if (
+          onCommitted &&
+          !notified &&
+          phase === 'after' &&
+          operation.stageId === target.stageId &&
+          operation.mode !== 'read'
+        ) {
+          const revision = await queryable.query<{ rev: number | string }>(
+            'SELECT rev FROM document_scene_revision WHERE stage_id = $1 AND scene_id = $2',
+            [target.stageId, target.sceneId],
+          );
+          const rev = revision.rows[0] ? Number(revision.rows[0].rev) : 0;
+          if (rev > target.baseRev) {
+            await onCommitted(queryable);
+            notified = true;
+          }
+        }
       },
     }),
   );
@@ -333,6 +368,21 @@ export async function regenerateSceneNarrationAudio(
     pool,
     { stageId: grant.stageId, sceneId, baseRev: live.rev },
     next,
+    // Agent API wave B: the change and a still-failed line, in the write's commit.
+    async (tx) => {
+      await enqueueSceneChanged(tx, {
+        versionId: grant.versionId,
+        stageId: grant.stageId,
+        sceneId,
+        change: 'narration_audio_regenerated',
+        actorRef: deps.actorRef ?? sceneRegenerationActorRef(grant.stageId),
+      });
+      await enqueueNarrationAudioFailedIfMarked(tx, {
+        versionId: grant.versionId,
+        stageId: grant.stageId,
+        scene: next,
+      });
+    },
   );
   log.info(
     `narration audio repaired for scene ${sceneId}: ${summary.generated} generated, ${gap.missing} still missing`,

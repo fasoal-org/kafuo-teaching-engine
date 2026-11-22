@@ -49,6 +49,14 @@ interface PendingOperation {
   mode: OwnershipMode;
   /** `library` = folder membership only, never Stage content. */
   scope: 'content' | 'library';
+  /** A single-Scene write (`putScene` / `deleteScene`): the Scene it targets. Informational. */
+  sceneId?: string;
+  /**
+   * `putScene`'s own read of the stored Scene before the write (lineage carry-forward):
+   * the same operation, in its own transaction. Fences behave exactly as before; it only
+   * lets a fence skip work meant for the write itself (the package scene events).
+   */
+  lookup?: true;
 }
 
 interface RawOwnershipRow extends Record<string, unknown> {
@@ -147,20 +155,29 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
   }
 
   putScene(stageId: string, scene: TScene): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, async () => {
+    const sceneId = (scene as { id: string }).id;
+    const operation: PendingOperation = { stageId, mode: 'mutate', scope: 'content', sceneId };
+    return this.tagged(operation, async () => {
       // Module 3/4 W4: the incremental scene write is where every whole-Scene
       // seam converges (grant-delegated HTTP PUT, agent tools, server
       // patches), so the stored Scene's governed lineage rides it without
       // application cooperation — the same structural argument as the
       // trigger-maintained sceneRev. Whole-document saveDocument is
       // deliberately excluded: it legitimately replaces the entire scene set.
-      const stored = await this.inner.getScene(stageId, (scene as { id: string }).id);
+      // The read runs under the same operation (fences unchanged), marked as the lookup.
+      this.pending.operation = { ...operation, lookup: true };
+      let stored: TScene | null;
+      try {
+        stored = await this.inner.getScene(stageId, sceneId);
+      } finally {
+        this.pending.operation = operation;
+      }
       return this.inner.putScene(stageId, carryForwardSceneLineage(stored, scene));
     });
   }
 
   deleteScene(stageId: string, sceneId: string): Promise<void> {
-    return this.tagged({ stageId, mode: 'mutate', scope: 'content' }, () =>
+    return this.tagged({ stageId, mode: 'mutate', scope: 'content', sceneId }, () =>
       this.inner.deleteScene(stageId, sceneId),
     );
   }

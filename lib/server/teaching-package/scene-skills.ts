@@ -142,7 +142,8 @@ export function normalizeSkillAssignment(assignment: {
 export async function setSceneTeachingSkills(
   pool: ConnectableQueryable,
   versionId: string,
-  scope: { tenantId: string },
+  /** `actorRef`: who the `scene_changed` webhook names (absent → the editor's actor). */
+  scope: { tenantId: string; actorRef?: string },
   assignments: ValidatedSkillAssignment[],
 ): Promise<{ updatedSceneIds: string[] }> {
   if (assignments.length === 0) {
@@ -188,7 +189,9 @@ export async function setSceneTeachingSkills(
     );
   }
 
-  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER, undefined, {
+    ...(scope.actorRef ? { sceneEventActorRef: scope.actorRef } : {}),
+  });
   const document = await store.loadDocument(version.currentStageId);
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');

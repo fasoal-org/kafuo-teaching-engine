@@ -105,7 +105,9 @@ export async function confirmSceneAlignments(
     );
   }
 
-  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
+  const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER, undefined, {
+    sceneEventActorRef: scope.actorRef,
+  });
   const document = await store.loadDocument(version.currentStageId);
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');

@@ -123,9 +123,13 @@ const WEBHOOK_EVENT_TYPES = [
   'teaching_package.review_completed',
   // The terminal result of one question-set review (plan §4.7): per-question verdicts.
   'teaching_question_set.review_completed',
+  // Kafuo Agent API wave B (plan §1.6): a package scene write succeeded, and a
+  // scene was recorded with failed narration audio. Ids only.
+  'teaching_package.scene_changed',
+  'teaching_package.narration_audio_failed',
 ] as const;
 /** The newest event type: the delivery-table evolution is guarded on it. */
-const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_question_set.review_completed';
+const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_package.narration_audio_failed';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
