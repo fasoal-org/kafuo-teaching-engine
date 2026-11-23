@@ -590,6 +590,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         try {
           const audio = await regenerateAudio(grant, slide.id, {
             pool,
+            actorRef: PACKAGE_REVIEWER_ACTOR,
             // LOW-1: an evicted run's TTS stops with its signal and writes no audio.
             ...(context.signal ? { signal: context.signal } : {}),
           });

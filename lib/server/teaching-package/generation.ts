@@ -37,6 +37,7 @@ import {
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import { removeStageMediaDir } from '@/lib/server/classroom-storage';
 import { enqueueWebhookEvent } from '@/lib/server/teaching-package/webhook-events';
+import { enqueueStageNarrationAudioFailures } from '@/lib/server/teaching-package/scene-webhook-events';
 import {
   insertQueuedReview,
   newPackageReviewId,
@@ -522,6 +523,12 @@ async function emitGenerationSucceeded(
     // Additive (contract §3.1): only a reviewed (Kafuo) binding carries it.
     ...(review ? { review } : {}),
   }));
+  // Agent API wave B: one `narration_audio_failed` per scene the build kept with the
+  // mark, after the version it belongs to, in the same binding transaction.
+  await enqueueStageNarrationAudioFailures(tx, {
+    versionId: version.id,
+    stageId: version.currentStageId,
+  });
 }
 
 interface LiveStageRow extends Record<string, unknown> {
@@ -756,15 +763,20 @@ export async function completeGenerationAttempt(
         now,
       });
       retiredStageId = replacement.retiredStageId;
+      // The version as the relink left it (new Stage, attempt, status `draft`): the
+      // webhook's `version` must name the Stage the version is now on, never the one it
+      // just retired (Kafuo's projection keeps `currentStageId` as the slot's stage).
+      const relinked =
+        (await readVersionForUpdate(tx, version.id, { tenantId: locked.tenantId })) ?? version;
       const succeeded = await markAttemptSucceeded(tx, locked.id, {
         stageId,
         versionId: version.id,
         now,
       });
       const review = options.review
-        ? await queuePackageReview(tx, succeeded!, version, stageId, options.review, now)
+        ? await queuePackageReview(tx, succeeded!, relinked, stageId, options.review, now)
         : null;
-      await emitGenerationSucceeded(tx, succeeded!, version, now, review);
+      await emitGenerationSucceeded(tx, succeeded!, relinked, now, review);
       return succeeded;
     });
   } catch (error) {

@@ -10,7 +10,12 @@ import {
   useState,
 } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import type { PPTTableElement, TableCell, TableCellBorder } from '@openmaic/dsl';
+import {
+  isTruthTableHeader,
+  type PPTTableElement,
+  type TableCell,
+  type TableCellBorder,
+} from '@openmaic/dsl';
 import { getTableSubThemeColor } from '@openmaic/renderer';
 import { getTextStyle } from '@openmaic/renderer/elements';
 import { RendererTextEditor } from '../text/RendererTextEditor';
@@ -115,6 +120,8 @@ export const RendererTableEditor = forwardRef<
     if (!outline) return 'none';
     return `${outline.width ?? 1}px ${outline.style === 'dashed' ? 'dashed' : 'solid'} ${outline.color ?? '#000'}`;
   }, [element.outline]);
+  // Same rule as the renderer's StaticTable: a Latin/symbol header reads left to right.
+  const latinHeader = useMemo(() => isTruthTableHeader(element.data), [element.data]);
 
   const commitActiveCell = useCallback(() => {
     activeCellControllerRef.current?.flush();
@@ -208,6 +215,7 @@ export const RendererTableEditor = forwardRef<
         borderCollapse: 'collapse',
         tableLayout: 'fixed',
         pointerEvents: 'auto',
+        ...(latinHeader ? { direction: 'ltr' as const } : {}),
       }}
     >
       <colgroup>
@@ -264,6 +272,7 @@ export const RendererTableEditor = forwardRef<
                     else cellRefs.current.delete(cell.id);
                   }}
                   data-table-cell-id={cell.id}
+                  dir={latinHeader ? 'auto' : undefined}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{

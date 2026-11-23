@@ -37,6 +37,7 @@ import {
 } from '@/lib/persistence/generation-checkpoint';
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import {
+  assertCheckpointPersistable,
   markAttemptAbandoned,
   markAttemptAwaitingCorrection,
   readAttempt,
@@ -86,6 +87,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationAttempt,
   GenerationCheckpoint,
+  GenerationCheckpointLogEntry,
   GenerationCheckpointSourceRefs,
   LearningItemRef,
   PlanReviewFix,
@@ -273,6 +275,12 @@ export interface EditCorrectionCommand {
   actorRef: string;
   expectedRevision: number;
   operations: CorrectionOperation[];
+  /**
+   * Kafuo Agent API E2: run every check and the diagnosis, and return the view the
+   * edit WOULD produce, saving nothing (no write statement runs). The view keeps the
+   * stored `revision`, so the real edit names the same one. Never with `review_plan`.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -314,6 +322,12 @@ export async function editGenerationCorrection(
       );
     }
     if (command.operations.some((operation) => operation.op === 'review_plan')) {
+      if (command.dryRun) {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          'review_plan cannot be dry-run: it starts a background review',
+        );
+      }
       return startPlanReview(tx, attempt, checkpoint, command, actorRef, reviewStatus);
     }
     const flow = flowOf(attempt);
@@ -386,6 +400,25 @@ export async function editGenerationCorrection(
     const diagnosis = diagnoseCandidateOutlines(edited, diagnosisContext);
     diagnosis.blocking = withoutIgnoredIssues(diagnosis.blocking, ignored);
     const now = Date.now();
+    if (command.dryRun) {
+      return buildCorrectionView(
+        attempt,
+        dryRunCheckpoint(checkpoint, {
+          outlines: diagnosis.outlines,
+          diagnostics: diagnosis.blocking,
+          repairs: [...checkpoint.repairs, ...diagnosis.repairs],
+          logEntry: {
+            event: 'edited',
+            actorRef,
+            at: now,
+            operations,
+            blockingCount: diagnosis.blocking.length,
+          },
+          now,
+        }),
+        flow,
+      );
+    }
     const updated = await applyCheckpointEdit(tx, attemptId, {
       tenantId: command.tenantId,
       expectedRevision: command.expectedRevision,
@@ -416,6 +449,39 @@ export async function editGenerationCorrection(
     }
     return buildCorrectionView(attempt, updated, flow);
   });
+}
+
+/**
+ * Kafuo Agent API E2: the checkpoint an edit would store, in memory only. The same
+ * persistability check the write runs; the log entry gets the revision the write would
+ * give it, but the checkpoint keeps the stored `revision`.
+ */
+function dryRunCheckpoint(
+  checkpoint: GenerationCheckpoint,
+  edit: {
+    outlines: SceneOutline[];
+    diagnostics: OutlineDiagnostic[];
+    repairs: OutlineDiagnostic[];
+    logEntry: Omit<GenerationCheckpointLogEntry, 'revision'>;
+    now: number;
+  },
+): GenerationCheckpoint {
+  assertCheckpointPersistable({
+    outlines: edit.outlines,
+    diagnostics: edit.diagnostics,
+    logEntry: edit.logEntry,
+  });
+  return {
+    ...checkpoint,
+    outlines: edit.outlines,
+    diagnostics: edit.diagnostics,
+    repairs: edit.repairs,
+    editLog: [
+      ...checkpoint.editLog,
+      { ...edit.logEntry, revision: checkpoint.revision + 1 } as GenerationCheckpointLogEntry,
+    ],
+    updatedAt: edit.now,
+  };
 }
 
 /**
@@ -700,6 +766,13 @@ export interface ResumeCorrectionCommand {
   /** Canonical digest of the re-sent request (fresh retrieval URLs, same semantics). */
   requestDigest: string;
   learningItem: LearningItemRef;
+  /**
+   * Kafuo Agent API E2: every check a resume runs (request digest, revision, plan
+   * review, open issues), then return `wouldResume: true` without changing anything.
+   * A revision already resumed answers as a replay does (`resumed: false`, no
+   * `wouldResume`).
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -713,7 +786,7 @@ export async function resumeGenerationAttempt(
   pool: ConnectableQueryable,
   attemptId: string,
   command: ResumeCorrectionCommand,
-): Promise<{ attempt: GenerationAttempt; resumed: boolean }> {
+): Promise<{ attempt: GenerationAttempt; resumed: boolean; wouldResume?: true }> {
   const actorRef = assertActorRef(command.actorRef);
   const withTransaction = nodePostgresTransaction(pool);
   return withTransaction(async (tx) => {
@@ -788,6 +861,7 @@ export async function resumeGenerationAttempt(
         { blockingIssues: blocking.slice(0, 20) },
       );
     }
+    if (command.dryRun) return { attempt, resumed: false, wouldResume: true };
     const now = Date.now();
     const marked = await markCheckpointResumed(tx, attemptId, {
       tenantId: command.tenantId,

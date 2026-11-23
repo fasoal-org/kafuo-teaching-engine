@@ -175,13 +175,14 @@ async function run(
     speech?: string;
     teachingModel?: { key: string; version: string };
     sacredExerciseUnitIds?: string[];
+    others?: AppScene[];
   } = {},
 ) {
   const pre = options.pre ?? preImage();
   const stub = model(contentReply, options.speech);
   const result = await regenerateOneScene({
     scene: pre,
-    scenes: [pre],
+    scenes: [pre, ...(options.others ?? [])],
     stage,
     outlineSnapshot: options.outline ?? snapshot(),
     instruction: INSTRUCTION,
@@ -264,6 +265,67 @@ describe('regenerateOneScene — AT-G', () => {
     // 21): on g5.v10 the narration model gets the same instruction as the canvas.
     expect(await narrationOf({ key: 'g5', version: 'g5.v10' })).toContain('INSTRUCTION-MARK');
     expect(await narrationOf({ key: 'g5', version: 'g5.v8' })).not.toContain('INSTRUCTION-MARK');
+  });
+
+  it("a MATH slide keeps the package's logic notation (\\sim, T/F) — lessons 1-2 / 1-3", async () => {
+    const row = (...texts: string[]) =>
+      texts.map((text, i) => ({ id: `c-${text}-${i}`, colspan: 1, rowspan: 1, text }));
+    const tableOf = (id: string, body: string[]) => ({
+      id,
+      type: 'table',
+      left: 100,
+      top: 250,
+      width: 400,
+      height: 120,
+      rotate: 0,
+      colWidths: [0.5, 0.5],
+      cellMinHeight: 40,
+      data: [row('p', '∼p'), row(...body)],
+      outline: { width: 1, style: 'solid', color: '#333333' },
+    });
+    const latexOf = (id: string, latex: string) => ({
+      id,
+      type: 'latex',
+      latex,
+      left: 100,
+      top: 150,
+      width: 300,
+      height: 60,
+    });
+    // Another slide of the package, as the run normalised it to the book.
+    const other = {
+      ...preImage([latexOf('l0', '\\sim p \\rightarrow \\sim q'), tableOf('tb0', ['T', 'F'])]),
+      id: 'scene-2',
+      outlineId: 'o2',
+      order: 2,
+    } as AppScene;
+    const reply = content([
+      latexOf('l1', '\\neg p \\to \\neg q'),
+      tableOf('tb1', ['ص', 'خ']),
+      image('src-3', 'x'),
+    ]);
+
+    const { result } = await run(reply, { others: [other] });
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.scene.content.type !== 'slide') throw new Error('slide');
+    const elements = result.scene.content.canvas.elements as unknown as Array<
+      Record<string, unknown>
+    >;
+    const latex = elements.find((element) => element.type === 'latex')!;
+    expect(latex.latex).toBe('{\\sim} p \\to {\\sim} q');
+    expect(String(latex.html)).not.toContain('¬');
+    const table = elements.find((element) => element.type === 'table') as {
+      data: Array<Array<{ text: string }>>;
+    };
+    expect(table.data[1].map((cell) => cell.text)).toEqual(['T', 'F']);
+
+    // Control: a package that shows no notation leaves the regenerated slide as written.
+    const { result: alone } = await run(reply);
+    if (!alone.ok || alone.scene.content.type !== 'slide') throw new Error('slide');
+    const kept = (
+      alone.scene.content.canvas.elements as unknown as Array<Record<string, unknown>>
+    ).find((element) => element.type === 'latex')!;
+    expect(kept.latex).toBe('\\neg p \\to \\neg q');
   });
 
   it('an unparsable content answer fails with SCENE_CONTENT_GENERATION_FAILED and no Action call', async () => {

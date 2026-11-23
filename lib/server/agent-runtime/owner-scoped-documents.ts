@@ -36,6 +36,8 @@ export type OwnerScopedDocumentStore = DocumentStore<AppScene, AppStage> &
 export async function getOwnerScopedDocumentStore(
   ownerId: string,
   mutationFence?: (queryable: Queryable) => Promise<void>,
+  /** Who the package `scene_changed` webhook names for this store's writes (Agent API wave B). */
+  options: { sceneEventActorRef?: string } = {},
 ): Promise<OwnerScopedDocumentStore> {
   const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
   return withPlainJsonDocumentWrites(
@@ -46,7 +48,9 @@ export async function getOwnerScopedDocumentStore(
       validateStage: validateAppStage,
       // Teaching package immutability composed ahead of the caller's (runner
       // lease) fence; the caller's fence keeps its exact previous behavior.
-      mutationFence: teachingPackageStageGuardFence(mutationFence),
+      mutationFence: teachingPackageStageGuardFence(mutationFence, {
+        sceneEvents: options.sceneEventActorRef ? { actorRef: options.sceneEventActorRef } : {},
+      }),
     }) as unknown as OwnerScopedDocumentStore,
   );
 }

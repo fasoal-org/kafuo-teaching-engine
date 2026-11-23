@@ -38,6 +38,7 @@ import {
   type VerifiedEditorGrant,
 } from '@/lib/server/teaching-package/editor-grant';
 import { signLearnerMediaUrls } from '@/lib/server/teaching-package/classroom-media-signature';
+import { hasAccessCookieOrNoGate } from '@/lib/server/teaching-package/editor-grant-tenant-access';
 import {
   evaluateLearnerGrantAccess,
   learnerDeliveryError,
@@ -561,7 +562,39 @@ async function evaluateEditorGrant(
   }
 
   if (path === '/assets' || path.startsWith('/assets/')) {
-    return { covered: true, mode: 'assets', grant: grants[0]! };
+    // Teacher voice (owner, 22 Nov 2026): the middleware now lets a grant-cookie
+    // holder allocate (`POST /assets`) and read an asset's bytes
+    // (`GET|HEAD /assets/:id/content`) without the access code, so a teacher can
+    // store a line's narration and re-voice a line voiced before. Without the
+    // access cookie, allocation needs a WRITE editing grant (not learner, not
+    // preview) and a read needs a non-learner grant; a learner grant keeps the
+    // middleware's answer.
+    const teacher = grants.find((candidate) => candidate.purpose !== 'learner');
+    const writer = grants.find(
+      (candidate) =>
+        candidate.capability === 'write' &&
+        candidate.purpose !== 'learner' &&
+        candidate.purpose !== 'preview',
+    );
+    const method = request.method.toUpperCase();
+    const needed = method === 'POST' ? writer : teacher;
+    if (
+      (method === 'POST' || method === 'GET' || method === 'HEAD') &&
+      !needed &&
+      !hasAccessCookieOrNoGate(request.headers)
+    ) {
+      return {
+        covered: true,
+        mode: 'assets',
+        grant: grants[0]!,
+        refusal: {
+          status: 401,
+          code: 'INVALID_REQUEST',
+          message: 'Access code required',
+        },
+      };
+    }
+    return { covered: true, mode: 'assets', grant: needed ?? teacher ?? grants[0]! };
   }
   return { covered: false };
 }

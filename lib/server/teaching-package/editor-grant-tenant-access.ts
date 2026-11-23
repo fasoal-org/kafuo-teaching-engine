@@ -32,6 +32,48 @@ export function hasValidAccessCookie(cookieValue: string | undefined, accessCode
   return Boolean(cookieValue) && verifyAccessToken(cookieValue!, accessCode);
 }
 
+/** The `openmaic_access` cookie read from raw headers (handlers on a plain `Request`). */
+function accessCookieFromHeaders(headers: Headers): string | undefined {
+  for (const item of (headers.get('cookie') ?? '').split(';')) {
+    const separator = item.indexOf('=');
+    if (separator < 0 || item.slice(0, separator).trim() !== 'openmaic_access') continue;
+    try {
+      return decodeURIComponent(item.slice(separator + 1).trim());
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Whether the request carries a valid access cookie (true when no `ACCESS_CODE` gates). */
+export function hasAccessCookieOrNoGate(headers: Headers): boolean {
+  const accessCode = process.env.ACCESS_CODE;
+  if (!accessCode) return true;
+  return hasValidAccessCookie(accessCookieFromHeaders(headers), accessCode);
+}
+
+/** Byte for byte the middleware's 401 (`middleware.ts`). */
+export function accessCodeRequiredResponse(): Response {
+  return NextResponse.json(
+    { success: false, errorCode: 'INVALID_REQUEST', error: 'Access code required' },
+    { status: 401 },
+  );
+}
+
+/**
+ * Teacher voice (owner, 22 Nov 2026): a teacher who opened the editor from the
+ * admin holds the grant cookie and no access code. The middleware lets such a
+ * browser reach `GET /api/server-providers`, `POST /api/generate/tts` and
+ * `POST /api/persistence/assets` (`EDITOR_GRANT_EXEMPT_ROUTES`) on cookie presence
+ * alone, so each handler decides here: the access cookie, or a signed, unexpired
+ * editor grant that is not a learner's. A learner grant keeps the middleware's 401.
+ */
+export function hasAccessCookieOrTeacherGrant(headers: Headers): boolean {
+  if (hasAccessCookieOrNoGate(headers)) return true;
+  return readEditorGrants(headers).some((grant) => grant.purpose !== 'learner');
+}
+
 /**
  * D-O1-5 (owner, 19 Oct 2026): before O1 the middleware answered a learner who
  * held only the grant cookie with 401 on `GET teaching-skills`,

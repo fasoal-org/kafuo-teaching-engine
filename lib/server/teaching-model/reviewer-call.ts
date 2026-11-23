@@ -74,13 +74,49 @@ export interface ReviewerCallInput {
    * reads it from the prompt cache (plan §4.2). OpenAI caches prefixes itself.
    */
   stablePrompt?: string;
+  /**
+   * Kafuo Agent API D2a: page images sent after `stablePrompt`, each after its
+   * text label, inside the stable (cache-marked) prefix. Additive: absent, the
+   * request is exactly as before. Never logged, never stored.
+   */
+  stableImages?: ReadonlyArray<{
+    label: string;
+    data: string;
+    mediaType: 'image/jpeg' | 'image/png';
+  }>;
   prompt: string;
   output: StructuredOutputSpec;
   signal?: AbortSignal;
 }
 
+const CACHE_MARK = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
+
 /** The user turn: `[stable (cache-marked)] + variable`, or the variable text alone. */
 function userTurn(input: ReviewerCallInput): { messages: ModelMessage[] } | { prompt: string } {
+  if (input.stablePrompt && input.stableImages && input.stableImages.length > 0) {
+    const images = input.stableImages.flatMap((image, index) => [
+      { type: 'text' as const, text: image.label },
+      {
+        type: 'image' as const,
+        image: image.data,
+        mediaType: image.mediaType,
+        // The cache marker closes the stable prefix: on its last part.
+        ...(index === input.stableImages!.length - 1 ? { providerOptions: CACHE_MARK } : {}),
+      },
+    ]);
+    return {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: input.stablePrompt },
+            ...images,
+            { type: 'text', text: input.prompt },
+          ],
+        },
+      ],
+    };
+  }
   if (!input.stablePrompt) return { prompt: input.prompt };
   return {
     messages: [

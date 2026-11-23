@@ -47,4 +47,39 @@ describe('StaticTable', () => {
     );
     error.mockRestore();
   });
+
+  const withHeader = (...header: string[]): PPTTableElement => ({
+    ...table,
+    colWidths: header.map(() => 1 / header.length),
+    data: [
+      header.map((text, i) => ({ id: `h${i}`, colspan: 1, rowspan: 1, text })),
+      header.map((_, i) => ({ id: `r${i}`, colspan: 1, rowspan: 1, text: 'T' })),
+    ],
+  });
+
+  it('renders a truth table (Latin/symbol header) left to right on any page', () => {
+    const { container } = render(
+      <div dir="rtl">
+        <StaticTable elementInfo={withHeader('p', 'q', '∼p → ∼q')} />
+      </div>,
+    );
+
+    expect((container.querySelector('table') as HTMLElement).style.direction).toBe('ltr');
+    // Each cell takes its own text's direction, so an Arabic cell still reads RTL.
+    expect(container.querySelector('td')?.getAttribute('dir')).toBe('auto');
+  });
+
+  it('keeps the page direction for a physics header without a logic connective', () => {
+    const physics = render(<StaticTable elementInfo={withHeader('t (s)', 'v (m/s)')} />);
+    expect((physics.container.querySelector('table') as HTMLElement).style.direction).toBe('');
+    expect(physics.container.querySelector('td')?.getAttribute('dir')).toBeNull();
+  });
+
+  it('keeps the page direction for an Arabic or mixed header', () => {
+    const arabic = render(<StaticTable elementInfo={withHeader('العبارة', 'قيمة الصواب')} />);
+    expect((arabic.container.querySelector('table') as HTMLElement).style.direction).toBe('');
+
+    const mixed = render(<StaticTable elementInfo={withHeader('p', 'q', 'p و q')} />);
+    expect((mixed.container.querySelector('table') as HTMLElement).style.direction).toBe('');
+  });
 });

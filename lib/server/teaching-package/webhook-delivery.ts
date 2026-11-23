@@ -265,6 +265,17 @@ export async function sweepWebhooksAndStaleAttempts(options?: {
     .catch((error) => {
       log.error('question review sweep failed:', describeErrorSafely(error));
     });
+  // Kafuo Agent API D2a: the on-demand agent book reviews, their own sweep (cap 1).
+  await import('@/lib/server/teaching-package/agent-book-review')
+    .then(({ sweepAgentBookReviews }) =>
+      sweepAgentBookReviews({
+        pool,
+        ...(options?.now ? { now: options.now } : {}),
+      }),
+    )
+    .catch((error) => {
+      log.error('agent book review sweep failed:', describeErrorSafely(error));
+    });
   await deliverPendingWebhooks({
     workerId,
     ...(options?.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),

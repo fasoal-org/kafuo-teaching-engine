@@ -70,6 +70,13 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   // W6 one question source (1 Nov 2026): the classroom's bank quiz.
   ['GET', '/api/stages/:id/bank-quiz'], // b1 questions by `?sceneId=`
   ['POST', '/api/stages/:id/bank-quiz'], // b2 grade (same-origin only; read-only grant)
+  // Teacher voice (owner, 22 Nov 2026): each handler refuses a learner grant and,
+  // for `generate/tts`, anything but a write grant for the body's Stage.
+  ['GET', '/api/server-providers'], // v1 provider availability
+  ['POST', '/api/generate/tts'], // v2 voice one line (same-origin only)
+  ['POST', '/api/generate/tts/assess'], // v3 which lines are current (same-origin only)
+  ['POST', '/api/persistence/assets'], // v4 store its clip (same-origin only)
+  ['GET', '/api/persistence/assets/:id/content'], // v5 probe/read a clip voiced before
 ];
 
 /** The handler file behind each reviewed Stage path (`app/api/…`). */
@@ -92,6 +99,10 @@ const STAGE_ROUTE_FILES: Readonly<Record<string, string>> = {
   '/api/stages/:id/scene-insertions': 'stages/[id]/scene-insertions/route.ts',
   '/api/stages/:id/scene-insertions/:id': 'stages/[id]/scene-insertions/[insertionId]/route.ts',
   '/api/stages/:id/bank-quiz': 'stages/[id]/bank-quiz/route.ts',
+  // Teacher voice (owner, 22 Nov 2026): not Stage paths, but the same scan.
+  '/api/server-providers': 'server-providers/route.ts',
+  '/api/generate/tts': 'generate/tts/route.ts',
+  '/api/generate/tts/assess': 'generate/tts/assess/route.ts',
 };
 const PERSISTENCE_ROUTE_FILE = 'persistence/[...path]/route.ts';
 
@@ -185,8 +196,6 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['GET', `/api/stages/${S}/scenes`],
   ['POST', `/api/stages/${S}/generation-complete`],
   // Generation, chat, speech, provider and probe routes (server keys).
-  ['POST', '/api/generate/tts'],
-  ['POST', '/api/generate/tts/assess'],
   ['POST', '/api/generate/scene-content'],
   ['POST', '/api/generate/image'],
   ['POST', '/api/generate-classroom'],
@@ -194,7 +203,6 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['POST', '/api/chat'],
   ['POST', '/api/chat/pi'],
   ['GET', '/api/speech/diagnostics'],
-  ['GET', '/api/server-providers'],
   ['POST', '/api/provider/probe-models'],
   ['POST', '/api/verify-model'],
   ['POST', '/api/quiz-grade'],
@@ -214,9 +222,8 @@ const NOT_EXEMPT: ReadonlyArray<readonly [string, string]> = [
   ['DELETE', '/api/persistence/runtime'],
   ['DELETE', `/api/persistence/runtime/stages/${S}`],
   ['POST', '/api/persistence/runtime/learners/merge'],
-  // Assets (x7-x9).
-  ['POST', '/api/persistence/assets'],
-  ['GET', '/api/persistence/assets/asset-1/content'],
+  // Assets (x7-x9). Allocation and content GET are the teacher-voice rows v4-v5;
+  // HEAD keeps the 401 (the probe falls back to GET).
   ['HEAD', '/api/persistence/assets/asset-1/content'],
   ['PUT', '/api/persistence/assets/asset-1/content'],
   ['DELETE', '/api/persistence/assets/asset-1'],
@@ -490,6 +497,9 @@ describe('editor-grant exemption (O1)', () => {
           `/api/stages/${S}/scenes/${CHILD}/narration-audio`,
           `/api/stages/${S}/scene-insertions`,
           `/api/stages/${S}/bank-quiz`,
+          '/api/generate/tts',
+          '/api/generate/tts/assess',
+          '/api/persistence/assets',
         ]);
       });
 
@@ -624,6 +634,8 @@ describe('editor-grant exemption (O1)', () => {
           ['GET', `/api/persistence/documents/${S}/scenes/${CHILD}`],
           ['PUT', `/api/persistence/documents/${S}/scenes/${CHILD}`],
           ['DELETE', `/api/persistence/documents/${S}/scenes/${CHILD}`],
+          ['POST', '/api/persistence/assets'],
+          ['GET', `/api/persistence/assets/${S}/content`],
         ]);
       });
 
@@ -724,7 +736,10 @@ describe('editor-grant exemption table (structural pin)', () => {
         // D-O1-2: without the access cookie, the handler requires the tenant grant.
         expect(source, label).toMatch(/holdsTenantEditorGrant/);
       }
-      if (isStageRoute) {
+      if (path === '/api/server-providers') {
+        // Teacher voice: without the access cookie, a non-learner editor grant.
+        expect(source, label).toMatch(/hasAccessCookieOrTeacherGrant\(req\.headers\)/);
+      } else if (isStageRoute) {
         expect(source, label).toMatch(/readEditorGrant|resolveRegenerationGrant/);
         if (path === '/api/stages/:id/bank-quiz') {
           // W6: grading writes no TE state, so a read-only (learner / preview)

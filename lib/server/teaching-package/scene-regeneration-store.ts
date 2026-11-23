@@ -57,6 +57,10 @@ import {
   runningSceneInsertionId,
 } from '@/lib/server/teaching-package/stage-generation-mutex';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
+import {
+  enqueueNarrationAudioFailedIfMarked,
+  enqueueSceneChanged,
+} from '@/lib/server/teaching-package/scene-webhook-events';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import type { ReviewEventType, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
@@ -788,6 +792,19 @@ export function regenerationCommitFence(
       },
       completedAt,
     );
+    // Agent API wave B: the backend learns of the change in the same commit.
+    await enqueueSceneChanged(queryable, {
+      versionId: context.versionId,
+      stageId: context.stageId,
+      sceneId: context.sceneId,
+      change: 'regenerated',
+      actorRef: context.actorRef,
+    });
+    await enqueueNarrationAudioFailedIfMarked(queryable, {
+      versionId: context.versionId,
+      stageId: context.stageId,
+      scene: written!.scene,
+    });
     state.completions += 1;
     state.completed = { resultSceneRev: rev, resultScene: written!.scene, completedAt };
   };
@@ -815,7 +832,8 @@ export async function commitSceneRegeneration(
 }> {
   const state: RegenerationCommitState = { completions: 0 };
   const commitFence = regenerationCommitFence(context, state);
-  const guard = teachingPackageStageGuardFence();
+  // This write sends its own, more specific `scene_changed`.
+  const guard = teachingPackageStageGuardFence(undefined, { sceneEvents: false });
   const store = withPlainJsonDocumentWrites(
     createOwnerBoundDocumentStore<AppScene, AppStage>({
       pool: pool as unknown as TransactionSource,
@@ -970,7 +988,8 @@ export async function restoreSceneRegeneration(
 ): Promise<{ restoredSceneRev: number; scene: AppScene; regeneration: SceneRegeneration }> {
   const clock = input.now ?? Date.now;
   const state: { restored?: { rev: number; scene: AppScene }; row?: SceneRegeneration } = {};
-  const guard = teachingPackageStageGuardFence();
+  // This write sends its own, more specific `scene_changed`.
+  const guard = teachingPackageStageGuardFence(undefined, { sceneEvents: false });
   const initial = await readSceneRegeneration(pool, input.regenerationId);
   if (!initial || initial.tenantId !== input.tenantId) {
     throw new TeachingPackageError('REGENERATION_NOT_FOUND', 'regeneration not found');
@@ -1052,6 +1071,18 @@ export async function restoreSceneRegeneration(
       },
       now,
     );
+    await enqueueSceneChanged(queryable, {
+      versionId: initial.versionId,
+      stageId: initial.stageId,
+      sceneId: initial.sceneId,
+      change: 'restored',
+      actorRef: input.actorRef,
+    });
+    await enqueueNarrationAudioFailedIfMarked(queryable, {
+      versionId: initial.versionId,
+      stageId: initial.stageId,
+      scene: written!.scene,
+    });
     state.restored = { rev, scene: written!.scene };
   };
   const store = withPlainJsonDocumentWrites(

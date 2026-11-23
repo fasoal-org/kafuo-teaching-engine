@@ -431,6 +431,12 @@ export interface SceneInsertionDeps {
     get(profileId: string, checksum: string): Promise<{ verdict: string } | undefined>;
   }>;
   readVisual?: typeof readSourceVisualDataUrl;
+  /**
+   * Kafuo Agent API E3: a non-editor actor (`agent:<user id>`) recorded on the row and
+   * the review events instead of the editor grant's, with its own session reference.
+   * Absent → the editor actor and session, exactly as before.
+   */
+  actor?: { actorRef: string; sessionRef: string | null };
 }
 
 function documentStore(pool: ConnectableQueryable) {
@@ -472,7 +478,8 @@ async function readCoverageGapEvidence(
   };
 }
 
-async function readInsertionContext(
+/** Exported for the Kafuo Agent API E3 dry run (the same new-run checks, no writes). */
+export async function readInsertionContext(
   pool: ConnectableQueryable,
   grant: Pick<InsertionGrant, 'tenantId' | 'versionId' | 'stageId'>,
 ): Promise<InsertionContext> {
@@ -512,7 +519,7 @@ function refusal(code: TeachingPackageErrorCode, message: string, details?: unkn
  * The checks that depend on the live document — run before T1 (new-run
  * checks), inside T1 (authoritative), and at T2 on the exact snapshot.
  */
-function checkPositionAndUnits(
+export function checkPositionAndUnits(
   request: SceneInsertionRequest,
   scenes: readonly AppScene[],
   outline: AppDocumentOutline | null | undefined,
@@ -571,7 +578,7 @@ function checkPositionAndUnits(
   return { at: position.at, after: position.after, before: position.before };
 }
 
-function exactFlowOrRefuse(
+export function exactFlowOrRefuse(
   scenes: readonly AppScene[],
   flow: readonly TeachingFlowEntry[],
   outline: AppDocumentOutline | null | undefined,
@@ -741,7 +748,7 @@ export async function insertGeneratedSlide(
     request.admitBy ?? Number.POSITIVE_INFINITY,
     clock() + SCENE_INSERTION_MAX_ADMISSION_WINDOW_MS,
   );
-  const actorRef = sceneInsertionActorRef(grant.stageId);
+  const actorRef = deps.actor?.actorRef ?? sceneInsertionActorRef(grant.stageId);
   const requestDigest = sceneInsertionRequestDigest(request);
 
   // Replay first (§6 step 4) — before any coverage or adjacency check.
@@ -914,7 +921,9 @@ export async function insertGeneratedSlide(
     instruction: request.instruction,
     reason: request.reason,
     actorRef,
-    sessionRef: sceneRegenerationSessionRef(grant.tenantId, grant.versionId, grant.learnerKey),
+    sessionRef: deps.actor
+      ? deps.actor.sessionRef
+      : sceneRegenerationSessionRef(grant.tenantId, grant.versionId, grant.learnerKey),
     registerPolicy: {
       current: registerPolicy
         ? { policyVersion: registerPolicy.version, register: registerPolicy.register }

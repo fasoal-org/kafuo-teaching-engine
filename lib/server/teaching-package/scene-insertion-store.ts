@@ -64,6 +64,10 @@ import {
   runningSceneInsertionId,
 } from '@/lib/server/teaching-package/stage-generation-mutex';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
+import {
+  enqueueNarrationAudioFailedIfMarked,
+  enqueueSceneChanged,
+} from '@/lib/server/teaching-package/scene-webhook-events';
 import type { ReviewEventType, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -809,6 +813,19 @@ export function insertionCommitFence(
       },
       completedAt,
     );
+    // Agent API wave B: the backend learns of the new slide in the same commit.
+    await enqueueSceneChanged(queryable, {
+      versionId: context.versionId,
+      stageId: context.stageId,
+      sceneId: context.newSceneId,
+      change: 'inserted',
+      actorRef: context.actorRef,
+    });
+    await enqueueNarrationAudioFailedIfMarked(queryable, {
+      versionId: context.versionId,
+      stageId: context.stageId,
+      scene: written.scene,
+    });
     state.completions += 1;
     state.completed = {
       resultScene: written.scene,
@@ -845,7 +862,8 @@ export async function commitSceneInsertion(
 ): Promise<InsertionCommitResult> {
   const state: InsertionCommitState = { completions: 0 };
   const commitFence = insertionCommitFence(context, state);
-  const guard = teachingPackageStageGuardFence();
+  // This write sends its own `scene_changed: inserted` (the shifted slides are not edits).
+  const guard = teachingPackageStageGuardFence(undefined, { sceneEvents: false });
   const store = withPlainJsonDocumentWrites(
     createOwnerBoundDocumentStore<AppScene, AppStage>({
       pool: pool as unknown as TransactionSource,

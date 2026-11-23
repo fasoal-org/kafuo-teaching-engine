@@ -52,7 +52,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const result = await setSceneTeachingSkills(
       pool,
       id,
-      { tenantId: parseTenantContext(body) },
+      { tenantId: parseTenantContext(body), actorRef: body.actorRef },
       assignments,
     );
     return NextResponse.json(result);

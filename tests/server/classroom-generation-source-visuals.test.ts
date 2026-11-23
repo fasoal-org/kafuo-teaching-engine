@@ -348,6 +348,68 @@ describe('generateClassroom source visuals', () => {
     expect(mocks.generateSceneActions.mock.calls[0]![3]).not.toHaveProperty('sourceUnits');
   });
 
+  it("a MATH lesson's fresh slides keep the book's logic notation (lessons 1-2 / 1-3)", async () => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'Arabic.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'S',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            sourceContentUnitIds: ['10'],
+          },
+        ],
+      },
+    });
+    const row = (...texts: string[]) =>
+      texts.map((text, i) => ({ id: `c${i}-${text}`, colspan: 1, rowspan: 1, text }));
+    const slideElements = () => [
+      { id: 'f1', type: 'latex', latex: '\\neg p \\to \\neg q', html: '<span>¬p→¬q</span>' },
+      { id: 't1', type: 'table', data: [row('p', '∼p'), row('صواب', 'خطأ'), row('ص', 'خ')] },
+    ];
+    const sourceUnits = [
+      {
+        id: '10',
+        title: 'المنطق',
+        text: 'p: المستطيل شكل رباعي قيمة الصواب: T\n\\sim p: المستطيل ليس شكلاً رباعياً قيمة الصواب: F',
+      },
+    ];
+    type Persisted = {
+      scenes: Array<{ content: { canvas: { elements: Array<Record<string, unknown>> } } }>;
+    };
+    const elementsOf = (persisted: unknown) =>
+      (persisted as Persisted).scenes[0]!.content.canvas.elements;
+    mocks.generateSceneContent.mockImplementation(async () => ({ elements: slideElements() }));
+
+    const math = elementsOf(
+      await generate({
+        input: { pdfContent: { text: 'pdf', images: [] }, sourceUnits, subjectCode: 'MATH' },
+      }),
+    );
+    expect(math[0]!.latex).toBe('{\\sim} p \\to {\\sim} q');
+    expect(String(math[0]!.html)).not.toContain('¬');
+    expect(
+      (math[1]!.data as Array<Array<{ text: string }>>).map((r) => r.map((c) => c.text)),
+    ).toEqual([
+      ['p', '∼p'],
+      ['T', 'F'],
+      ['T', 'F'],
+    ]);
+
+    // Another subject keeps the slide as generated.
+    const physics = elementsOf(
+      await generate({
+        input: { pdfContent: { text: 'pdf', images: [] }, sourceUnits, subjectCode: 'PHYSICS' },
+      }),
+    );
+    expect(physics[0]!.latex).toBe('\\neg p \\to \\neg q');
+  });
+
   it('a selected-image materialization failure fails the run (no AI substitution)', async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
