@@ -292,6 +292,10 @@ export type TeachingPackageErrorCode =
   | 'BANK_QUIZ_NOT_REGENERABLE'
   /** W6: Kafuo could not be reached (or could not grade) for a bank quiz; retryable. */
   | 'BANK_QUIZ_UNAVAILABLE'
+  // Kafuo Agent API D2a: this process holds too many page images; retry later.
+  | 'AGENT_REVIEW_BUSY'
+  // Kafuo Agent API D2a: the request body is over the agent review cap.
+  | 'AGENT_REVIEW_BODY_TOO_LARGE'
   /** W6: Kafuo refused a bank quiz read or grade (a definitive 4xx). */
   | 'BANK_QUIZ_REFUSED'
   /** The slide plans a textbook visual, but none of its selected ids resolves in the manifest. */
@@ -536,6 +540,8 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SCENE_TYPE_NOT_REGENERABLE: 422,
   BANK_QUIZ_NOT_REGENERABLE: 422,
   BANK_QUIZ_UNAVAILABLE: 503,
+  AGENT_REVIEW_BUSY: 503,
+  AGENT_REVIEW_BODY_TOO_LARGE: 413,
   BANK_QUIZ_REFUSED: 502,
   SOURCE_VISUAL_UNRESOLVED: 422,
   SCENE_CONTENT_GENERATION_FAILED: 502,

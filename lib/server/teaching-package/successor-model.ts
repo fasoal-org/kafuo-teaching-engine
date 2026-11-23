@@ -73,7 +73,7 @@ export async function readProducingAttemptTeachingModel(
  * The attempt that produced the version's Stage lineage (`current_attempt_id`,
  * else the predecessor walk), and whether it is the version's OWN attempt.
  */
-async function readProducingAttemptId(
+export async function readProducingAttemptId(
   tx: Queryable,
   versionId: string,
 ): Promise<{ attemptId: string; own: boolean } | null> {

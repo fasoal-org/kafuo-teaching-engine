@@ -127,9 +127,11 @@ const WEBHOOK_EVENT_TYPES = [
   // scene was recorded with failed narration audio. Ids only.
   'teaching_package.scene_changed',
   'teaching_package.narration_audio_failed',
+  // Kafuo Agent API D2a: an on-demand agent book review ended. Ids and status only.
+  'teaching_package.agent_review_completed',
 ] as const;
 /** The newest event type: the delivery-table evolution is guarded on it. */
-const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_package.narration_audio_failed';
+const NEWEST_WEBHOOK_EVENT_TYPE = 'teaching_package.agent_review_completed';
 const WEBHOOK_EVENT_TYPES_SQL = WEBHOOK_EVENT_TYPES.map((type) => `'${type}'`).join(',\n    ');
 
 /** Tables only — created before the evolution block runs. */
@@ -767,6 +769,53 @@ CREATE UNIQUE INDEX IF NOT EXISTS tqr_tenant_request_unique
   ON teaching_question_reviews (tenant_id, request_id);
 CREATE INDEX IF NOT EXISTS tqr_open_idx
   ON teaching_question_reviews (status, lease_until)
+  WHERE status IN ('queued','running');
+
+-- Kafuo Agent API D2a: one on-demand "agent book review" of a package version,
+-- asked for by the Backend's evaluation (202), run by its own sweep (cap 1)
+-- under a lease, answered by 'teaching_package.agent_review_completed'. No fix
+-- loop, no review_completed, no gate effect. 'evidence' holds the page text,
+-- blocks and constants; the page images are never stored (process memory only).
+CREATE TABLE IF NOT EXISTS teaching_package_agent_reviews (
+  id TEXT PRIMARY KEY,
+  ${TENANT_CHECK},
+  learning_item_type TEXT NOT NULL CHECK (learning_item_type IN ('lesson','section')),
+  learning_item_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  stage_id TEXT NOT NULL,
+  subject_code TEXT,
+  request_id TEXT NOT NULL,
+  evaluation_id TEXT,
+  run_id TEXT,
+  evidence JSONB NOT NULL,
+  has_images BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','partial','failed')),
+  provider TEXT CHECK (provider IN ('anthropic','openai')),
+  model TEXT,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  groups JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_code TEXT,
+  input_tokens BIGINT,
+  output_tokens BIGINT,
+  cost_usd NUMERIC(14,8),
+  -- Every paid model attempt of the review (failed ones and fallbacks included):
+  -- the spend above is their ledger sum, so the Backend can bill each one.
+  attempt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  run_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  started_at DOUBLE PRECISION,
+  completed_at DOUBLE PRECISION,
+  updated_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tpar_tenant_request_unique
+  ON teaching_package_agent_reviews (tenant_id, request_id);
+CREATE INDEX IF NOT EXISTS tpar_version_idx
+  ON teaching_package_agent_reviews (tenant_id, version_id, created_at);
+CREATE INDEX IF NOT EXISTS tpar_open_idx
+  ON teaching_package_agent_reviews (status, lease_until)
   WHERE status IN ('queued','running');
 `;
 
