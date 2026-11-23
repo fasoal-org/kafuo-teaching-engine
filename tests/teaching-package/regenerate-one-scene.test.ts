@@ -280,7 +280,7 @@ describe('regenerateOneScene — AT-G', () => {
       rotate: 0,
       colWidths: [0.5, 0.5],
       cellMinHeight: 40,
-      data: [row('p', 'q'), row(...body)],
+      data: [row('p', '∼p'), row(...body)],
       outline: { width: 1, style: 'solid', color: '#333333' },
     });
     const latexOf = (id: string, latex: string) => ({
@@ -312,7 +312,7 @@ describe('regenerateOneScene — AT-G', () => {
       Record<string, unknown>
     >;
     const latex = elements.find((element) => element.type === 'latex')!;
-    expect(latex.latex).toBe('\\sim p \\to \\sim q');
+    expect(latex.latex).toBe('{\\sim} p \\to {\\sim} q');
     expect(String(latex.html)).not.toContain('¬');
     const table = elements.find((element) => element.type === 'table') as {
       data: Array<Array<{ text: string }>>;

@@ -11,7 +11,7 @@ import {
 } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
-  isLatinSymbolHeaderTable,
+  isTruthTableHeader,
   type PPTTableElement,
   type TableCell,
   type TableCellBorder,
@@ -121,7 +121,7 @@ export const RendererTableEditor = forwardRef<
     return `${outline.width ?? 1}px ${outline.style === 'dashed' ? 'dashed' : 'solid'} ${outline.color ?? '#000'}`;
   }, [element.outline]);
   // Same rule as the renderer's StaticTable: a Latin/symbol header reads left to right.
-  const latinHeader = useMemo(() => isLatinSymbolHeaderTable(element.data), [element.data]);
+  const latinHeader = useMemo(() => isTruthTableHeader(element.data), [element.data]);
 
   const commitActiveCell = useCallback(() => {
     activeCellControllerRef.current?.flush();
@@ -272,6 +272,7 @@ export const RendererTableEditor = forwardRef<
                     else cellRefs.current.delete(cell.id);
                   }}
                   data-table-cell-id={cell.id}
+                  dir={latinHeader ? 'auto' : undefined}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{

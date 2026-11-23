@@ -1,11 +1,7 @@
 'use client';
 
 import { useMemo, type CSSProperties } from 'react';
-import {
-  isLatinSymbolHeaderTable,
-  type PPTTableElement,
-  type TableCellBorder,
-} from '@openmaic/dsl';
+import { isTruthTableHeader, type PPTTableElement, type TableCellBorder } from '@openmaic/dsl';
 import { getTableSubThemeColor } from '../../utils/element';
 import { getTextStyle } from './tableUtils';
 
@@ -37,7 +33,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
 
   // A Latin/symbol header (a truth table: p | q | p ∧ q) reads left to right on
   // any page, as the textbook prints it; any other table keeps the page direction.
-  const latinHeader = useMemo(() => isLatinSymbolHeaderTable(data), [data]);
+  const latinHeader = useMemo(() => isTruthTableHeader(data), [data]);
 
   const getCellBg = (
     rowIdx: number,
@@ -120,6 +116,7 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
               return (
                 <td
                   key={`${rowIdx}:${colIdx}:${cell.id}`}
+                  dir={latinHeader ? 'auto' : undefined}
                   colSpan={cell.colspan > 1 ? cell.colspan : undefined}
                   rowSpan={cell.rowspan > 1 ? cell.rowspan : undefined}
                   style={{

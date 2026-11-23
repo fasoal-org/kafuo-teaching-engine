@@ -91,7 +91,7 @@ describe('normalizeSceneLogicNotation', () => {
     };
     const scene = slide(latex);
     expect(normalizeSceneLogicNotation(scene, BOTH)).toBe(1);
-    expect(latex.latex).toBe('\\sim p \\to \\sim q');
+    expect(latex.latex).toBe('{\\sim} p \\to {\\sim} q');
     expect(latex.html).toContain('katex');
     expect(latex.html).toContain('∼');
     expect(latex.html).not.toContain('¬');
@@ -101,7 +101,7 @@ describe('normalizeSceneLogicNotation', () => {
     const latex = { id: 'f2', type: 'latex', latex: '\\lnot(p \\wedge q) \\leftrightarrow ¬p' };
     const spacing = { id: 'f3', type: 'latex', latex: 'a\\negthinspace b' };
     normalizeSceneLogicNotation(slide(latex, spacing), BOTH);
-    expect(latex.latex).toBe('\\sim(p \\wedge q) \\leftrightarrow \\sim p');
+    expect(latex.latex).toBe('{\\sim}(p \\wedge q) \\leftrightarrow {\\sim}p');
     expect(spacing.latex).toBe('a\\negthinspace b');
   });
 
@@ -138,7 +138,7 @@ describe('normalizeSceneLogicNotation', () => {
   });
 
   it('keeps cell markup around the converted value', () => {
-    const table = truthTable(['p', 'q'], ['<p><strong>ص</strong></p>', '&nbsp;خ&nbsp;']);
+    const table = truthTable(['p', '∼p'], ['<p><strong>ص</strong></p>', '&nbsp;خ&nbsp;']);
     normalizeSceneLogicNotation(slide(table), BOTH);
     expect(cellTexts(table)[1]).toEqual(['<p><strong>T</strong></p>', 'F']);
   });
@@ -146,7 +146,7 @@ describe('normalizeSceneLogicNotation', () => {
   it('never touches prose, an Arabic-header table or a sentence cell', () => {
     const prose = { id: 't2', type: 'text', content: '<p>صواب</p>' };
     const arabic = truthTable(['العبارة', 'قيمة الصواب'], ['المستطيل شكل رباعي', 'صواب']);
-    const sentence = truthTable(['p', 'q'], ['صواب دائمًا', 'خطأ']);
+    const sentence = truthTable(['p', '∼p'], ['صواب دائمًا', 'خطأ']);
     normalizeSceneLogicNotation(slide(prose, arabic, sentence), BOTH);
     expect(prose.content).toBe('<p>صواب</p>');
     expect(cellTexts(arabic)[1]).toEqual(['المستطيل شكل رباعي', 'صواب']);
@@ -155,7 +155,7 @@ describe('normalizeSceneLogicNotation', () => {
 
   it('changes nothing the book does not show', () => {
     const latex = { id: 'f4', type: 'latex', latex: '\\neg p' };
-    const table = truthTable(['p', 'q'], ['ص', 'خ']);
+    const table = truthTable(['p', '∼p'], ['ص', 'خ']);
     const none = { tildeNegation: false, latinTruthValues: false };
     expect(normalizeSceneLogicNotation(slide(latex, table), none)).toBe(0);
     expect(latex.latex).toBe('\\neg p');
@@ -181,7 +181,7 @@ describe('packageLogicNotation (regeneration)', () => {
   it("reads the notation the package's normalised slides already use", () => {
     const normalised = slide(
       { id: 'f', type: 'latex', latex: '\\sim p \\rightarrow \\sim q' },
-      truthTable(['p', 'q'], ['T', 'F'], ['F', 'T']),
+      truthTable(['p', '∼p'], ['T', 'F'], ['F', 'T']),
     );
     expect(packageLogicNotation([normalised])).toEqual(BOTH);
   });
@@ -190,7 +190,7 @@ describe('packageLogicNotation (regeneration)', () => {
     const mixed = slide(
       { id: 'a', type: 'latex', latex: '\\sim p' },
       { id: 'b', type: 'latex', latex: '\\neg q' },
-      truthTable(['p', 'q'], ['ص', 'خ']),
+      truthTable(['p', '∼p'], ['ص', 'خ']),
     );
     expect(packageLogicNotation([mixed])).toEqual({
       tildeNegation: false,

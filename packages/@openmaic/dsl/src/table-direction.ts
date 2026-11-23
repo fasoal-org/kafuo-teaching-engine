@@ -106,3 +106,23 @@ export function isLatinSymbolHeaderTable(data: unknown): boolean {
   }
   return latin > 0 && empty <= covered;
 }
+
+/** A logic connective: negation, and, or, implication, equivalence. */
+const LOGIC_CONNECTIVE = /[∼~¬∧∨→↔⇒⇔]/u;
+
+/**
+ * Whether a table is a logic truth table: a Latin/symbol header
+ * (`isLatinSymbolHeaderTable`) with a logic connective in at least one header cell
+ * (`p | q | ∼p ∨ q`). This is the table the renderers draw left to right; a
+ * physics or data table (`t (s) | v (m/s)`, `2020 | 2021`) keeps the page direction.
+ */
+export function isTruthTableHeader(data: unknown): boolean {
+  if (!isLatinSymbolHeaderTable(data)) return false;
+  const header = (data as unknown[])[0] as unknown[];
+  return header.some(
+    (cell) =>
+      !!cell &&
+      typeof cell === 'object' &&
+      LOGIC_CONNECTIVE.test(tableCellPlainText((cell as { text?: unknown }).text)),
+  );
+}

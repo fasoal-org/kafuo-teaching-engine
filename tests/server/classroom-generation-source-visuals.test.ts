@@ -370,7 +370,7 @@ describe('generateClassroom source visuals', () => {
       texts.map((text, i) => ({ id: `c${i}-${text}`, colspan: 1, rowspan: 1, text }));
     const slideElements = () => [
       { id: 'f1', type: 'latex', latex: '\\neg p \\to \\neg q', html: '<span>¬p→¬q</span>' },
-      { id: 't1', type: 'table', data: [row('p', 'q'), row('صواب', 'خطأ'), row('ص', 'خ')] },
+      { id: 't1', type: 'table', data: [row('p', '∼p'), row('صواب', 'خطأ'), row('ص', 'خ')] },
     ];
     const sourceUnits = [
       {
@@ -391,12 +391,12 @@ describe('generateClassroom source visuals', () => {
         input: { pdfContent: { text: 'pdf', images: [] }, sourceUnits, subjectCode: 'MATH' },
       }),
     );
-    expect(math[0]!.latex).toBe('\\sim p \\to \\sim q');
+    expect(math[0]!.latex).toBe('{\\sim} p \\to {\\sim} q');
     expect(String(math[0]!.html)).not.toContain('¬');
     expect(
       (math[1]!.data as Array<Array<{ text: string }>>).map((r) => r.map((c) => c.text)),
     ).toEqual([
-      ['p', 'q'],
+      ['p', '∼p'],
       ['T', 'F'],
       ['T', 'F'],
     ]);

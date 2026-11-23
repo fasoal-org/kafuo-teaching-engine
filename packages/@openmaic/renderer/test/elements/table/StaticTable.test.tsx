@@ -65,6 +65,14 @@ describe('StaticTable', () => {
     );
 
     expect((container.querySelector('table') as HTMLElement).style.direction).toBe('ltr');
+    // Each cell takes its own text's direction, so an Arabic cell still reads RTL.
+    expect(container.querySelector('td')?.getAttribute('dir')).toBe('auto');
+  });
+
+  it('keeps the page direction for a physics header without a logic connective', () => {
+    const physics = render(<StaticTable elementInfo={withHeader('t (s)', 'v (m/s)')} />);
+    expect((physics.container.querySelector('table') as HTMLElement).style.direction).toBe('');
+    expect(physics.container.querySelector('td')?.getAttribute('dir')).toBeNull();
   });
 
   it('keeps the page direction for an Arabic or mixed header', () => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isLatinSymbolHeaderTable, isLatinSymbolText, tableCellPlainText } from '../src/index.js';
+import {
+  isLatinSymbolHeaderTable,
+  isLatinSymbolText,
+  isTruthTableHeader,
+  tableCellPlainText,
+} from '../src/index.js';
 
 const cell = (text: string, extra: Record<string, unknown> = {}) => ({
   id: text || 'empty',
@@ -72,6 +77,21 @@ describe('isLatinSymbolHeaderTable', () => {
     expect(
       isLatinSymbolHeaderTable(table([cell('p', { colspan: 2 }), cell('', { colspan: 0 })])),
     ).toBe(true);
+  });
+});
+
+describe('isTruthTableHeader', () => {
+  it('is true only when a Latin/symbol header has a logic connective', () => {
+    expect(isTruthTableHeader(table([cell('p'), cell('q'), cell('∼p → ∼q')]))).toBe(true);
+    expect(isTruthTableHeader(table([cell('p'), cell('~p')]))).toBe(true);
+    expect(isTruthTableHeader(table([cell('p'), cell('q'), cell('p ∧ q')]))).toBe(true);
+    // A physics, data or function table keeps the page direction.
+    expect(isTruthTableHeader(table([cell('t (s)'), cell('v (m/s)')]))).toBe(false);
+    expect(isTruthTableHeader(table([cell('2020'), cell('2021')]))).toBe(false);
+    expect(isTruthTableHeader(table([cell('x'), cell('y = x + 2')]))).toBe(false);
+    expect(isTruthTableHeader(table([cell('p'), cell('q')]))).toBe(false);
+    expect(isTruthTableHeader(table([cell('p'), cell('p و q')]))).toBe(false);
+    expect(isTruthTableHeader(undefined)).toBe(false);
   });
 });
 

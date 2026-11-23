@@ -13,12 +13,12 @@
  * 1. The book negates with `\sim` / ∼ / ~ and never with `\neg` / ¬ → `\neg` (and
  *    `\lnot`) become `\sim` in LaTeX elements (their KaTeX snapshot is re-rendered),
  *    and ¬ becomes ∼ in text, shape text and table cells.
- * 2. The book prints Latin truth values → in a TABLE whose header row is Latin/symbol
- *    text (`isLatinSymbolHeaderTable`, the renderers' left-to-right rule), a body cell
+ * 2. The book prints Latin truth values → in a truth TABLE (`isTruthTableHeader`, the
+ *    renderers' left-to-right rule: a Latin/symbol header with a connective), a body cell
  *    that is only «ص»/«صواب»/«صائب» becomes `T` and «خ»/«خطأ»/«خاطئ» becomes `F`. Prose
  *    text is never touched by this rule.
  */
-import { isLatinSymbolHeaderTable, tableCellPlainText } from '@openmaic/dsl';
+import { isTruthTableHeader, tableCellPlainText } from '@openmaic/dsl';
 import { renderLatexElementHtml } from '@/lib/edit/slide-edit-elements';
 
 /** What the lesson's textbook source shows about its logic notation. */
@@ -44,7 +44,7 @@ const HAS_NOT_NEGATION = /\\(?:neg|lnot)(?![A-Za-z])|¬|&not;|&#172;|&#x0*ac;/i;
  * `\simeq`, the similarity sign between named figures (`△ABC \sim △DEF`, `ABC ∼ DEF`),
  * or a LaTeX tie after a letter or digit (`5~cm`).
  */
-const TILDE_NEGATION = /(?:\\sim(?![A-Za-z])|∼|(?<![A-Za-z0-9\\])~)\s*(?:[a-z](?![A-Za-z])|\()/;
+const TILDE_NEGATION = /(?:\\sim(?![A-Za-z])\}?|∼|(?<![A-Za-z0-9\\])~)\s*(?:[a-z](?![A-Za-z])|\()/;
 const LATIN_T = /(?<![A-Za-z0-9_\\])T(?![A-Za-z0-9_])/;
 const LATIN_F = /(?<![A-Za-z0-9_\\])F(?![A-Za-z0-9_])/;
 /** «قيمة الصواب», «قيم الصواب», «جدول الصواب». */
@@ -82,8 +82,12 @@ export function detectBookLogicNotation(texts: readonly string[]): BookLogicNota
   };
 }
 
+/**
+ * KaTeX reads a bare `\sim` as a relation and spaces it like `=`; braced, `{\sim}p`
+ * sits tight against its statement like the book's ∼p and like `\neg` did.
+ */
 function tildeLatex(latex: string): string {
-  return latex.replace(NEG_COMMAND, '\\sim').replace(/¬\s*/g, '\\sim ');
+  return latex.replace(NEG_COMMAND, '{\\sim}').replace(/¬\s*/g, '{\\sim}');
 }
 
 function tildeText(html: string): string {
@@ -191,7 +195,7 @@ export function normalizeSceneLogicNotation(
         }
       }
     }
-    if (notation.latinTruthValues && isLatinSymbolHeaderTable(element.data)) {
+    if (notation.latinTruthValues && isTruthTableHeader(element.data)) {
       for (const cell of rows.slice(1).flat()) {
         if (typeof cell.text !== 'string') continue;
         const value = latinTruthValue(cell.text);
