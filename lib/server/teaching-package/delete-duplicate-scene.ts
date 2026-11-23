@@ -7,7 +7,9 @@
  *
  * - the package is editable (`draft` | `rejected`) and nothing generates on it;
  * - `keepSceneId` is another live scene of the same type (slide or a generated
- *   quiz; a question-bank quiz is never deleted here);
+ *   quiz; a question-bank quiz is never deleted here) and, for a slide, of the same
+ *   slide kind (`slideKind`: a transition is never a duplicate of a content slide,
+ *   `reason: 'slide_type_mismatch'`);
  * - it is a duplicate (`SCENE_NOT_DUPLICATE` otherwise): the deleted slide cites
  *   at least one lesson part, both slides are in the same teaching stage (their
  *   own `teachingStage`, else their outline entry's), and the kept slide cites
@@ -27,6 +29,7 @@
  * read's form (spec §5.5), never the raw scene. `dryRun` runs every check and
  * writes nothing.
  */
+import type { SlideType } from '@openmaic/dsl';
 import { DocumentVersionError } from '@openmaic/storage';
 import type { Queryable } from '@openmaic/storage/document/pg';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
@@ -73,7 +76,7 @@ import {
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import { TEACHING_PACKAGE_EDITABLE_STATUSES } from '@/lib/types/teaching-package';
 import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
-import type { AppScene } from '@/lib/types/stage';
+import { isSlideType, type AppScene } from '@/lib/types/stage';
 
 export interface DuplicateDeleteRequest {
   sceneId: string;
@@ -123,6 +126,24 @@ export function teachingStageKey(
   return typeof entry?.teachingStage?.key === 'string' ? entry.teachingStage.key : null;
 }
 
+/**
+ * The slide's kind (`cover` | `contents` | `transition` | `content` | `end`), resolved
+ * as the agent read's `slide_type` is: its canvas `type`, else its outline entry's
+ * `slideType`. A slide with neither (or an unknown value) is a `content` slide, as
+ * `teaches` in book coverage reads it, so two plain content slides still compare equal.
+ */
+export function slideKind(
+  scene: Pick<AppScene, 'content' | 'outlineId'>,
+  outline: AppDocumentOutline | null,
+): SlideType {
+  const canvasType = (scene.content as { canvas?: { type?: unknown } } | undefined)?.canvas?.type;
+  if (isSlideType(canvasType)) return canvasType;
+  const entry = outline?.outlines?.find((candidate) => candidate.id === scene.outlineId) as
+    | { slideType?: unknown }
+    | undefined;
+  return isSlideType(entry?.slideType) ? entry.slideType : 'content';
+}
+
 function coveredIds(coverage: readonly UnitCoverage[]): Set<string> {
   return new Set(coverage.filter((unit) => unit.covered).map((unit) => unit.id));
 }
@@ -158,6 +179,19 @@ export function planDuplicateDelete(input: DuplicateDeletePlanInput): DuplicateD
       sceneType: scene.type,
       keepType: keep.type,
     });
+  }
+  if (scene.type === 'slide') {
+    // Same type means the same slide kind too: a transition is never a duplicate of
+    // a content slide, even when both cite the same part (owner rule, 23 Nov 2026).
+    const kind = slideKind(scene, outline);
+    const keepKind = slideKind(keep, outline);
+    if (kind !== keepKind) {
+      throw refuse('SCENE_NOT_DUPLICATE', 'the kept slide is not the same kind of slide', {
+        reason: 'slide_type_mismatch',
+        slideType: kind,
+        keepSlideType: keepKind,
+      });
+    }
   }
   const record = (outline ?? undefined) as Parameters<typeof citedContentUnitIds>[1];
   const cited = citedContentUnitIds(scene, record);

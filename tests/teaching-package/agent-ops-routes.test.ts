@@ -968,6 +968,62 @@ describe('planDuplicateDelete', () => {
     );
   });
 
+  it('refuses a transition slide as a duplicate of a content slide (same kind only)', () => {
+    // Both cite u1 in the same stage: only the slide kind tells them apart.
+    const ownCanvas = [
+      slide('s1', 0, ['u1'], {
+        content: { type: 'slide', canvas: { type: 'content', elements: [] } },
+      }),
+      slide('t1', 1, ['u1'], {
+        content: { type: 'slide', canvas: { type: 'transition', elements: [] } },
+      }),
+    ];
+    expect(() =>
+      planDuplicateDelete({
+        sceneId: 't1',
+        keepSceneId: 's1',
+        scenes: ownCanvas,
+        outline: null,
+        units,
+        flow: null,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'SCENE_NOT_DUPLICATE',
+        details: {
+          reason: 'slide_type_mismatch',
+          slideType: 'transition',
+          keepSlideType: 'content',
+        },
+      }),
+    );
+    // The kind from the outline entry when the canvas carries none.
+    const viaOutline = [
+      slide('s1', 0, ['u1'], { outlineId: 'o1' }),
+      slide('t1', 1, ['u1'], { outlineId: 'o2' }),
+    ];
+    const outline = {
+      outlines: [
+        { id: 'o1', slideType: 'content' },
+        { id: 'o2', slideType: 'transition' },
+      ],
+    } as never;
+    expect(() =>
+      planDuplicateDelete({
+        sceneId: 't1',
+        keepSceneId: 's1',
+        scenes: viaOutline,
+        outline,
+        units,
+        flow: null,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        details: expect.objectContaining({ reason: 'slide_type_mismatch' }),
+      }),
+    );
+  });
+
   it('allows a true duplicate', () => {
     const scenes = [slide('s1', 0, ['u1', 'u2']), slide('s2', 1, ['u1'])];
     expect(

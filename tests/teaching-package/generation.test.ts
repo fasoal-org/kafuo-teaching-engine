@@ -634,6 +634,23 @@ describe('teaching package generation', () => {
       expect(versionAfter.status).toBe('draft');
       expect(versionAfter.currentStageId).toBe(secondAfter.stageId);
 
+      // The succeeded webhook names the version as the relink left it: the new Stage,
+      // `draft`, this attempt -- never the Stage it just retired.
+      const delivered = await pool.query(
+        `SELECT payload FROM teaching_package_webhook_deliveries
+          WHERE event_type = 'teaching_package.generation_succeeded' ORDER BY sequence`,
+      );
+      const event = (delivered.rows.at(-1) as { payload: Record<string, unknown> }).payload as {
+        data?: Record<string, unknown>;
+      };
+      const sentVersion = ((event.data ?? event) as { version: Record<string, unknown> }).version;
+      expect(sentVersion).toMatchObject({
+        id: versionBefore.id,
+        status: 'draft',
+        currentStageId: secondAfter.stageId,
+        currentAttemptId: second.attempt.id,
+      });
+
       // The rejected → draft transition is recorded on the replacement event
       // itself, so the audit trail carries it without a new event type.
       const events = await listReviewEvents(qp(), versionBefore.id);
