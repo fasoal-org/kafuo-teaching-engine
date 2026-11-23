@@ -27,6 +27,7 @@ export * from './guards.js';
 export * from './stage.js';
 export * from './slide-semantics.js';
 export * from './language.js';
+export * from './table-direction.js';
 export * from './interactive.js';
 export * from './pbl.js';
 export * from './action.js';

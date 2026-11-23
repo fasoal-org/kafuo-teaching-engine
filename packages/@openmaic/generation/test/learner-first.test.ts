@@ -138,6 +138,15 @@ describe('g5.v10 learner-first prompts', () => {
     expect(slide).toContain('names every answer its item accepts');
     expect(slide).toContain('quotes a whole sentence of the book');
     expect(slide).toContain('a check item («تحقق من فهمك») keeps its own label');
+    // Owner, 23 Nov 2026 (lessons 1-2 / 1-3): the book's logic notation and real tables.
+    expect(slide).toContain('truth values as T and F and negation with a tilde');
+    expect(slide).toContain('`\\sim p`');
+    expect(slide).toContain('never «ص/خ», «صواب/خطأ», ¬ or `\\neg`');
+    expect(slide).toContain('ONE table element with one cell per value');
+    expect(slide).toContain(
+      'plain text with the symbols themselves (∼p, p ∧ q, p → q), never LaTeX',
+    );
+    expect(structural).not.toContain('truth table');
     // Follow-up (item 208 slide 28 labelled Q11 «تمرين 1»): no local numbering.
     expect(slide).toContain('never restart at «تمرين ١» on a new slide');
     expect(slide).not.toContain('number it locally');

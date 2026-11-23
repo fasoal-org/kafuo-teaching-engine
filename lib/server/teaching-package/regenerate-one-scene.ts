@@ -89,6 +89,11 @@ import {
   packageDigitStyle,
 } from '@/lib/server/teaching-package/learner-first-source';
 import {
+  isMathSubject,
+  normalizeSceneLogicNotation,
+  packageLogicNotation,
+} from '@/lib/server/teaching-package/math-logic-notation';
+import {
   pinnedQuotesIn,
   readSacredQuotePins,
   sacredPolicyModeFor,
@@ -647,6 +652,7 @@ export async function regenerateOneScene(
         : {}),
   } as AppScene;
   candidate = learnerFirstNormalized(input, candidate);
+  candidate = logicNotationNormalized(input, candidate);
   // Lesson 2-5 (17 Nov 2026, g5.v11): an exercise solution slide's title names exactly
   // the exercises its new canvas solves (scene 35: «حل التمارين ٤–٦» over ex 20 alone).
   if (isGuideAnswerModel(input.teachingModel) && candidate.content.type === 'slide') {
@@ -682,6 +688,20 @@ function learnerFirstNormalized(input: RegenerateOneSceneInput, candidate: AppSc
   normalizeSceneDigits(copy as never, style);
   normalizeQuizPoints(copy as never);
   return copy;
+}
+
+/**
+ * Owner, 23 Nov 2026 (lessons 1-2 / 1-3): a regenerated MATH slide keeps the logic
+ * notation the package's other slides use (`\sim` / ∼, T / F), which the run took from
+ * the book. A copy, only when something changes; the pre-image is never touched.
+ */
+function logicNotationNormalized(input: RegenerateOneSceneInput, candidate: AppScene): AppScene {
+  if (!isMathSubject(input.stage.subjectCode)) return candidate;
+  const others = input.scenes.filter((scene) => scene.id !== input.scene.id);
+  const notation = packageLogicNotation(others as never);
+  if (!notation.tildeNegation && !notation.latinTruthValues) return candidate;
+  const copy = structuredClone(candidate);
+  return normalizeSceneLogicNotation(copy as never, notation) > 0 ? copy : candidate;
 }
 
 /** Step 6 of a slide regeneration: invariants, Actions, the write boundary. */

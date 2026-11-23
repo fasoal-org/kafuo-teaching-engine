@@ -108,6 +108,11 @@ export function learnerFirstSlideRules(): string {
     "10. A solution names every answer its item accepts («أي عدد سالب أو الصفر»), so the learner's own correct try is never contradicted.",
     '11. A definition box quotes a whole sentence of the book, from its start, never half of one.',
     '12. Only a textbook exercise («تمارين») is labelled «تمرين»; a check item («تحقق من فهمك») keeps its own label, for example «تحقق ٣».',
+    // Owner, 23 Nov 2026 (teacher feedback, lessons 1-2 / 1-3): the slides wrote «ص/خ»,
+    // «صواب/خطأ» and `\neg` where the book prints T/F and `\sim`, and drew a truth table
+    // as shapes with one text line per row.
+    "13. Write the textbook source's symbols exactly as it prints them. When it writes truth values as T and F and negation with a tilde (∼p; in LaTeX `\\sim p`), use exactly those — never «ص/خ», «صواب/خطأ», ¬ or `\\neg`.",
+    "14. A truth table is ONE table element with one cell per value and its columns in the book's order (p, q, then the compound statement) — never shapes or one text line per row. Its cells are plain text with the symbols themselves (∼p, p ∧ q, p → q), never LaTeX.",
   ].join('\n');
 }
 

@@ -131,6 +131,11 @@ import {
   normalizeSceneDigits,
 } from '@/lib/server/teaching-package/learner-first-source';
 import {
+  detectBookLogicNotation,
+  isMathSubject,
+  normalizeSceneLogicNotation,
+} from '@/lib/server/teaching-package/math-logic-notation';
+import {
   executeTeachingCall,
   TeachingModelUnavailableError,
   type TeachingCallContext,
@@ -3442,6 +3447,18 @@ export async function generateClassroom(
         // Quality plan W5: one point per choice question, two per short answer.
         normalizeQuizPoints(scene as never);
       }
+    }
+
+    // Owner, 23 Nov 2026 (lessons 1-2 / 1-3): a MATH lesson's slides keep the book's
+    // logic notation — negation `\sim` / ∼ and truth values T / F — on every Teaching
+    // Model, beside the digit style and from the same source text.
+    if (isMathSubject(input.subjectCode) && input.sourceUnits?.length) {
+      const notation = detectBookLogicNotation(input.sourceUnits.map((unit) => unit.text));
+      let changed = 0;
+      for (const scene of freshScenes) {
+        changed += normalizeSceneLogicNotation(scene as never, notation);
+      }
+      if (changed > 0) log.warn(`Kept the book's logic notation in ${changed} slide value(s)`);
     }
 
     // Q-7 / Q-11 (owner decision): narration and characters never speak a Quran
