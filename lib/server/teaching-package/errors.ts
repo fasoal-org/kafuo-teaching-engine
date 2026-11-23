@@ -414,6 +414,11 @@ export type TeachingPackageErrorCode =
   | 'CORRECTION_SOURCE_DRIFT'
   /** An administrator abandoned the paused attempt (terminal, retryable by a new attempt). */
   | 'ADMIN_CORRECTION_ABANDONED'
+  /**
+   * Kafuo Agent API E2: the agent's correction routes refuse an operation the agent is
+   * never offered (`review_plan`, `revert_fix`) or an actor that is not `agent:<id>`.
+   */
+  | 'AGENT_ACTION_NOT_ALLOWED'
   // --- Kafuo Release 1 game deferral (kafuo-game-deferral.ts) ---
   /**
    * A Kafuo request, outline or Scene would generate a learning game, which
@@ -427,7 +432,16 @@ export type TeachingPackageErrorCode =
   /** The version's AI review (or a flagged-slide regeneration) is still queued or running. */
   | 'PACKAGE_REVIEW_IN_PROGRESS'
   /** No open finding sits on a slide a regeneration may fix (only teacher-only issues remain). */
-  | 'NO_REGENERABLE_SLIDES';
+  | 'NO_REGENERABLE_SLIDES'
+  // --- Kafuo Agent API E3: delete a duplicate slide (delete-duplicate-scene.ts) ---
+  /** The slide is not a duplicate of the kept one (type, bank quiz, or a part only it teaches). */
+  | 'SCENE_NOT_DUPLICATE'
+  /** Deleting the slide would leave a covered lesson part with no slide. */
+  | 'PART_WOULD_BE_UNTAUGHT'
+  /** D-6: a real part link needs a successful dry run by the same key first (30 min). */
+  | 'LINK_DRY_RUN_REQUIRED'
+  /** An agent op of this idempotency key is still running (narration audio synthesis). */
+  | 'AGENT_OP_IN_PROGRESS';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_NOT_AWAITING: 409,
@@ -435,10 +449,15 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_REQUEST_MISMATCH: 409,
   CORRECTION_SOURCE_DRIFT: 409,
   ADMIN_CORRECTION_ABANDONED: 409,
+  AGENT_ACTION_NOT_ALLOWED: 422,
   GAME_GENERATION_DEFERRED: 422,
   PACKAGE_REVIEW_NOT_READY: 409,
   PACKAGE_REVIEW_IN_PROGRESS: 409,
   NO_REGENERABLE_SLIDES: 409,
+  SCENE_NOT_DUPLICATE: 422,
+  PART_WOULD_BE_UNTAUGHT: 422,
+  LINK_DRY_RUN_REQUIRED: 409,
+  AGENT_OP_IN_PROGRESS: 409,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,

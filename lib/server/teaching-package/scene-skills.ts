@@ -145,6 +145,8 @@ export async function setSceneTeachingSkills(
   /** `actorRef`: who the `scene_changed` webhook names (absent → the editor's actor). */
   scope: { tenantId: string; actorRef?: string },
   assignments: ValidatedSkillAssignment[],
+  /** Kafuo Agent API E3: `dryRun` runs every check and writes nothing. Absent → as before. */
+  options: { dryRun?: boolean } = {},
 ): Promise<{ updatedSceneIds: string[] }> {
   if (assignments.length === 0) {
     throw new TeachingPackageError('INVALID_REQUEST', 'assignments must not be empty');
@@ -245,6 +247,11 @@ export async function setSceneTeachingSkills(
       throw new TeachingPackageError(error.code, error.message, base);
     }
     throw error;
+  }
+
+  // Kafuo Agent API E3: a dry run stops after every check, before the only write.
+  if (options.dryRun) {
+    return { updatedSceneIds: assignments.map((assignment) => assignment.sceneId) };
   }
 
   // Single putScene per scene — the ONLY write, and nothing precedes it that

@@ -114,6 +114,7 @@ describe('teaching package service auth', () => {
       CORRECTION_REQUEST_MISMATCH: 409,
       CORRECTION_SOURCE_DRIFT: 409,
       ADMIN_CORRECTION_ABANDONED: 409,
+      AGENT_ACTION_NOT_ALLOWED: 422,
       GAME_GENERATION_DEFERRED: 422,
       NOT_FOUND: 404,
       INVALID_REQUEST: 400,
@@ -271,6 +272,11 @@ describe('teaching package service auth', () => {
       PACKAGE_REVIEW_NOT_READY: 409,
       PACKAGE_REVIEW_IN_PROGRESS: 409,
       NO_REGENERABLE_SLIDES: 409,
+      // Kafuo Agent API E3: delete a duplicate slide (delete-duplicate-scene.ts).
+      SCENE_NOT_DUPLICATE: 422,
+      PART_WOULD_BE_UNTAUGHT: 422,
+      LINK_DRY_RUN_REQUIRED: 409,
+      AGENT_OP_IN_PROGRESS: 409,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

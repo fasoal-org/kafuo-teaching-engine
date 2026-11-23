@@ -817,6 +817,27 @@ CREATE INDEX IF NOT EXISTS tpar_version_idx
 CREATE INDEX IF NOT EXISTS tpar_open_idx
   ON teaching_package_agent_reviews (status, lease_until)
   WHERE status IN ('queued','running');
+
+-- Kafuo Agent API E3: one keyed record per agent editor op that has no run row of its
+-- own (lib/server/teaching-package/agent-op-records.ts). 'delete' is written in the
+-- delete's own transaction (with the deleted slide, as the agent read projects it), so a
+-- retry after an unknown outcome answers "done" with the backup; 'narration-audio' holds
+-- a leased 'running' marker while the voice is synthesized, then 'done'; 'link-dry-run'
+-- is D-6's "dry run first" proof for a real part link. Additive; drop to remove.
+CREATE TABLE IF NOT EXISTS teaching_package_agent_ops (
+  ${TENANT_CHECK},
+  version_id TEXT NOT NULL REFERENCES teaching_package_versions(id) ON DELETE RESTRICT,
+  idempotency_key TEXT NOT NULL,
+  op TEXT NOT NULL CHECK (op IN ('delete','narration-audio','link-dry-run')),
+  scene_id TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running','done')),
+  result JSONB,
+  lease_until DOUBLE PRECISION,
+  created_at DOUBLE PRECISION NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (version_id, op, idempotency_key)
+);
 `;
 
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}

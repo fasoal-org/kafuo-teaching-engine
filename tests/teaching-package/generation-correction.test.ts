@@ -898,6 +898,42 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
         ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
       });
 
+      it('Agent API E2: a dry-run «تراجع» shows the undo and leaves the plan review untouched', async () => {
+        const { attemptId } = await pausedWithMove();
+        const { getGenerationCorrection, editGenerationCorrection } = await correction();
+        const view = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        const fixId = view.autoFixes[0]!.id;
+        const checkpointBefore = (
+          await pool.query(
+            `SELECT * FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+            [attemptId],
+          )
+        ).rows[0];
+        const reviewBefore = await storedPlanReview(attemptId);
+
+        const dry = await editGenerationCorrection(txPool(), attemptId, {
+          tenantId: TENANT,
+          actorRef: 'kafuo:admin-1',
+          expectedRevision: view.revision,
+          operations: [{ op: 'revert_fix', fixId }],
+          dryRun: true,
+        });
+        expect(dry.revision).toBe(view.revision);
+        expect(dry.outlines.map((outline) => outline.id)).toEqual(['o-visual', 'o-intro']);
+        // Nothing stored: the checkpoint, the attempt's plan review and its fix are as they were.
+        const checkpointAfter = (
+          await pool.query(
+            `SELECT * FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+            [attemptId],
+          )
+        ).rows[0];
+        expect(checkpointAfter).toEqual(checkpointBefore);
+        expect(await storedPlanReview(attemptId)).toEqual(reviewBefore);
+        expect((await storedPlanReview(attemptId))?.fixes.map((fix) => fix.id)).toEqual([fixId]);
+        const reread = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+        expect(reread.autoFixes[0]!.reverted).toBe(false);
+      });
+
       it('undoes a removed slide and an added one through the edit', async () => {
         const { attemptId } = await pausedWithMove();
         const extra = { ...visualOutline({ id: 'o-extra', title: 'Extra' }), order: 2 };
@@ -2281,5 +2317,153 @@ describe('admin-correction pause / resume (real runner + real generateClassroom 
     );
     expect(eventCheck.rows[0]!.def).toContain('teaching_package.generation_awaiting_correction');
     await old.end();
+  });
+
+  // -------------------------------------------------------------------------
+  // (j) Kafuo Agent API E2: dry runs save nothing
+  // -------------------------------------------------------------------------
+
+  it('(j) a dry-run edit returns the view it would produce and saves nothing; a dry-run resume changes nothing', async () => {
+    answerWith([introOutline(), visualOutline({ contentRole: undefined })]);
+    const { attemptId, context } = await startAndRun({
+      flow: flowV4(),
+      teachingModel: { key: 'g5', version: 'g5.v4' },
+    });
+    const { getGenerationCorrection, editGenerationCorrection, resumeGenerationAttempt } =
+      await correction();
+    const checkpointRow = async () =>
+      (
+        await pool.query<Record<string, unknown>>(
+          `SELECT * FROM teaching_package_generation_checkpoints WHERE attempt_id = $1`,
+          [attemptId],
+        )
+      ).rows[0];
+    const attemptRow = async () =>
+      (
+        await pool.query<Record<string, unknown>>(
+          `SELECT * FROM teaching_package_generation_attempts WHERE id = $1`,
+          [attemptId],
+        )
+      ).rows[0];
+    const fix = [
+      {
+        op: 'set' as const,
+        outlineId: 'o-visual',
+        field: 'contentRole' as const,
+        value: 'explanation',
+      },
+    ];
+    const before = { checkpoint: await checkpointRow(), attempt: await attemptRow() };
+    const viewBefore = await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT });
+
+    const dry = await editGenerationCorrection(txPool(), attemptId, {
+      tenantId: TENANT,
+      actorRef: 'agent:5',
+      expectedRevision: 1,
+      operations: fix,
+      dryRun: true,
+    });
+    // The view the edit would produce, at the STORED revision.
+    expect(dry).toMatchObject({ revision: 1, blockingIssues: [], canResume: true });
+    expect(dry.editLog.at(-1)).toMatchObject({ event: 'edited', actorRef: 'agent:5', revision: 2 });
+    // Nothing saved: the checkpoint, the attempt and the read view are unchanged.
+    expect(await checkpointRow()).toEqual(before.checkpoint);
+    expect(await attemptRow()).toEqual(before.attempt);
+    expect(await getGenerationCorrection(qp(), attemptId, { tenantId: TENANT })).toEqual(
+      viewBefore,
+    );
+
+    // Every other agent op as a dry run: the would-be view, and the rows untouched.
+    const dryOf = (operations: Parameters<typeof editGenerationCorrection>[2]['operations']) =>
+      editGenerationCorrection(txPool(), attemptId, {
+        tenantId: TENANT,
+        actorRef: 'agent:5',
+        expectedRevision: 1,
+        operations,
+        dryRun: true,
+      });
+    const issueKey = viewBefore.blockingIssues[0]!.key;
+    const ignored = await dryOf([{ op: 'ignore_issue', issueKey }]);
+    expect(ignored).toMatchObject({ revision: 1, blockingIssues: [] });
+    expect(ignored.ignoredIssues.map((issue) => issue.key)).toEqual([issueKey]);
+    const removed = await dryOf([{ op: 'remove', outlineId: 'o-visual' }]);
+    expect(removed.revision).toBe(1);
+    expect(removed.outlines.map((outline) => outline.id)).not.toContain('o-visual');
+    const moved = await dryOf([{ op: 'move', outlineId: 'o-visual', toIndex: 0 }]);
+    expect(moved.revision).toBe(1);
+    expect(moved.outlines[0]!.id).toBe('o-visual');
+    // This attempt has no book map, so the engine refuses the insert, dry run or not.
+    expect(
+      (await errorOf(dryOf([{ op: 'insert_book_slide', outlineId: 'o-intro', unitId: 'cu-1' }])))
+        .code,
+    ).toBe('INVALID_REQUEST');
+    expect(await checkpointRow()).toEqual(before.checkpoint);
+    expect(await attemptRow()).toEqual(before.attempt);
+
+    // A dry run still refuses a stale revision and a plan review.
+    expect(
+      (
+        await errorOf(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'agent:5',
+            expectedRevision: 0,
+            operations: fix,
+            dryRun: true,
+          }),
+        )
+      ).code,
+    ).toBe('STALE_STATE');
+    expect(
+      (
+        await errorOf(
+          editGenerationCorrection(txPool(), attemptId, {
+            tenantId: TENANT,
+            actorRef: 'agent:5',
+            expectedRevision: 1,
+            operations: [{ op: 'review_plan' }],
+            dryRun: true,
+          }),
+        )
+      ).code,
+    ).toBe('INVALID_REQUEST');
+
+    const resume = (revision: number, dryRun: boolean) =>
+      resumeGenerationAttempt(txPool(), attemptId, {
+        tenantId: TENANT,
+        actorRef: 'agent:5',
+        expectedRevision: revision,
+        requestDigest: DIGEST,
+        learningItem: context.aggregate.learningItem,
+        dryRun,
+      });
+    // Open issues are refused by the dry run as by the real resume.
+    expect((await errorOf(resume(1, true))).code).toBe('CORRECTION_INCOMPLETE');
+
+    // The real edit, then a dry-run resume: ready, and nothing changes.
+    const edited = await editGenerationCorrection(txPool(), attemptId, {
+      tenantId: TENANT,
+      actorRef: 'agent:5',
+      expectedRevision: 1,
+      operations: fix,
+    });
+    expect(edited).toMatchObject({ revision: 2, canResume: true });
+    expect(edited.editLog.at(-1)).toMatchObject({ actorRef: 'agent:5', revision: 2 });
+    const ready = { checkpoint: await checkpointRow(), attempt: await attemptRow() };
+    const dryResume = await resume(2, true);
+    expect(dryResume).toMatchObject({ resumed: false, wouldResume: true });
+    expect(dryResume.attempt.status).toBe('awaiting_admin_correction');
+    expect(await checkpointRow()).toEqual(ready.checkpoint);
+    expect(await attemptRow()).toEqual(ready.attempt);
+    expect((await errorOf(resume(1, true))).code).toBe('STALE_STATE');
+
+    // The real resume still resumes once; a later dry run answers as a replay.
+    expect((await resume(2, false)).resumed).toBe(true);
+    // The audit names the agent on the resume too.
+    const resumedLog = (await checkpointRow())!.edit_log as Array<Record<string, unknown>>;
+    expect(resumedLog.at(-1)).toMatchObject({ event: 'resumed', actorRef: 'agent:5' });
+    const replay = await resume(2, true);
+    expect(replay).toMatchObject({ resumed: false });
+    expect(replay.wouldResume).toBeUndefined();
   });
 });
