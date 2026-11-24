@@ -90,6 +90,8 @@ export interface AgentQuizItem {
   options: Array<{ id: string; text: string }>;
   correct_option_ids: string[];
   correct_value: string | null;
+  /** Every accepted answer of a short answer (the edit op's `correct_values` replaces it). */
+  correct_values: string[];
   explanation: string | null;
   points: number | null;
 }
@@ -362,6 +364,7 @@ export function projectQuiz(
         })),
         correct_option_ids: type === 'short_answer' ? [] : answer,
         correct_value: type === 'short_answer' ? (answer[0] ?? null) : null,
+        correct_values: type === 'short_answer' ? answer : [],
         explanation:
           typeof question.analysis === 'string' ? htmlToPlainText(question.analysis) : null,
         points: typeof question.points === 'number' ? question.points : null,
