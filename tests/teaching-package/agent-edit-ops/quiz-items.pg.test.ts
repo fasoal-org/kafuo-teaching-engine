@@ -56,9 +56,38 @@ describe('editQuizItem (pure)', () => {
     expect(() => editQuizItem(single, { options: [{ id: 'q', text: 'n' }] })).toThrow(
       expect.objectContaining({ code: 'QUIZ_OPTION_NOT_FOUND' }),
     );
-    expect(() => editQuizItem(single, { correctValue: '4' })).toThrow(
+    expect(() => editQuizItem(single, { correctValues: ['4'] })).toThrow(
       expect.objectContaining({ code: 'INVALID_REQUEST' }),
     );
+  });
+
+  it('replaces every accepted short answer and keeps the item auto-graded', () => {
+    const short: QuizQuestion = {
+      id: 's',
+      type: 'short_answer',
+      question: 'q',
+      answer: ['9', 'تسعة'],
+    };
+    const edited = editQuizItem(short, { correctValues: ['9', '9.0'] });
+    expect(edited.question.answer).toEqual(['9', '9.0']);
+    expect(edited.question.hasAnswer).toBe(true);
+    // Without a key edit, the stored answers stay as they are.
+    expect(editQuizItem(short, { stem: 'new' }).question.answer).toEqual(['9', 'تسعة']);
+  });
+
+  it('refuses keying a short answer a teacher or the model grades (no key today)', () => {
+    const graded: QuizQuestion[] = [
+      { id: 'g1', type: 'short_answer', question: 'q', hasAnswer: false, commentPrompt: 'p' },
+      { id: 'g2', type: 'short_answer', question: 'q', hasAnswer: false, answer: ['x'] },
+      { id: 'g3', type: 'short_answer', question: 'q' },
+    ];
+    for (const question of graded) {
+      expect(() => editQuizItem(question, { correctValues: ['x'] }), question.id).toThrow(
+        expect.objectContaining({ code: 'QUIZ_ITEM_NOT_KEYED' }),
+      );
+      // Its stem and explanation are still editable.
+      expect(editQuizItem(question, { stem: 'n' }).question.hasAnswer).toBe(question.hasAnswer);
+    }
   });
 });
 
@@ -107,24 +136,59 @@ describe('agent-ops quiz items', () => {
     ).toBe(1);
   });
 
-  it('sets a short answer’s correct value and refuses options on it', async () => {
+  it('replaces a short answer’s accepted answers and refuses options on it', async () => {
     harness = await setupHarness({ scenes: [quizScene('quiz-1', 1)] });
     const revision = await harness.revision();
-    const refused = await harness.post('quiz-item-edit', {
-      expectedRevision: revision,
-      sceneId: 'quiz-1',
-      itemId: 'q3',
-      correctOptionIds: ['A'],
-    });
+    const ask = (fields: Record<string, unknown>) =>
+      harness.post('quiz-item-edit', {
+        expectedRevision: revision,
+        sceneId: 'quiz-1',
+        itemId: 'q3',
+        ...fields,
+      });
+    const refused = await ask({ correctOptionIds: ['A'] });
     expect(refused.status).toBe(400);
-    const done = await harness.post('quiz-item-edit', {
-      expectedRevision: revision,
+    // The old single-value field is gone (never deployed): refused, not aliased.
+    const old = await ask({ correctValue: '9.0' });
+    expect(old.status).toBe(400);
+    expect((await body(old)).error).toMatchObject({
+      code: 'INVALID_REQUEST',
+      details: { field: 'correctValue' },
+    });
+    for (const malformed of [[], [''], ['  '], [9], 'nine', Array.from({ length: 11 }, String)]) {
+      const response = await ask({ correctValues: malformed });
+      expect(response.status, JSON.stringify(malformed)).toBe(400);
+      expect((await body(response)).error.details).toMatchObject({ field: 'correctValues' });
+    }
+    expect(await harness.count('SELECT count(*) AS n FROM teaching_package_agent_ops')).toBe(0);
+
+    const done = await ask({ correctValues: ['9', ' 9.0 ', 'تسعة'] });
+    expect(done.status).toBe(200);
+    expect((await body(done)).item).toMatchObject({ correct_value: '9' });
+    const stored = questions(await harness.scene('quiz-1'))[2]!;
+    expect(stored.answer).toEqual(['9', '9.0', 'تسعة']);
+    expect(stored.hasAnswer).toBe(true);
+  });
+
+  it('refuses keying a short answer graded by a teacher or the model (422 QUIZ_ITEM_NOT_KEYED)', async () => {
+    const scene = quizScene('quiz-1', 1);
+    const graded = questions(scene)[2]!;
+    graded.hasAnswer = false;
+    delete graded.answer;
+    graded.commentPrompt = 'قيّم خطوات الحل';
+    harness = await setupHarness({ scenes: [scene] });
+    const response = await harness.post('quiz-item-edit', {
+      expectedRevision: await harness.revision(),
       sceneId: 'quiz-1',
       itemId: 'q3',
-      correctValue: '9.0',
+      correctValues: ['9'],
     });
-    expect(done.status).toBe(200);
-    expect((await body(done)).item).toMatchObject({ correct_value: '9.0' });
+    expect(response.status).toBe(422);
+    expect((await body(response)).error.code).toBe('QUIZ_ITEM_NOT_KEYED');
+    const stored = questions(await harness.scene('quiz-1'))[2]!;
+    expect(stored.hasAnswer).toBe(false);
+    expect(stored.answer).toBeUndefined();
+    expect(await harness.count('SELECT count(*) AS n FROM teaching_package_agent_ops')).toBe(0);
   });
 
   it('refuses a bank quiz, an engine question, a verse item and an unknown item', async () => {

@@ -222,6 +222,24 @@ export async function recordEditInTransaction(
   );
 }
 
+/**
+ * Merge top-level fields into a landed edit row's stored result (the narration line's
+ * `audio` block, known only after the write committed), so a replay answers the same body.
+ */
+export async function mergeAgentOpResult(
+  queryable: Queryable,
+  key: { versionId: string; op: AgentEditOpKind; idempotencyKey: string },
+  fields: Record<string, unknown>,
+  now: number,
+): Promise<void> {
+  await queryable.query(
+    `UPDATE teaching_package_agent_ops
+        SET result = COALESCE(result, '{}'::jsonb) || $4::jsonb, updated_at = $5
+      WHERE version_id = $1 AND op = $2 AND idempotency_key = $3 AND status = 'done'`,
+    [key.versionId, key.op, key.idempotencyKey, JSON.stringify(fields), now],
+  );
+}
+
 /** The A8 proof fields of one landed edit row. */
 export interface AgentEditRow {
   op: AgentEditOpKind;

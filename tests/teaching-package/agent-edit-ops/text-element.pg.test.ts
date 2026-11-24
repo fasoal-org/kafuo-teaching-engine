@@ -11,14 +11,130 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
+/** A hook run once, after a call read the live scene and before it writes: the race. */
+const race = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
+vi.mock('@/lib/server/teaching-package/agent-alignment-proof', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/server/teaching-package/agent-alignment-proof')>();
+  return {
+    ...actual,
+    loadSceneWriteEvents: async (...args: Parameters<typeof actual.loadSceneWriteEvents>) => {
+      const before = race.before;
+      race.before = null;
+      if (before) await before();
+      return actual.loadSceneWriteEvents(...args);
+    },
+  };
+});
+
 const KEY = 'agt_3_text0123456789abcdef0123456789';
 
 describe('agent-ops text-element', () => {
   let harness: Harness;
 
   afterEach(async () => {
+    race.before = null;
     await harness.pool.end();
     vi.unstubAllEnvs();
+  });
+
+  it('two calls racing on one key: the loser answers the winner’s row as its replay (L8)', async () => {
+    harness = await setupHarness({ scenes: [textSlide('scene-1', 1)] });
+    const request = {
+      expectedRevision: await harness.revision(),
+      sceneId: 'scene-1',
+      elementId: 'scene-1-text',
+      text: 'النص الجديد',
+      idempotencyKey: KEY,
+    };
+    let winner: Record<string, unknown> | null = null;
+    // The winner lands after the loser read the scene (and found no row of the key).
+    race.before = async () => {
+      winner = await body(await harness.post('text-element', request));
+    };
+    const loser = await harness.post('text-element', request);
+    expect(winner).toMatchObject({ status: 'done', replayed: false });
+    expect(loser.status).toBe(200);
+    expect(await body(loser)).toMatchObject({
+      status: 'done',
+      replayed: true,
+      sceneId: 'scene-1',
+      resultSceneRev: winner!.resultSceneRev,
+    });
+    expect(await harness.count('SELECT count(*) AS n FROM teaching_package_agent_ops')).toBe(1);
+  });
+
+  it('a race lost to another body (or no key) stays 409 SCENE_REVISION_CONFLICT', async () => {
+    harness = await setupHarness({ scenes: [textSlide('scene-1', 1)] });
+    const request = {
+      expectedRevision: await harness.revision(),
+      sceneId: 'scene-1',
+      elementId: 'scene-1-text',
+      text: 'النص الجديد',
+      idempotencyKey: KEY,
+    };
+    race.before = async () => {
+      await harness.post('text-element', { ...request, text: 'نص الفائز' });
+    };
+    const reused = await harness.post('text-element', request);
+    expect(reused.status).toBe(409);
+    expect((await body(reused)).error.code).toBe('SCENE_REVISION_CONFLICT');
+
+    const revision = await harness.revision();
+    race.before = async () => {
+      await harness.post('text-element', {
+        ...request,
+        expectedRevision: revision,
+        idempotencyKey: undefined,
+        text: 'نص ثالث',
+      });
+    };
+    const unkeyed = await harness.post('text-element', {
+      ...request,
+      expectedRevision: revision,
+      idempotencyKey: undefined,
+    });
+    expect(unkeyed.status).toBe(409);
+    expect((await body(unkeyed)).error.code).toBe('SCENE_REVISION_CONFLICT');
+  });
+
+  it('normalizes digits on a learner-first package, as the quiz edits do (L10)', async () => {
+    harness = await setupHarness({
+      scenes: [textSlide('scene-1', 1), textSlide('scene-2', 2, 'نجمع 12 و 34 ثم 56')],
+      teachingModel: { key: 'g5', version: 'g5.v10' },
+    });
+    const response = await harness.post('text-element', {
+      expectedRevision: await harness.revision(),
+      sceneId: 'scene-1',
+      elementId: 'scene-1-text',
+      text: 'نعد من ٢ إلى ٤',
+    });
+    expect(response.status).toBe(200);
+    const element = (
+      (await harness.scene('scene-1')).content as unknown as {
+        canvas: { elements: Array<Record<string, unknown>> };
+      }
+    ).canvas.elements[0]!;
+    // The package's other learner text is Western digits: the new text follows it.
+    expect(element.content).toBe('<p>نعد من 2 إلى 4</p>');
+  });
+
+  it('keeps the text as sent on a package that is not learner-first', async () => {
+    harness = await setupHarness({
+      scenes: [textSlide('scene-1', 1), textSlide('scene-2', 2, 'نجمع 12 و 34 ثم 56')],
+    });
+    await harness.post('text-element', {
+      expectedRevision: await harness.revision(),
+      sceneId: 'scene-1',
+      elementId: 'scene-1-text',
+      text: 'نعد من ٢ إلى ٤',
+    });
+    const element = (
+      (await harness.scene('scene-1')).content as unknown as {
+        canvas: { elements: Array<Record<string, unknown>> };
+      }
+    ).canvas.elements[0]!;
+    expect(element.content).toBe('<p>نعد من ٢ إلى ٤</p>');
   });
 
   it('sets one text element, records the op row and the webhook, and replays by key', async () => {

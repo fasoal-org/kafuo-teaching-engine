@@ -455,6 +455,8 @@ export type TeachingPackageErrorCode =
   | 'QUIZ_SINGLE_KEY_COUNT'
   /** The quiz's only item cannot be deleted. */
   | 'QUIZ_LAST_ITEM'
+  /** A short answer graded by a teacher or the model (no key today) is not keyed by the agent. */
+  | 'QUIZ_ITEM_NOT_KEYED'
   /** No quiz item, option, narration line or element with that id on the slide. */
   | 'QUIZ_ITEM_NOT_FOUND'
   | 'QUIZ_OPTION_NOT_FOUND'
@@ -491,6 +493,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   QUIZ_KEY_NOT_IN_OPTIONS: 422,
   QUIZ_SINGLE_KEY_COUNT: 422,
   QUIZ_LAST_ITEM: 422,
+  QUIZ_ITEM_NOT_KEYED: 422,
   QUIZ_ITEM_NOT_FOUND: 404,
   QUIZ_OPTION_NOT_FOUND: 422,
   NARRATION_LINE_NOT_FOUND: 404,

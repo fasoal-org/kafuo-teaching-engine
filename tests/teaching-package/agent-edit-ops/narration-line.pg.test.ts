@@ -123,6 +123,34 @@ describe('agent-ops narration-line', () => {
     expect(actions[0]).not.toHaveProperty('audioId');
   });
 
+  it('a keyed replay answers the first call’s audio block, a TTS failure included (L7)', async () => {
+    harness = await setupHarness({ scenes: [textSlide('scene-1', 1)] });
+    tts.fail = true;
+    const request = {
+      expectedRevision: await harness.revision(),
+      sceneId: 'scene-1',
+      actionId: 'scene-1-speech-1',
+      text: 'طيب خلونا نبدأ',
+      idempotencyKey: 'agt_3_line_replay_0001',
+    };
+    const first = await body(await harness.post('narration-line', request));
+    expect(first.audio).toEqual({
+      status: 'failed',
+      errorCode: 'NARRATION_AUDIO_GENERATION_FAILED',
+    });
+    // The provider is back, but a replay never voices again: it reports the first outcome.
+    tts.fail = false;
+    const replay = await harness.post('narration-line', request);
+    expect(replay.status).toBe(200);
+    expect(await body(replay)).toMatchObject({
+      status: 'done',
+      replayed: true,
+      actionId: 'scene-1-speech-1',
+      audio: first.audio,
+    });
+    expect(tts.calls).toEqual([]);
+  });
+
   it('refuses a line the register policy refuses, an unknown action and a dry run writes nothing', async () => {
     harness = await setupHarness({
       scenes: [textSlide('scene-1', 1)],

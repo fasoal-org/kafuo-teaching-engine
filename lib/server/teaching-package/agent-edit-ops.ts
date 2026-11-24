@@ -53,6 +53,7 @@ import {
 } from '@/lib/server/teaching-package/agent-alignment-proof';
 import {
   agentOpDigest,
+  mergeAgentOpResult,
   readAgentOpRecord,
   recordEditInTransaction,
   type AgentEditOpKind,
@@ -359,16 +360,27 @@ async function runSceneEdit(
       body: { dryRun: true, status: 'would_update', sceneId: plan.sceneId, ...built.result },
     };
   }
-  const written = await writeWithRecord(context, {
-    op: plan.op,
-    sceneId: plan.sceneId,
-    baseRev: live.rev,
-    scene: next,
-    key: key.key,
-    digest: plan.digest,
-    alignedBefore,
-    result: built.result,
-  });
+  let written: { rev: number; result: Record<string, unknown> };
+  try {
+    written = await writeWithRecord(context, {
+      op: plan.op,
+      sceneId: plan.sceneId,
+      baseRev: live.rev,
+      scene: next,
+      key: key.key,
+      digest: plan.digest,
+      alignedBefore,
+      result: built.result,
+    });
+  } catch (error) {
+    // Two calls with one key raced: the loser's write fails the revision fence. If the
+    // winner's row (same key, same body) is there now, this call is its replay, not a 409.
+    if (error instanceof TeachingPackageError && error.code === 'SCENE_REVISION_CONFLICT') {
+      const raced = await replayed(context, plan.op, key, plan.digest).catch(() => null);
+      if (raced) return { ...raced, written: false };
+    }
+    throw error;
+  }
   return {
     status: 200,
     written: true,
@@ -496,6 +508,30 @@ function idList(value: unknown, field: string): string[] | undefined {
   return [...new Set(value as string[])];
 }
 
+const MAX_CORRECT_VALUES = 10;
+
+/**
+ * A short answer's accepted answers, all of them: 1..10 non-empty strings that REPLACE the
+ * stored ones (a single value would silently drop the other accepted forms).
+ */
+function correctValueList(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_CORRECT_VALUES ||
+    value.some((entry) => typeof entry !== 'string' || entry.trim() === '')
+  ) {
+    throw invalid('correctValues', 'malformed');
+  }
+  return (value as string[]).map((entry) => entry.trim());
+}
+
+/** Keyed today: auto-graded against stored answers (not a teacher- or model-graded item). */
+function hasKeyToday(question: QuizQuestion): boolean {
+  return question.hasAnswer !== false && (question.answer?.length ?? 0) > 0;
+}
+
 /** The edited item and the letters its options carry now (`fromRows` re-letters). */
 export function editQuizItem(
   question: QuizQuestion,
@@ -504,7 +540,7 @@ export function editQuizItem(
     explanation?: string;
     options?: OptionEdit[];
     correctOptionIds?: string[];
-    correctValue?: string;
+    correctValues?: string[];
   },
 ): { question: QuizQuestion; optionLetters: Array<{ from: string; to: string }> } {
   let next: QuizQuestion = { ...question };
@@ -515,18 +551,29 @@ export function editQuizItem(
     if (edit.options || edit.correctOptionIds) {
       throw new TeachingPackageError(
         'INVALID_REQUEST',
-        'a short-answer item has no options; set correctValue',
+        'a short-answer item has no options; set correctValues',
         { field: edit.options ? 'options' : 'correctOptionIds', rule: 'not_applicable' },
       );
     }
-    if (edit.correctValue !== undefined) next.answer = [edit.correctValue];
+    if (edit.correctValues !== undefined) {
+      if (!hasKeyToday(question)) {
+        // A teacher- or model-graded item: keying it would change how it is graded.
+        throw new TeachingPackageError(
+          'QUIZ_ITEM_NOT_KEYED',
+          'this item has no answer key today (a teacher or the model grades it); it is not keyed here',
+          { itemId: question.id },
+        );
+      }
+      next.answer = [...edit.correctValues];
+      next.hasAnswer = true;
+    }
     return { question: next, optionLetters: [] };
   }
-  if (edit.correctValue !== undefined) {
+  if (edit.correctValues !== undefined) {
     throw new TeachingPackageError(
       'INVALID_REQUEST',
-      'a choice item is keyed by correctOptionIds, not correctValue',
-      { field: 'correctValue', rule: 'not_applicable' },
+      'a choice item is keyed by correctOptionIds, not correctValues',
+      { field: 'correctValues', rule: 'not_applicable' },
     );
   }
   const options = question.options ?? [];
@@ -593,15 +640,23 @@ async function quizItemEditOp(
 ) {
   const sceneId = requiredText(body, 'sceneId');
   const itemId = requiredText(body, 'itemId');
+  if (body.correctValue !== undefined) {
+    // Replaced by `correctValues` (the whole accepted list); never deployed, no alias.
+    throw new TeachingPackageError(
+      'INVALID_REQUEST',
+      'correctValue is not supported; send correctValues (every accepted answer)',
+      { field: 'correctValue', rule: 'not_supported' },
+    );
+  }
   const edit = {
     stem: optionalText(body, 'stem'),
     explanation: optionalText(body, 'explanation'),
     options: optionEdits(body.options),
     correctOptionIds: idList(body.correctOptionIds, 'correctOptionIds'),
-    correctValue: optionalText(body, 'correctValue'),
+    correctValues: correctValueList(body.correctValues),
   };
   if (Object.values(edit).every((value) => value === undefined)) {
-    throw invalid('stem|options|correctOptionIds|correctValue|explanation', 'required');
+    throw invalid('stem|options|correctOptionIds|correctValues|explanation', 'required');
   }
   return runSceneEdit(context, expectedRevision, {
     op: 'quiz-item-edit',
@@ -797,9 +852,12 @@ async function narrationLineOp(
     },
   });
   if (!answer.written) return answer;
-  // The text landed; now voice the lines without audio (that line), with the Stage's own
-  // TTS route. A failure here never undoes the text: the line reads `missing` and the
-  // agent may call `narration-audio`.
+  // The text landed; now voice the slide's lines without audio, with the Stage's own TTS
+  // route. `regenerateSceneNarrationAudio` voices EVERY unvoiced line on the slide, not
+  // only this one: a line already missing audio is voiced (and metered) here too. A
+  // failure never undoes the text: the line reads `missing` and the agent may call
+  // `narration-audio`. The `audio` block is then kept on the op row, so a replay of this
+  // key answers the same block (a first-call TTS failure stays visible to the agent).
   let audio: Record<string, unknown>;
   try {
     const result = await regenerateSceneNarrationAudio(
@@ -827,6 +885,24 @@ async function narrationLineOp(
     log.warn(`narration line audio for scene ${sceneId} ended with ${code}`);
     audio = { status: 'failed', errorCode: code };
   }
+  const key = engineKey(body);
+  if (key.given) {
+    try {
+      await mergeAgentOpResult(
+        context.pool as never,
+        { versionId: context.version.id, op: 'narration-line', idempotencyKey: key.key },
+        { audio },
+        (context.now ?? Date.now)(),
+      );
+    } catch (error) {
+      // The text and its row stand; only a replay's audio block would be missing.
+      log.warn(
+        `narration line audio record for scene ${sceneId} not kept: ${
+          error instanceof Error ? error.name : 'unknown'
+        }`,
+      );
+    }
+  }
   return { ...answer, body: { ...answer.body, audio } };
 }
 
@@ -847,7 +923,7 @@ async function textElementOp(
     sceneId,
     body,
     digest: agentOpDigest({ op: 'text-element', sceneId, elementId, text: newText }),
-    build: async (live) => {
+    build: async (live, document) => {
       if (live.type !== 'slide') {
         throw new TeachingPackageError(
           'SCENE_TYPE_NOT_EDITABLE',
@@ -877,10 +953,13 @@ async function textElementOp(
         elementId,
         content: plainTextToParagraphHtml(newText),
       });
-      return {
-        next: { ...live, content: nextContent } as AppScene,
-        result: { elementId, text: newText },
-      };
+      // The quiz edits' W5 digit normalization, on learner-first packages only.
+      const next = learnerFirstNormalized(
+        context,
+        { ...live, content: nextContent } as AppScene,
+        document,
+      );
+      return { next, result: { elementId, text: newText } };
     },
   });
 }

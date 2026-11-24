@@ -283,6 +283,7 @@ describe('teaching package service auth', () => {
       QUIZ_KEY_NOT_IN_OPTIONS: 422,
       QUIZ_SINGLE_KEY_COUNT: 422,
       QUIZ_LAST_ITEM: 422,
+      QUIZ_ITEM_NOT_KEYED: 422,
       QUIZ_ITEM_NOT_FOUND: 404,
       QUIZ_OPTION_NOT_FOUND: 422,
       NARRATION_LINE_NOT_FOUND: 404,
