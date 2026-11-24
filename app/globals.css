@@ -257,10 +257,12 @@ body[data-maic-editor='true'] .editable-element-text li,
 /* Owner, 24 Nov 2026: the slide sits in a `dir="ltr"` frame, so an Arabic line in
    the editor put its «•» on the left and its «.» on the right. Each line takes its
    direction from its own text, as playback's BaseTextElement already does
-   (225728a6). A list item gets `dir="auto"` from listItemDirectionPlugin, so its
-   indent sits on the item's own start side and its marker hangs there. */
-.prosemirror-editor p,
-.prosemirror-editor li {
+   (225728a6). lineDirectionPlugin sets `dir` on each paragraph and list item from
+   its text (any Arabic letter → rtl), so a list item's indent sits on its own start
+   side and its marker hangs there. plaintext only covers lines with no letters:
+   on a line with `dir` it would go back to the first-letter rule. */
+.prosemirror-editor p:not([dir]),
+.prosemirror-editor li:not([dir]) {
   unicode-bidi: plaintext;
 }
 .prosemirror-editor ul,

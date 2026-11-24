@@ -6,7 +6,7 @@ import { useKeyboardStore, useCanvasStore } from '@/lib/store';
 import type { EditorView } from 'prosemirror-view';
 import { toggleMark, wrapIn, lift } from 'prosemirror-commands';
 import { initProsemirrorEditor, createDocument } from '@/lib/prosemirror';
-import { stripEditorOnlyAttrs } from '@/lib/prosemirror/plugins/list-item-direction';
+import { stripEditorOnlyAttrs } from '@/lib/prosemirror/plugins/line-direction';
 import {
   isActiveOfParentNodeType,
   findNodesWithSameMark,
