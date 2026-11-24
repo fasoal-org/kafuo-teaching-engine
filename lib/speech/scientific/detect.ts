@@ -44,8 +44,11 @@ export interface ExpressionCandidate {
   /** Offsets of the content to parse (delimiters excluded). */
   innerStart: number;
   innerEnd: number;
-  /** `run` only: why it is an expression. */
-  reason?: 'structure' | 'symbol' | 'quantity' | 'formula' | 'notation';
+  /**
+   * `run` only: why it is an expression. `'label'` (phase 2 F3.2): a figure or
+   * table number after «الشكل/الجدول» (`الشكل 3-5`), read as a label, never math.
+   */
+  reason?: 'structure' | 'symbol' | 'quantity' | 'formula' | 'notation' | 'label';
   /** `ce` only: which explicit chemistry command (`\\ce{}` or `\\pu{}`). */
   command?: 'ce' | 'pu';
   /**
@@ -531,6 +534,33 @@ function isYearRange(run: string): boolean {
   );
 }
 
+/** The two numbers of a figure-label run `3-5` / `13–4` / `٤−٣` (hyphen, en dash, minus). */
+export function figureLabelParts(run: string): [string, string] | null {
+  const match = /^([0-9٠-٩]{1,3})\s*[-–−]\s*([0-9٠-٩]{1,3})$/.exec(run);
+  return match ? [match[1]!, match[2]!] : null;
+}
+
+/**
+ * «الشكل/شكل/الجدول/جدول» as a whole word, optionally after «و/ف» and «ب/ل/ك»
+ * (`بالشكل`, `للجدول`, `وشكل`), then spaces, at the end of the text before the run.
+ */
+const FIGURE_LABEL_WORD = /(?:^|[^ء-ٰٟ-ۓ])[وف]?(?:[بك]?ال|لل|[بلك])?(?:شكل|جدول)\s*$/u;
+
+/** A label number at the start of a run, not running on into a longer number. */
+const FIGURE_LABEL_HEAD = /^[0-9٠-٩]{1,3}\s*[-–−]\s*[0-9٠-٩]{1,3}(?![0-9٠-٩]|[.,٫٬][0-9٠-٩])/;
+
+/**
+ * Phase 2 F3.2: a figure or table number (`الشكل 3-5`, `جدول 4−3`) is a label —
+ * beside {@link isYearRange}, but it needs the word before the run. Returns the end
+ * of the label inside the run `[start, end)`, or -1; whatever follows it (a sub-figure
+ * letter `3-5أ`, `3-5 (أ)`) is scanned again on its own.
+ */
+function figureLabelEnd(text: string, start: number, end: number): number {
+  if (!FIGURE_LABEL_WORD.test(text.slice(Math.max(0, start - 16), start))) return -1;
+  const head = FIGURE_LABEL_HEAD.exec(text.slice(start, end));
+  return head ? start + head[0].length : -1;
+}
+
 /** `sin`, `log` … followed by a bracket or a spaced number: `sin(x)`, `log 100`. */
 function startsFunctionCall(run: string, i: number): boolean {
   for (const name of FUNCTION_NAMES) {
@@ -685,6 +715,20 @@ export function detectExpressions(
     ) {
       const rawEnd = scanRun(text, i, arabicVariables);
       const [s, e] = trimRun(text, i, rawEnd);
+      // Every subject: in Chemistry the dash would otherwise read as a bond.
+      const labelEnd = e > s ? figureLabelEnd(text, s, e) : -1;
+      if (labelEnd > s) {
+        out.push({
+          kind: 'run',
+          start: s,
+          end: labelEnd,
+          innerStart: s,
+          innerEnd: labelEnd,
+          reason: 'label',
+        });
+        i = labelEnd;
+        continue;
+      }
       if (e > s) {
         const run = text.slice(s, e);
         const reason = classifyRun(run, subject, hooks);

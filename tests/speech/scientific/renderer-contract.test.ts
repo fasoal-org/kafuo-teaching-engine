@@ -81,6 +81,33 @@ describe('renderScientificSpeech contract', () => {
     expect(codes(result)).toContain('SATTS_W_BOUND_EXCEEDED');
   });
 
+  it('reads a figure or table label as a label, never a subtraction or a decimal (F3.2)', () => {
+    expect(render('انظر الشكل 3-5 جيدًا').preparedText).toBe('انظر الشكل ثلاثة شرطة خمسة جيدًا');
+    expect(render('في شكل 13–4 نرى', 'PHYSICS').preparedText).toBe(
+      'في شكل ثلاثة عشر شرطة أربعة نرى',
+    );
+    expect(render('من الجدول 2-1.', 'CHEMISTRY').preparedText).toBe('من الجدول اثنين شرطة واحد.');
+    expect(render('جدول 4−3 يلخص').preparedText).toBe('جدول أربعة شرطة ثلاثة يلخص');
+    expect(render('(بالشكل ١٢-٣)').preparedText).toBe('(بالشكل اثني عشر شرطة ثلاثة)');
+    // A sub-figure letter stays prose after the label.
+    for (const subject of ['MATH', 'PHYSICS'] as const) {
+      expect(render('الشكل 3-5 (أ) يوضح', subject).preparedText).toBe(
+        'الشكل ثلاثة شرطة خمسة (أ) يوضح',
+      );
+      expect(render('الشكل 3-5أ يوضح', subject).preparedText).not.toContain('ناقص');
+    }
+    const label = render('انظر الشكل 3-5');
+    expect(label.preparedText).not.toContain('ناقص');
+    expect(codes(label)).toEqual([]);
+    expect(label.stats.expressionsFallback).toBe(0);
+    // Without the label word the same run stays a subtraction.
+    expect(render('نحسب 3-5 الآن').preparedText).toContain('ناقص');
+    // Production policy (no proposed wording): the glyph's own name, flagged.
+    const production = render('الشكل 3-5', 'MATH', 'natural', { allowProposed: false });
+    expect(production.preparedText).toBe('الشكل ثلاثة شرطة خمسة');
+    expect(codes(production)).toContain('SATTS_W_MISSING_DICTIONARY_ENTRY');
+  });
+
   it('contains a renderer fault to one expression', () => {
     // A number whose value cannot be represented still reads (digits), never throws.
     const result = render(`نحسب ${'9'.repeat(40)}.5 + x`);

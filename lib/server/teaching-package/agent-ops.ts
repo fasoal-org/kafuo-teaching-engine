@@ -14,6 +14,7 @@
  * | `narration-audio`| `regenerateSceneNarrationAudio`                            | TTS   |
  * | `delete`         | `deleteDuplicateScene` (new, guarded, returns the backup)  | no    |
  * | `skills`         | `setSceneTeachingSkills` (the scene-skills service)        | no    |
+ * | `add-image`      | `regenerateSlideScene` + `imageAddition` (phase 2 F3.3)    | yes   |
  * | `quiz-item-edit`, `quiz-item-delete`, `narration-line` (TTS), `text-element`,      |
  * |   `alignment-confirm` — phase 2 wave F2, `agent-edit-ops.ts`              | no    |
  *
@@ -73,6 +74,10 @@ import {
   type DuplicateDeleteResult,
 } from '@/lib/server/teaching-package/delete-duplicate-scene';
 import { AGENT_EDIT_OPS, runAgentEditOp } from '@/lib/server/teaching-package/agent-edit-ops';
+import {
+  checkSlideImageAddition,
+  SLIDE_IMAGE_NOTE_MAX,
+} from '@/lib/server/teaching-package/add-slide-image';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { resolveGovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import {
@@ -134,6 +139,8 @@ export const AGENT_OPS = [
   'narration-audio',
   'delete',
   'skills',
+  // Phase 2 F3.3: add an eligible textbook image (a regeneration-type op).
+  'add-image',
   // Phase 2 wave F2 (agent-edit-ops.ts): direct edits and the A8 confirmation.
   ...AGENT_EDIT_OPS,
 ] as const;
@@ -557,6 +564,93 @@ async function regenerationOp(
       opId,
       status: 'done',
       sceneId: result.body.sceneId,
+      replayed: result.body.replayed,
+      resultSceneRev: result.body.resultSceneRev,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// add-image (regenerateSlideScene + imageAddition), phase 2 F3.3
+// ---------------------------------------------------------------------------
+
+/** The agent's `{ sceneId, sourceVisualId, note? }` as a regeneration request. */
+export function addImageInput(body: Record<string, unknown>): RegenerationInput {
+  const sceneId = text(body, 'sceneId')!;
+  const sourceVisualId = text(body, 'sourceVisualId')!;
+  if (sourceVisualId.length > 200) throw invalid('sourceVisualId', 'malformed');
+  const note = text(body, 'note', false);
+  if (note && note.length > SLIDE_IMAGE_NOTE_MAX) throw invalid('note', 'malformed');
+  // A fixed instruction and reason (the audit record; the narration directive of a slide
+  // with its own part list). The note stays out of them: it reaches the model only through
+  // the visual re-plan, marked as untrusted, and joins the idempotency digest.
+  const request = parseSceneRegenerationRequest({
+    instruction: `Add the textbook image ${sourceVisualId} to this slide and teach it in the narration`,
+    reason: `agent add-image ${sourceVisualId}`,
+    idempotencyKey: body.idempotencyKey,
+  });
+  return {
+    sceneId,
+    request: { ...request, imageAddition: { sourceVisualId, ...(note ? { note } : {}) } },
+  };
+}
+
+async function addImageOp(
+  context: AgentOpsContext,
+  input: RegenerationInput,
+  expectedRevision: number,
+): Promise<AgentOpAnswer> {
+  const addition = input.request.imageAddition!;
+  if (context.dryRun) {
+    await assertStageRevision(context, expectedRevision);
+    assertEditable(context.version);
+    const document = await loadStageDocument(context);
+    await checkSlideImageAddition(
+      context.pool,
+      document.scenes.find((scene) => scene.id === input.sceneId),
+      document.outline as AppDocumentOutline | undefined,
+      addition.sourceVisualId,
+    );
+    // The regeneration's own busy checks (no route, no row).
+    const answer = await regenerationDryRun(context, input);
+    return {
+      status: 200,
+      body: { ...answer.body, sourceVisualId: addition.sourceVisualId },
+    };
+  }
+  // A key that already names a run answers as that run, before the checks that run moved
+  // (after it, the image IS on the slide).
+  const opId = regenerationOpId(input.request.idempotencyKey);
+  if (await existingRegeneration(context, input)) return opStatus(context, opId);
+  await assertStageRevision(context, expectedRevision);
+  const grant = grantOf(context);
+  // The refusals (422/409) come from the service before its row exists.
+  const outcome = await runUntilStarted(context, 'slide image addition', (onStarted) =>
+    regenerateSlideScene(grant, input.sceneId, input.request, {
+      pool: context.pool,
+      actor: { actorRef: context.actorRef, sessionRef: null },
+      resolveGoverned: (...args) => {
+        onStarted();
+        return resolveGovernedRegenerationContext(...args);
+      },
+      ...(context.now ? { now: context.now } : {}),
+    }),
+  );
+  if (outcome.kind === 'started') {
+    return running(opId, { sceneId: input.sceneId, sourceVisualId: addition.sourceVisualId });
+  }
+  const result = outcome.value;
+  if (result.status === 202) {
+    return running(opId, { sceneId: input.sceneId, sourceVisualId: addition.sourceVisualId });
+  }
+  return {
+    status: 200,
+    body: {
+      dryRun: false,
+      opId,
+      status: 'done',
+      sceneId: result.body.sceneId,
+      sourceVisualId: addition.sourceVisualId,
       replayed: result.body.replayed,
       resultSceneRev: result.body.resultSceneRev,
     },
@@ -1092,6 +1186,8 @@ export async function runAgentOp(
       return deleteOp(context, body, expectedRevision);
     case 'skills':
       return skillsOp(context, body, expectedRevision);
+    case 'add-image':
+      return addImageOp(context, addImageInput(body), expectedRevision);
     case 'quiz-item-edit':
     case 'quiz-item-delete':
     case 'narration-line':

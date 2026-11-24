@@ -614,12 +614,24 @@ export async function eligibleVisualsForUnits(
   pool: ConnectableQueryable,
   outline: AppDocumentOutline | null | undefined,
   unitIds: readonly string[],
+  /**
+   * Phase 2 F3.3 (agent add-image): these visual ids go first, so they are inside the
+   * planner's vision budget. Absent → the manifest order, exactly as before.
+   */
+  firstIds?: readonly string[],
 ): Promise<{
   visuals: Array<{ entry: SourceVisualManifestEntry; image: PdfImage }>;
   visionImages: Array<{ id: string; src: string; width?: number; height?: number }>;
 }> {
   const deps: SceneInsertionDeps = { pool };
-  const visuals = await eligibleVisuals(outline, unitIds, deps);
+  const found = await eligibleVisuals(outline, unitIds, deps);
+  const first = new Set(firstIds ?? []);
+  const visuals = first.size
+    ? [
+        ...found.filter(({ entry }) => first.has(entry.id)),
+        ...found.filter(({ entry }) => !first.has(entry.id)),
+      ]
+    : found;
   return { visuals, visionImages: await plannerVisionImages(visuals, deps) };
 }
 

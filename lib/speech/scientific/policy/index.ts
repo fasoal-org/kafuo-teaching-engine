@@ -28,7 +28,7 @@ import statesJson from './ar-v1/states.json';
  * part of `manifest.contentHash`, so a code-only wording change still forces a
  * deliberate policy version bump (FR-039, AS-007).
  */
-export const RENDERER_GRAMMAR_VERSION = 'satts-grammar-17';
+export const RENDERER_GRAMMAR_VERSION = 'satts-grammar-18';
 
 export type PolicyTableName =
   | 'letters'

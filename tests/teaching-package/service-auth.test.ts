@@ -293,6 +293,8 @@ describe('teaching package service auth', () => {
       SACRED_TEXT_PINNED: 422,
       GUIDE_ANSWER_LEAK: 422,
       STALE_NOT_BY_AGENT: 422,
+      VISUAL_NOT_ELIGIBLE: 422,
+      VISUAL_ALREADY_ON_SLIDE: 409,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

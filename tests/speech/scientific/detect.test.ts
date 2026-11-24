@@ -82,6 +82,23 @@ describe('expression boundary detection (§9.3)', () => {
     expect(leading('1445 هـ - 3')).toEqual([true]);
   });
 
+  it('a figure or table number after «الشكل/الجدول» is a label in every subject (F3.2)', () => {
+    const labels = (text: string, subject: 'MATH' | 'PHYSICS' | 'CHEMISTRY' = 'MATH') =>
+      detectExpressions(text, subject).map((c) => [text.slice(c.start, c.end), c.reason]);
+    expect(labels('انظر الشكل 3-5 جيدًا')).toEqual([['3-5', 'label']]);
+    expect(labels('في شكل 13–4 نرى', 'PHYSICS')).toEqual([['13–4', 'label']]);
+    expect(labels('من الجدول 2-1.', 'CHEMISTRY')).toEqual([['2-1', 'label']]);
+    expect(labels('جدول 4−3 يلخص')).toEqual([['4−3', 'label']]);
+    expect(labels('كما بالشكل ٣-٥ وللجدول 2 - 1')).toEqual([
+      ['٣-٥', 'label'],
+      ['2 - 1', 'label'],
+    ]);
+    expect(labels('(الشكل 3-5)')).toEqual([['3-5', 'label']]);
+    // Not after a label word: still an expression, never a label.
+    expect(labels('نحسب 3-5 الآن')).toEqual([['3-5', 'structure']]);
+    expect(labels('مشكل 3-5 هنا')).toEqual([['3-5', 'structure']]);
+  });
+
   it('never produces overlapping candidates', () => {
     const text = '$x$ \\(y\\) z^2 $$w$$ 2a';
     const found = detectExpressions(text, 'MATH');
