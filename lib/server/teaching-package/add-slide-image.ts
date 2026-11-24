@@ -82,8 +82,10 @@ export function slideShowsVisual(scene: AppScene, servingPath: string): boolean 
 /**
  * The refusals, before any row or model call:
  * - not a content slide (a quiz, a bank quiz, an interactive scene) → 422 `SCENE_TYPE_NOT_EDITABLE`;
- * - not an eligible visual of the slide's parts (or its bytes cannot be read for the
- *   planner) → 422 `VISUAL_NOT_ELIGIBLE`;
+ * - not an eligible visual of the slide's parts (`details.reason` `not_eligible`), or its
+ *   bytes cannot be read for the planner (`details.reason` `unreadable`) → 422
+ *   `VISUAL_NOT_ELIGIBLE`; `details.eligibleVisualIds` lists only the ids that would pass
+ *   (eligible, readable and not already on the slide);
  * - already on the slide's canvas → 409 `VISUAL_ALREADY_ON_SLIDE`;
  * - the slide already shows {@link MAX_SLIDE_IMAGES_BEFORE_ADD} or more images → 422
  *   `SLIDE_IMAGE_LIMIT` (`details.max`: the most images a slide may show with the new one);
@@ -118,15 +120,25 @@ export async function checkSlideImageAddition(
   // The new visual and the slide's own images first: inside the planner's vision budget.
   const visuals = await visualsFor(pool, outlineRecord, unitIds, [sourceVisualId, ...onCanvas]);
   const eligibleIds = visuals.visuals.map(({ entry }) => entry.id);
+  const readableIds = new Set(visuals.visionImages.map((image) => image.id));
   const found = visuals.visuals.find(({ entry }) => entry.id === sourceVisualId);
-  const readable = visuals.visionImages.some((image) => image.id === sourceVisualId);
+  const readable = readableIds.has(sourceVisualId);
   if (!found || !readable) {
+    // Only ids that would pass: eligible for the slide's parts, readable, not on the slide.
+    const shown = new Set(onCanvas);
+    const addableIds = eligibleIds.filter(
+      (id) => readableIds.has(id) && !shown.has(id) && id !== sourceVisualId,
+    );
     throw new TeachingPackageError(
       'VISUAL_NOT_ELIGIBLE',
       found
         ? 'this textbook image cannot be read for the planner right now'
         : 'this textbook image is not one of the eligible source visuals of the slide’s lesson parts',
-      { sourceVisualId, eligibleVisualIds: eligibleIds },
+      {
+        sourceVisualId,
+        reason: found ? 'unreadable' : 'not_eligible',
+        eligibleVisualIds: addableIds,
+      },
     );
   }
   if (slideShowsVisual(scene, found.entry.servingPath)) {
@@ -144,7 +156,6 @@ export async function checkSlideImageAddition(
       { sourceVisualId, max: MAX_SLIDE_IMAGES_BEFORE_ADD },
     );
   }
-  const readableIds = new Set(visuals.visionImages.map((image) => image.id));
   const notCarried = [
     ...new Set(
       images

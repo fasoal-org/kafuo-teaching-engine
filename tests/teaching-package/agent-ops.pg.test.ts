@@ -437,7 +437,10 @@ describe('agent-ops over PGlite', () => {
       const unknown = await post('add-image', body(revision, { sourceVisualId: 'src-99' }));
       expect(unknown.status).toBe(422);
       expect(await unknown.json()).toMatchObject({
-        error: { code: 'VISUAL_NOT_ELIGIBLE', details: { eligibleVisualIds: ['src-7'] } },
+        error: {
+          code: 'VISUAL_NOT_ELIGIBLE',
+          details: { reason: 'not_eligible', eligibleVisualIds: ['src-7'] },
+        },
       });
       expect(await counts()).toEqual(before);
       expect(mocks.regenerate).not.toHaveBeenCalled();
@@ -612,6 +615,25 @@ describe('agent-ops over PGlite', () => {
             error: { code: 'SLIDE_IMAGES_NOT_CARRIED', details: { imageIds: ['src-10'] } },
           });
         }
+        // The refusal lists only ids that would pass: src-10 (eligible, unreadable) and
+        // src-8 (already on the slide) are left out; src-10 itself is refused as unreadable.
+        revision = await reseedSlide([imageElement('el-8', pathOf('src-8'))]);
+        const unknown = await post('add-image', body(revision, { sourceVisualId: 'src-99' }));
+        expect(unknown.status).toBe(422);
+        const unknownDetails = (await unknown.json()).error.details;
+        expect(unknownDetails.reason).toBe('not_eligible');
+        expect([...unknownDetails.eligibleVisualIds].sort()).toEqual([
+          'src-11',
+          'src-12',
+          'src-13',
+          'src-7',
+        ]);
+        const unreadableAdd = await post('add-image', body(revision, { sourceVisualId: 'src-10' }));
+        expect(unreadableAdd.status).toBe(422);
+        const unreadableDetails = (await unreadableAdd.json()).error.details;
+        expect(unreadableDetails).toMatchObject({ sourceVisualId: 'src-10', reason: 'unreadable' });
+        expect(unreadableDetails.eligibleVisualIds).not.toContain('src-10');
+        expect(unreadableDetails.eligibleVisualIds).toContain('src-7');
         // Five images already: the re-plan could not keep them all with a sixth.
         revision = await reseedSlide(
           ['src-8', 'src-10', 'src-11', 'src-12', 'src-13'].map((id) =>
