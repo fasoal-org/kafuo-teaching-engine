@@ -149,6 +149,87 @@ describe('resolveContentUnitChange', () => {
     expect(resolved.directive).toContain('LESSON PART MOVED OUT');
   });
 
+  it('g5.v12: adds a part only to a slide in the objective block that owns it (book section order plan)', () => {
+    const inBlock3 = {
+      ...(slide('a', ['cu-3']) as object),
+      teachingStage: { key: 'x', flowIndex: 3 },
+    };
+    const ownerBlock = {
+      ownerBlockOf: (unitId: string) => ({ 'cu-1': 1, 'cu-2': 3 })[unitId],
+      isObjectiveBlock: (flowIndex: number) => flowIndex === 1 || flowIndex === 3,
+    };
+    expect(
+      ruleOf(() =>
+        resolveContentUnitChange(
+          inBlock3 as never,
+          [inBlock3 as never],
+          undefined,
+          UNITS,
+          { op: 'add', unitId: 'cu-1' },
+          ownerBlock,
+        ),
+      ),
+    ).toBe('otherObjectiveBlock');
+    const resolved = resolveContentUnitChange(
+      inBlock3 as never,
+      [inBlock3 as never],
+      undefined,
+      UNITS,
+      { op: 'add', unitId: 'cu-2' },
+      ownerBlock,
+    );
+    expect(resolved.unitIds).toEqual(['cu-2', 'cu-3']);
+    // A part no block owns (or any version before g5.v12, with no map) moves as before.
+    expect(
+      resolveContentUnitChange(inBlock3 as never, [inBlock3 as never], undefined, UNITS, {
+        op: 'add',
+        unitId: 'cu-1',
+      }).unitIds,
+    ).toEqual(['cu-1', 'cu-3']);
+    // Review 2 (25 Nov 2026): a part already taught in this block (a person's placement)
+    // still moves inside it, and a slide with no flow position is never refused.
+    const sourceInBlock3 = {
+      ...(slide('s', ['cu-1', 'cu-2']) as object),
+      teachingStage: { key: 'x', flowIndex: 3 },
+    };
+    expect(
+      resolveContentUnitChange(
+        inBlock3 as never,
+        [inBlock3 as never, sourceInBlock3 as never],
+        undefined,
+        UNITS,
+        { op: 'add', unitId: 'cu-1' },
+        ownerBlock,
+      ).unitIds,
+    ).toEqual(['cu-1', 'cu-3']);
+    const unstaged = slide('u', ['cu-3']);
+    expect(
+      resolveContentUnitChange(
+        unstaged,
+        [unstaged],
+        undefined,
+        UNITS,
+        { op: 'add', unitId: 'cu-1' },
+        ownerBlock,
+      ).unitIds,
+    ).toEqual(['cu-1', 'cu-3']);
+    // A slide at a flow position that is no objective block is never refused either.
+    const opener = {
+      ...(slide('o', ['cu-3']) as object),
+      teachingStage: { key: 'y', flowIndex: 0 },
+    };
+    expect(
+      resolveContentUnitChange(
+        opener as never,
+        [opener as never],
+        undefined,
+        UNITS,
+        { op: 'add', unitId: 'cu-1' },
+        ownerBlock,
+      ).unitIds,
+    ).toEqual(['cu-1', 'cu-3']);
+  });
+
   it('reads the current list from the stored plan when the slide carries none', () => {
     const outline = { outlines: [{ id: 'o1', sourceContentUnitIds: ['cu-2'] }] } as never;
     const scene = { ...(slide('a', undefined) as object), outlineId: 'o1' } as never;

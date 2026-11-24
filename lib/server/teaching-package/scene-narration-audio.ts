@@ -28,10 +28,7 @@ import {
 import { omitUndefinedObjectMembers } from '@/lib/persistence/plain-json';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { synthesizeSceneNarration } from '@/lib/server/agent-runtime/scene-tts';
-import {
-  deriveSceneAlignment,
-  sceneMaterialFingerprint,
-} from '@/lib/server/teaching-package/alignment';
+import { carryAlignmentBaselineForward } from '@/lib/server/teaching-package/narration-audio-alignment';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   NARRATION_MISSING_ISSUE_CODE,
@@ -98,20 +95,11 @@ export interface NarrationAudioDeps {
   ) => Promise<number>;
 }
 
-const AUDIO_FIELDS = ['audioId', 'audioUrl', 'audioProvenance', 'audioInvalidated'] as const;
-
-/** The Scene with every speech Action's audio reference removed. */
-export function withoutNarrationAudio(scene: AppScene): AppScene {
-  return {
-    ...scene,
-    actions: (scene.actions ?? []).map((action) => {
-      if (action.type !== 'speech') return action;
-      const copy = { ...action } as Record<string, unknown>;
-      for (const field of AUDIO_FIELDS) delete copy[field];
-      return copy as unknown as typeof action;
-    }),
-  } as AppScene;
-}
+// Moved to `narration-audio-alignment.ts` (25 Nov 2026); re-exported for existing callers.
+export {
+  carryAlignmentBaselineForward,
+  withoutNarrationAudio,
+} from '@/lib/server/teaching-package/narration-audio-alignment';
 
 /**
  * The lines this run voiced drop their `audioInvalidated` flag: the flag marks
@@ -131,29 +119,6 @@ function clearInvalidationOfVoicedLines(before: AppScene, after: AppScene): AppS
       return rest as typeof action;
     }),
   } as AppScene;
-}
-
-/**
- * Audio references are part of the material fingerprint (`actions` verbatim),
- * so voicing a line would turn an aligned Scene `stale / material-change` and
- * block Submit although no teaching content changed. When the Scene was
- * aligned before and ONLY audio references differ, its baseline is carried
- * forward with the new fingerprint (origin, actor and time kept). Anything
- * else keeps the baseline untouched.
- */
-export function carryAlignmentBaselineForward(before: AppScene, after: AppScene): AppScene {
-  const baseline = before.alignmentBaseline;
-  if (!baseline || !deriveSceneAlignment(before).aligned) return after;
-  if (
-    sceneMaterialFingerprint(withoutNarrationAudio(before)) !==
-    sceneMaterialFingerprint(withoutNarrationAudio(after))
-  ) {
-    return after;
-  }
-  return {
-    ...after,
-    alignmentBaseline: { ...baseline, fingerprint: sceneMaterialFingerprint(after) },
-  };
 }
 
 function ownerBoundStore(pool: ConnectableQueryable) {

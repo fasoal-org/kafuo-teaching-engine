@@ -125,12 +125,27 @@ describe('ThumbItem generation-issue card', () => {
     expect(regenerateButton(host)).not.toBeNull();
   });
 
-  it('while running: the audio button is disabled and says so', () => {
+  it('while the missing audio is generated: a calm "generating" card, not a problem (owner, 25 Nov 2026)', () => {
     const host = mount({
       scene: quiz([AUDIO]),
       onRegenerateAudio: vi.fn(),
       regeneratingAudio: true,
     });
+    expect(host.querySelector('[data-testid="scene-generation-issues"]')).toBeNull();
+    expect(audioButton(host)).toBeNull();
+    const voicing = host.querySelector('[data-testid="scene-voicing"]');
+    expect(voicing?.textContent).toBe('جارٍ توليد الصوت…');
+    expect(host.textContent).not.toContain('لم يُولَّد صوت المعلّم');
+  });
+
+  it('while running beside another issue: the red card stays, its audio button disabled', () => {
+    const host = mount({
+      scene: quiz([OTHER, AUDIO]),
+      onRegenerate: vi.fn(),
+      onRegenerateAudio: vi.fn(),
+      regeneratingAudio: true,
+    });
+    expect(host.querySelector('[data-testid="scene-voicing"]')).toBeNull();
     expect(audioButton(host)?.disabled).toBe(true);
     expect(audioButton(host)?.textContent).toBe('جارٍ توليد الصوت…');
   });

@@ -115,6 +115,7 @@ const RULE_MESSAGES = new Set([
   'lastPart',
   'alreadyTaught',
   'notTaught',
+  'otherObjectiveBlock',
 ]);
 
 export function MovePartDialog({
@@ -384,7 +385,10 @@ function MovePartStatus({
   // A refusal rule the teacher can act on reads as words; anything else as its code.
   const said = (code: string) => {
     const rule = code.startsWith('rule:') ? code.slice('rule:'.length) : null;
-    return rule && RULE_MESSAGES.has(rule) ? tr(`rule.${rule}`) : (rule ?? code);
+    // A locale without the rule's own words shows the rule name, as before, never a key.
+    return rule && RULE_MESSAGES.has(rule)
+      ? tr(`rule.${rule}`, { defaultValue: rule })
+      : (rule ?? code);
   };
   const text =
     phase.kind === 'running'

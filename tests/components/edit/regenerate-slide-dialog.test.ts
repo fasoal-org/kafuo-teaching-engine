@@ -189,6 +189,24 @@ describe('RegenerateSlideDialog', () => {
     expect(new Set(keys).size).toBe(2);
   });
 
+  it('a content failure says nothing changed and what to do, not a code (owner, 25 Nov 2026)', async () => {
+    const run = vi.fn(async (_input: RunSlideRegenerationInput) => ({
+      kind: 'failed' as const,
+      status: 422,
+      code: 'GOVERNED_SCENE_GENERATION_FAILED',
+      message: 'failed',
+    }));
+    mount(run);
+    type('regenerate-instruction', VALID_INSTRUCTION);
+    type('regenerate-reason', VALID_REASON);
+    act(() => submitButton().click());
+    await flush();
+    const text = q('[data-testid="regenerate-failure"]')!.textContent ?? '';
+    expect(text).toContain('Nothing was changed');
+    expect(text).toContain('write the requirements differently');
+    expect(text).not.toContain('GOVERNED_SCENE_GENERATION_FAILED');
+  });
+
   it('a not-durable outcome sends nothing more and explains why', async () => {
     const run = vi.fn(async () => ({ kind: 'not-durable' as const }));
     mount(run);

@@ -36,10 +36,15 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
   bookStructureRequirement,
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  bookPartsRequirement,
+  buildBookPartMap,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
@@ -1624,7 +1629,17 @@ export function buildKafuoStartRequest(
     // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
     learnerFirst: isLearnerFirstModel(request.teachingModel),
   });
-  const requirement = `${buildKafuoRequirement(request)}${book}`;
+  // g5.v12 (book section order plan, owner 25 Nov 2026): the lesson's parts in book
+  // order, each with the objective block it belongs to. Absent on every other version.
+  const partMap = isBookPartPlacementModel(request.teachingModel)
+    ? buildBookPartMap(
+        request.bookStructure,
+        request.learningObjectives,
+        request.teachingModel.flow,
+      )
+    : null;
+  const parts = partMap ? bookPartsRequirement(partMap, request.teachingModel.flow) : '';
+  const requirement = `${buildKafuoRequirement(request)}${book}${parts}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
   // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B, D-20:

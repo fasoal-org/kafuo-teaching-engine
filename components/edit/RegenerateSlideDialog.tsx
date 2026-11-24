@@ -66,6 +66,10 @@ const KNOWN_ERROR_CODES = new Set([
   'READ_ONLY_GRANT',
   // B-4: an AI slide insertion runs on this Stage (server refusal B-3).
   'STAGE_GENERATION_IN_PROGRESS',
+  // Owner, 25 Nov 2026: the teacher sees what happened and what to do, not a code.
+  'SCENE_CONTENT_GENERATION_FAILED',
+  'GOVERNED_SCENE_GENERATION_FAILED',
+  'REGENERATION_PERSISTENCE_FAILED',
 ]);
 
 export function fieldError(
@@ -145,7 +149,10 @@ export function RegenerateSlideDialog({
   const failureMessage = useCallback(
     (outcome: Extract<RegenerationOutcome, { kind: 'failed' }>) =>
       KNOWN_ERROR_CODES.has(outcome.code)
-        ? t(`edit.slideRegeneration.errors.${outcome.code}`)
+        ? // A locale without the code's own words reads the generic message, never a key.
+          t(`edit.slideRegeneration.errors.${outcome.code}`, {
+            defaultValue: tr('errors.generic', { code: outcome.code }),
+          })
         : tr('errors.generic', { code: outcome.code }),
     [t, tr],
   );

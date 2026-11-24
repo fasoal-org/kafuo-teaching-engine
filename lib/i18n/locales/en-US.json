@@ -725,6 +725,9 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "STAGE_GENERATION_IN_PROGRESS": "An AI slide insertion is running on this lesson; try again when it finishes.",
+        "SCENE_CONTENT_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "REGENERATION_PERSISTENCE_FAILED": "The new version was written but could not be saved. Nothing was changed; try again.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
       }
     },
@@ -820,7 +823,8 @@
           "notTeachingSlide": "this is an orientation, summary, check or practice slide, which does not count as teaching the part",
           "lastPart": "this is the slide's only part",
           "alreadyTaught": "the slide already teaches this part",
-          "notTaught": "the slide does not teach this part"
+          "notTaught": "the slide does not teach this part",
+          "otherObjectiveBlock": "this slide is in another part of the lesson; the lesson follows the book, so this part can only move to a slide of its own part"
         }
       },
       "title": "Generate a slide for a lesson part",

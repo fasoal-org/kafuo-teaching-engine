@@ -89,6 +89,10 @@ import {
 } from '@/lib/server/teaching-package/governed-regeneration';
 import { insertOneScene } from '@/lib/server/teaching-package/insert-one-scene';
 import {
+  VOICE_LEASE_MARGIN_MS,
+  voiceRegeneratedScene,
+} from '@/lib/server/teaching-package/regenerated-scene-voice';
+import {
   readSacredQuotePins,
   sacredPolicyModeFor,
 } from '@/lib/server/teaching-package/sacred-text';
@@ -426,6 +430,8 @@ export interface SceneInsertionDeps {
   createRoute?: typeof createInsertionRoute;
   plan?: typeof planInsertedSlide;
   insert?: typeof insertOneScene;
+  /** Voices the inserted slide before it is saved (owner, 25 Nov 2026). */
+  voice?: typeof voiceRegeneratedScene;
   resolveGoverned?: typeof resolveGovernedRegenerationContext;
   verdictStore?: () => Promise<{
     get(profileId: string, checksum: string): Promise<{ verdict: string } | undefined>;
@@ -1111,7 +1117,13 @@ export async function insertGeneratedSlide(
     if (!generated.ok) {
       throw new TeachingPackageError(generated.code, generated.message, generated.details);
     }
-    candidate = generated.scene;
+    // Owner, 25 Nov 2026: the inserted slide is voiced before T2, as a regenerated one
+    // is; a failed or late voice (two minutes before the lease) keeps it marked
+    // exactly as before.
+    candidate = await (deps.voice ?? voiceRegeneratedScene)(generated.scene, stage, {
+      deadlineMs: row.leaseExpiresAt - VOICE_LEASE_MARGIN_MS,
+      now: clock,
+    });
   } catch (error) {
     if (error instanceof TeachingPackageError) return failAndThrow(error);
     // The live answer and a later replay of the stored row share one code.

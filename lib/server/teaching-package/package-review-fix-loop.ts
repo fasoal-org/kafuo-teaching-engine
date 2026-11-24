@@ -378,6 +378,10 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             ...(context.signal ? { signal: context.signal } : {}),
             // LOW-1 (last round): never a lease as long as the review lease.
             leaseSeconds: reviewerRegenerationLeaseSeconds(),
+            // Owner, 25 Nov 2026: an editor regeneration is voiced before it is saved; this
+            // loop voices a fix only after its re-review keeps it (no TTS paid for a fix
+            // that is undone), so the regeneration itself stays silent here.
+            voice: async (candidate) => candidate,
           },
         );
       let attempt = await settle(regenerateWith(fixIdempotencyKey(review.id, slide.id)));
