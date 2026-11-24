@@ -254,6 +254,23 @@ body[data-maic-editor='true'] .editable-element-text li,
   display: list-item !important;
 }
 
+/* Owner, 24 Nov 2026: the slide sits in a `dir="ltr"` frame, so an Arabic line in
+   the editor put its «•» on the left and its «.» on the right. Each line takes its
+   direction from its own text, as playback's BaseTextElement already does
+   (225728a6). A list item gets `dir="auto"` from listItemDirectionPlugin, so its
+   indent sits on the item's own start side and its marker hangs there. */
+.prosemirror-editor p,
+.prosemirror-editor li {
+  unicode-bidi: plaintext;
+}
+.prosemirror-editor ul,
+.prosemirror-editor ol {
+  padding-inline-start: 0 !important;
+}
+.prosemirror-editor li {
+  margin-inline-start: 1.5rem;
+}
+
 /* Compact react-colorful for the slide editor's color popover. Defaults are
    a 200×200 square with a thick separator — we squeeze it tight + round it
    so the popover feels intentional, not stock. */
