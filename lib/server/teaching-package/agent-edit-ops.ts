@@ -716,7 +716,8 @@ async function quizItemDeleteOp(
         result: {
           itemId,
           reason,
-          deleted: true,
+          // A dry run deletes nothing: it says what would happen (like `would_update`).
+          ...(context.dryRun ? { deleted: false, would_delete: true } : { deleted: true }),
           backup: {
             scene_id: live.id,
             position: index + 1,

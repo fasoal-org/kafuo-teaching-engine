@@ -285,7 +285,12 @@ describe('agent-ops quiz items', () => {
       itemId: 'q2',
       reason: 'duplicate of q1',
     });
-    expect(await body(dry)).toMatchObject({ dryRun: true, status: 'would_update' });
+    expect(await body(dry)).toMatchObject({
+      dryRun: true,
+      status: 'would_update',
+      deleted: false,
+      would_delete: true,
+    });
     expect(questions(await harness.scene('quiz-1'))).toHaveLength(3);
 
     const done = await harness.post('quiz-item-delete', {
