@@ -113,6 +113,23 @@ function refusal(findings: SacredTextFinding[]): SacredEditRefusal {
 }
 
 /**
+ * The same check for ONE Scene a server op is about to write (Kafuo Agent API wave F2:
+ * the agent's direct edits): the refusal, or `null` on a Stage without pins or a Scene
+ * whose pinned quotes are unchanged.
+ */
+export async function sacredSceneEditRefusal(
+  queryable: OutlineReader,
+  stageId: string,
+  scene: SacredSceneLike,
+): Promise<SacredEditRefusal | null> {
+  const pins = await readStagePins(queryable, stageId);
+  if (!pins) return null;
+  const recovered = await storedPinnedQuotes(queryable, stageId, pins);
+  const findings = findPinnedSacredTextEdits([scene], pins, recovered);
+  return findings.length > 0 ? refusal(findings) : null;
+}
+
+/**
  * The refusal for this request, or `null` to let it through. Reads a clone of
  * the body, so the store still receives the original stream. An unreadable
  * body is left to the store's own validation.

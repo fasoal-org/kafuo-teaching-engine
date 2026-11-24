@@ -35,6 +35,7 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import { readTeachingSkillsGovernanceForVersion } from '@/lib/server/teaching-package/exact-flow';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
 import { TEACHING_PACKAGE_EDITABLE_STATUSES } from '@/lib/types/teaching-package';
+import type { AppDocument } from '@/lib/document-store/persistence-types';
 import type { AppScene } from '@/lib/types/stage';
 
 export interface SceneAlignmentConfirmation {
@@ -66,6 +67,15 @@ export async function confirmSceneAlignments(
   scope: { tenantId: string; actorRef: string },
   confirmations: SceneAlignmentConfirmation[],
   now: number = Date.now(),
+  /**
+   * Kafuo Agent API A8 (wave F2.5): the agent's confirmation runs its proof and this
+   * confirmation on ONE loaded document, and writes under the scene's revision
+   * precondition (this function has none of its own). Absent → exactly as before.
+   */
+  options: {
+    document?: AppDocument;
+    putScene?: (stageId: string, scene: AppScene) => Promise<void>;
+  } = {},
 ): Promise<{ confirmedSceneIds: string[] }> {
   if (confirmations.length === 0) {
     throw new TeachingPackageError('INVALID_REQUEST', 'confirmations must not be empty');
@@ -108,7 +118,10 @@ export async function confirmSceneAlignments(
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER, undefined, {
     sceneEventActorRef: scope.actorRef,
   });
-  const document = await store.loadDocument(version.currentStageId);
+  const document =
+    options.document && options.document.stage.id === version.currentStageId
+      ? options.document
+      : await store.loadDocument(version.currentStageId);
   if (!document) {
     throw new TeachingPackageError('STAGE_NOT_LIVE', 'the version’s stage is not live');
   }
@@ -174,7 +187,8 @@ export async function confirmSceneAlignments(
       ...scene,
       alignmentBaseline: baseline,
     };
-    await store.putScene(document.stage.id, updated);
+    if (options.putScene) await options.putScene(document.stage.id, updated);
+    else await store.putScene(document.stage.id, updated);
     confirmedSceneIds.push(scene.id);
   }
   return { confirmedSceneIds };

@@ -277,6 +277,21 @@ describe('teaching package service auth', () => {
       PART_WOULD_BE_UNTAUGHT: 422,
       LINK_DRY_RUN_REQUIRED: 409,
       AGENT_OP_IN_PROGRESS: 409,
+      BANK_QUIZ_NOT_EDITABLE: 422,
+      ENGINE_QUESTION_NOT_EDITABLE: 422,
+      SACRED_EXERCISE_ITEM: 422,
+      QUIZ_KEY_NOT_IN_OPTIONS: 422,
+      QUIZ_SINGLE_KEY_COUNT: 422,
+      QUIZ_LAST_ITEM: 422,
+      QUIZ_ITEM_NOT_FOUND: 404,
+      QUIZ_OPTION_NOT_FOUND: 422,
+      NARRATION_LINE_NOT_FOUND: 404,
+      ELEMENT_NOT_FOUND: 404,
+      SCENE_TYPE_NOT_EDITABLE: 422,
+      ELEMENT_NOT_TEXT: 422,
+      SACRED_TEXT_PINNED: 422,
+      GUIDE_ANSWER_LEAK: 422,
+      STALE_NOT_BY_AGENT: 422,
     };
 
     it('maps every code onto the folders envelope with its status', async () => {

@@ -4,7 +4,9 @@
  *
  * Service-to-service only (Kafuo Backend, service key); `[id]` is the package
  * version. `[op]`: `regenerate`, `generate`, `link`, `narration-audio`,
- * `delete`, `skills` — each the editor's own service with the actor
+ * `delete`, `skills`, and wave F2's `quiz-item-edit`, `quiz-item-delete`,
+ * `narration-line`, `text-element`, `alignment-confirm`
+ * (`lib/server/teaching-package/agent-edit-ops.ts`) — each the editor's own service with the actor
  * `agent:<user id>` (`lib/server/teaching-package/agent-ops.ts`). A never-offered
  * action (submit, approve, publish, …) → 422 `AGENT_ACTION_NOT_ALLOWED`; any
  * other name → 404.

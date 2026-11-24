@@ -76,6 +76,8 @@ export interface AgentSceneElement {
 
 export interface AgentNarrationLine {
   index: number;
+  /** The speech Action's id: what `narration-line` addresses (F2.2), never the index. */
+  action_id: string | null;
   text: string;
   numbers: number[];
   audio: { status: 'ok' | 'missing' | 'failed' };
@@ -120,6 +122,12 @@ export interface AgentScene {
     checks: SkillRequirementCheck[];
   };
   validation: { state: string; needs_alignment_confirmation: boolean };
+  /**
+   * F2.6: why the slide is stale (`material-change`, `assignment-change`,
+   * `classification-change`; null when aligned or never baselined), and whether
+   * `alignment-confirm` would accept it (A8: stale only by the agent's own ops).
+   */
+  alignment: { state: string; reason: string | null; confirmable_by_agent: boolean };
   review_flags: Array<{ code: string; message: string }>;
   part_ids: string[];
   source_block_ids: string[];
@@ -158,6 +166,8 @@ export interface ProjectScenesInput {
   /** Governed by Teaching Skills: alignment confirmation applies only then (submit check 10). */
   governed: boolean;
   regenerations?: ReadonlyMap<string, SceneRegenerationSummary>;
+  /** F2.6: the scenes the A8 proof accepts (`agent-alignment-proof.ts`); absent = none. */
+  agentConfirmable?: ReadonlySet<string>;
 }
 
 function str(value: unknown): string | null {
@@ -277,7 +287,13 @@ export function projectNarration(scene: Pick<AppScene, 'actions' | 'generationIs
   const lines = (scene.actions ?? [])
     .map(
       (action) =>
-        action as { type?: unknown; text?: unknown; audioId?: unknown; audioInvalidated?: unknown },
+        action as {
+          id?: unknown;
+          type?: unknown;
+          text?: unknown;
+          audioId?: unknown;
+          audioInvalidated?: unknown;
+        },
     )
     .filter((action) => action.type === 'speech' && typeof action.text === 'string' && action.text)
     .map((action, at) => {
@@ -290,7 +306,13 @@ export function projectNarration(scene: Pick<AppScene, 'actions' | 'generationIs
         : action.audioInvalidated === true
           ? 'missing'
           : 'ok';
-      return { index: at + 1, text, numbers: extractNumbers(text), audio: { status } };
+      return {
+        index: at + 1,
+        action_id: typeof action.id === 'string' ? action.id : null,
+        text,
+        numbers: extractNumbers(text),
+        audio: { status },
+      };
     });
   return { lines };
 }
@@ -497,6 +519,12 @@ export function projectAgentScenes(input: ProjectScenesInput): AgentScenesProjec
       validation: {
         state: alignment.state,
         needs_alignment_confirmation: input.governed && !alignment.aligned,
+      },
+      alignment: {
+        state: alignment.state,
+        reason: alignment.reason ?? null,
+        confirmable_by_agent:
+          input.governed && !alignment.aligned && (input.agentConfirmable?.has(scene.id) ?? false),
       },
       review_flags: (scene.generationIssues ?? []).map((issue) => ({
         code: issue.code,

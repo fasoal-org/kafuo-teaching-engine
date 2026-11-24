@@ -838,6 +838,36 @@ CREATE TABLE IF NOT EXISTS teaching_package_agent_ops (
   updated_at DOUBLE PRECISION NOT NULL,
   PRIMARY KEY (version_id, op, idempotency_key)
 );
+
+-- Kafuo Agent API phase 2 wave F2 (plan §5, §10 R-H4): the direct edit ops and the
+-- alignment confirmation. An existing database keeps the CHECK it was created with
+-- (CREATE TABLE IF NOT EXISTS), so the CHECK is widened here, guarded on its own text
+-- holding the newest op, so a re-boot is a no-op. Never narrowed. The columns are the
+-- A8 proof of an edit row: who wrote it, the scene revision it produced, the material
+-- fingerprint of the result without narration audio, and whether the slide was aligned
+-- (or stale only by this agent's own ops) before it. Nullable: the E3 rows have none.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'teaching_package_agent_ops_op_check'
+       AND pg_get_constraintdef(oid) LIKE '%alignment-confirm%'
+  ) THEN
+    ALTER TABLE teaching_package_agent_ops
+      DROP CONSTRAINT IF EXISTS teaching_package_agent_ops_op_check;
+    ALTER TABLE teaching_package_agent_ops
+      ADD CONSTRAINT teaching_package_agent_ops_op_check
+      CHECK (op IN ('delete','narration-audio','link-dry-run','quiz-item-edit',
+                    'quiz-item-delete','narration-line','text-element','alignment-confirm'));
+  END IF;
+END;
+$$;
+ALTER TABLE teaching_package_agent_ops ADD COLUMN IF NOT EXISTS actor_ref TEXT;
+ALTER TABLE teaching_package_agent_ops ADD COLUMN IF NOT EXISTS result_scene_rev BIGINT;
+ALTER TABLE teaching_package_agent_ops ADD COLUMN IF NOT EXISTS result_fingerprint TEXT;
+ALTER TABLE teaching_package_agent_ops ADD COLUMN IF NOT EXISTS aligned_before BOOLEAN;
+CREATE INDEX IF NOT EXISTS tpao_version_scene_idx
+  ON teaching_package_agent_ops (version_id, scene_id, created_at);
 `;
 
 export const TEACHING_PACKAGE_SCHEMA = `${TEACHING_PACKAGE_TABLES}

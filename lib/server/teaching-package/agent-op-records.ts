@@ -19,7 +19,21 @@ import { createHash } from 'node:crypto';
 
 import type { Queryable } from '@openmaic/storage/document/pg';
 
-export type AgentOpRecordKind = 'delete' | 'narration-audio' | 'link-dry-run';
+export type AgentOpRecordKind =
+  | 'delete'
+  | 'narration-audio'
+  | 'link-dry-run'
+  | AgentEditOpKind
+  | 'alignment-confirm';
+
+/** Wave F2's direct edits: each row is an A8 proof (actor, result rev and fingerprint). */
+export const AGENT_EDIT_OP_KINDS = [
+  'quiz-item-edit',
+  'quiz-item-delete',
+  'narration-line',
+  'text-element',
+] as const;
+export type AgentEditOpKind = (typeof AGENT_EDIT_OP_KINDS)[number];
 
 export const LINK_DRY_RUN_WINDOW_MS = 30 * 60 * 1000;
 export const NARRATION_MARKER_LEASE_MS = 10 * 60 * 1000;
@@ -165,6 +179,95 @@ export async function releaseNarration(
         AND status = 'running'`,
     [input.versionId, input.idempotencyKey],
   );
+}
+
+/**
+ * Wave F2: one direct edit (or an alignment confirmation), written on the transaction
+ * that advanced the scene's revision, so the row exists exactly when the write landed.
+ * `resultFingerprint` is the material fingerprint of the written scene WITHOUT its
+ * narration audio (R-H1); `alignedBefore` is A8's "the slide was aligned (or stale only
+ * by this agent's own ops) before this op" (R-H2).
+ */
+export async function recordEditInTransaction(
+  queryable: Queryable,
+  input: WriteInput & {
+    op: AgentEditOpKind | 'alignment-confirm';
+    actorRef: string;
+    resultSceneRev: number;
+    resultFingerprint: string;
+    alignedBefore: boolean;
+    result: Record<string, unknown>;
+  },
+): Promise<void> {
+  await queryable.query(
+    `INSERT INTO teaching_package_agent_ops
+       (tenant_id, version_id, idempotency_key, op, scene_id, request_digest, status, result,
+        lease_until, created_at, updated_at, actor_ref, result_scene_rev, result_fingerprint,
+        aligned_before)
+     VALUES ($1, $2, $3, $4, $5, $6, 'done', $7::jsonb, NULL, $8, $8, $9, $10, $11, $12)`,
+    [
+      input.tenantId,
+      input.versionId,
+      input.idempotencyKey,
+      input.op,
+      input.sceneId,
+      input.requestDigest,
+      JSON.stringify(input.result),
+      input.now,
+      input.actorRef,
+      input.resultSceneRev,
+      input.resultFingerprint,
+      input.alignedBefore,
+    ],
+  );
+}
+
+/** The A8 proof fields of one landed edit row. */
+export interface AgentEditRow {
+  op: AgentEditOpKind;
+  sceneId: string;
+  actorRef: string;
+  at: number;
+  resultSceneRev: number | null;
+  resultFingerprint: string;
+  alignedBefore: boolean;
+}
+
+/** Every landed F2 edit row of the version (optionally of some scenes), oldest first. */
+export async function listAgentEditRows(
+  queryable: Queryable,
+  versionId: string,
+  sceneIds?: readonly string[],
+): Promise<AgentEditRow[]> {
+  const result = await queryable.query<{
+    op: AgentEditOpKind;
+    scene_id: string;
+    actor_ref: string | null;
+    created_at: number | string;
+    result_scene_rev: number | string | null;
+    result_fingerprint: string | null;
+    aligned_before: boolean | null;
+  }>(
+    `SELECT op, scene_id, actor_ref, created_at, result_scene_rev, result_fingerprint,
+            aligned_before
+       FROM teaching_package_agent_ops
+      WHERE version_id = $1 AND status = 'done'
+        AND op IN (${AGENT_EDIT_OP_KINDS.map((kind) => `'${kind}'`).join(',')})
+        ${sceneIds ? 'AND scene_id = ANY($2::text[])' : ''}
+      ORDER BY created_at, idempotency_key`,
+    sceneIds ? [versionId, [...sceneIds]] : [versionId],
+  );
+  return result.rows
+    .filter((row) => row.actor_ref !== null && row.result_fingerprint !== null)
+    .map((row) => ({
+      op: row.op,
+      sceneId: row.scene_id,
+      actorRef: row.actor_ref!,
+      at: Number(row.created_at),
+      resultSceneRev: row.result_scene_rev === null ? null : Number(row.result_scene_rev),
+      resultFingerprint: row.result_fingerprint!,
+      alignedBefore: row.aligned_before === true,
+    }));
 }
 
 /** D-6: a successful link dry run by this key, on this scene and part (refreshed each time). */

@@ -11,6 +11,11 @@ import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 import { readAttemptById } from '@/lib/persistence/teaching-package';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import {
+  agentAlignmentProof,
+  loadSceneWriteEvents,
+} from '@/lib/server/teaching-package/agent-alignment-proof';
+import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
+import {
   isTeachingPackageStageLockedError,
   TeachingPackageError,
 } from '@/lib/server/teaching-package/errors';
@@ -145,6 +150,26 @@ export async function loadAgentScenes(
     version.id,
     version.currentStageId,
   );
+  // F2.6: the A8 proof for every stale slide of a governed package (the same proof
+  // `alignment-confirm` runs, so the read never promises what the op refuses).
+  const governed = Boolean(governance?.contract);
+  const stale = governed
+    ? document.scenes.filter((scene) => !deriveSceneAlignment(scene).aligned)
+    : [];
+  const agentConfirmable = new Set<string>();
+  if (stale.length > 0) {
+    const events = await loadSceneWriteEvents(
+      queryable,
+      version.id,
+      version.currentStageId,
+      stale.map((scene) => scene.id),
+    );
+    for (const scene of stale) {
+      if (agentAlignmentProof(scene, events.get(scene.id) ?? []).ok) {
+        agentConfirmable.add(scene.id);
+      }
+    }
+  }
   const projection = projectAgentScenes({
     version,
     revision: manifest.rev,
@@ -152,8 +177,9 @@ export async function loadAgentScenes(
     outline: (document.outline ?? null) as AppDocumentOutline | null,
     stage: document.stage,
     flow: flow && flow.length > 0 ? flow : null,
-    governed: Boolean(governance?.contract),
+    governed,
     regenerations,
+    agentConfirmable,
   });
   sceneProjectionCache.set(key, projection);
   return withLiveStatus(projection);
