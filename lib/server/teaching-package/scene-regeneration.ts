@@ -38,6 +38,12 @@ import {
 } from '@/lib/server/teaching-package/book-coverage';
 import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import {
+  checkSlideImageAddition,
+  replanSlideWithImage,
+  slideShowsVisual,
+  type SlideImageAddition,
+} from '@/lib/server/teaching-package/add-slide-image';
+import {
   citedContentUnitIds,
   isTeachingSlide,
 } from '@/lib/server/teaching-package/content-unit-coverage';
@@ -56,6 +62,7 @@ import {
   REPLAN_PLANNER_STAGE,
 } from '@/lib/server/teaching-package/replan-moved-slide';
 import { createRegenerationRoute } from '@/lib/server/teaching-package/routed-regeneration-call';
+import type { eligibleVisualsForUnits } from '@/lib/server/teaching-package/scene-insertion';
 import {
   commitSceneRegeneration,
   failSceneRegeneration,
@@ -113,6 +120,13 @@ export interface SceneRegenerationRequest {
    * `sourceContentUnitIds` becomes the new list. Absent → the list never changes.
    */
   contentUnitChange?: ContentUnitChange;
+  /**
+   * Kafuo Agent API phase 2 F3.3 (`add-image`): add one eligible textbook image. The
+   * slide is re-planned by the visual re-plan with the image in its `suggestedImageIds`
+   * and generated fresh from that plan (`add-slide-image.ts`). Never with `mode` or
+   * `contentUnitChange`; the editor's own parser never sets it.
+   */
+  imageAddition?: SlideImageAddition;
 }
 
 export interface ContentUnitChange {
@@ -182,10 +196,13 @@ export function parseSceneRegenerationRequest(
 /** The digest an idempotency key is bound to: same key + different body → 409. */
 export function sceneRegenerationRequestDigest(
   sceneId: string,
-  request: Pick<SceneRegenerationRequest, 'instruction' | 'reason' | 'mode' | 'contentUnitChange'>,
+  request: Pick<
+    SceneRegenerationRequest,
+    'instruction' | 'reason' | 'mode' | 'contentUnitChange' | 'imageAddition'
+  >,
 ): string {
-  // `mode` and `contentUnitChange` join the digest only when set, so the digests
-  // of every other request are unchanged.
+  // `mode`, `contentUnitChange` and `imageAddition` join the digest only when set, so
+  // the digests of every other request are unchanged.
   return createHash('sha256')
     .update(
       JSON.stringify({
@@ -194,6 +211,14 @@ export function sceneRegenerationRequestDigest(
         reason: request.reason,
         ...(request.mode ? { mode: request.mode } : {}),
         ...(request.contentUnitChange ? { contentUnitChange: request.contentUnitChange } : {}),
+        ...(request.imageAddition
+          ? {
+              imageAddition: {
+                sourceVisualId: request.imageAddition.sourceVisualId,
+                note: request.imageAddition.note ?? null,
+              },
+            }
+          : {}),
       }),
     )
     .digest('hex');
@@ -356,6 +381,10 @@ export interface SceneRegenerationDeps {
   regenerate?: typeof regenerateOneScene;
   /** A moved lesson part's re-plan (owner, 14 Nov 2026). */
   replan?: typeof replanMovedSlide;
+  /** An added textbook image's re-plan (phase 2 F3.3). */
+  replanImage?: typeof replanSlideWithImage;
+  /** The eligible-visuals reader of an image addition (test seam). */
+  imageVisuals?: typeof eligibleVisualsForUnits;
   resolveGoverned?: typeof resolveGovernedRegenerationContext;
   routingMode?: 'enforced' | 'off';
   /**
@@ -461,10 +490,23 @@ export async function regenerateSlideScene(
 
   // A moved lesson part (owner, 14 Nov 2026): the slide's new part list and the
   // directive, refused before any row is written.
-  const versionUnits = request.contentUnitChange
-    ? (await readAllContentUnitsForVersion(pool, grant.versionId, { tenantId: grant.tenantId }))
-        .units
-    : [];
+  const versionUnits =
+    request.contentUnitChange || request.imageAddition
+      ? (await readAllContentUnitsForVersion(pool, grant.versionId, { tenantId: grant.tenantId }))
+          .units
+      : [];
+  // An added textbook image (phase 2 F3.3): refused before any row is written —
+  // not a content slide, not an eligible visual of its parts, or already on it.
+  if (request.imageAddition) {
+    if (request.mode || request.contentUnitChange) throw invalid('imageAddition', 'format');
+    await checkSlideImageAddition(
+      pool,
+      stageDocument.scenes.find((scene) => scene.id === sceneId),
+      stageDocument.outline as AppDocumentOutline | undefined,
+      request.imageAddition.sourceVisualId,
+      deps.imageVisuals,
+    );
+  }
   const unitChange = request.contentUnitChange
     ? resolveContentUnitChange(
         stageDocument.scenes.find((scene) => scene.id === sceneId),
@@ -572,6 +614,10 @@ export async function regenerateSlideScene(
 
   // Generation — no transaction is open while the model runs.
   let candidate: AppScene;
+  /** An added textbook image's serving path: the candidate must show it (F3.3). */
+  let addedImagePath: string | null = null;
+  /** Every image an added-image run must leave on the slide (old ones + the new one). */
+  let keptImages: Array<{ id: string; servingPath: string }> = [];
   try {
     const resolveGoverned = deps.resolveGoverned ?? resolveGovernedRegenerationContext;
     const governed = await resolveGoverned(pool, grant.versionId, row.previousScene);
@@ -627,6 +673,31 @@ export async function regenerateSlideScene(
       }
       if (replanned.kind === 'planned') replannedOutline = replanned.outline;
     }
+    // An added textbook image (phase 2 F3.3): the visual re-plan with the image in the
+    // slide's `suggestedImageIds`; the slide is then generated fresh from that plan.
+    if (request.imageAddition) {
+      const withImage = await (deps.replanImage ?? replanSlideWithImage)({
+        pool,
+        scene: row.previousScene,
+        outlineRecord: stageDocument.outline as AppDocumentOutline | undefined,
+        units: versionUnits,
+        addition: request.imageAddition,
+        languageDirective: registerPolicy?.directive ?? stage.languageDirective ?? '',
+        aiCall: route.aiCallFor(REPLAN_PLANNER_STAGE),
+        ...(deps.imageVisuals ? { visuals: deps.imageVisuals } : {}),
+      });
+      route.assertAvailable();
+      if (!withImage.ok) {
+        await fail('SCENE_CONTENT_GENERATION_FAILED');
+        throw new TeachingPackageError('SCENE_CONTENT_GENERATION_FAILED', withImage.message, {
+          regenerationId: row.id,
+          failure: 'VISUAL_REPLAN_FAILED',
+        });
+      }
+      replannedOutline = withImage.outline;
+      addedImagePath = withImage.servingPath;
+      keptImages = withImage.requiredImages;
+    }
     const instruction =
       unitChange && !replannedOutline
         ? `${request.instruction}\n\n${unitChange.directive}`
@@ -660,6 +731,10 @@ export async function regenerateSlideScene(
       // slide's.
       instruction,
       ...(unitChange ? { sourceContentUnitIds: unitChange.unitIds } : {}),
+      // An added image keeps the slide's own part list (the re-plan drops it otherwise).
+      ...(request.imageAddition && row.previousScene.sourceContentUnitIds
+        ? { sourceContentUnitIds: row.previousScene.sourceContentUnitIds }
+        : {}),
       ...(replannedOutline ? { replannedOutline } : {}),
       ...(request.mode === 'narration' ? { narrationOnly: true } : {}),
       teachingModel: version.teachingModel,
@@ -678,6 +753,29 @@ export async function regenerateSlideScene(
       });
     }
     candidate = generated.scene;
+    // The generator only guarantees SOME authorized visual: an added image that did not
+    // reach the canvas is a failed op, never a "done" without the image.
+    if (addedImagePath && !slideShowsVisual(candidate, addedImagePath)) {
+      await fail('SCENE_CONTENT_GENERATION_FAILED', candidate);
+      throw new TeachingPackageError(
+        'SCENE_CONTENT_GENERATION_FAILED',
+        'the slide was regenerated without the added textbook image; nothing was written',
+        { regenerationId: row.id, failure: 'VISUAL_NOT_ADDED' },
+      );
+    }
+    // Review H2: the slide's own images must survive too — a re-planned slide starts from
+    // an empty canvas, so a dropped one would be silently deleted under a "done".
+    const lostImageIds = keptImages
+      .filter(({ servingPath }) => !slideShowsVisual(candidate, servingPath))
+      .map(({ id }) => id);
+    if (lostImageIds.length > 0) {
+      await fail('VISUAL_NOT_KEPT', candidate);
+      throw new TeachingPackageError(
+        'VISUAL_NOT_KEPT',
+        'the slide was regenerated without images it already showed; nothing was written',
+        { regenerationId: row.id, imageIds: lostImageIds },
+      );
+    }
   } catch (error) {
     if (error instanceof TeachingPackageError) {
       if (!(error.details as { regenerationId?: string } | undefined)?.regenerationId) {

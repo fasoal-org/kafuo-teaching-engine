@@ -4,7 +4,7 @@
  *
  * Service-to-service only (Kafuo Backend, service key); `[id]` is the package
  * version. `[op]`: `regenerate`, `generate`, `link`, `narration-audio`,
- * `delete`, `skills`, and wave F2's `quiz-item-edit`, `quiz-item-delete`,
+ * `delete`, `skills`, phase 2 F3.3's `add-image`, and wave F2's `quiz-item-edit`, `quiz-item-delete`,
  * `narration-line`, `text-element`, `alignment-confirm`
  * (`lib/server/teaching-package/agent-edit-ops.ts`) — each the editor's own service with the actor
  * `agent:<user id>` (`lib/server/teaching-package/agent-ops.ts`). A never-offered

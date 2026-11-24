@@ -470,7 +470,18 @@ export type TeachingPackageErrorCode =
   /** A new narration line states a guide answer before the learner's try. */
   | 'GUIDE_ANSWER_LEAK'
   /** A8: the slide was not made stale by this tenant's agent alone. */
-  | 'STALE_NOT_BY_AGENT';
+  | 'STALE_NOT_BY_AGENT'
+  // --- Kafuo Agent API phase 2 F3.3: add a textbook image (add-slide-image.ts) ---
+  /** Not an eligible source visual of the slide's lesson parts (or unreadable for the planner). */
+  | 'VISUAL_NOT_ELIGIBLE'
+  /** The textbook image is already on the slide's canvas. */
+  | 'VISUAL_ALREADY_ON_SLIDE'
+  /** The slide shows images the fresh re-plan cannot carry; adding would delete them (H2). */
+  | 'SLIDE_IMAGES_NOT_CARRIED'
+  /** The slide already shows the most images an added image allows (H2). */
+  | 'SLIDE_IMAGE_LIMIT'
+  /** The regenerated slide lost an image it already showed; nothing was written (H2). */
+  | 'VISUAL_NOT_KEPT';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_NOT_AWAITING: 409,
@@ -503,6 +514,11 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   SACRED_TEXT_PINNED: 422,
   GUIDE_ANSWER_LEAK: 422,
   STALE_NOT_BY_AGENT: 422,
+  VISUAL_NOT_ELIGIBLE: 422,
+  VISUAL_ALREADY_ON_SLIDE: 409,
+  SLIDE_IMAGES_NOT_CARRIED: 422,
+  SLIDE_IMAGE_LIMIT: 422,
+  VISUAL_NOT_KEPT: 502,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,

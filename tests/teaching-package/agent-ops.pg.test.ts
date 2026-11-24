@@ -25,11 +25,13 @@ import type { RegenerateOneSceneInput } from '@/lib/server/teaching-package/rege
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
 import type { AppStage } from '@/lib/document-store/persistence-types';
-import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
+import { makeDocument, makeOutline, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 const mocks = vi.hoisted(() => ({
   regenerate: vi.fn(),
   createRoute: vi.fn(),
+  /** Phase 2 F3.3: the eligible visuals (null → the real reader). */
+  visuals: null as null | ((...args: unknown[]) => Promise<unknown>),
   release: null as null | (() => void),
   afterCallbacks: [] as Array<() => unknown>,
 }));
@@ -46,6 +48,17 @@ vi.mock('@/lib/server/teaching-package/regenerate-one-scene', () => ({
 vi.mock('@/lib/server/teaching-package/routed-regeneration-call', () => ({
   createRegenerationRoute: mocks.createRoute,
 }));
+vi.mock('@/lib/server/teaching-package/scene-insertion', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('@/lib/server/teaching-package/scene-insertion')>();
+  return {
+    ...original,
+    eligibleVisualsForUnits: (...args: Parameters<typeof original.eligibleVisualsForUnits>) =>
+      mocks.visuals
+        ? (mocks.visuals(...args) as ReturnType<typeof original.eligibleVisualsForUnits>)
+        : original.eligibleVisualsForUnits(...args),
+  };
+});
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
@@ -94,6 +107,7 @@ describe('agent-ops over PGlite', () => {
     vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', SERVICE_KEY);
     mocks.afterCallbacks.length = 0;
     mocks.release = null;
+    mocks.visuals = null;
     mocks.regenerate.mockReset();
     mocks.createRoute.mockReset();
     mocks.createRoute.mockResolvedValue({
@@ -321,6 +335,360 @@ describe('agent-ops over PGlite', () => {
     const other = await post('delete', { ...body, reason: 'another reason entirely' });
     expect(other.status).toBe(409);
     expect(await counts()).toEqual(after);
+  });
+
+  describe('add-image (phase 2 F3.3)', () => {
+    const IMAGE_KEY = 'agt_3_add_image_0123456789abcdef0123456789abcdef';
+    const PATH = '/media/stage-agent-ops/src-7.png';
+    const entry = {
+      id: 'src-7',
+      contentResourceId: '1',
+      pageNumber: 4,
+      mimeType: 'image/png',
+      sha256: 'a'.repeat(64),
+      servingPath: PATH,
+      sourceContentUnitIds: ['u1'],
+    };
+    const image = { id: 'src-7', src: PATH, pageNumber: 4, sourceContentUnitIds: ['u1'] };
+    const plan = JSON.stringify({
+      suggestedImageIds: ['src-7'],
+      imagePlans: [{ imageId: 'src-7', shows: 'دائرة كهربائية', teachingPoint: 'مسار التيار' }],
+      visualPlan: { mode: 'image' },
+      keyPoints: ['نقطة أولى', 'نقطة ثانية', 'نقطة ثالثة'],
+    });
+    const prompts: string[] = [];
+
+    beforeEach(() => {
+      prompts.length = 0;
+      // Only the parts `u1` cites have this one approved, readable visual.
+      mocks.visuals = async (...args: unknown[]) =>
+        (args[2] as string[]).includes('u1')
+          ? {
+              visuals: [{ entry, image }],
+              visionImages: [{ id: 'src-7', src: 'data:image/png;base64,AAAA' }],
+            }
+          : { visuals: [], visionImages: [] };
+      mocks.createRoute.mockResolvedValue({
+        aiCallFor: () => async (_system: string, user: string) => {
+          prompts.push(user);
+          return plan;
+        },
+        assertAvailable: () => {},
+        description: { mode: 'test' },
+      });
+      mocks.regenerate.mockImplementation(async (input: RegenerateOneSceneInput) => {
+        await new Promise<void>((resolve) => {
+          mocks.release = resolve;
+        });
+        const pre = input.scene as AppScene & { content: { canvas: { elements: unknown[] } } };
+        return {
+          ok: true,
+          scene: {
+            ...generatedFrom(input.scene),
+            content: {
+              ...pre.content,
+              canvas: {
+                ...pre.content.canvas,
+                elements: [
+                  ...pre.content.canvas.elements,
+                  {
+                    id: 'img-1',
+                    type: 'image',
+                    src: PATH,
+                    left: 0,
+                    top: 0,
+                    width: 100,
+                    height: 80,
+                  },
+                ],
+              },
+            },
+          },
+        };
+      });
+    });
+
+    const body = (revision: string, extra: Record<string, unknown> = {}) => ({
+      expectedRevision: revision,
+      sceneId: 'scene-1',
+      sourceVisualId: 'src-7',
+      note: 'اربط الصورة بمسار التيار',
+      idempotencyKey: IMAGE_KEY,
+      ...extra,
+    });
+
+    it('a dry run and every refusal write no row and call no model', async () => {
+      const revision = String(await stageRevision());
+      const before = await counts();
+      const dry = await post('add-image', body(revision, { dryRun: true }));
+      expect(dry.status).toBe(200);
+      expect(await dry.json()).toMatchObject({
+        dryRun: true,
+        wouldRun: true,
+        sceneId: 'scene-1',
+        sourceVisualId: 'src-7',
+      });
+      // scene-3 cites u2: src-7 is not one of its parts' visuals.
+      const foreign = await post('add-image', body(revision, { sceneId: 'scene-3' }));
+      expect(foreign.status).toBe(422);
+      expect(await foreign.json()).toMatchObject({
+        error: { code: 'VISUAL_NOT_ELIGIBLE', details: { eligibleVisualIds: [] } },
+      });
+      const unknown = await post('add-image', body(revision, { sourceVisualId: 'src-99' }));
+      expect(unknown.status).toBe(422);
+      expect(await unknown.json()).toMatchObject({
+        error: { code: 'VISUAL_NOT_ELIGIBLE', details: { eligibleVisualIds: ['src-7'] } },
+      });
+      expect(await counts()).toEqual(before);
+      expect(mocks.regenerate).not.toHaveBeenCalled();
+      expect(prompts).toEqual([]);
+    });
+
+    it('answers 202, re-plans with the image, lands as the agent’s regeneration, replays by key', async () => {
+      const revision = String(await stageRevision());
+      const response = await post('add-image', body(revision));
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({
+        opId: `rg_${IMAGE_KEY}`,
+        status: 'running',
+        sceneId: 'scene-1',
+        sourceVisualId: 'src-7',
+      });
+      await vi.waitFor(() => expect(mocks.release).not.toBeNull());
+      // The visual re-plan ran on the metered route, with the image required.
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('keep exactly src-7');
+      expect(prompts[0]).toContain('<<<NOTE');
+      const input = mocks.regenerate.mock.calls[0]![0] as RegenerateOneSceneInput;
+      expect(input.replannedOutline?.suggestedImageIds).toEqual(['src-7']);
+      expect(input.sourceContentUnitIds).toEqual(['u1']);
+      mocks.release!();
+      await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+
+      const done = await opStatus(`rg_${IMAGE_KEY}`);
+      expect(done.status).toBe(200);
+      expect(await done.json()).toMatchObject({ status: 'done', kind: 'regeneration' });
+      // A8: the agent's own regeneration event on the slide.
+      const { loadSceneWriteEvents } =
+        await import('@/lib/server/teaching-package/agent-alignment-proof');
+      const events = await loadSceneWriteEvents(pool as never, VERSION, STAGE, ['scene-1']);
+      expect(events.get('scene-1')).toEqual([
+        expect.objectContaining({ kind: 'regeneration', actorRef: AGENT }),
+      ]);
+      expect((await counts()).agentOps).toBe(0);
+
+      // The same key after the image landed: that run, never a 409.
+      const replay = await post('add-image', body(revision));
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({ opId: `rg_${IMAGE_KEY}`, status: 'done' });
+      const reused = await post('add-image', body(revision, { note: 'ملاحظة أخرى مختلفة' }));
+      expect(reused.status).toBe(409);
+      expect(await reused.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_KEY_REUSED' } });
+      // A new key: the image is on the slide now.
+      const again = await post(
+        'add-image',
+        body(String(await stageRevision()), { idempotencyKey: `${IMAGE_KEY}_2` }),
+      );
+      expect(again.status).toBe(409);
+      expect(await again.json()).toMatchObject({ error: { code: 'VISUAL_ALREADY_ON_SLIDE' } });
+      expect(mocks.regenerate).toHaveBeenCalledTimes(1);
+    });
+
+    it('a regeneration that drops the added image fails and writes nothing to the slide', async () => {
+      mocks.regenerate.mockImplementation(async (input: RegenerateOneSceneInput) => ({
+        ok: true,
+        scene: generatedFrom(input.scene),
+      }));
+      const revision = String(await stageRevision());
+      const response = await post('add-image', body(revision));
+      // Started after its row exists (202); the run then fails on the missing image.
+      expect(response.status).toBe(202);
+      await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+      expect(String(await stageRevision())).toBe(revision);
+      const status = await opStatus(`rg_${IMAGE_KEY}`);
+      expect(await status.json()).toMatchObject({
+        status: 'failed',
+        errorCode: 'SCENE_CONTENT_GENERATION_FAILED',
+      });
+    });
+
+    // Review H2: the slide's own images are carried by the fresh re-plan, or refused.
+    describe('with images already on the slide', () => {
+      const pathOf = (id: string) => `/media/stage-agent-ops/${id}.png`;
+      const manifestEntry = (id: string, units: string[]) => ({
+        ...entry,
+        id,
+        servingPath: pathOf(id),
+        sourceContentUnitIds: units,
+      });
+      // src-9 is linked to u2 (another part); the others to u1. src-10 cannot be read.
+      const manifest = [
+        entry,
+        manifestEntry('src-8', ['u1']),
+        manifestEntry('src-9', ['u2']),
+        manifestEntry('src-10', ['u1']),
+        manifestEntry('src-11', ['u1']),
+        manifestEntry('src-12', ['u1']),
+        manifestEntry('src-13', ['u1']),
+      ];
+      const imageElement = (id: string, src: string) => ({
+        id,
+        type: 'image',
+        src,
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 80,
+      });
+
+      async function reseedSlide(elements: unknown[]): Promise<string> {
+        const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+          pool,
+          ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+          validateScene: validateAppScene,
+          validateStage: validateAppStage,
+          mutationFence: teachingPackageStageGuardFence(),
+        });
+        const first = slide('scene-1', 1, ['u1']) as AppScene & {
+          content: { canvas: { elements: unknown[] } };
+        };
+        first.content.canvas.elements = elements;
+        await store.saveDocument(
+          makeDocument(
+            STAGE,
+            'Draft package',
+            [first, slide('scene-2', 2, ['u1']), slide('scene-3', 3, ['u2'])],
+            { ...makeOutline('Draft package'), sourceVisuals: manifest },
+          ),
+        );
+        return String(await stageRevision());
+      }
+
+      beforeEach(() => {
+        mocks.visuals = async (...args: unknown[]) => {
+          const units = args[2] as string[];
+          const eligible = manifest.filter((item) =>
+            item.sourceContentUnitIds.some((unit) => units.includes(unit)),
+          );
+          return {
+            visuals: eligible.map((item) => ({
+              entry: item,
+              image: {
+                id: item.id,
+                src: item.servingPath,
+                pageNumber: 4,
+                sourceContentUnitIds: item.sourceContentUnitIds,
+              },
+            })),
+            visionImages: eligible
+              .filter((item) => item.id !== 'src-10')
+              .map((item) => ({ id: item.id, src: 'data:image/png;base64,AAAA' })),
+          };
+        };
+      });
+
+      it('refuses a slide whose images the re-plan cannot carry, or one at the image limit', async () => {
+        const before = (await counts()).regenerations;
+        // A decorative image (outside the manifest) and an image of another part.
+        let revision = await reseedSlide([
+          imageElement('el-8', pathOf('src-8')),
+          imageElement('el-9', pathOf('src-9')),
+          imageElement('deco-1', '/media/stage-agent-ops/decoration.png'),
+        ]);
+        const mixed = await post('add-image', body(revision));
+        expect(mixed.status).toBe(422);
+        expect(await mixed.json()).toMatchObject({
+          error: { code: 'SLIDE_IMAGES_NOT_CARRIED', details: { imageIds: ['src-9', 'deco-1'] } },
+        });
+        // An eligible image the planner cannot read; the dry run refuses the same way.
+        revision = await reseedSlide([
+          imageElement('el-8', pathOf('src-8')),
+          imageElement('el-10', pathOf('src-10')),
+        ]);
+        for (const extra of [{ dryRun: true }, {}]) {
+          const unreadable = await post('add-image', body(revision, extra));
+          expect(unreadable.status).toBe(422);
+          expect(await unreadable.json()).toMatchObject({
+            error: { code: 'SLIDE_IMAGES_NOT_CARRIED', details: { imageIds: ['src-10'] } },
+          });
+        }
+        // Five images already: the re-plan could not keep them all with a sixth.
+        revision = await reseedSlide(
+          ['src-8', 'src-10', 'src-11', 'src-12', 'src-13'].map((id) =>
+            imageElement(`el-${id}`, pathOf(id)),
+          ),
+        );
+        const full = await post('add-image', body(revision));
+        expect(full.status).toBe(422);
+        expect(await full.json()).toMatchObject({
+          error: { code: 'SLIDE_IMAGE_LIMIT', details: { max: 5 } },
+        });
+        expect((await counts()).regenerations).toBe(before);
+        expect(mocks.regenerate).not.toHaveBeenCalled();
+        expect(prompts).toEqual([]);
+      });
+
+      const planBoth = JSON.stringify({
+        suggestedImageIds: ['src-8', 'src-7'],
+        imagePlans: [
+          { imageId: 'src-8', shows: 'بطارية', teachingPoint: 'مصدر الطاقة' },
+          { imageId: 'src-7', shows: 'دائرة كهربائية', teachingPoint: 'مسار التيار' },
+        ],
+        visualPlan: { mode: 'image' },
+        keyPoints: ['نقطة أولى', 'نقطة ثانية', 'نقطة ثالثة'],
+      });
+
+      beforeEach(() => {
+        mocks.createRoute.mockResolvedValue({
+          aiCallFor: () => async (_system: string, user: string) => {
+            prompts.push(user);
+            return planBoth;
+          },
+          assertAvailable: () => {},
+          description: { mode: 'test' },
+        });
+      });
+
+      it('keeps the slide’s own image with the added one', async () => {
+        const revision = await reseedSlide([imageElement('el-8', pathOf('src-8'))]);
+        const response = await post('add-image', body(revision));
+        expect(response.status).toBe(202);
+        await vi.waitFor(() => expect(mocks.release).not.toBeNull());
+        expect(prompts[0]).toContain('keep exactly src-8, src-7');
+        const input = mocks.regenerate.mock.calls[0]![0] as RegenerateOneSceneInput;
+        expect(input.replannedOutline?.suggestedImageIds).toEqual(['src-8', 'src-7']);
+        mocks.release!();
+        await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+        const done = await opStatus(`rg_${IMAGE_KEY}`);
+        expect(await done.json()).toMatchObject({ status: 'done', kind: 'regeneration' });
+      });
+
+      it('a regeneration that drops an image the slide showed fails VISUAL_NOT_KEPT', async () => {
+        mocks.regenerate.mockImplementation(async (input: RegenerateOneSceneInput) => {
+          const pre = input.scene as AppScene & { content: { canvas: { elements: unknown[] } } };
+          return {
+            ok: true,
+            scene: {
+              ...generatedFrom(input.scene),
+              content: {
+                ...pre.content,
+                canvas: { ...pre.content.canvas, elements: [imageElement('img-1', PATH)] },
+              },
+            },
+          };
+        });
+        const revision = await reseedSlide([imageElement('el-8', pathOf('src-8'))]);
+        const response = await post('add-image', body(revision));
+        expect(response.status).toBe(202);
+        await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+        expect(String(await stageRevision())).toBe(revision);
+        const status = await opStatus(`rg_${IMAGE_KEY}`);
+        expect(await status.json()).toMatchObject({
+          status: 'failed',
+          errorCode: 'VISUAL_NOT_KEPT',
+        });
+      });
+    });
   });
 
   it('the delete fence refuses a slide changed since its revision was read', async () => {

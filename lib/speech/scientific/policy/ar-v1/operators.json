@@ -427,6 +427,14 @@
       "notes": ""
     },
     {
+      "key": "figure-label-dash",
+      "roles": ["label"],
+      "natural": "شرطة",
+      "status": "proposed",
+      "source": "Kafuo Agent API phase 2 plan F3.2 (B10), 24 Nov 2026: a figure or table label «الشكل 3-5» reads «الشكل ثلاثة شرطة خمسة»; pending curriculum reviewer",
+      "notes": "The dash of a figure/table label after «الشكل/الجدول» (hyphen, en dash or minus); never «ناقص» or a decimal."
+    },
+    {
       "key": "infinity",
       "roles": ["label"],
       "natural": "ما لا نهاية",

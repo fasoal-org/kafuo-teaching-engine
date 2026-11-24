@@ -23,11 +23,12 @@ import {
   expansionAllowance,
 } from './bounds';
 import type { ScientificSubjectCode, SpeechContext } from './context';
-import { detectExpressions, type ExpressionCandidate } from './detect';
+import { detectExpressions, figureLabelParts, type ExpressionCandidate } from './detect';
 import { literalReading } from './literal';
+import { integerToArabicWords } from './numbers/ar-words';
 import { parseMath, ParseFault, type MathParseOptions } from './math/parse';
 import { verbaliseMath } from './math/verbalise-ar';
-import { normaliseInput, stripBidiControls } from './normalise';
+import { digitsValue, normaliseInput, stripBidiControls } from './normalise';
 import { physicsHooks, renderPhysics } from './physics/grammar';
 import { matchUnit } from './physics/units';
 import { writeUnit } from './physics/verbalise-ar';
@@ -36,7 +37,7 @@ import { loadPolicyPack, type PolicyPack } from './policy';
 import type { FallbackReason, RenderedSpan, SpeechRenderResult } from './result';
 import { reviewGuards } from './review-guards';
 import { makeWarning, type RenderWarning, type RenderWarningCode } from './warnings';
-import type { VerbaliseContext, Writer } from './writer';
+import { labelOrNull, type VerbaliseContext, type Writer } from './writer';
 import type { DetectHooks } from './detect';
 
 export type { SpeechContext, ScientificSubjectCode } from './context';
@@ -87,6 +88,9 @@ const GRAMMARS: Readonly<Partial<Record<ScientificSubjectCode, SubjectGrammar>>>
     render: renderChemistry,
   },
 };
+
+/** The policy label read between a figure label's two numbers (`الشكل 3-5`). */
+const FIGURE_LABEL_DASH = 'figure-label-dash';
 
 interface RenderedExpression {
   text: string;
@@ -216,7 +220,23 @@ export function renderScientificSpeech(
     };
 
     let rendered: RenderedExpression;
-    if (candidate.kind === 'ce' && subject !== 'CHEMISTRY') {
+    const labelParts = candidate.reason === 'label' ? figureLabelParts(source) : null;
+    if (labelParts) {
+      // Phase 2 F3.2: «الشكل 3-5» is a label — «ثلاثة شرطة خمسة», never a decimal
+      // or a subtraction. The numbers are words so the dash is never heard as a range.
+      const [first, second] = labelParts.map(
+        (part) => integerToArabicWords(digitsValue(part)) ?? part,
+      );
+      const dash = labelOrNull(ctx, FIGURE_LABEL_DASH);
+      rendered = {
+        text: `${first} ${dash ?? 'شرطة'} ${second}`,
+        fallback: dash === null,
+        ...(dash === null ? { fallbackReason: 'policy' as const } : {}),
+        atomic: true,
+        maxDepth: 0,
+        tokens: 0,
+      };
+    } else if (candidate.kind === 'ce' && subject !== 'CHEMISTRY') {
       // `\ce{}`/`\pu{}` outside a Chemistry lesson: an unsupported command.
       rendered = literal('SATTS_W_UNSUPPORTED_NOTATION', 'chemistry command outside Chemistry');
     } else if (source.length > MAX_EXPRESSION_SOURCE_CHARS) {
