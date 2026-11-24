@@ -40,21 +40,38 @@ export interface SlideImageAddition {
 export const SLIDE_IMAGE_NOTE_MAX = 1000;
 /** The cited parts' text given to the visual re-plan (characters). */
 const SOURCE_TEXT_CAP = 6000;
+/**
+ * The most images a slide may show with an added one (review H2): a slide that already
+ * shows this many is refused, so the re-plan never has to drop one under its image cap.
+ */
+export const MAX_SLIDE_IMAGES_BEFORE_ADD = MAX_REPLAN_IMAGES - 1;
 
 export interface SlideImageCheck {
   entry: SourceVisualManifestEntry;
   /** The lesson parts the slide cites (the eligibility scope). */
   unitIds: string[];
-  /** Ids of the eligible images the slide shows now (canvas). */
+  /** Ids of the images the slide shows now (canvas): every one eligible and readable. */
   shownIds: string[];
   visuals: Awaited<ReturnType<typeof eligibleVisualsForUnits>>;
 }
 
-function canvasImageSources(scene: AppScene): string[] {
+interface CanvasImage {
+  elementId: string;
+  src: string;
+}
+
+function canvasImages(scene: AppScene): CanvasImage[] {
   if (scene.content.type !== 'slide') return [];
   return scene.content.canvas.elements
     .filter((element) => (element as { type?: unknown }).type === 'image')
-    .map((element) => String((element as { src?: unknown }).src ?? ''));
+    .map((element) => ({
+      elementId: String((element as { id?: unknown }).id ?? ''),
+      src: String((element as { src?: unknown }).src ?? ''),
+    }));
+}
+
+function canvasImageSources(scene: AppScene): string[] {
+  return canvasImages(scene).map(({ src }) => src);
 }
 
 /** Whether the slide's canvas shows the visual (its manifest serving path). */
@@ -67,7 +84,15 @@ export function slideShowsVisual(scene: AppScene, servingPath: string): boolean 
  * - not a content slide (a quiz, a bank quiz, an interactive scene) → 422 `SCENE_TYPE_NOT_EDITABLE`;
  * - not an eligible visual of the slide's parts (or its bytes cannot be read for the
  *   planner) → 422 `VISUAL_NOT_ELIGIBLE`;
- * - already on the slide's canvas → 409 `VISUAL_ALREADY_ON_SLIDE`.
+ * - already on the slide's canvas → 409 `VISUAL_ALREADY_ON_SLIDE`;
+ * - the slide already shows {@link MAX_SLIDE_IMAGES_BEFORE_ADD} or more images → 422
+ *   `SLIDE_IMAGE_LIMIT` (`details.max`: the most images a slide may show with the new one);
+ * - the slide shows an image the fresh re-plan cannot carry (review H2: a re-planned slide
+ *   starts from an empty canvas, so anything outside the plan would be silently deleted)
+ *   → 422 `SLIDE_IMAGES_NOT_CARRIED` (`details.imageIds`: the source-visual id, or the
+ *   canvas element id of an image outside the manifest). Not carried: an image outside the
+ *   run's manifest (a decorative image), one not eligible for the slide's own parts
+ *   (linked elsewhere, not compliance-approved), or one the planner cannot read.
  */
 export async function checkSlideImageAddition(
   pool: ConnectableQueryable,
@@ -111,12 +136,46 @@ export async function checkSlideImageAddition(
       { sourceVisualId },
     );
   }
-  const shownIds = [...new Set(onCanvas)].filter((id) => eligibleIds.includes(id));
+  const images = canvasImages(scene);
+  if (new Set(images.map(({ src }) => src)).size >= MAX_SLIDE_IMAGES_BEFORE_ADD) {
+    throw new TeachingPackageError(
+      'SLIDE_IMAGE_LIMIT',
+      `the slide already shows ${MAX_SLIDE_IMAGES_BEFORE_ADD} or more images; a slide may show at most ${MAX_SLIDE_IMAGES_BEFORE_ADD} with an added one`,
+      { sourceVisualId, max: MAX_SLIDE_IMAGES_BEFORE_ADD },
+    );
+  }
+  const readableIds = new Set(visuals.visionImages.map((image) => image.id));
+  const notCarried = [
+    ...new Set(
+      images
+        .map(({ elementId, src }) => {
+          const id = byPath.get(src);
+          if (id === undefined) return elementId || src;
+          return eligibleIds.includes(id) && readableIds.has(id) ? null : id;
+        })
+        .filter((id): id is string => id !== null),
+    ),
+  ];
+  if (notCarried.length > 0) {
+    throw new TeachingPackageError(
+      'SLIDE_IMAGES_NOT_CARRIED',
+      'the slide shows images a re-plan cannot keep (not textbook images of its own lesson parts, or unreadable); adding an image would delete them',
+      { sourceVisualId, imageIds: notCarried },
+    );
+  }
+  const shownIds = [...new Set(onCanvas)];
   return { entry: found.entry, unitIds, shownIds, visuals };
 }
 
 export type ReplanSlideWithImageResult =
-  | { ok: true; outline: SceneOutline; servingPath: string; calls: number }
+  | {
+      ok: true;
+      outline: SceneOutline;
+      servingPath: string;
+      /** Every image the regenerated slide must show: its old images and the new one. */
+      requiredImages: Array<{ id: string; servingPath: string }>;
+      calls: number;
+    }
   | { ok: false; message: string; calls: number };
 
 export interface ReplanSlideWithImageInput {
@@ -148,10 +207,9 @@ export async function replanSlideWithImage(
     input.visuals,
   );
   const src = new Map(check.visuals.visionImages.map((image) => [image.id, image.src]));
-  // Only images the planner can see; the required ones lead (the vision budget).
-  const required = [...check.shownIds, check.entry.id]
-    .filter((id) => src.has(id))
-    .slice(-MAX_REPLAN_IMAGES);
+  // The slide's images and the new one, all readable and under the cap (the check
+  // refuses otherwise): none is dropped here; the required ones lead (the vision budget).
+  const required = [...check.shownIds, check.entry.id];
   const linkedImages: PdfImage[] = [
     ...required.map((id) => check.visuals.visuals.find(({ entry }) => entry.id === id)!.image),
     ...check.visuals.visuals
@@ -210,6 +268,10 @@ export async function replanSlideWithImage(
     ok: true,
     outline: result.outline,
     servingPath: check.entry.servingPath,
+    requiredImages: required.map((id) => ({
+      id,
+      servingPath: check.visuals.visuals.find(({ entry }) => entry.id === id)!.entry.servingPath,
+    })),
     calls: result.calls,
   };
 }

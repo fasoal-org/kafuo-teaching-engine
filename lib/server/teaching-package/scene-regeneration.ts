@@ -616,6 +616,8 @@ export async function regenerateSlideScene(
   let candidate: AppScene;
   /** An added textbook image's serving path: the candidate must show it (F3.3). */
   let addedImagePath: string | null = null;
+  /** Every image an added-image run must leave on the slide (old ones + the new one). */
+  let keptImages: Array<{ id: string; servingPath: string }> = [];
   try {
     const resolveGoverned = deps.resolveGoverned ?? resolveGovernedRegenerationContext;
     const governed = await resolveGoverned(pool, grant.versionId, row.previousScene);
@@ -694,6 +696,7 @@ export async function regenerateSlideScene(
       }
       replannedOutline = withImage.outline;
       addedImagePath = withImage.servingPath;
+      keptImages = withImage.requiredImages;
     }
     const instruction =
       unitChange && !replannedOutline
@@ -758,6 +761,19 @@ export async function regenerateSlideScene(
         'SCENE_CONTENT_GENERATION_FAILED',
         'the slide was regenerated without the added textbook image; nothing was written',
         { regenerationId: row.id, failure: 'VISUAL_NOT_ADDED' },
+      );
+    }
+    // Review H2: the slide's own images must survive too — a re-planned slide starts from
+    // an empty canvas, so a dropped one would be silently deleted under a "done".
+    const lostImageIds = keptImages
+      .filter(({ servingPath }) => !slideShowsVisual(candidate, servingPath))
+      .map(({ id }) => id);
+    if (lostImageIds.length > 0) {
+      await fail('VISUAL_NOT_KEPT', candidate);
+      throw new TeachingPackageError(
+        'VISUAL_NOT_KEPT',
+        'the slide was regenerated without images it already showed; nothing was written',
+        { regenerationId: row.id, imageIds: lostImageIds },
       );
     }
   } catch (error) {

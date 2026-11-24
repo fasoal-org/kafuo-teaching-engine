@@ -25,7 +25,7 @@ import type { RegenerateOneSceneInput } from '@/lib/server/teaching-package/rege
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppScene } from '@/lib/types/stage';
 import type { AppStage } from '@/lib/document-store/persistence-types';
-import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
+import { makeDocument, makeOutline, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 const mocks = vi.hoisted(() => ({
   regenerate: vi.fn(),
@@ -509,6 +509,184 @@ describe('agent-ops over PGlite', () => {
       expect(await status.json()).toMatchObject({
         status: 'failed',
         errorCode: 'SCENE_CONTENT_GENERATION_FAILED',
+      });
+    });
+
+    // Review H2: the slide's own images are carried by the fresh re-plan, or refused.
+    describe('with images already on the slide', () => {
+      const pathOf = (id: string) => `/media/stage-agent-ops/${id}.png`;
+      const manifestEntry = (id: string, units: string[]) => ({
+        ...entry,
+        id,
+        servingPath: pathOf(id),
+        sourceContentUnitIds: units,
+      });
+      // src-9 is linked to u2 (another part); the others to u1. src-10 cannot be read.
+      const manifest = [
+        entry,
+        manifestEntry('src-8', ['u1']),
+        manifestEntry('src-9', ['u2']),
+        manifestEntry('src-10', ['u1']),
+        manifestEntry('src-11', ['u1']),
+        manifestEntry('src-12', ['u1']),
+        manifestEntry('src-13', ['u1']),
+      ];
+      const imageElement = (id: string, src: string) => ({
+        id,
+        type: 'image',
+        src,
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 80,
+      });
+
+      async function reseedSlide(elements: unknown[]): Promise<string> {
+        const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+          pool,
+          ownerId: TEACHING_PACKAGE_STAGE_OWNER,
+          validateScene: validateAppScene,
+          validateStage: validateAppStage,
+          mutationFence: teachingPackageStageGuardFence(),
+        });
+        const first = slide('scene-1', 1, ['u1']) as AppScene & {
+          content: { canvas: { elements: unknown[] } };
+        };
+        first.content.canvas.elements = elements;
+        await store.saveDocument(
+          makeDocument(
+            STAGE,
+            'Draft package',
+            [first, slide('scene-2', 2, ['u1']), slide('scene-3', 3, ['u2'])],
+            { ...makeOutline('Draft package'), sourceVisuals: manifest },
+          ),
+        );
+        return String(await stageRevision());
+      }
+
+      beforeEach(() => {
+        mocks.visuals = async (...args: unknown[]) => {
+          const units = args[2] as string[];
+          const eligible = manifest.filter((item) =>
+            item.sourceContentUnitIds.some((unit) => units.includes(unit)),
+          );
+          return {
+            visuals: eligible.map((item) => ({
+              entry: item,
+              image: {
+                id: item.id,
+                src: item.servingPath,
+                pageNumber: 4,
+                sourceContentUnitIds: item.sourceContentUnitIds,
+              },
+            })),
+            visionImages: eligible
+              .filter((item) => item.id !== 'src-10')
+              .map((item) => ({ id: item.id, src: 'data:image/png;base64,AAAA' })),
+          };
+        };
+      });
+
+      it('refuses a slide whose images the re-plan cannot carry, or one at the image limit', async () => {
+        const before = (await counts()).regenerations;
+        // A decorative image (outside the manifest) and an image of another part.
+        let revision = await reseedSlide([
+          imageElement('el-8', pathOf('src-8')),
+          imageElement('el-9', pathOf('src-9')),
+          imageElement('deco-1', '/media/stage-agent-ops/decoration.png'),
+        ]);
+        const mixed = await post('add-image', body(revision));
+        expect(mixed.status).toBe(422);
+        expect(await mixed.json()).toMatchObject({
+          error: { code: 'SLIDE_IMAGES_NOT_CARRIED', details: { imageIds: ['src-9', 'deco-1'] } },
+        });
+        // An eligible image the planner cannot read; the dry run refuses the same way.
+        revision = await reseedSlide([
+          imageElement('el-8', pathOf('src-8')),
+          imageElement('el-10', pathOf('src-10')),
+        ]);
+        for (const extra of [{ dryRun: true }, {}]) {
+          const unreadable = await post('add-image', body(revision, extra));
+          expect(unreadable.status).toBe(422);
+          expect(await unreadable.json()).toMatchObject({
+            error: { code: 'SLIDE_IMAGES_NOT_CARRIED', details: { imageIds: ['src-10'] } },
+          });
+        }
+        // Five images already: the re-plan could not keep them all with a sixth.
+        revision = await reseedSlide(
+          ['src-8', 'src-10', 'src-11', 'src-12', 'src-13'].map((id) =>
+            imageElement(`el-${id}`, pathOf(id)),
+          ),
+        );
+        const full = await post('add-image', body(revision));
+        expect(full.status).toBe(422);
+        expect(await full.json()).toMatchObject({
+          error: { code: 'SLIDE_IMAGE_LIMIT', details: { max: 5 } },
+        });
+        expect((await counts()).regenerations).toBe(before);
+        expect(mocks.regenerate).not.toHaveBeenCalled();
+        expect(prompts).toEqual([]);
+      });
+
+      const planBoth = JSON.stringify({
+        suggestedImageIds: ['src-8', 'src-7'],
+        imagePlans: [
+          { imageId: 'src-8', shows: 'بطارية', teachingPoint: 'مصدر الطاقة' },
+          { imageId: 'src-7', shows: 'دائرة كهربائية', teachingPoint: 'مسار التيار' },
+        ],
+        visualPlan: { mode: 'image' },
+        keyPoints: ['نقطة أولى', 'نقطة ثانية', 'نقطة ثالثة'],
+      });
+
+      beforeEach(() => {
+        mocks.createRoute.mockResolvedValue({
+          aiCallFor: () => async (_system: string, user: string) => {
+            prompts.push(user);
+            return planBoth;
+          },
+          assertAvailable: () => {},
+          description: { mode: 'test' },
+        });
+      });
+
+      it('keeps the slide’s own image with the added one', async () => {
+        const revision = await reseedSlide([imageElement('el-8', pathOf('src-8'))]);
+        const response = await post('add-image', body(revision));
+        expect(response.status).toBe(202);
+        await vi.waitFor(() => expect(mocks.release).not.toBeNull());
+        expect(prompts[0]).toContain('keep exactly src-8, src-7');
+        const input = mocks.regenerate.mock.calls[0]![0] as RegenerateOneSceneInput;
+        expect(input.replannedOutline?.suggestedImageIds).toEqual(['src-8', 'src-7']);
+        mocks.release!();
+        await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+        const done = await opStatus(`rg_${IMAGE_KEY}`);
+        expect(await done.json()).toMatchObject({ status: 'done', kind: 'regeneration' });
+      });
+
+      it('a regeneration that drops an image the slide showed fails VISUAL_NOT_KEPT', async () => {
+        mocks.regenerate.mockImplementation(async (input: RegenerateOneSceneInput) => {
+          const pre = input.scene as AppScene & { content: { canvas: { elements: unknown[] } } };
+          return {
+            ok: true,
+            scene: {
+              ...generatedFrom(input.scene),
+              content: {
+                ...pre.content,
+                canvas: { ...pre.content.canvas, elements: [imageElement('img-1', PATH)] },
+              },
+            },
+          };
+        });
+        const revision = await reseedSlide([imageElement('el-8', pathOf('src-8'))]);
+        const response = await post('add-image', body(revision));
+        expect(response.status).toBe(202);
+        await Promise.all(mocks.afterCallbacks.map((callback) => callback()));
+        expect(String(await stageRevision())).toBe(revision);
+        const status = await opStatus(`rg_${IMAGE_KEY}`);
+        expect(await status.json()).toMatchObject({
+          status: 'failed',
+          errorCode: 'VISUAL_NOT_KEPT',
+        });
       });
     });
   });
