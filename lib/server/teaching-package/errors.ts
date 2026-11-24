@@ -441,7 +441,36 @@ export type TeachingPackageErrorCode =
   /** D-6: a real part link needs a successful dry run by the same key first (30 min). */
   | 'LINK_DRY_RUN_REQUIRED'
   /** An agent op of this idempotency key is still running (narration audio synthesis). */
-  | 'AGENT_OP_IN_PROGRESS';
+  | 'AGENT_OP_IN_PROGRESS'
+  // --- Kafuo Agent API phase 2 wave F2: direct package edits (agent-edit-ops.ts) ---
+  /** A bank quiz shows Kafuo's approved questions; TE holds none to edit. */
+  | 'BANK_QUIZ_NOT_EDITABLE'
+  /** D-8: an engine-written question (`q_guide_…`) is rebuilt from the guide on every regeneration. */
+  | 'ENGINE_QUESTION_NOT_EDITABLE'
+  /** The quiz item shows a Quran verse or hadith (the exercise rule): left to a person. */
+  | 'SACRED_EXERCISE_ITEM'
+  /** A correct option that is not among the item's options. */
+  | 'QUIZ_KEY_NOT_IN_OPTIONS'
+  /** A single-choice item needs exactly one correct option. */
+  | 'QUIZ_SINGLE_KEY_COUNT'
+  /** The quiz's only item cannot be deleted. */
+  | 'QUIZ_LAST_ITEM'
+  /** A short answer graded by a teacher or the model (no key today) is not keyed by the agent. */
+  | 'QUIZ_ITEM_NOT_KEYED'
+  /** No quiz item, option, narration line or element with that id on the slide. */
+  | 'QUIZ_ITEM_NOT_FOUND'
+  | 'QUIZ_OPTION_NOT_FOUND'
+  | 'NARRATION_LINE_NOT_FOUND'
+  | 'ELEMENT_NOT_FOUND'
+  /** The op does not apply to this kind of scene or element. */
+  | 'SCENE_TYPE_NOT_EDITABLE'
+  | 'ELEMENT_NOT_TEXT'
+  /** The edit changes a Quran verse or hadith the package pins (the editor's own guard). */
+  | 'SACRED_TEXT_PINNED'
+  /** A new narration line states a guide answer before the learner's try. */
+  | 'GUIDE_ANSWER_LEAK'
+  /** A8: the slide was not made stale by this tenant's agent alone. */
+  | 'STALE_NOT_BY_AGENT';
 
 const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   CORRECTION_NOT_AWAITING: 409,
@@ -458,6 +487,22 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   PART_WOULD_BE_UNTAUGHT: 422,
   LINK_DRY_RUN_REQUIRED: 409,
   AGENT_OP_IN_PROGRESS: 409,
+  BANK_QUIZ_NOT_EDITABLE: 422,
+  ENGINE_QUESTION_NOT_EDITABLE: 422,
+  SACRED_EXERCISE_ITEM: 422,
+  QUIZ_KEY_NOT_IN_OPTIONS: 422,
+  QUIZ_SINGLE_KEY_COUNT: 422,
+  QUIZ_LAST_ITEM: 422,
+  QUIZ_ITEM_NOT_KEYED: 422,
+  QUIZ_ITEM_NOT_FOUND: 404,
+  QUIZ_OPTION_NOT_FOUND: 422,
+  NARRATION_LINE_NOT_FOUND: 404,
+  ELEMENT_NOT_FOUND: 404,
+  SCENE_TYPE_NOT_EDITABLE: 422,
+  ELEMENT_NOT_TEXT: 422,
+  SACRED_TEXT_PINNED: 422,
+  GUIDE_ANSWER_LEAK: 422,
+  STALE_NOT_BY_AGENT: 422,
   NOT_FOUND: 404,
   INVALID_REQUEST: 400,
   ACTOR_REQUIRED: 400,

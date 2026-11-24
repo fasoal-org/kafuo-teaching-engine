@@ -14,6 +14,8 @@
  * | `narration-audio`| `regenerateSceneNarrationAudio`                            | TTS   |
  * | `delete`         | `deleteDuplicateScene` (new, guarded, returns the backup)  | no    |
  * | `skills`         | `setSceneTeachingSkills` (the scene-skills service)        | no    |
+ * | `quiz-item-edit`, `quiz-item-delete`, `narration-line` (TTS), `text-element`,      |
+ * |   `alignment-confirm` — phase 2 wave F2, `agent-edit-ops.ts`              | no    |
  *
  * Common rules:
  * - `expectedRevision` is the stage revision the agent read (`agent-read/scenes`
@@ -70,6 +72,7 @@ import {
   replayDuplicateDelete,
   type DuplicateDeleteResult,
 } from '@/lib/server/teaching-package/delete-duplicate-scene';
+import { AGENT_EDIT_OPS, runAgentEditOp } from '@/lib/server/teaching-package/agent-edit-ops';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { resolveGovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import {
@@ -131,6 +134,8 @@ export const AGENT_OPS = [
   'narration-audio',
   'delete',
   'skills',
+  // Phase 2 wave F2 (agent-edit-ops.ts): direct edits and the A8 confirmation.
+  ...AGENT_EDIT_OPS,
 ] as const;
 export type AgentOp = (typeof AGENT_OPS)[number];
 
@@ -1087,6 +1092,12 @@ export async function runAgentOp(
       return deleteOp(context, body, expectedRevision);
     case 'skills':
       return skillsOp(context, body, expectedRevision);
+    case 'quiz-item-edit':
+    case 'quiz-item-delete':
+    case 'narration-line':
+    case 'text-element':
+    case 'alignment-confirm':
+      return runAgentEditOp(op, context, body, expectedRevision);
   }
 }
 

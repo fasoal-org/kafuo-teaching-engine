@@ -108,9 +108,9 @@ def worktree_slot(a, base):
     root=next((p for p in HERE.parents if all((p/r).is_dir() for r in SLOT_REPOS)),None)
     if not paths or root is None:raise Block('git worktree add needs a literal slot path inside the workspace.')
     repo=next((r for r in SLOT_REPOS if base==root/r or root/r in base.parents),None)
-    allowed={root/'worktrees'/f'{r}-{n}' for r in ([repo] if repo else SLOT_REPOS) for n in (2,3)}
+    allowed={root/'worktrees'/f'{r}-{n}' for r in ([repo] if repo else SLOT_REPOS) for n in (2,3,4,5,6)}
     if (base/paths[0]).resolve() not in allowed:
-        raise Block('Only worktree slots worktrees/<repo>-2 and -3 are allowed (max 3 per repo); see the workspace CLAUDE.md Git flow.')
+        raise Block('Only worktree slots worktrees/<repo>-2 to -6 are allowed (max 6 per repo); see the workspace CLAUDE.md Git flow.')
 
 class Guard:
     def __init__(self):

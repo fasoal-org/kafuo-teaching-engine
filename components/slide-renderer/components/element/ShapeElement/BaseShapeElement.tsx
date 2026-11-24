@@ -5,6 +5,7 @@ import { useElementOutline } from '../hooks/useElementOutline';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { useElementFlip } from '../hooks/useElementFlip';
 import { useElementFill } from '../hooks/useElementFill';
+import { useLineDirections } from '../hooks/useLineDirections';
 import { GradientDefs } from './GradientDefs';
 import { PatternDefs } from './PatternDefs';
 
@@ -27,6 +28,7 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
     defaultFontName: 'Microsoft YaHei',
     defaultColor: '#333333',
   };
+  const { ref: textRef, innerHTML } = useLineDirections<HTMLDivElement>(text.content);
 
   return (
     <div
@@ -103,12 +105,13 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
             }}
           >
             <div
-              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)] [&_p]:[unicode-bidi:plaintext] [&_li]:[unicode-bidi:plaintext]"
+              ref={textRef}
+              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)] [&_p:not([dir])]:[unicode-bidi:plaintext] [&_li:not([dir])]:[unicode-bidi:plaintext]"
               style={{
                 // @ts-expect-error CSS custom properties
                 '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,
               }}
-              dangerouslySetInnerHTML={{ __html: text.content }}
+              dangerouslySetInnerHTML={innerHTML}
             />
           </div>
         </div>

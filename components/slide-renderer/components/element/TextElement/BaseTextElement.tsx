@@ -3,6 +3,7 @@
 import type { PPTTextElement } from '@openmaic/dsl';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { ElementOutline } from '../ElementOutline';
+import { useLineDirections } from '../hooks/useLineDirections';
 
 export interface BaseTextElementProps {
   elementInfo: PPTTextElement;
@@ -15,6 +16,7 @@ export interface BaseTextElementProps {
  */
 export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
+  const { ref: textRef, innerHTML } = useLineDirections<HTMLDivElement>(elementInfo.content);
 
   return (
     <div
@@ -55,10 +57,13 @@ export function BaseTextElement({ elementInfo, target }: BaseTextElementProps) {
             outline={elementInfo.outline}
           />
           <div
-            // Each paragraph takes its direction from its own text: the slide sits in a
-            // `dir="ltr"` frame, so an Arabic line otherwise put its «.» and «•» on the wrong side.
-            className={`text ProseMirror-static relative [&_p]:[unicode-bidi:plaintext] [&_li]:[unicode-bidi:plaintext] ${target === 'thumbnail' ? 'pointer-events-none' : ''}`}
-            dangerouslySetInnerHTML={{ __html: elementInfo.content }}
+            ref={textRef}
+            // Each paragraph takes its direction from its own text (useLineDirections: any
+            // Arabic letter → rtl): the slide sits in a `dir="ltr"` frame, so an Arabic line
+            // otherwise put its «.» and «•» on the wrong side. plaintext covers lines with no
+            // letters only.
+            className={`text ProseMirror-static relative [&_p:not([dir])]:[unicode-bidi:plaintext] [&_li:not([dir])]:[unicode-bidi:plaintext] ${target === 'thumbnail' ? 'pointer-events-none' : ''}`}
+            dangerouslySetInnerHTML={innerHTML}
           />
         </div>
       </div>

@@ -101,7 +101,7 @@ export interface NarrationAudioDeps {
 const AUDIO_FIELDS = ['audioId', 'audioUrl', 'audioProvenance', 'audioInvalidated'] as const;
 
 /** The Scene with every speech Action's audio reference removed. */
-function withoutNarrationAudio(scene: AppScene): AppScene {
+export function withoutNarrationAudio(scene: AppScene): AppScene {
   return {
     ...scene,
     actions: (scene.actions ?? []).map((action) => {
@@ -178,7 +178,7 @@ async function loadStageFromStore(
  * `onCommitted` runs once, on the transaction that advanced the Scene's revision
  * (before its COMMIT), so what it enqueues commits or rolls back with the write.
  */
-async function writeSceneAtRev(
+export async function writeSceneAtRev(
   pool: ConnectableQueryable,
   target: { stageId: string; sceneId: string; baseRev: number },
   scene: AppScene,

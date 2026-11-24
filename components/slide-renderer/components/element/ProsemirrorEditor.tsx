@@ -6,6 +6,7 @@ import { useKeyboardStore, useCanvasStore } from '@/lib/store';
 import type { EditorView } from 'prosemirror-view';
 import { toggleMark, wrapIn, lift } from 'prosemirror-commands';
 import { initProsemirrorEditor, createDocument } from '@/lib/prosemirror';
+import { stripEditorOnlyAttrs } from '@/lib/prosemirror/plugins/line-direction';
 import {
   isActiveOfParentNodeType,
   findNodesWithSameMark,
@@ -93,13 +94,10 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
         debounce(
           (isHandleHistory = false) => {
             if (!editorView.current) return;
-            if (
-              value.replace(/ style=""/g, '') ===
-              editorView.current.dom.innerHTML.replace(/ style=""/g, '')
-            )
-              return;
+            const html = stripEditorOnlyAttrs(editorView.current.dom.innerHTML);
+            if (value.replace(/ style=""/g, '') === html.replace(/ style=""/g, '')) return;
             onUpdate?.({
-              value: editorView.current.dom.innerHTML,
+              value: html,
               ignore: isHandleHistory,
             });
           },
