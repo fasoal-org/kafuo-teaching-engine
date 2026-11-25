@@ -967,6 +967,87 @@ describe('regenerateOneScene — a lesson part moved between slides (owner, 14 N
       'sourceContentUnitIds',
     ]);
   });
+
+  it('a slide never gains, changes or loses its classification', async () => {
+    const { regenerationInvariantViolations } =
+      await import('@/lib/server/teaching-package/regenerate-one-scene');
+    const pre = preImage();
+    if (pre.content.type !== 'slide') throw new Error('slide');
+    const { contentRole: _role, contentKind: _kind, ...unclassified } = pre.content;
+    const blank = {
+      ...pre,
+      content: { ...unclassified, canvas: { ...pre.content.canvas, type: undefined } },
+    } as unknown as AppScene;
+    expect(regenerationInvariantViolations(blank, pre)).toEqual(['canvas.type', 'contentRole']);
+    expect(regenerationInvariantViolations(pre, blank)).toEqual(['canvas.type', 'contentRole']);
+    const reclassified = {
+      ...pre,
+      content: {
+        ...pre.content,
+        contentRole: 'summary',
+        canvas: { ...pre.content.canvas, type: 'cover' },
+      },
+    } as unknown as AppScene;
+    expect(regenerationInvariantViolations(pre, reclassified)).toEqual([
+      'canvas.type',
+      'contentRole',
+    ]);
+  });
+
+  // Owner, 26 Nov 2026: «Regenerate» on an «Untitled slide» a teacher added failed every
+  // time — the page has no outline, and the order fallback gave it the plan of the
+  // slide that used to sit at its order.
+  it('a page a teacher added never takes another slide’s plan', async () => {
+    const { ownPlanSnapshot } = await import('@/lib/server/agent-runtime/generation-tools');
+    const planned = { ...preImage(), id: 'scene-planned', order: 2 } as AppScene;
+    const blankSlide = {
+      id: 'scene-blank',
+      stageId: STAGE_ID,
+      order: 1,
+      title: 'Untitled slide',
+      type: 'slide',
+      createdAt: 1,
+      updatedAt: 1,
+      content: {
+        type: 'slide',
+        canvas: {
+          id: 'canvas-blank',
+          viewportSize: 1000,
+          viewportRatio: 0.5625,
+          theme: (preImage().content as { canvas: { theme: unknown } }).canvas.theme,
+          elements: [],
+        },
+      },
+      actions: [],
+    } as unknown as AppScene;
+    // The order-1 plan belongs to the slide that now sits at order 2.
+    const own = ownPlanSnapshot(blankSlide, snapshot(), [blankSlide, planned]);
+    expect(own?.outlines).toEqual([]);
+    const { result, prompts } = await run(content([]), {
+      pre: blankSlide,
+      others: [planned],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    if (result.scene.content.type !== 'slide') throw new Error('slide');
+    expect(result.scene.content.contentRole).toBeUndefined();
+    expect(result.scene.content.canvas.type).toBeUndefined();
+    expect(result.scene.outlineId).toBeUndefined();
+    expect(prompts.map((prompt) => prompt.user).join('\n')).not.toContain(
+      'Explain patterns from the figure.',
+    );
+    // Review 2: the slide at that order was deleted and its plan stayed behind — the
+    // page still takes no plan (the remaining slide owns another plan).
+    const otherPlan = { ...planned, outlineId: 'o2' } as AppScene;
+    expect(ownPlanSnapshot(blankSlide, snapshot(), [blankSlide, otherPlan])?.outlines).toEqual([]);
+    const leftover = await run(content([]), { pre: blankSlide, others: [otherPlan] });
+    expect(leftover.result.ok).toBe(true);
+    // A legacy Stage (no Scene carries an outline id) keeps the order fallback.
+    const legacyOther = { ...planned, outlineId: undefined } as AppScene;
+    expect(
+      ownPlanSnapshot(blankSlide, snapshot(), [blankSlide, legacyOther])?.outlines,
+    ).toHaveLength(1);
+  });
 });
 
 // g5.v11 (review findings 1 and 2): a regenerated attempt is checked against the pinned

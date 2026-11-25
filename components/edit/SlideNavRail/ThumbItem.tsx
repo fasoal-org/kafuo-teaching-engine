@@ -42,6 +42,9 @@ interface ThumbItemProps {
   readonly onRegenerateAudio?: () => void;
   /** The audio of this scene is being regenerated now. */
   readonly regeneratingAudio?: boolean;
+  /** A drag of this thumbnail starts / ends (the rail checks the dropped order). */
+  readonly onDragStart?: () => void;
+  readonly onDragEnd?: () => void;
 }
 
 function ThumbItemComponent({
@@ -57,6 +60,8 @@ function ThumbItemComponent({
   onDismissNarrationWarning,
   onRegenerateAudio,
   regeneratingAudio = false,
+  onDragStart,
+  onDragEnd,
 }: ThumbItemProps) {
   const { t } = useI18n();
   const issues = scene.generationIssues ?? [];
@@ -138,6 +143,8 @@ function ThumbItemComponent({
       // tried earlier but broke drag-to-reorder entirely — Reorder.Item
       // needs the layout tracker to compute the drag transform's origin.
       layout="position"
+      {...(onDragStart ? { onDragStart } : {})}
+      {...(onDragEnd ? { onDragEnd } : {})}
       whileDrag={{
         scale: 1.03,
         rotate: -0.4,

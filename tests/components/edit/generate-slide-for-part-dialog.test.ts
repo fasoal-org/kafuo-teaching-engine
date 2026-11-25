@@ -499,6 +499,47 @@ describe('GenerateSlideForPartDialog — outcomes', () => {
     );
     expect(offendingSlidesText(undefined, SCENES, translate, 'en-US')).toBe(null);
   });
+
+  it('says what is missing and only the slides out of place, never every slide (owner, 26 Nov 2026)', () => {
+    const allSlides = ['s1', 's2', 's3'];
+    // A deleted check quiz: the missing page and the slide it belongs after.
+    const missing = offendingSlidesText(
+      {
+        offendingSceneIds: allSlides,
+        misplacedSceneIds: [],
+        missing: [{ flowIndex: 2, stage: 'outcome_check_understanding', afterSceneId: 's2' }],
+      },
+      SCENES,
+      translate,
+      'en-US',
+    );
+    expect(missing).toContain('missing after slide 2 — The rule');
+    expect(missing).toContain('Add a quiz right after that slide');
+    expect(missing).not.toContain('Intro');
+    // A dragged slide: only that slide.
+    const moved = offendingSlidesText(
+      { offendingSceneIds: allSlides, misplacedSceneIds: ['s3'], missing: [] },
+      SCENES,
+      translate,
+      'en-US',
+    );
+    expect(moved).toContain('Out of place: slide 3 — Check');
+    expect(moved).not.toContain('Intro');
+    // A slide this editor does not show (e.g. a server-side placeholder) is never
+    // named and never read as "missing at the start"; the plain list is the fallback.
+    const unknown = offendingSlidesText(
+      {
+        offendingSceneIds: ['s2'],
+        misplacedSceneIds: [],
+        missing: [{ flowIndex: 2, stage: 'outcome_check_understanding', afterSceneId: 'ghost' }],
+      },
+      SCENES,
+      translate,
+      'en-US',
+    );
+    expect(unknown).not.toContain('missing at its start');
+    expect(unknown).toContain('slide 2 — The rule');
+  });
 });
 
 describe('GenerateSlideForPartDialog — modal while running', () => {

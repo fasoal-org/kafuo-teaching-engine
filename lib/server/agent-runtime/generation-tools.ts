@@ -266,6 +266,25 @@ export function outlineFromScene(scene: Scene, snapshot: unknown): SceneOutline 
   };
 }
 
+/**
+ * Owner, 26 Nov 2026: the plans `outlineFromScene` may read for `scene`. A page a
+ * teacher added has no outline id, and the order fallback paired it with the plan at
+ * its order — the neighbour slide's, or one a deleted slide left behind (another
+ * slide's classification, key points and book images; Regenerate was refused with
+ * «changed fields it must keep: canvas.type, contentRole»). On a Stage whose Scenes
+ * carry outline ids, a Scene without one has no plan; only a legacy Stage (no Scene
+ * carries one) keeps the order fallback.
+ */
+export function ownPlanSnapshot<T extends { outlines: ReadonlyArray<unknown> }>(
+  scene: { id: string; outlineId?: string },
+  snapshot: T | undefined,
+  scenes: ReadonlyArray<{ id: string; outlineId?: string }>,
+): T | undefined {
+  if (!snapshot || scene.outlineId !== undefined) return snapshot;
+  const linked = scenes.some((other) => other.id !== scene.id && other.outlineId !== undefined);
+  return linked ? { ...snapshot, outlines: [] } : snapshot;
+}
+
 /** Per field: the planned value when valid, else the persisted Scene's. */
 function persistedSlideSemantics(
   scene: Scene,

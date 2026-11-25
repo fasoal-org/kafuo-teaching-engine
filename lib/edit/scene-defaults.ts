@@ -22,18 +22,110 @@ export function createBlankQuizScene(stageId: string, title: string, order: numb
   };
 }
 
+/** An objective's slides, and the check quiz that closes them (g5 flows). */
+export const OBJECTIVE_EXPLANATION_STAGE_KEY = 'outcome_visual_explanations';
+export const OBJECTIVE_CHECK_STAGE_KEY = 'outcome_check_understanding';
+const OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY = 'outcome_worked_examples';
+
 /**
  * The teaching stage a scene inserted at `insertIndex` inherits: the previous
  * scene's when inserting mid-list, the first scene's when inserting at 0, and
- * none when the stage's scenes carry no teaching stage (non-package stages).
- * Never inferred from titles, types, or order.
+ * none (`undefined`) when the stage's scenes carry no teaching stage (non-package
+ * stages). Never inferred from titles.
+ *
+ * Owner, 26 Nov 2026 — an objective's check quiz holds its flow position alone, so a
+ * page added right after it inherited a position it can never share, and the lesson
+ * then refused every new slide and Submit («the lesson's teaching order already has a
+ * problem»):
+ * - after a check quiz, a new page takes the next scene's position (the next part);
+ * - a quiz added right after an objective's slides, where that objective's check quiz
+ *   is missing (deleted), takes the check quiz's position, which repairs the lesson;
+ * - after the lesson's last check quiz there is no valid position: `null`.
  */
 export function teachingStageForInsertion(
   scenes: readonly Scene[],
   insertIndex: number,
-): TeachingStageRef | undefined {
-  const neighbor = scenes[insertIndex - 1] ?? scenes[0];
-  return neighbor?.teachingStage;
+  type: EditableSceneType = 'slide',
+): TeachingStageRef | null | undefined {
+  const previous = scenes[insertIndex - 1];
+  const next = scenes[insertIndex];
+  const before = previous?.teachingStage;
+  // g5.v1–v3 put worked examples between an objective's slides and its check quiz,
+  // so there the empty position after the slides is not the check's (review, 26 Nov).
+  const checkFollowsSlides = !scenes.some(
+    (scene) => scene.teachingStage?.key === OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY,
+  );
+  if (type === 'quiz' && checkFollowsSlides && before?.key === OBJECTIVE_EXPLANATION_STAGE_KEY) {
+    const checkAt = before.flowIndex + 1;
+    const taken = scenes.some((scene) => scene.teachingStage?.flowIndex === checkAt);
+    const after = next?.teachingStage;
+    if (
+      !taken &&
+      (!after || (after.flowIndex > checkAt && after.key !== OBJECTIVE_CHECK_STAGE_KEY))
+    ) {
+      return { key: OBJECTIVE_CHECK_STAGE_KEY, flowIndex: checkAt };
+    }
+  }
+  if (before?.key === OBJECTIVE_CHECK_STAGE_KEY) {
+    const after = next?.teachingStage;
+    return after && after.key !== OBJECTIVE_CHECK_STAGE_KEY ? after : null;
+  }
+  return (previous ?? scenes[0])?.teachingStage;
+}
+
+/**
+ * Owner, 26 Nov 2026: a package scene alone at its flow position (an objective's check
+ * quiz, an objective's last slide). Deleting it leaves that position empty, and the
+ * lesson then refuses every new slide and Submit, so the editor never deletes it.
+ */
+export function isOnlySceneAtItsPosition(
+  scenes: readonly Pick<Scene, 'id' | 'teachingStage'>[],
+  scene: Pick<Scene, 'id' | 'teachingStage'>,
+): boolean {
+  const position = scene.teachingStage?.flowIndex;
+  if (position === undefined) return false;
+  return !scenes.some(
+    (other) => other.id !== scene.id && other.teachingStage?.flowIndex === position,
+  );
+}
+
+/**
+ * Owner, 26 Nov 2026: whether a package's scenes still follow its teaching flow — their
+ * flow positions never go back (a slide dragged into another part of the lesson makes
+ * them go back, and the lesson then refuses every new slide and Submit). Scenes without
+ * a position (non-package stages) are ignored, so their order is always kept.
+ */
+export function keepsTeachingOrder(scenes: readonly Pick<Scene, 'teachingStage'>[]): boolean {
+  let last = -Infinity;
+  for (const scene of scenes) {
+    const position = scene.teachingStage?.flowIndex;
+    if (position === undefined) continue;
+    if (position < last) return false;
+    last = position;
+  }
+  return true;
+}
+
+/**
+ * The current scenes put back in `before`'s order — only the order: each scene keeps
+ * its current content (review, 26 Nov 2026: a regeneration that finished during a
+ * refused drag must not be undone). `null` when scenes were added or removed meanwhile.
+ */
+export function inOrderOf(
+  current: readonly Scene[],
+  before: readonly Pick<Scene, 'id'>[],
+): Scene[] | null {
+  if (current.length !== before.length) return null;
+  const byId = new Map(current.map((scene) => [scene.id, scene] as const));
+  const restored: Scene[] = [];
+  for (const { id } of before) {
+    const scene = byId.get(id);
+    if (!scene) return null;
+    restored.push(scene);
+  }
+  return restored.map((scene, index) =>
+    scene.order === index + 1 ? scene : { ...scene, order: index + 1 },
+  );
 }
 
 export interface BlankSceneOptions {
