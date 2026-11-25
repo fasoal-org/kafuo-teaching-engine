@@ -1313,6 +1313,11 @@ async function runKafuoAttempt(
                     ...(droppedGuideIds.size > 0 ? { skipAttemptIds: droppedGuideIds } : {}),
                     // Lesson 2-5 (g5.v11 only): ex 14 on the line of ex 13 gets its own try.
                     ...(isGuideAnswerModel(kafuo.teachingModel) ? { inlineQuestions: true } : {}),
+                    // g5.v12 (owner, 26 Nov 2026): an attempt asks only from the book's own
+                    // question text; with none, no attempt (never an invented question).
+                    ...(isBookPartPlacementModel(kafuo.teachingModel)
+                      ? { bookTextOnly: true }
+                      : {}),
                   });
                   // g5.v11 (plan §8): the approved answers go to the solution slides and
                   // the attempts' hidden keys, never to a try-it slide. Rebuilt on every
