@@ -242,5 +242,62 @@ describe('teaching_package_content_units', () => {
       expect(rows.map((row) => row.unitId)).toEqual(['fig']);
       expect(rows[0]!.contentRevisionId).toBeNull();
     });
+
+    it('reads the approved snapshot id from the unit, falling back to the manifest', () => {
+      const rows = retainableContentUnits({
+        approvedSnapshotId: 'snap-manifest',
+        contentUnits: [
+          {
+            id: 'own',
+            orderIndex: 1,
+            role: 'CONCEPT',
+            normalizedText: 'own',
+            approvedSnapshotId: '77',
+          },
+          { id: 'inherits', orderIndex: 2, role: 'CONCEPT', normalizedText: 'inherits' },
+        ],
+      });
+      expect(rows.map((row) => [row.unitId, row.approvedSnapshotId])).toEqual([
+        ['own', '77'],
+        ['inherits', 'snap-manifest'],
+      ]);
+      const neither = retainableContentUnits({
+        contentUnits: [{ id: 'none', orderIndex: 1, role: 'CONCEPT', normalizedText: 'x' }],
+      });
+      expect(neither[0]!.approvedSnapshotId).toBeNull();
+    });
+
+    it('every row written from a Kafuo manifest carries the unit’s snapshot id', async () => {
+      const attemptId = await seedAttempt();
+      // Kafuo's export shape: the snapshot id rides on each unit, not on the manifest.
+      await upsertContentUnits(qp(), {
+        tenantId: TENANT,
+        attemptId,
+        units: retainableContentUnits({
+          contentRevisionId: 'rev-3',
+          contentUnits: [
+            {
+              id: '11',
+              orderIndex: 1,
+              role: 'CONCEPT',
+              normalizedText: 'one',
+              approvedSnapshotId: '42',
+            },
+            {
+              id: '12',
+              orderIndex: 2,
+              role: 'EXAMPLE',
+              normalizedText: 'two',
+              approvedSnapshotId: '42',
+            },
+          ],
+        }),
+      });
+      const rows = await readContentUnitsForAttempt(qp(), attemptId, { tenantId: TENANT });
+      expect(rows.map((row) => [row.unitId, row.approvedSnapshotId])).toEqual([
+        ['11', '42'],
+        ['12', '42'],
+      ]);
+    });
   });
 });
