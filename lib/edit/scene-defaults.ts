@@ -26,6 +26,36 @@ export function createBlankQuizScene(stageId: string, title: string, order: numb
 export const OBJECTIVE_EXPLANATION_STAGE_KEY = 'outcome_visual_explanations';
 export const OBJECTIVE_CHECK_STAGE_KEY = 'outcome_check_understanding';
 const OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY = 'outcome_worked_examples';
+/** The stages an objective's block opens with (g5.v2 teaching cards, v3+ explanations). */
+const OBJECTIVE_OPENING_STAGE_KEYS: readonly string[] = [
+  OBJECTIVE_EXPLANATION_STAGE_KEY,
+  'outcome_teaching_cards',
+];
+
+/**
+ * Whether this lesson's check quizzes sit right after their objective's slides (g5.v4+),
+ * read from the lesson itself: no worked-examples stage, and every check quiz that
+ * follows slides directly sits one position after them (g5.v1–v3 put worked examples
+ * in between — review, 26 Nov 2026). No such check quiz at all → unknown → `false`.
+ */
+function checkSitsRightAfterSlides(scenes: readonly Scene[]): boolean {
+  let previous: TeachingStageRef | undefined;
+  let seen = false;
+  for (const scene of scenes) {
+    const stage = scene.teachingStage;
+    if (!stage) continue;
+    if (stage.key === OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY) return false;
+    if (
+      stage.key === OBJECTIVE_CHECK_STAGE_KEY &&
+      previous?.key === OBJECTIVE_EXPLANATION_STAGE_KEY
+    ) {
+      if (stage.flowIndex !== previous.flowIndex + 1) return false;
+      seen = true;
+    }
+    previous = stage;
+  }
+  return seen;
+}
 
 /**
  * The teaching stage a scene inserted at `insertIndex` inherits: the previous
@@ -37,10 +67,15 @@ const OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY = 'outcome_worked_examples';
  * page added right after it inherited a position it can never share, and the lesson
  * then refused every new slide and Submit («the lesson's teaching order already has a
  * problem»):
- * - after a check quiz, a new page takes the next scene's position (the next part);
+ * - after a check quiz, a new page takes the next objective's opening position;
  * - a quiz added right after an objective's slides, where that objective's check quiz
  *   is missing (deleted), takes the check quiz's position, which repairs the lesson;
- * - after the lesson's last check quiz there is no valid position: `null`.
+ * - a page added between two check quizzes whose objective lost all its slides takes
+ *   that objective's slides position, which repairs the lesson (review, 26 Nov);
+ * - anywhere else after a check quiz (after the lesson's last one, or before a
+ *   lesson-level stage such as the learning game) there is no valid position: `null`.
+ * The two repairs run only where the lesson shows its check quizzes right after their
+ * slides (g5.v4+).
  */
 export function teachingStageForInsertion(
   scenes: readonly Scene[],
@@ -50,25 +85,30 @@ export function teachingStageForInsertion(
   const previous = scenes[insertIndex - 1];
   const next = scenes[insertIndex];
   const before = previous?.teachingStage;
-  // g5.v1–v3 put worked examples between an objective's slides and its check quiz,
-  // so there the empty position after the slides is not the check's (review, 26 Nov).
-  const checkFollowsSlides = !scenes.some(
-    (scene) => scene.teachingStage?.key === OBJECTIVE_WORKED_EXAMPLES_STAGE_KEY,
-  );
-  if (type === 'quiz' && checkFollowsSlides && before?.key === OBJECTIVE_EXPLANATION_STAGE_KEY) {
+  const after = next?.teachingStage;
+  const taken = (flowIndex: number) =>
+    scenes.some((scene) => scene.teachingStage?.flowIndex === flowIndex);
+  const repairable = checkSitsRightAfterSlides(scenes);
+  if (type === 'quiz' && repairable && before?.key === OBJECTIVE_EXPLANATION_STAGE_KEY) {
     const checkAt = before.flowIndex + 1;
-    const taken = scenes.some((scene) => scene.teachingStage?.flowIndex === checkAt);
-    const after = next?.teachingStage;
     if (
-      !taken &&
+      !taken(checkAt) &&
       (!after || (after.flowIndex > checkAt && after.key !== OBJECTIVE_CHECK_STAGE_KEY))
     ) {
       return { key: OBJECTIVE_CHECK_STAGE_KEY, flowIndex: checkAt };
     }
   }
   if (before?.key === OBJECTIVE_CHECK_STAGE_KEY) {
-    const after = next?.teachingStage;
-    return after && after.key !== OBJECTIVE_CHECK_STAGE_KEY ? after : null;
+    const slidesAt = before.flowIndex + 1;
+    if (
+      repairable &&
+      after?.key === OBJECTIVE_CHECK_STAGE_KEY &&
+      after.flowIndex > slidesAt &&
+      !taken(slidesAt)
+    ) {
+      return { key: OBJECTIVE_EXPLANATION_STAGE_KEY, flowIndex: slidesAt };
+    }
+    return after && OBJECTIVE_OPENING_STAGE_KEYS.includes(after.key) ? after : null;
   }
   return (previous ?? scenes[0])?.teachingStage;
 }
@@ -77,15 +117,41 @@ export function teachingStageForInsertion(
  * Owner, 26 Nov 2026: a package scene alone at its flow position (an objective's check
  * quiz, an objective's last slide). Deleting it leaves that position empty, and the
  * lesson then refuses every new slide and Submit, so the editor never deletes it.
+ * An objective's last SLIDE counts alone: a «جرّب بنفسك» practice quiz sharing its
+ * position does not let the objective lose every slide (review, 26 Nov 2026).
  */
 export function isOnlySceneAtItsPosition(
-  scenes: readonly Pick<Scene, 'id' | 'teachingStage'>[],
-  scene: Pick<Scene, 'id' | 'teachingStage'>,
+  scenes: readonly Pick<Scene, 'id' | 'type' | 'teachingStage'>[],
+  scene: Pick<Scene, 'id' | 'type' | 'teachingStage'>,
 ): boolean {
   const position = scene.teachingStage?.flowIndex;
   if (position === undefined) return false;
+  const lastSlideOfObjective =
+    scene.type === 'slide' && scene.teachingStage?.key === OBJECTIVE_EXPLANATION_STAGE_KEY;
   return !scenes.some(
-    (other) => other.id !== scene.id && other.teachingStage?.flowIndex === position,
+    (other) =>
+      other.id !== scene.id &&
+      other.teachingStage?.flowIndex === position &&
+      (!lastSlideOfObjective || other.type === 'slide'),
+  );
+}
+
+/**
+ * Review, 26 Nov 2026: a check quiz the editor rebuilds where one was deleted is served
+ * from the Kafuo question bank like its siblings — never an empty quiz of its own.
+ */
+export function rebuildsBankCheckQuiz(
+  scenes: readonly Pick<Scene, 'teachingStage' | 'questionSource'>[],
+  stage: TeachingStageRef | null | undefined,
+  type: EditableSceneType,
+): boolean {
+  return (
+    type === 'quiz' &&
+    stage?.key === OBJECTIVE_CHECK_STAGE_KEY &&
+    scenes.some(
+      (scene) =>
+        scene.teachingStage?.key === OBJECTIVE_CHECK_STAGE_KEY && scene.questionSource === 'bank',
+    )
   );
 }
 

@@ -575,6 +575,16 @@ export async function regenerateOneScene(
       contentFailure ? { failure: contentFailure.code } : undefined,
     );
   }
+  // Owner, 26 Nov 2026 (local recheck): a regeneration that brings nothing to show is
+  // never saved as a success — a blank page's Regenerate came back with an empty canvas
+  // and the teacher saw «the slide was regenerated» over an empty slide.
+  if (content.elements.length === 0) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      'the regenerated slide came back empty; nothing was written',
+      { failure: 'EMPTY_SLIDE' },
+    );
+  }
   // Lesson 2-5 (17 Nov 2026): a try on the screen that shows the answer → kept as it was.
   if (posesTryOnSolution(input, content.elements as never)) {
     return failure(

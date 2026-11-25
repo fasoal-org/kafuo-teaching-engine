@@ -19,6 +19,7 @@ import {
   inOrderOf,
   isOnlySceneAtItsPosition,
   keepsTeachingOrder,
+  rebuildsBankCheckQuiz,
   type EditableSceneType,
   teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
@@ -459,9 +460,13 @@ export function SlideNavRail() {
         );
         return;
       }
-      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
+      const blank = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
         ...(inheritedTeachingStage !== undefined && { teachingStage: inheritedTeachingStage }),
       });
+      // A rebuilt check quiz is served from the question bank like its siblings.
+      const scene: Scene = rebuildsBankCheckQuiz(scenes, inheritedTeachingStage, type)
+        ? { ...blank, questionSource: 'bank' }
+        : blank;
       setScenes(insertSceneAtIndex(scenes, scene, insertIndex));
       setCurrentSceneId(scene.id);
     },

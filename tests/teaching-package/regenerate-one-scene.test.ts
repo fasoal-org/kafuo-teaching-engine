@@ -361,6 +361,17 @@ describe('regenerateOneScene — AT-G', () => {
     expect(result).toMatchObject({ ok: false, code: 'SCENE_ACTION_GENERATION_FAILED' });
   });
 
+  it('an empty answer is refused, never saved as a regenerated slide (owner, 26 Nov 2026)', async () => {
+    const { result } = await run(JSON.stringify({ elements: [], remark: '' }), {
+      pre: preImage([]),
+      outline: snapshot({ suggestedImageIds: undefined, visualPlan: undefined }),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('SCENE_CONTENT_GENERATION_FAILED');
+    expect(result.message).toContain('came back empty');
+  });
+
   it('refuses a Scene that is neither a slide nor a quiz', async () => {
     const interactive = {
       ...preImage(),
@@ -1032,6 +1043,7 @@ describe('regenerateOneScene — a lesson part moved between slides (owner, 14 N
     if (result.scene.content.type !== 'slide') throw new Error('slide');
     expect(result.scene.content.contentRole).toBeUndefined();
     expect(result.scene.content.canvas.type).toBeUndefined();
+    expect(result.scene.content.canvas.elements.length).toBeGreaterThan(0);
     expect(result.scene.outlineId).toBeUndefined();
     expect(prompts.map((prompt) => prompt.user).join('\n')).not.toContain(
       'Explain patterns from the figure.',

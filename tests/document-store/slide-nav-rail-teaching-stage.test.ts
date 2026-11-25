@@ -5,6 +5,7 @@ import {
   inOrderOf,
   isOnlySceneAtItsPosition,
   keepsTeachingOrder,
+  rebuildsBankCheckQuiz,
   teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
 import { duplicateSlideScene } from '@/lib/edit/slide-defaults';
@@ -91,6 +92,41 @@ describe('editor scene insertion/duplication teachingStage inheritance', () => {
     // Even without a worked-examples scene left, a check right after is never doubled.
     const nextIsCheck = [scene('s1', 1, EXPL), scene('q1', 2, CHECK)];
     expect(teachingStageForInsertion(nextIsCheck, 1, 'quiz')).toEqual(EXPL);
+    // A broken v3 lesson with no worked-example scene left: the check two positions after
+    // the slides still tells the lesson's shape, so nothing is "repaired" into it.
+    const v3Broken = [scene('s1', 1, EXPL), scene('q1', 2, CHECK), scene('s2', 3, NEXT_EXPL)];
+    expect(teachingStageForInsertion(v3Broken, 3, 'quiz')).toEqual(NEXT_EXPL);
+  });
+
+  // Review, 26 Nov 2026.
+  it('a page between two check quizzes whose objective lost every slide takes its slides position', () => {
+    const scenes = [scene('s1', 1, EXPL_1), scene('q1', 2, CHECK_1), scene('q2', 3, CHECK_2)];
+    expect(teachingStageForInsertion(scenes, 2, 'slide')).toEqual(EXPL_2);
+    expect(teachingStageForInsertion(scenes, 2, 'quiz')).toEqual(EXPL_2);
+  });
+
+  it('g5.v2–v5: no page is added between the last check quiz and the learning game', () => {
+    const GAME = { key: 'lesson_learning_game', flowIndex: 3 };
+    const scenes = [scene('s1', 1, EXPL_1), scene('q1', 2, CHECK_1), scene('g', 3, GAME)];
+    expect(teachingStageForInsertion(scenes, 2, 'slide')).toBeNull();
+  });
+
+  it('an objective’s last slide is kept even when its «جرّب بنفسك» quiz shares the position', () => {
+    const slide = scene('s1', 1, EXPL_1);
+    const attempt = { ...scene('try', 2, EXPL_1), type: 'quiz' } as Scene;
+    const scenes = [slide, attempt, scene('q1', 3, CHECK_1)];
+    expect(isOnlySceneAtItsPosition(scenes, slide)).toBe(true);
+    expect(isOnlySceneAtItsPosition(scenes, attempt)).toBe(false);
+  });
+
+  it('a rebuilt check quiz is a question-bank quiz when its siblings are', () => {
+    const bankCheck = { ...scene('q2', 3, CHECK_2), questionSource: 'bank' } as Scene;
+    const scenes = [scene('s1', 1, EXPL_1), scene('s2', 2, EXPL_2), bankCheck];
+    expect(rebuildsBankCheckQuiz(scenes, CHECK_1, 'quiz')).toBe(true);
+    expect(rebuildsBankCheckQuiz(scenes, EXPL_1, 'quiz')).toBe(false);
+    expect(rebuildsBankCheckQuiz(scenes, CHECK_1, 'slide')).toBe(false);
+    const ownQuestions = [scene('s1', 1, EXPL_1), scene('q2', 2, CHECK_2)];
+    expect(rebuildsBankCheckQuiz(ownQuestions, CHECK_1, 'quiz')).toBe(false);
   });
 
   it('the only scene of a flow position is the one the editor never deletes', () => {
