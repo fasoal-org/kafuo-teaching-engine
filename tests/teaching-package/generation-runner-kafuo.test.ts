@@ -503,6 +503,36 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     });
   });
 
+  it('D-18: real admission keeps the pin record, so the 202 and its replay echo it', async () => {
+    const context = kafuoContext();
+    const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+    const { readAttemptByRequestId } = await import('@/lib/persistence/teaching-package');
+    const { routePinEchoOf } = await import('@/lib/server/teaching-package/original-route-pin');
+    const requestId = `kafuo-pin-${randomUUID()}`;
+    const started = await startGenerationAttempt(txPool(), {
+      tenantId: context.aggregate.tenantId,
+      learningItem: context.aggregate.learningItem,
+      teachingModel: { key: 'g5', version: 'g5.v1' },
+      generation: { requirement: 'req', teachingFlow: FLOW },
+      actorRef: 'actor-1',
+      requestId,
+      requestDigest: 'a'.repeat(64),
+      teachingFlow: FLOW,
+      contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      // Admission does not check the pin itself (the route resolved it already).
+      routePin: { mode: 'original', sourceAttemptId: 'tpa-x' },
+    });
+    const echo = { applied: 'original', sourceAttemptId: 'tpa-x' };
+    expect(routePinEchoOf(started.attempt)).toEqual(echo);
+    // The replay lookup the route answers with reads the same record back.
+    const replayed = await readAttemptByRequestId(txPool(), context.aggregate, requestId);
+    expect(routePinEchoOf(replayed)).toEqual(echo);
+    // An unpinned attempt echoes nothing.
+    expect(
+      routePinEchoOf({ inputSnapshot: { ...started.attempt.inputSnapshot, routePin: undefined } }),
+    ).toBeNull();
+  });
+
   it('records the engine build that ran the attempt (S5.5 / G4), NULL when the image carries none', async () => {
     vi.stubEnv('KAFUO_BUILD_SHA', 'FCE7B150AABBCCDDEEFF00112233445566778899');
     const attemptId = await startKafuo();
