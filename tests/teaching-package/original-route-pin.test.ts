@@ -33,7 +33,20 @@ const PLAN: GenerationModelRoute = {
   fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
   settingKey: 'teaching_generation.plan_route.MATH',
 };
-const POOL = { query: vi.fn() } as never;
+/** The raw reads the pin makes itself: frozen-route key presence, and the table ledger. */
+const db = {
+  raw: { has_generation: false, has_plan: false },
+  ledger: [] as Array<{ role: string; model_string: string; thinking_label: string | null }>,
+  queries: [] as Array<{ text: string; params: unknown[] }>,
+};
+const POOL = {
+  query: vi.fn(async (text: string, params: unknown[] = []) => {
+    db.queries.push({ text, params });
+    if (/input_snapshot \? 'generationRoute'/.test(text)) return { rows: [db.raw] };
+    if (/FROM teaching_model_attempts/.test(text)) return { rows: db.ledger };
+    return { rows: [] };
+  }),
+} as never;
 
 function context(overrides: Partial<KafuoGenerationContext> = {}): KafuoGenerationContext {
   return {
@@ -54,7 +67,9 @@ function context(overrides: Partial<KafuoGenerationContext> = {}): KafuoGenerati
   } as KafuoGenerationContext;
 }
 
+/** The parsed context of the producing attempt; the raw row holds the same route keys. */
 function producing(snapshot: Record<string, unknown>) {
+  db.raw = { has_generation: 'generationRoute' in snapshot, has_plan: 'planRoute' in snapshot };
   return {
     attemptId: 'tpa-original',
     inputSnapshot: snapshot,
@@ -64,10 +79,22 @@ function producing(snapshot: Record<string, unknown>) {
 }
 
 const TABLE = SUBJECT_MODEL_POLICY.MATH;
+const TABLE_RUN = {
+  subjectCode: 'MATH',
+  policyVersion: 'r1-2026-09',
+  primaryModel: TABLE.primary.model,
+  fallbackModel: TABLE.fallback.model,
+};
 
 beforeEach(() => {
   mocks.retained.mockReset();
   mocks.assertAvailable.mockReset();
+  db.raw = { has_generation: false, has_plan: false };
+  // A table run's slide and narration rows, as recorded: today's primary and its label.
+  db.ledger = [
+    { role: 'primary', model_string: TABLE.primary.model, thinking_label: TABLE.primary.label },
+  ];
+  db.queries = [];
   vi.unstubAllEnvs();
   vi.stubEnv('TEACHING_SUBJECT_ROUTING', 'enforced');
 });
@@ -197,6 +224,64 @@ describe('resolveOriginalRoutePin', () => {
     });
     expect(mocks.retained).not.toHaveBeenCalled();
   });
+
+  it('a table original: its slide and narration rows decide the thinking, read tenant-scoped', async () => {
+    mocks.retained.mockResolvedValue(producing(TABLE_RUN));
+    db.ledger = [
+      { role: 'primary', model_string: TABLE.primary.model, thinking_label: TABLE.primary.label },
+      {
+        role: 'fallback',
+        model_string: TABLE.fallback.model,
+        thinking_label: TABLE.fallback.label,
+      },
+    ];
+    const result = await resolveOriginalRoutePin(POOL, context());
+    expect(result?.kafuo).not.toHaveProperty('modelRoute');
+    const ledgerRead = db.queries.find((q) => /FROM teaching_model_attempts/.test(q.text))!;
+    expect(ledgerRead.params).toEqual(['tpa-original', 'tenant-1']);
+    // Planning stages are not part of the check (they may run on a planning route).
+    expect(ledgerRead.text).toMatch(/scene-content%/);
+    expect(ledgerRead.text).toMatch(/scene-actions/);
+  });
+
+  it.each([
+    [
+      'the primary ran with another thinking level',
+      [{ role: 'primary', model_string: TABLE.primary.model, thinking_label: 'medium' }],
+    ],
+    [
+      'the fallback ran another target',
+      [
+        { role: 'primary', model_string: TABLE.primary.model, thinking_label: TABLE.primary.label },
+        { role: 'fallback', model_string: 'qwen:qwen3.7-flash', thinking_label: 'think' },
+      ],
+    ],
+    ['no slide or narration row exists to verify it', []],
+  ])('refuses a table original when %s', async (_label, ledger) => {
+    mocks.retained.mockResolvedValue(producing(TABLE_RUN));
+    db.ledger = ledger;
+    await expect(resolveOriginalRoutePin(POOL, context())).rejects.toMatchObject({
+      code: 'ORIGINAL_ROUTE_UNAVAILABLE',
+    });
+  });
+
+  it.each([
+    ['generationRoute', { has_generation: true, has_plan: false }],
+    ['planRoute', { has_generation: false, has_plan: true }],
+  ])(
+    'refuses a malformed frozen %s (dropped by the reader) instead of falling back',
+    async (field, raw) => {
+      // The reader already removed the malformed key; the raw row still has it.
+      mocks.retained.mockResolvedValue(producing(TABLE_RUN));
+      db.raw = raw;
+      await expect(resolveOriginalRoutePin(POOL, context())).rejects.toMatchObject({
+        code: 'ORIGINAL_ROUTE_UNAVAILABLE',
+        details: expect.objectContaining({ field, sourceAttemptId: 'tpa-original' }),
+      });
+      const presence = db.queries.find((q) => /input_snapshot \? 'planRoute'/.test(q.text))!;
+      expect(presence.params).toEqual(['tpa-original', 'tenant-1']);
+    },
+  );
 
   it('a pinned route whose model has no server key is refused by the key check, as a sent route', async () => {
     mocks.retained.mockResolvedValue(

@@ -146,9 +146,30 @@ async function capture(
   }
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * The service key travels in the HTTP reads' bearer header, so the Teaching Engine URL
+ * must be https; plain http is accepted for a loopback host only (a local dev server).
+ */
+export function assertSafeTeUrl(teUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(teUrl);
+  } catch {
+    throw new S6ExportError(`--te-url ${JSON.stringify(teUrl)} is not a URL`);
+  }
+  if (url.protocol === 'https:') return;
+  if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)) return;
+  throw new S6ExportError(
+    `refused: --te-url must be https (plain http only for localhost, 127.0.0.1 or [::1]); it carries the service key`,
+  );
+}
+
 /** Collect every part in memory (no file is written). */
 export async function collectS6StageExport(input: S6StageExportInput): Promise<S6StageExport> {
   const { queryable, tenantId, versionId } = input;
+  if (input.teUrl) assertSafeTeUrl(input.teUrl);
   if (input.teUrl && !input.serviceKey) {
     throw new S6ExportError('TEACHING_ENGINE_SERVICE_KEY is required for the HTTP reads');
   }

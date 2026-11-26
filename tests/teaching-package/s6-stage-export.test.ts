@@ -21,6 +21,7 @@ import {
 } from '@/lib/persistence/teaching-model-attempts';
 import { ensureTeachingPackageSchema } from '@/lib/persistence/teaching-package';
 import {
+  assertSafeTeUrl,
   collectS6StageExport,
   writeS6StageExport,
 } from '@/lib/server/teaching-package/s6-stage-export';
@@ -151,6 +152,39 @@ describe('S6 stage export (read-only)', () => {
       }),
     ).rejects.toThrow(/not read-only/);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a plain-http Teaching Engine URL (it carries the service key), before any read', async () => {
+    await pool.query('SET default_transaction_read_only = on');
+    const spy = vi.spyOn(pool, 'query');
+    const fetchImpl = vi.fn();
+    for (const teUrl of [
+      'http://te.example.test',
+      'http://10.0.0.5:3005',
+      'ftp://te.example.test',
+      'not a url',
+    ]) {
+      await expect(
+        collectS6StageExport({
+          queryable: pool,
+          tenantId: 'tenant-1',
+          versionId: 'tpv-1',
+          teUrl,
+          serviceKey: 'svc-key',
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow(/https|not a URL/);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    for (const teUrl of [
+      'https://te.example.test',
+      'http://localhost:3005',
+      'http://127.0.0.1:3005',
+      'http://[::1]:3005',
+    ]) {
+      expect(() => assertSafeTeUrl(teUrl)).not.toThrow();
+    }
   });
 
   it('exports the stage, attempt and tenant-scoped ledger rows, and the HTTP reads, under item/attempt', async () => {

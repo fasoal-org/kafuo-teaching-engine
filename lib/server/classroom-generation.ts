@@ -1251,12 +1251,14 @@ export async function generateClassroom(
   // re-generation) name theirs through `loopSceneId`, set and cleared beside
   // `sceneRefusalScope`. Lesson-level calls (outline, plan review, agent profiles, the
   // web-search rewrite) keep `scene_id` NULL by design.
-  const plannedSceneIds = new Map<string, string>();
-  const plannedSceneIdOf = (outlineId: string): string => {
-    let sceneId = plannedSceneIds.get(outlineId);
+  // Keyed by the outline's POSITION in the plan, never by `outline.id`: the model writes
+  // those ids and two outlines may share one, and each must still get its own Scene.
+  const plannedSceneIds = new Map<number, string>();
+  const plannedSceneIdOf = (outlineIndex: number): string => {
+    let sceneId = plannedSceneIds.get(outlineIndex);
     if (!sceneId) {
       sceneId = generateId('scene');
-      plannedSceneIds.set(outlineId, sceneId);
+      plannedSceneIds.set(outlineIndex, sceneId);
     }
     return sceneId;
   };
@@ -2790,7 +2792,7 @@ export async function generateClassroom(
       return contentRefusalScopes.run(
         {
           scope: governedScope ? { refusals: contentRefusals } : null,
-          sceneId: plannedSceneIdOf(safeOutline.id),
+          sceneId: plannedSceneIdOf(index),
         },
         run,
       );
@@ -2847,7 +2849,7 @@ export async function generateClassroom(
           continue;
         }
         const safeOutline = prepared[index]!.safeOutline;
-        loopSceneId = plannedSceneIdOf(safeOutline.id);
+        loopSceneId = plannedSceneIdOf(index);
         const sceneRefusals: TeachingModelUnavailableError[] = [];
         sceneRefusalScope =
           input.governed && isReviewerRegenerable(safeOutline.type)
@@ -3138,8 +3140,16 @@ export async function generateClassroom(
         let sceneId: string | null = null;
         let assemblyFailure: string | undefined;
         // The id its model calls were recorded under (S8-O1). A failed first assembly
-        // created nothing, so the placeholder below reuses it.
-        const plannedSceneId = plannedSceneIdOf(safeOutline.id);
+        // created nothing, so the placeholder below reuses it. Never a reason to lose the
+        // slide: an id already on the stage (not expected, ids are per position) gives way
+        // to a fresh one, and only the ledger link is lost.
+        let plannedSceneId: string | undefined = plannedSceneIdOf(index);
+        if (store.getState().scenes.some((existing) => existing.id === plannedSceneId)) {
+          log.warn(
+            `Scene "${safeOutline.title}": planned id ${plannedSceneId} is already on the stage; a fresh id is used`,
+          );
+          plannedSceneId = undefined;
+        }
         try {
           sceneId = createSceneWithActions(safeOutline, content, actions, api, plannedSceneId);
         } catch (error) {

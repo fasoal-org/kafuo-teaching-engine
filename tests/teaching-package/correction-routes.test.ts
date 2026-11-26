@@ -21,7 +21,19 @@ const mocks = vi.hoisted(() => ({
   routedStatus: vi.fn(),
   /** Overrides a generation catalogue model's server availability; unset = real. */
   modelAvailability: vi.fn(),
+  /** Overrides the "regenerate as the original" resolution (plan D-18); unset = real. */
+  resolvePin: vi.fn(),
 }));
+
+vi.mock('@/lib/server/teaching-package/original-route-pin', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/server/teaching-package/original-route-pin')>();
+  return {
+    ...actual,
+    resolveOriginalRoutePin: (...args: Parameters<typeof actual.resolveOriginalRoutePin>) =>
+      mocks.resolvePin(...args) ?? actual.resolveOriginalRoutePin(...args),
+  };
+});
 
 vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/speech/teaching-route')>();
@@ -669,6 +681,60 @@ describe('POST …/resume', () => {
     } finally {
       mocks.modelAvailability.mockReset();
     }
+  });
+
+  describe('a pinned regeneration ("regenerate as the original", plan D-18)', () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.BIOLOGY',
+    };
+    const pinnedRequest = () => kafuoRequest({ versionId: 'tpv-7', routePin: 'original' });
+
+    it('resumes on the original attempt’s route: the runner receives the pinned routes', async () => {
+      mocks.resolvePin.mockReset();
+      mocks.resolvePin.mockImplementationOnce(async (_pool, kafuo) => ({
+        kafuo: { ...kafuo, modelRoute: ROUTE },
+        routePin: { mode: 'original', sourceAttemptId: 'tpa-original' },
+      }));
+      mocks.resumeGenerationAttempt.mockResolvedValue({
+        attempt: attempt({ status: 'queued' }),
+        resumed: true,
+      });
+      const response = await send(
+        resumePost,
+        '/resume',
+        'POST',
+        resumeBody({ request: pinnedRequest() }),
+      );
+      expect(response.status).toBe(202);
+      const [poolArg, kafuoArg] = mocks.resolvePin.mock.calls[0]!;
+      expect(poolArg).toBe(mocks.pool);
+      expect(kafuoArg).toMatchObject({ routePin: 'original', versionId: 'tpv-7' });
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        routePin: 'original',
+        modelRoute: ROUTE,
+      });
+    });
+
+    it('a pin that can no longer be honoured → 409 before the attempt’s state changes', async () => {
+      mocks.resolvePin.mockReset();
+      mocks.resolvePin.mockImplementationOnce(async () => {
+        throw new TeachingPackageError('ORIGINAL_ROUTE_UNAVAILABLE', 'the table changed');
+      });
+      const response = await send(
+        resumePost,
+        '/resume',
+        'POST',
+        resumeBody({ request: pinnedRequest() }),
+      );
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'ORIGINAL_ROUTE_UNAVAILABLE' },
+      });
+      expectNoServiceCall();
+    });
   });
 
   it.each([

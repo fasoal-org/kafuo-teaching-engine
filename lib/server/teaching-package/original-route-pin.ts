@@ -61,6 +61,20 @@ function unavailable(message: string, details: Record<string, unknown>): Teachin
   return new TeachingPackageError('ORIGINAL_ROUTE_UNAVAILABLE', message, details);
 }
 
+/**
+ * The 202 echo of an honoured pin (plan D-18): `{ applied: "original", sourceAttemptId }`,
+ * read from the attempt's own snapshot, so an idempotent replay of a pinned attempt echoes
+ * it too. Absent on every unpinned attempt. A Backend that sent a pin and gets no echo
+ * knows this Teaching Engine ignored it (an older build) and records the attempt so.
+ */
+export function routePinEchoOf(
+  attempt: { inputSnapshot?: { routePin?: OriginalRoutePinRecord } | null } | null | undefined,
+): { applied: 'original'; sourceAttemptId: string } | null {
+  const pin = attempt?.inputSnapshot?.routePin;
+  if (!pin || pin.mode !== 'original' || typeof pin.sourceAttemptId !== 'string') return null;
+  return { applied: 'original', sourceAttemptId: pin.sourceAttemptId };
+}
+
 /** A frozen route re-validated against today's catalogue and the lesson's subject. */
 function pinnedRoute(
   raw: GenerationModelRoute,
@@ -84,6 +98,65 @@ function pinnedRoute(
     );
   }
   return route;
+}
+
+/** Whether the attempt row's raw snapshot holds each frozen route key (well-formed or not). */
+async function storedRouteKeysOf(
+  queryable: Queryable,
+  attemptId: string,
+  tenantId: string,
+): Promise<{ generationRoute: boolean; planRoute: boolean }> {
+  const result = await queryable.query<{ has_generation: boolean; has_plan: boolean }>(
+    `SELECT input_snapshot ? 'generationRoute' AS has_generation,
+            input_snapshot ? 'planRoute' AS has_plan
+       FROM teaching_package_generation_attempts
+      WHERE id = $1 AND tenant_id = $2`,
+    [attemptId, tenantId],
+  );
+  const row = result.rows[0];
+  return { generationRoute: row?.has_generation === true, planRoute: row?.has_plan === true };
+}
+
+/**
+ * A table original's thinking levels, from its own ledger: every slide-content and
+ * narration row must name today's table target for its role (model and thinking label).
+ * Planning stages are left out (they may run on a separate planning route). An attempt
+ * with no such row cannot be verified, so it is refused.
+ */
+async function assertTableThinkingUnchanged(
+  queryable: Queryable,
+  attemptId: string,
+  tenantId: string,
+  table: (typeof SUBJECT_MODEL_POLICY)[keyof typeof SUBJECT_MODEL_POLICY],
+  details: Record<string, unknown>,
+): Promise<void> {
+  const result = await queryable.query<{
+    role: string;
+    model_string: string;
+    thinking_label: string | null;
+  }>(
+    `SELECT DISTINCT role, model_string, thinking_label
+       FROM teaching_model_attempts
+      WHERE generation_attempt_id = $1 AND tenant_id = $2
+        AND capability = 'package_generation'
+        AND (stage LIKE 'scene-content%' OR stage = 'scene-actions')`,
+    [attemptId, tenantId],
+  );
+  if (result.rows.length === 0) {
+    throw unavailable(
+      `the original attempt ${attemptId} has no slide or narration ledger row, so its code-table thinking levels cannot be verified`,
+      details,
+    );
+  }
+  for (const row of result.rows) {
+    const target = row.role === 'fallback' ? table.fallback : table.primary;
+    if (row.model_string !== target.model || row.thinking_label !== target.label) {
+      throw unavailable(
+        `the original attempt's ${row.role} ran ${row.model_string} (${row.thinking_label ?? 'no thinking label'}); today's table runs ${target.model} (${target.label})`,
+        details,
+      );
+    }
+  }
 }
 
 /**
@@ -141,13 +214,30 @@ export async function resolveOriginalRoutePin(
     );
   }
 
+  // `readRetainedVersionContext` drops a malformed frozen route with only a warning (the
+  // later steps then use the table). Under a pin that would silently unpin, so the raw row
+  // is asked whether the attempt HAD each route: had one but it no longer parses → refuse.
+  const stored = await storedRouteKeysOf(queryable, retained.attemptId, kafuo.aggregate.tenantId);
+  for (const [field, present] of [
+    ['generationRoute', Boolean(snapshot.generationRoute)],
+    ['planRoute', Boolean(snapshot.planRoute)],
+  ] as const) {
+    if (stored[field] && !present) {
+      throw unavailable(
+        `the original attempt's frozen ${field} is malformed and cannot be pinned`,
+        { ...sourceDetails, field },
+      );
+    }
+  }
+
   let modelRoute: GenerationModelRoute | undefined;
   if (snapshot.generationRoute) {
     modelRoute = pinnedRoute(snapshot.generationRoute, 'modelRoute', subjectCode, sourceDetails);
   } else {
     // The code table: honoured only while today's table is the one the attempt ran on.
     // The policy version alone is not enough (a model swap may keep its label), so the
-    // two recorded models must match too.
+    // two recorded models must match, and so must the thinking levels the attempt's
+    // slide and narration calls ran with (the snapshot keeps none for a table run).
     const table = SUBJECT_MODEL_POLICY[subjectCode];
     if (
       snapshot.policyVersion !== POLICY_VERSION ||
@@ -159,6 +249,13 @@ export async function resolveOriginalRoutePin(
         sourceDetails,
       );
     }
+    await assertTableThinkingUnchanged(
+      queryable,
+      retained.attemptId,
+      kafuo.aggregate.tenantId,
+      table,
+      sourceDetails,
+    );
   }
   const planRoute = snapshot.planRoute
     ? pinnedRoute(snapshot.planRoute, 'planRoute', subjectCode, sourceDetails)

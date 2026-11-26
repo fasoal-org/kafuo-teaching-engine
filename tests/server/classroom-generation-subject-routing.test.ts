@@ -402,6 +402,58 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
     expect(contentRows.map((row) => row.scene_id)).toEqual(sceneByCallOrder);
   });
 
+  it('S8-O1: two outlines that share an id are both saved, each under its own Scene id', async () => {
+    // The model writes outline ids; nothing removes a repeat. Each position gets its Scene.
+    const outlines = [1, 2].map((n) => ({
+      ...outline,
+      id: 'scene_3',
+      title: `Fractions ${n}`,
+      order: n,
+    }));
+    mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+      async (_req, _pdf, images, aiCall) => {
+        await aiCall('sys-outline', 'user-outline', images);
+        return { success: true, data: { languageDirective: 'Use English.', outlines } };
+      },
+    );
+    mocks.generateSceneContent.mockImplementation(async (sceneOutline, aiCall, options) => {
+      await aiCall(
+        `sys-content-${sceneOutline.title}`,
+        'user-content',
+        options?.resolvedVisionImages,
+      );
+      return slideContent;
+    });
+    const policy = await policyFor('MATH');
+    await generate({ modelPolicy: policy, attribution: ATTRIBUTION, agentMode: 'generate' });
+
+    const persisted = mocks.persistClassroom.mock.calls[0]![0].scenes as Array<{ id: string }>;
+    expect(persisted).toHaveLength(2);
+    expect(new Set(persisted.map((scene) => scene.id)).size).toBe(2);
+    const sceneOfTitle = new Map(
+      mocks.createSceneWithActions.mock.calls.map((call) => [call[0].title as string, call[4]]),
+    );
+    expect(sceneOfTitle.get('Fractions 1')).not.toBe(sceneOfTitle.get('Fractions 2'));
+    const contentCalls = mocks.callLLM.mock.calls.filter(
+      ([, source]) => source === 'scene-content:slide',
+    );
+    const expected = contentCalls.map(([params]) => {
+      const system = (params as { messages: Array<{ content: string }> }).messages[0]!.content;
+      return sceneOfTitle.get(system.replace('sys-content-', ''));
+    });
+    const rows = await ledgerRows();
+    const contentRows = rows.filter((row) => row.stage === 'scene-content:slide');
+    expect(contentRows.map((row) => row.scene_id)).toEqual(expected);
+    expect(new Set(contentRows.map((row) => row.scene_id))).toEqual(
+      new Set(persisted.map((scene) => scene.id)),
+    );
+    // Each Scene's narration row names that Scene too.
+    const actionRows = rows.filter((row) => row.stage === 'scene-actions');
+    expect(new Set(actionRows.map((row) => row.scene_id))).toEqual(
+      new Set(persisted.map((scene) => scene.id)),
+    );
+  });
+
   it('runs the planner, the book repair and the refinement on the planning route, and every scene stage on the generation route (§3c)', async () => {
     // package-planner-issue-resolve-plan-2026-11-22 §3c (owner, 22 Nov 2026).
     const generation = await policyFor('MATH'); // Luna primary → Qwen fallback
