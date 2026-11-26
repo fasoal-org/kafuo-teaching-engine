@@ -266,6 +266,8 @@ describe('teaching package service auth', () => {
       // Configured generation model route (teaching-generation-model-admin-config-plan D-11).
       GENERATION_ROUTE_INVALID: 400,
       GENERATION_ROUTE_UNAVAILABLE: 409,
+      // "Regenerate as the original" (plan D-18).
+      ORIGINAL_ROUTE_UNAVAILABLE: 409,
       SACRED_TEXT_ALTERED: 502,
       SACRED_TEXT_CANONICAL_MISMATCH: 422,
       // The AI package review's lesson-run actions (errors.ts).

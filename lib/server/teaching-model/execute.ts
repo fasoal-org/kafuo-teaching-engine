@@ -463,6 +463,64 @@ interface AttemptOutcomeRecord {
   totalMs: number;
   /** Streaming: visible deltas reached the sink before the outcome was known. */
   deltasEmitted: boolean;
+  /** The provider's own ids (S8-O2), NULL when it sent none. */
+  providerIds: ProviderIds;
+}
+
+interface ProviderIds {
+  requestId: string | null;
+  responseId: string | null;
+}
+
+const NO_PROVIDER_IDS: ProviderIds = { requestId: null, responseId: null };
+
+/**
+ * The response headers that carry a provider's request id (S5.5 / S8-O2):
+ * Anthropic sends `request-id`; OpenAI and OpenAI-compatible endpoints send
+ * `x-request-id`. Any other header is ignored, and a provider that sends
+ * neither leaves the column NULL.
+ */
+const PROVIDER_REQUEST_ID_HEADERS = ['request-id', 'x-request-id'] as const;
+
+/**
+ * The AI SDK fills `response.id` with its own `aitxt-…` id when the provider's
+ * body names none (`generateText` / `streamText`); that id is ours, not the
+ * provider's, so it is never recorded as one.
+ */
+const SDK_GENERATED_RESPONSE_ID = /^aitxt-/;
+
+function providerIdsOf(
+  response: { id?: unknown; headers?: unknown } | null | undefined,
+): ProviderIds {
+  if (!response || typeof response !== 'object') return NO_PROVIDER_IDS;
+  let requestId: string | null = null;
+  const headers = response.headers;
+  if (headers && typeof headers === 'object') {
+    const byName = new Map<string, unknown>();
+    for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
+      byName.set(name.toLowerCase(), value);
+    }
+    for (const name of PROVIDER_REQUEST_ID_HEADERS) {
+      const value = byName.get(name);
+      if (typeof value === 'string' && value.trim() !== '') {
+        requestId = value.trim();
+        break;
+      }
+    }
+  }
+  const id = response.id;
+  const responseId =
+    typeof id === 'string' && id.trim() !== '' && !SDK_GENERATED_RESPONSE_ID.test(id)
+      ? id.trim()
+      : null;
+  return { requestId, responseId };
+}
+
+/** A failed call's request id, from the provider error's response headers (APICallError). */
+function providerIdsOfError(error: unknown): ProviderIds {
+  if (!error || typeof error !== 'object') return NO_PROVIDER_IDS;
+  const headers = (error as { responseHeaders?: unknown }).responseHeaders;
+  return { requestId: providerIdsOf({ headers }).requestId, responseId: null };
 }
 
 interface CallPlan {
@@ -590,6 +648,7 @@ async function runCall(plan: CallPlan, deps: Deps): Promise<AttemptOutcomeRecord
       ttftUnavailableReason: 'non_streaming',
       totalMs: deps.now() - startedAt,
       deltasEmitted: false,
+      providerIds: providerIdsOf(result.response),
     };
   } catch (error) {
     return {
@@ -601,6 +660,7 @@ async function runCall(plan: CallPlan, deps: Deps): Promise<AttemptOutcomeRecord
       ttftUnavailableReason: 'failed_before_response',
       totalMs: deps.now() - startedAt,
       deltasEmitted: false,
+      providerIds: providerIdsOfError(error),
     };
   }
 }
@@ -617,6 +677,8 @@ interface StreamResultShape {
   totalUsage?: PromiseLike<unknown>;
   usage?: PromiseLike<unknown>;
   finishReason?: PromiseLike<unknown>;
+  /** The final step's response metadata (`id`, `headers`), settled with `totalUsage`. */
+  response?: PromiseLike<unknown>;
 }
 
 /**
@@ -682,11 +744,25 @@ async function runStream(
 
   const totalMs = deps.now() - startedAt;
   let rawUsage: unknown;
+  let providerIds: ProviderIds = sawError ? providerIdsOfError(streamError) : NO_PROVIDER_IDS;
   if (stream) {
     try {
       rawUsage = await (stream.totalUsage ?? stream.usage);
     } catch {
       rawUsage = undefined;
+    }
+    if (stream.response) {
+      // Settled by the same flush as `totalUsage` (rejected when no step finished).
+      try {
+        const response = (await stream.response) as { id?: unknown; headers?: unknown };
+        const fromResponse = providerIdsOf(response);
+        providerIds = {
+          requestId: fromResponse.requestId ?? providerIds.requestId,
+          responseId: fromResponse.responseId,
+        };
+      } catch {
+        /* no finished step: the error's headers (if any) stand */
+      }
     }
     if (finishReason === undefined && stream.finishReason) {
       try {
@@ -709,6 +785,7 @@ async function runStream(
       ttftUnavailableReason,
       totalMs,
       deltasEmitted,
+      providerIds,
     };
   }
   const judged = judgeOutput(plan.params, text, finishReason);
@@ -722,6 +799,7 @@ async function runStream(
     ttftUnavailableReason,
     totalMs,
     deltasEmitted,
+    providerIds,
   };
 }
 
@@ -817,6 +895,8 @@ function completionOf(
     totalMs: record.totalMs,
     primaryFailureMs: options.primaryFailureMs,
     completedAt: options.completedAtMs / 1000,
+    providerRequestId: record.providerIds.requestId,
+    providerResponseId: record.providerIds.responseId,
   };
 }
 

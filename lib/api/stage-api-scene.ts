@@ -40,7 +40,15 @@ export function createSceneAPI(store: StageStore) {
           };
         }
 
-        const sceneId = generateId('scene');
+        if (params.id !== undefined) {
+          if (params.id.trim() === '') {
+            return { success: false, error: 'A supplied scene id must be non-empty' };
+          }
+          if (validateSceneId(state.scenes, params.id)) {
+            return { success: false, error: `Scene id already exists: ${params.id}` };
+          }
+        }
+        const sceneId = params.id ?? generateId('scene');
 
         // Determine order
         const order = params.order ?? state.scenes.length;

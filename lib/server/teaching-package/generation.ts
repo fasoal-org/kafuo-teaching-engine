@@ -116,6 +116,8 @@ export interface StartGenerationAttemptRequest {
    */
   contentResource?: GenerationInputSnapshot['contentResource'];
   normalizedContentResource?: GenerationInputSnapshot['normalizedContentResource'];
+  /** "Regenerate as the original" (plan D-18): the attempt whose route was pinned. */
+  routePin?: GenerationInputSnapshot['routePin'];
 }
 
 /** The request's canonical aggregate scope (plan §4.1.2). */
@@ -182,6 +184,7 @@ export function toGenerationInputSnapshot(
       ? { teachingSkillsContract: request.teachingSkillsContract }
       : {}),
     ...(request.skillPolicyDigest ? { skillPolicyDigest: request.skillPolicyDigest } : {}),
+    ...(request.routePin ? { routePin: request.routePin } : {}),
   };
 }
 
@@ -688,6 +691,37 @@ export async function recordSpeechRegister(
         SET input_snapshot = input_snapshot || $2::jsonb
       WHERE id = $1`,
     [attemptId, JSON.stringify({ speechRegister: register })],
+  );
+}
+
+/**
+ * The Teaching Engine build this process runs (S5.5 / G4): `KAFUO_BUILD_SHA`,
+ * baked into the image by the staging and production `deploy.sh` (a Dockerfile
+ * `ARG`). Only a hex commit id is accepted; anything else, or no value, is
+ * NULL ("build unknown").
+ */
+export function engineBuildSha(): string | null {
+  const raw = process.env.KAFUO_BUILD_SHA?.trim();
+  return raw && /^[0-9a-f]{7,40}$/i.test(raw) ? raw.toLowerCase() : null;
+}
+
+/**
+ * Record the build that runs a Kafuo attempt (`input_snapshot.engineBuild`),
+ * written by the runner before any model call, beside the subject route and
+ * the speech register. A correction resume records `resumeEngineBuild` and
+ * leaves the first run's build as it was. Not part of the request digest.
+ */
+export async function recordEngineBuild(
+  pool: ConnectableQueryable,
+  attemptId: string,
+  build: { sha: string | null; resumed: boolean },
+): Promise<void> {
+  const key = build.resumed ? 'resumeEngineBuild' : 'engineBuild';
+  await pool.query(
+    `UPDATE teaching_package_generation_attempts
+        SET input_snapshot = input_snapshot || $2::jsonb
+      WHERE id = $1`,
+    [attemptId, JSON.stringify({ [key]: { sha: build.sha } })],
   );
 }
 

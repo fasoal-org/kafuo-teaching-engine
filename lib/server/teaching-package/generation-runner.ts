@@ -50,7 +50,9 @@ import {
 } from '@/lib/server/teaching-package/normalized-content-resource';
 import {
   completeGenerationAttempt,
+  engineBuildSha,
   failGenerationAttempt,
+  recordEngineBuild,
   recordResolvedLlmModel,
   recordSpeechRegister,
   recordSubjectRoute,
@@ -456,6 +458,9 @@ async function runKafuoAttempt(
   // attempt; nothing below runs for it.
   const route = await resolveAttemptSubjectRoute(attemptId, kafuo, pool);
   if (route.failed) return;
+
+  // S5.5 / G4: the engine build that runs this attempt, recorded before any model call.
+  await recordEngineBuild(pool, attemptId, { sha: engineBuildSha(), resumed: resume !== null });
 
   // The spoken-language register the run is generated under: derived from the
   // same authoritative language + subject code generation receives, and

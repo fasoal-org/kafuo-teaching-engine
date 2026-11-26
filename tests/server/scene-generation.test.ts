@@ -61,6 +61,44 @@ describe('createSceneWithActions app adapter', () => {
     );
   });
 
+  it('creates the scene under a pre-minted id (S8-O1); absent, no id is sent', () => {
+    const minted = stageApi({ success: true, data: 'scene_minted1' });
+    const content = { questions: [] } as unknown as GeneratedSceneContent;
+    expect(createSceneWithActions(outline('quiz'), content, [], minted.api, 'scene_minted1')).toBe(
+      'scene_minted1',
+    );
+    expect(minted.create.mock.calls[0]![0].id).toBe('scene_minted1');
+    const fresh = stageApi({ success: true, data: 'scene-fresh' });
+    createSceneWithActions(outline('quiz'), content, [], fresh.api);
+    expect(fresh.create.mock.calls[0]![0]).not.toHaveProperty('id');
+  });
+
+  it('the stage API keeps a supplied scene id and refuses a duplicate or empty one', async () => {
+    const { createStageAPI } = await import('@/lib/api/stage-api');
+    let state = {
+      stage: { id: 'stage-1', name: 'S', createdAt: 1, updatedAt: 1 },
+      scenes: [] as unknown[],
+      currentSceneId: null,
+      mode: 'autonomous',
+    };
+    const store = {
+      getState: () => state,
+      setState: (patch: Partial<typeof state>) => {
+        state = { ...state, ...patch };
+      },
+    } as unknown as Parameters<typeof createStageAPI>[0];
+    const api = createStageAPI(store);
+    const first = api.scene.create({ id: 'scene_planned', type: 'quiz', title: 'Q' });
+    expect(first).toEqual({ success: true, data: 'scene_planned' });
+    expect(api.scene.create({ id: 'scene_planned', type: 'quiz', title: 'Q2' }).success).toBe(
+      false,
+    );
+    expect(api.scene.create({ id: '  ', type: 'quiz', title: 'Q3' }).success).toBe(false);
+    const generated = api.scene.create({ type: 'quiz', title: 'Q4' });
+    expect(generated.success && generated.data).toMatch(/^scene_/);
+    expect(state.scenes).toHaveLength(2);
+  });
+
   it('returns null when the store rejects the package-built scene', () => {
     const { api } = stageApi({ success: false });
     expect(

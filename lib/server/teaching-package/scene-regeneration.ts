@@ -598,6 +598,7 @@ export async function regenerateSlideScene(
         versionId: grant.versionId,
         regenerationId,
         generationAttemptId: retained?.attemptId ?? null,
+        sceneId,
         learningItem: version.learningItem,
         snapshotSubjectCode: subjectCode,
         // The package's frozen generation model route (teaching-generation-

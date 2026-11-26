@@ -454,6 +454,23 @@ export interface GenerationInputSnapshot {
    * `generationRoute`. Absent ⇒ planning followed the generation route.
    */
   planRoute?: GenerationModelRoute;
+  /**
+   * "Regenerate as the original" (S6 G1(b), teaching-generation-model-admin-
+   * config-plan-2026-11-18 D-18): set when the request said `routePin:
+   * "original"`. `generationRoute` / `planRoute` above (or their absence, the
+   * code table) were copied from `sourceAttemptId`, the version's producing
+   * attempt, instead of today's settings.
+   */
+  routePin?: { mode: 'original'; sourceAttemptId: string };
+  /**
+   * The Teaching Engine build that ran the attempt (S5.5 / G4): the image's
+   * `KAFUO_BUILD_SHA`, NULL when the image carries none (a local run, or an
+   * image built before the deploy passed it). Written by the runner before any
+   * model call; a correction resume writes `resumeEngineBuild` instead, so the
+   * first run's build stays.
+   */
+  engineBuild?: { sha: string | null };
+  resumeEngineBuild?: { sha: string | null };
   /** True when any teaching-call ledger row of this attempt did not reach `complete`. */
   ledgerIncomplete?: boolean;
   /**
@@ -977,6 +994,15 @@ export interface KafuoGenerationRequest {
    * runs on the generation route, and the canonical digest is byte-identical.
    */
   planRoute?: GenerationModelRoute;
+  /**
+   * "Regenerate as the original" (S6 G1(b), teaching-generation-model-admin-
+   * config-plan-2026-11-18 D-18): `"original"` makes a regeneration
+   * (`versionId` required) run on the version's producing attempt's frozen
+   * `generationRoute` / `planRoute`, or on the code table when that attempt
+   * ran on it, instead of a sent route. Never sent with `modelRoute` or
+   * `planRoute`. Covered by the digest when present; absent ⇒ byte-identical.
+   */
+  routePin?: 'original';
   /**
    * g5.v7 only: the lesson's book map and Lesson Template. Absent ⇒ every
    * earlier version's planning and digest are unchanged.

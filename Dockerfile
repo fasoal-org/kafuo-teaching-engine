@@ -111,4 +111,10 @@ USER nextjs
 
 EXPOSE 3005
 
+# The commit the image was built from (S5.5 tracing): recorded on each generation
+# attempt as `input_snapshot.engineBuild`. Not a secret. Last, so a new commit only
+# rebuilds this layer.
+ARG KAFUO_BUILD_SHA=""
+ENV KAFUO_BUILD_SHA=$KAFUO_BUILD_SHA
+
 CMD ["node", "server.js"]

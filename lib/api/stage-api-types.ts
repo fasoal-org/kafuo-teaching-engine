@@ -24,6 +24,13 @@ export interface APIResult<T = unknown> {
  * Scene creation parameters
  */
 export interface CreateSceneParams {
+  /**
+   * A scene id the caller minted beforehand (`generateId('scene')`), so the
+   * model calls that write the scene can name it before it exists (package
+   * generation's ledger rows, S5.5 / S8-O1). Absent ⇒ a fresh id. An id
+   * already on the stage is refused.
+   */
+  id?: string;
   type: SceneType;
   title: string;
   content?: Partial<SceneContent>;

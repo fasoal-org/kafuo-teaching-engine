@@ -33,6 +33,8 @@ export function createSceneWithActions(
   content: GeneratedSceneContent,
   actions: Action[],
   api: StageAPI,
+  /** A scene id minted before the scene's model calls (S5.5 / S8-O1); absent ⇒ a fresh one. */
+  sceneId?: string,
 ): string | null {
   const scene = buildCompleteScene(outline, content, actions, '');
   if (!scene) return null;
@@ -42,6 +44,7 @@ export function createSceneWithActions(
   assertGeneratedSlideScene(scene);
 
   const result = api.scene.create({
+    ...(sceneId !== undefined ? { id: sceneId } : {}),
     type: scene.type,
     title: scene.title,
     order: scene.order,

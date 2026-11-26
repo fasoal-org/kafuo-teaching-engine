@@ -387,6 +387,29 @@ describe('canonicalRequestDigest', () => {
     );
   });
 
+  it('covers "regenerate as the original" only when sent (vector 11, plan D-18)', () => {
+    // Vector 11 is vector 1 plus `versionId` and `routePin` (requestId is outside the
+    // digest). The Backend's `semantic_payload` gives the same pinned digest.
+    const vector = vectors.vectors[10]!;
+    expect(vector.request.routePin).toBe('original');
+    expect(vector.request.versionId).toBe('tpv-11');
+    expect(vector.request).not.toHaveProperty('modelRoute');
+    expect(vector.request).not.toHaveProperty('planRoute');
+    const { request } = parseKafuoGenerationRequest(vector.request);
+    expect(request.routePin).toBe('original');
+    expect(canonicalRequestPayload(request).routePin).toBe('original');
+    expect(canonicalRequestDigest(request)).toBe(vector.digest);
+    // Without the pin it is a plain regeneration of the same version: another digest.
+    const { routePin: _pin, ...unpinned } = JSON.parse(JSON.stringify(vector.request)) as Record<
+      string,
+      unknown
+    >;
+    const plain = parseKafuoGenerationRequest(unpinned).request;
+    expect(plain).not.toHaveProperty('routePin');
+    expect(canonicalRequestPayload(plain)).not.toHaveProperty('routePin');
+    expect(canonicalRequestDigest(plain)).not.toBe(vector.digest);
+  });
+
   it('is independent of the signed retrieval URL', () => {
     const first = parseKafuoGenerationRequest(body()).request;
     const second = parseKafuoGenerationRequest(
@@ -815,5 +838,52 @@ describe('planRoute (planning and review model, package-planner-issue-resolve-pl
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('routePin ("regenerate as the original", plan D-18)', () => {
+  const ROUTE = {
+    primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+    fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+    settingKey: 'teaching_generation.route.MATH',
+  };
+  const regeneration = (overrides: Record<string, unknown> = {}) => {
+    const base = body({ versionId: 'tpv-1', ...overrides });
+    return { ...base, learningItem: { ...base.learningItem, subjectOffering: { code: 'MATH' } } };
+  };
+
+  it('absent stays absent: no pin on the request, the context or the digest', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(regeneration());
+    expect(request).not.toHaveProperty('routePin');
+    expect(canonicalRequestPayload(request)).not.toHaveProperty('routePin');
+    expect(buildKafuoStartRequest(request, aggregate).kafuo).not.toHaveProperty('routePin');
+  });
+
+  it('carries "original" onto the run context; the start snapshot gets it only once resolved', () => {
+    const { request, aggregate } = parseKafuoGenerationRequest(
+      regeneration({ routePin: 'original' }),
+    );
+    const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+    expect(kafuo.routePin).toBe('original');
+    expect(kafuo).not.toHaveProperty('modelRoute');
+    expect(start).not.toHaveProperty('routePin');
+  });
+
+  it.each([
+    ['another value', { routePin: 'today' }],
+    ['null', { routePin: null }],
+    ['an initial generation (no versionId)', { routePin: 'original', versionId: undefined }],
+    ['a sent modelRoute beside it', { routePin: 'original', modelRoute: ROUTE }],
+    [
+      'a sent planRoute beside it',
+      {
+        routePin: 'original',
+        planRoute: { ...ROUTE, settingKey: 'teaching_generation.plan_route.MATH' },
+      },
+    ],
+  ])('refuses %s with GENERATION_ROUTE_INVALID (400)', (_label, overrides) => {
+    expect(() => parseKafuoGenerationRequest(regeneration(overrides))).toThrowError(
+      expect.objectContaining({ code: 'GENERATION_ROUTE_INVALID', status: 400 }),
+    );
   });
 });

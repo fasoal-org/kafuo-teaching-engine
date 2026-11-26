@@ -935,6 +935,78 @@
         "actorRef": "42"
       },
       "digest": "df6720ffb6a3672bfb4608a407289f998cdd2eb3cb288154bbe0bc8c7a014d02"
+    },
+    {
+      "request": {
+        "requestId": "kafuo-req-11",
+        "tenantContext": {
+          "tenantId": "tenant-1"
+        },
+        "learningItem": {
+          "type": "lesson",
+          "id": "901",
+          "title": "Photosynthesis",
+          "unit": {
+            "id": "12",
+            "title": "Unit 3"
+          },
+          "curriculum": {
+            "id": "5",
+            "name": "Science 5"
+          },
+          "curriculumVersion": {
+            "id": "8",
+            "versionLabel": "2026-A"
+          },
+          "subjectOffering": {
+            "id": "10",
+            "name": "Science",
+            "code": "BIOLOGY",
+            "nameAr": "العلوم",
+            "nameEn": "Science",
+            "academicLanguage": "ar"
+          },
+          "language": "ar"
+        },
+        "learningObjectives": [
+          {
+            "objectiveRef": "7001",
+            "snapshot": {
+              "statement": "Explain photosynthesis."
+            }
+          }
+        ],
+        "teachingModel": {
+          "key": "g5",
+          "version": "g5.v1",
+          "flow": [
+            {
+              "stage": "lesson_introduction",
+              "instructions": "Introduce the item once."
+            },
+            {
+              "stage": "outcome_teaching_cards",
+              "instructions": "Cards for O1."
+            },
+            {
+              "stage": "outcome_worked_examples",
+              "instructions": "Examples for O1."
+            }
+          ]
+        },
+        "contentResource": {
+          "id": "cs-77",
+          "mimeType": "application/pdf",
+          "url": "https://r2.example.test/lesson.pdf?X-Amz-Signature=abc"
+        },
+        "generation": {
+          "enableTTS": true
+        },
+        "versionId": "tpv-11",
+        "routePin": "original",
+        "actorRef": "42"
+      },
+      "digest": "63c7c6dc15084a3ab2c8fb0bddea6fa5c5bd705fba7a89c5baf8b3da637e008f"
     }
   ]
 }

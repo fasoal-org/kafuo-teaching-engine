@@ -84,6 +84,23 @@ describe('createRegenerationRoute', () => {
       { role: 'user', content: 'user' },
     ]);
     expect(route.description).toMatchObject({ mode: 'enforced', subjectCode: 'MATH' });
+    // No Scene named: the association carries none.
+    expect((context.association as Record<string, unknown>).sceneId).toBeUndefined();
+  });
+
+  it('S8-O1: names the regenerated Scene on every call', async () => {
+    const execute = vi.fn(async () => ({ text: 'ok' }));
+    const route = await createRegenerationRoute({
+      ...base,
+      sceneId: 'scene_target',
+      execute: execute as never,
+    });
+    await route.aiCallFor('scene-actions')('system', 'user');
+    const context = (execute.mock.calls[0] as unknown as [unknown, { association: object }])[1];
+    expect(context.association).toMatchObject({
+      sceneRegenerationId: 'tsr-1',
+      sceneId: 'scene_target',
+    });
   });
 
   it('refuses without a recorded subject, or when the Stage subject disagrees', async () => {

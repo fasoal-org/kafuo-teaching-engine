@@ -277,7 +277,58 @@ describe('teaching_model_attempts ledger', () => {
       turn_id: null,
       budget_estimate_tokens: null,
       budget_counter_kind: null,
+      // S8-O1: a lesson-level call names no Scene.
+      scene_id: null,
+      provider_request_id: null,
+      provider_response_id: null,
     });
+  });
+
+  it('S5.5 tracing: a generation row names its Scene, and the completion keeps the provider ids', async () => {
+    await insertStartedAttempt(
+      pool,
+      started({
+        id: 'tma-scene',
+        capability: 'package_generation',
+        stage: 'scene-content:slide',
+        association: { kind: 'generation', generationAttemptId: 'ga-1', sceneId: 'scene_abc123' },
+        budget: null,
+      }),
+    );
+    expect(await readAttempt(pool, 'tma-scene')).toMatchObject({ scene_id: 'scene_abc123' });
+    await completeAttempt(
+      pool,
+      'tma-scene',
+      completion({ providerRequestId: '  req_011CX  ', providerResponseId: 'msg_01AbC' }),
+    );
+    expect(await readAttempt(pool, 'tma-scene')).toMatchObject({
+      scene_id: 'scene_abc123',
+      provider_request_id: 'req_011CX',
+      provider_response_id: 'msg_01AbC',
+    });
+    // Bounded to 200 characters; an absent id leaves the column NULL.
+    await insertStartedAttempt(
+      pool,
+      started({
+        id: 'tma-long',
+        association: { kind: 'generation', generationAttemptId: 'ga-1' },
+        budget: null,
+      }),
+    );
+    await completeAttempt(pool, 'tma-long', completion({ providerRequestId: 'r'.repeat(500) }));
+    const long = await readAttempt(pool, 'tma-long');
+    expect(long?.provider_request_id).toHaveLength(200);
+    expect(long?.provider_response_id).toBeNull();
+  });
+
+  it('evolution adds the provider id columns to a ledger booted before them, once', async () => {
+    await pool.query(`ALTER TABLE teaching_model_attempts DROP COLUMN provider_request_id`);
+    await pool.query(`ALTER TABLE teaching_model_attempts DROP COLUMN provider_response_id`);
+    await ensureTeachingModelAttemptsSchema(pool);
+    await ensureTeachingModelAttemptsSchema(pool);
+    await insertStartedAttempt(pool, started({ id: 'tma-evolved' }));
+    await completeAttempt(pool, 'tma-evolved', completion({ providerRequestId: 'req_1' }));
+    expect(await readAttempt(pool, 'tma-evolved')).toMatchObject({ provider_request_id: 'req_1' });
   });
 
   it('error_message is bounded to 300 chars and scrubbed of bearer tokens', async () => {

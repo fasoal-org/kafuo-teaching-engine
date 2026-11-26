@@ -218,8 +218,9 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
       await aiCall('sys-actions', 'user-actions');
       return [];
     });
-    mocks.createSceneWithActions.mockImplementation((sceneOutline, content, actions, api) => {
+    mocks.createSceneWithActions.mockImplementation((sceneOutline, content, actions, api, id) => {
       const created = api.scene.create({
+        ...(id !== undefined ? { id } : {}),
         type: sceneOutline.type,
         title: sceneOutline.title,
         order: sceneOutline.order,
@@ -336,6 +337,69 @@ describe('generateClassroom on the subject route (Kafuo R1 P4)', () => {
         budget_breach: null,
       });
     }
+    // S5.5 / S8-O1: the Scene's content and narration rows name the Scene that was
+    // persisted (its id minted before the first call); lesson-level rows name none.
+    const persistedScenes = mocks.persistClassroom.mock.calls[0]![0].scenes as Array<{
+      id: string;
+    }>;
+    expect(persistedScenes).toHaveLength(1);
+    const sceneId = persistedScenes[0]!.id;
+    expect(sceneId).toMatch(/^scene_/);
+    expect(mocks.createSceneWithActions.mock.calls[0]![4]).toBe(sceneId);
+    expect(rows.map((row) => [row.stage, row.scene_id])).toEqual([
+      ['scene-outlines-stream', null],
+      ['agent-profiles', null],
+      ['scene-content:slide', sceneId],
+      ['scene-actions', sceneId],
+    ]);
+  });
+
+  it('S8-O1: concurrently prefetched Scenes each record their own Scene id', async () => {
+    const outlines = [1, 2, 3].map((n) => ({
+      ...outline,
+      id: `outline-${n}`,
+      title: `Fractions ${n}`,
+      order: n,
+    }));
+    mocks.generateSceneOutlinesFromRequirements.mockImplementation(
+      async (_req, _pdf, images, aiCall) => {
+        await aiCall('sys-outline', 'user-outline', images);
+        return { success: true, data: { languageDirective: 'Use English.', outlines } };
+      },
+    );
+    // Later Scenes answer first, so their content calls interleave with earlier ones.
+    mocks.generateSceneContent.mockImplementation(async (sceneOutline, aiCall, options) => {
+      const delay = 30 - Number(String(sceneOutline.order)) * 10;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      await aiCall(`sys-content-${sceneOutline.id}`, 'user-content', options?.resolvedVisionImages);
+      return slideContent;
+    });
+    const policy = await policyFor('MATH');
+    await generate({ modelPolicy: policy, attribution: ATTRIBUTION, agentMode: 'generate' });
+
+    const persisted = mocks.persistClassroom.mock.calls[0]![0].scenes as Array<{
+      id: string;
+      outlineId?: string;
+    }>;
+    expect(persisted).toHaveLength(3);
+    const contentRows = (await ledgerRows()).filter((row) => row.stage === 'scene-content:slide');
+    expect(contentRows).toHaveLength(3);
+    // Each content call's system prompt names its outline; its row names that outline's Scene.
+    const sceneOfOutline = new Map(
+      mocks.createSceneWithActions.mock.calls.map((call) => [call[0].id as string, call[4]]),
+    );
+    const contentCalls = mocks.callLLM.mock.calls.filter(
+      ([, source]) => source === 'scene-content:slide',
+    );
+    const sceneByCallOrder = contentCalls.map(([params]) => {
+      const system = (params as { messages: Array<{ role: string; content: string }> }).messages[0]!
+        .content;
+      return sceneOfOutline.get(system.replace('sys-content-', ''));
+    });
+    expect(new Set(contentRows.map((row) => row.scene_id))).toEqual(
+      new Set(persisted.map((scene) => scene.id)),
+    );
+    expect(contentRows.map((row) => row.scene_id)).toEqual(sceneByCallOrder);
   });
 
   it('runs the planner, the book repair and the refinement on the planning route, and every scene stage on the generation route (§3c)', async () => {

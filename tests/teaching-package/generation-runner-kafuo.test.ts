@@ -503,6 +503,30 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     });
   });
 
+  it('records the engine build that ran the attempt (S5.5 / G4), NULL when the image carries none', async () => {
+    vi.stubEnv('KAFUO_BUILD_SHA', 'FCE7B150AABBCCDDEEFF00112233445566778899');
+    const attemptId = await startKafuo();
+    const build = async (id: string) => {
+      const raw = await pool.query(
+        `SELECT input_snapshot->'engineBuild' AS b, input_snapshot->'resumeEngineBuild' AS r
+           FROM teaching_package_generation_attempts WHERE id = $1`,
+        [id],
+      );
+      const row = raw.rows[0] as { b: unknown; r: unknown };
+      const parse = (value: unknown) => (typeof value === 'string' ? JSON.parse(value) : value);
+      return { first: parse(row.b), resumed: parse(row.r) };
+    };
+    expect(await build(attemptId)).toEqual({
+      first: { sha: 'fce7b150aabbccddeeff00112233445566778899' },
+      resumed: null,
+    });
+    const { engineBuildSha } = await import('@/lib/server/teaching-package/generation');
+    vi.stubEnv('KAFUO_BUILD_SHA', 'not a sha');
+    expect(engineBuildSha()).toBeNull();
+    vi.stubEnv('KAFUO_BUILD_SHA', '');
+    expect(engineBuildSha()).toBeNull();
+  });
+
   it('uses normalized acquisition exclusively and never calls the PDF path', async () => {
     mocks.acquireNormalizedContentResource.mockResolvedValue({
       text: '[[CONTENT_UNIT id=cu-1]] normalized text',

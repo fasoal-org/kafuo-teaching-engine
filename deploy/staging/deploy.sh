@@ -34,6 +34,7 @@ step "1/4 Building kafuo-te:$short"
 docker build --quiet --tag "kafuo-te:$sha" \
   --build-arg NEXT_PUBLIC_PERSISTENCE=1 \
   --build-arg NEXT_PUBLIC_MAIC_EDITOR_ENABLED=true \
+  --build-arg KAFUO_BUILD_SHA="$sha" \
   "$repo" >/dev/null
 
 step "2/4 Database kafuo_te and a backup"

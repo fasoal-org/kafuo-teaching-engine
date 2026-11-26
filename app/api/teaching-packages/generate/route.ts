@@ -24,6 +24,7 @@ import {
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
 import { assertKafuoFlowWithoutGames } from '@/lib/server/teaching-package/kafuo-game-deferral';
+import { resolveOriginalRoutePin } from '@/lib/server/teaching-package/original-route-pin';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
   readJsonObject,
@@ -101,7 +102,7 @@ export async function POST(req: NextRequest) {
       // runner the Kafuo context — whose `contentResource.url` lives in
       // memory only from here on.
       const { request, aggregate } = parseKafuoGenerationRequest(body);
-      const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+      let { start, kafuo } = buildKafuoStartRequest(request, aggregate);
       // Subject routing (Kafuo R1 contracts §6, AMB-04): under
       // TEACHING_SUBJECT_ROUTING=enforced an unrouted subject — `code: null`
       // from the Backend, or a code outside the policy table — is refused
@@ -133,6 +134,13 @@ export async function POST(req: NextRequest) {
       // (GENERATION_ROUTE_INVALID).
       assertConfiguredGenerationRouteAvailable(kafuo);
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+      // "Regenerate as the original" (plan D-18): the version's producing attempt's
+      // route replaces any route, refused before any attempt row when it cannot run.
+      const pinned = await resolveOriginalRoutePin(pool as never, kafuo);
+      if (pinned) {
+        kafuo = pinned.kafuo;
+        start = { ...start, routePin: pinned.routePin };
+      }
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay
       // returns the existing attempt untouched — scheduling the runner for one

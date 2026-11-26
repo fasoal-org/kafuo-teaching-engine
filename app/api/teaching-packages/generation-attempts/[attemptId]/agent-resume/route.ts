@@ -22,6 +22,7 @@ import { isTeachingPackageApiConfigured } from '@/lib/config/feature-flags';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { assertAgentActorRef, parseDryRun } from '@/lib/server/teaching-package/agent-correction';
 import { parseCorrectionResumeBody } from '@/lib/server/teaching-package/correction-resume-request';
+import { resolveOriginalRoutePin } from '@/lib/server/teaching-package/original-route-pin';
 import { resumeGenerationAttempt } from '@/lib/server/teaching-package/generation-correction';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
@@ -49,10 +50,14 @@ export async function POST(
     }
     assertAgentActorRef(body.actorRef);
     const dryRun = parseDryRun(body.dryRun);
-    const { tenantId, actorRef, expectedRevision, start, kafuo, aggregate } =
+    const { tenantId, actorRef, expectedRevision, start, aggregate, ...parsed } =
       parseCorrectionResumeBody(body);
 
     const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+    // A pinned regeneration (plan D-18) resumes on the same original route, refused
+    // before the attempt's state changes when that route can no longer run.
+    const kafuo =
+      (await resolveOriginalRoutePin(pool as never, parsed.kafuo))?.kafuo ?? parsed.kafuo;
     const result = await resumeGenerationAttempt(pool, attemptId, {
       tenantId,
       actorRef,

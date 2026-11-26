@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { callLLM } from '@/lib/ai/llm';
 import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createStageAPI } from '@/lib/api/stage-api';
+import { generateId } from '@/lib/api/stage-api-defaults';
 import type { StageStore } from '@/lib/api/stage-api-types';
 import {
   analyzeOutlines,
@@ -1238,23 +1239,47 @@ export async function generateClassroom(
   // `sceneRefusalScope`.
   // `scope: null` is an explicit "no Scene scope" (a refusal then fails the run), so a
   // prefetched call never falls through to the loop's scope for a different Scene.
+  // `sceneId` (S5.5 / S8-O1): the Scene a prefetched content call writes, carried in the
+  // same per-Scene store for the same reason as its refusal scope.
   const contentRefusalScopes = new AsyncLocalStorage<{
     scope: { refusals: TeachingModelUnavailableError[] } | null;
+    sceneId: string | null;
   }>();
-  const teachingContext = (stage: string): TeachingCallContext => ({
-    tenantId: routed!.attribution.tenantId,
-    capability: 'package_generation',
-    stage,
-    origin: 'openmaic_runtime',
-    association: {
-      kind: 'generation',
-      generationAttemptId: routed!.attribution.generationAttemptId,
-      generationRun: routed!.attribution.generationRun,
-      versionId: null,
-      learningItemType: routed!.attribution.learningItemType,
-      learningItemId: routed!.attribution.learningItemId,
-    },
-  });
+  // S5.5 / S8-O1 (model per slide): each outline's Scene id is minted before its first
+  // model call, so every ledger row of that Scene names it; `createSceneWithActions`
+  // creates the Scene under the same id. The loop's serial calls (narration, a native
+  // re-generation) name theirs through `loopSceneId`, set and cleared beside
+  // `sceneRefusalScope`. Lesson-level calls (outline, plan review, agent profiles, the
+  // web-search rewrite) keep `scene_id` NULL by design.
+  const plannedSceneIds = new Map<string, string>();
+  const plannedSceneIdOf = (outlineId: string): string => {
+    let sceneId = plannedSceneIds.get(outlineId);
+    if (!sceneId) {
+      sceneId = generateId('scene');
+      plannedSceneIds.set(outlineId, sceneId);
+    }
+    return sceneId;
+  };
+  let loopSceneId: string | null = null;
+  const teachingContext = (stage: string): TeachingCallContext => {
+    const holder = contentRefusalScopes.getStore();
+    const sceneId = holder ? holder.sceneId : loopSceneId;
+    return {
+      tenantId: routed!.attribution.tenantId,
+      capability: 'package_generation',
+      stage,
+      origin: 'openmaic_runtime',
+      association: {
+        kind: 'generation',
+        generationAttemptId: routed!.attribution.generationAttemptId,
+        generationRun: routed!.attribution.generationRun,
+        versionId: null,
+        learningItemType: routed!.attribution.learningItemType,
+        learningItemId: routed!.attribution.learningItemId,
+        ...(sceneId ? { sceneId } : {}),
+      },
+    };
+  };
   const routedCall = async (
     stage: string,
     systemPrompt: string,
@@ -2763,7 +2788,10 @@ export async function generateClassroom(
         };
       };
       return contentRefusalScopes.run(
-        { scope: governedScope ? { refusals: contentRefusals } : null },
+        {
+          scope: governedScope ? { refusals: contentRefusals } : null,
+          sceneId: plannedSceneIdOf(safeOutline.id),
+        },
         run,
       );
     };
@@ -2808,6 +2836,7 @@ export async function generateClassroom(
     let firstRefusal: TeachingModelUnavailableError | undefined;
     try {
       for (const [index, outline] of outlines.entries()) {
+        loopSceneId = null;
         if (droppedGuideOutlines.has(outline.id)) continue;
         const retained = retainedByOutline.get(outline.id);
         if (retained) {
@@ -2818,6 +2847,7 @@ export async function generateClassroom(
           continue;
         }
         const safeOutline = prepared[index]!.safeOutline;
+        loopSceneId = plannedSceneIdOf(safeOutline.id);
         const sceneRefusals: TeachingModelUnavailableError[] = [];
         sceneRefusalScope =
           input.governed && isReviewerRegenerable(safeOutline.type)
@@ -3107,8 +3137,11 @@ export async function generateClassroom(
 
         let sceneId: string | null = null;
         let assemblyFailure: string | undefined;
+        // The id its model calls were recorded under (S8-O1). A failed first assembly
+        // created nothing, so the placeholder below reuses it.
+        const plannedSceneId = plannedSceneIdOf(safeOutline.id);
         try {
-          sceneId = createSceneWithActions(safeOutline, content, actions, api);
+          sceneId = createSceneWithActions(safeOutline, content, actions, api, plannedSceneId);
         } catch (error) {
           // A governed slide/quiz whose generated content cannot be assembled
           // (e.g. invalid slide semantics) is kept as a placeholder instead of
@@ -3129,6 +3162,7 @@ export async function generateClassroom(
             placeholderContentFor(safeOutline, textDirection),
             actions,
             api,
+            plannedSceneId,
           );
         }
         if (!sceneId) {
@@ -3173,6 +3207,7 @@ export async function generateClassroom(
     } finally {
       // Normal end or a throw out of the loop: no prefetched Scene starts after it.
       contentStopped = true;
+      loopSceneId = null;
     }
 
     sceneRefusalScope = null;
@@ -3264,6 +3299,8 @@ export async function generateClassroom(
     // narration, since element ids change). Still missing → the generator
     // throws the typed ORIENTATION_VISUAL_MISSING; it is never a log line.
     for (const sceneId of withheld.keys()) {
+      // S8-O1: this native re-generation's content and narration calls name the Scene.
+      loopSceneId = sceneId;
       const scene = scenes.find((item) => item.id === sceneId);
       const planned = outlines.find((item) => item.id === scene?.outlineId);
       if (!scene || !planned || scene.content.type !== 'slide') continue;
@@ -3404,6 +3441,7 @@ export async function generateClassroom(
       scene.actions = nativeActions as never;
       if (nativeRegisterIssues.length > 0) markSceneIssues(store, scene.id, nativeRegisterIssues);
     }
+    loopSceneId = null;
 
     if (input.guideAnswerGuard) {
       // Lesson 2-5 (17 Nov 2026): an exercise solution slide's title names exactly the
