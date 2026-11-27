@@ -27,17 +27,39 @@ import {
   type EditorOperation,
   type EditorTransaction,
 } from '@openmaic/editor/core';
+import type { Action } from '@openmaic/dsl';
 import {
   deletedElementIds,
   deletedNarratedImage,
   NARRATION_DELETED_IMAGE_ISSUE_CODE,
+  pointerActionsOn,
+  withActionsRestored,
   withoutActionsOnDeletedElements,
 } from '@/lib/edit/dangling-element-actions';
 import { commitSlideEdit } from '@/lib/edit/scene-edit-bridge';
 import { migrateSlideContent } from '@/lib/edit/slide-schema';
 import type { SlideEditHistory } from '@/lib/edit/slide-ops';
 import { isStageEditingLocked, useStageStore } from '@/lib/store/stage';
-import type { SlideContent } from '@/lib/types/stage';
+import type { Scene, SlideContent } from '@/lib/types/stage';
+
+/** How a history move reaches the stage store (see `writeThrough`). */
+type WriteKind = 'manual' | 'history' | 'other';
+
+/** ED-11: the pointer Actions one manual delete took with one element. */
+interface TakenPointers {
+  actions: Array<{ action: Action; index: number }>;
+  /** That delete raised the deleted-image flag (D-5 A). */
+  flagged: boolean;
+  /** The element (and so its Actions) is away now. */
+  away: boolean;
+}
+
+type GenerationIssue = NonNullable<Scene['generationIssues']>[number];
+
+const DELETED_IMAGE_FLAG: GenerationIssue = {
+  code: NARRATION_DELETED_IMAGE_ISSUE_CODE,
+  message: 'The narration still describes an image that was deleted from this slide.',
+};
 
 /**
  * An AI slide insertion holds the Stage-wide editing lock
@@ -91,12 +113,73 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
    * (SceneProvider reads via `currentSlideContent`) see the new content as
    * soon as React processes the next batch.
    */
-  /** `manual`: a person's own canvas/toolbar edit (not undo/redo, an agent or a reflow). */
-  const writeThrough = (next: SlideContent, manual = false) => {
+  /**
+   * ED-11 (critical items, 27 Nov 2026): what each manual delete of this session took
+   * with its element — its spotlight/laser Actions (and whether that delete raised the
+   * deleted-image flag) — so an undo that brings the element back brings them back, and
+   * a redo of the delete takes them again. Cleared with the session (seed / end).
+   */
+  let taken = new Map<string, TakenPointers>();
+
+  const withFlag = (issues: readonly GenerationIssue[], on: boolean): GenerationIssue[] => {
+    const rest = issues.filter((issue) => issue.code !== NARRATION_DELETED_IMAGE_ISSUE_CODE);
+    return on ? [...rest, DELETED_IMAGE_FLAG] : rest;
+  };
+
+  /** An undo or a redo: the Actions its manual deletes took go back, or away again. */
+  const historyWrite = (sceneId: string, previous: SlideContent, next: SlideContent) => {
+    const store = useStageStore.getState();
+    const scene = store.scenes?.find((candidate) => candidate.id === sceneId);
+    const back = deletedElementIds(next.canvas.elements, previous.canvas.elements);
+    const gone = deletedElementIds(previous.canvas.elements, next.canvas.elements);
+    let actions = scene?.actions;
+    let changed = false;
+    for (const id of back) {
+      const entry = taken.get(id);
+      if (!entry?.away) continue;
+      actions = withActionsRestored(actions, entry.actions);
+      entry.away = false;
+      changed = true;
+    }
+    for (const id of gone) {
+      const entry = taken.get(id);
+      if (!entry || entry.away) continue;
+      const ids = new Set(entry.actions.map(({ action }) => action.id));
+      actions = (actions ?? []).filter((action) => !ids.has(action.id));
+      entry.away = true;
+      changed = true;
+    }
+    if (!changed) {
+      store.updateScene(sceneId, { content: next });
+      return;
+    }
+    // The deleted-image flag a delete raised stands exactly while one such image is away.
+    const raised = [...taken.values()].filter((entry) => entry.flagged);
+    const issues = scene?.generationIssues ?? [];
+    const flagNow = raised.some((entry) => entry.away);
+    const flagShown = issues.some((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE);
+    const nextIssues =
+      raised.length > 0 && flagNow !== flagShown ? withFlag(issues, flagNow) : null;
+    store.updateScene(sceneId, {
+      content: next,
+      actions: actions ?? [],
+      ...(nextIssues ? { generationIssues: nextIssues.length > 0 ? nextIssues : undefined } : {}),
+    });
+  };
+
+  /**
+   * `manual`: a person's own canvas/toolbar edit; `history`: an undo or a redo;
+   * `other`: an agent edit or a reflow.
+   */
+  const writeThrough = (next: SlideContent, kind: WriteKind = 'other') => {
     const { sceneId, history } = get();
     if (!sceneId) return;
     const store = useStageStore.getState();
-    if (!manual || !history) {
+    if (kind === 'history' && history) {
+      historyWrite(sceneId, history.present, next);
+      return;
+    }
+    if (kind !== 'manual' || !history) {
       store.updateScene(sceneId, { content: next });
       return;
     }
@@ -112,32 +195,33 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     const flag =
       deletedNarratedImage(history.present.canvas.elements, deletedIds, scene?.actions) &&
       !issues.some((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE);
+    if (actions) {
+      // ED-11: kept for an undo; a later manual delete of a restored element records anew.
+      const images = new Set(
+        history.present.canvas.elements
+          .filter((element) => element.type === 'image')
+          .map((element) => element.id),
+      );
+      for (const [id, pointers] of pointerActionsOn(scene?.actions, deletedIds)) {
+        taken.set(id, { actions: pointers, flagged: flag && images.has(id), away: true });
+      }
+    }
     store.updateScene(sceneId, {
       content: next,
       ...(actions ? { actions } : {}),
-      ...(flag
-        ? {
-            generationIssues: [
-              ...issues,
-              {
-                code: NARRATION_DELETED_IMAGE_ISSUE_CODE,
-                message: 'The narration still describes an image that was deleted from this slide.',
-              },
-            ],
-          }
-        : {}),
+      ...(flag ? { generationIssues: [...issues, DELETED_IMAGE_FLAG] } : {}),
     });
   };
 
-  const replace = (history: EditorHistory, manual = false) => {
+  const replace = (history: EditorHistory, kind: WriteKind = 'other') => {
     const { history: prev } = get();
     if (history === prev || editingLocked()) return;
-    writeThrough(history.present, manual);
+    writeThrough(history.present, kind);
     set({ history });
   };
 
-  const isManual = (transaction: EditorTransaction) =>
-    transaction.origin === 'canvas' || transaction.origin === 'toolbar';
+  const kindOf = (transaction: EditorTransaction): WriteKind =>
+    transaction.origin === 'canvas' || transaction.origin === 'toolbar' ? 'manual' : 'other';
 
   return {
     sceneId: null,
@@ -150,6 +234,7 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
       // shouldn't receive a redundant write. Any schema migration the
       // first user edit triggers will naturally flow back through
       // commitContent's writeThrough.
+      taken = new Map();
       set({
         sceneId,
         history: createEditorHistory(migrateSlideContent(content)),
@@ -176,20 +261,20 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
           history: 'record',
           operations: [op],
         }),
-        true,
+        'manual',
       );
     },
 
     applyTransaction: (transaction) => {
       const { history } = get();
       if (!history) return;
-      replace(applyEditorTransaction(history, transaction), isManual(transaction));
+      replace(applyEditorTransaction(history, transaction), kindOf(transaction));
     },
 
     applyTransactionForScene: (sceneId, transaction) => {
       const { history, sceneId: currentSceneId } = get();
       if (!history || currentSceneId !== sceneId) return;
-      replace(applyEditorTransaction(history, transaction), isManual(transaction));
+      replace(applyEditorTransaction(history, transaction), kindOf(transaction));
     },
 
     commitContent: (next, isUserEdit) => {
@@ -214,7 +299,7 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
       // to that fallback until its React surface moves into @openmaic/editor.
       replace(
         commitSlideEdit(history as unknown as SlideEditHistory, next) as unknown as EditorHistory,
-        true,
+        'manual',
       );
     },
 
@@ -223,16 +308,17 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     undo: () => {
       const { history } = get();
       if (!history) return;
-      replace(undoEditorTransaction(history));
+      replace(undoEditorTransaction(history), 'history');
     },
 
     redo: () => {
       const { history } = get();
       if (!history) return;
-      replace(redoEditorTransaction(history));
+      replace(redoEditorTransaction(history), 'history');
     },
 
     end: () => {
+      taken = new Map();
       set({ sceneId: null, history: null, gestureActive: false });
     },
   };

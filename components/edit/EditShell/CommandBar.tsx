@@ -103,6 +103,9 @@ function IconButton({
           size="icon-sm"
           variant="ghost"
           className="h-8 w-8 shrink-0 rounded-xl text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          // ED-11 (critical items, 27 Nov 2026): an icon-only button names itself — undo,
+          // redo and the surface commands had only a hover tooltip.
+          aria-label={title}
           {...props}
         >
           {children}

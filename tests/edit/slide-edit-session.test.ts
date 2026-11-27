@@ -94,6 +94,73 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     expect(updateScene.mock.calls.at(-1)![1]).not.toHaveProperty('actions');
   });
 
+  // ED-11 (critical items, 27 Nov 2026): undo brought the element back but not its spotlight.
+  it('an undo of a manual delete brings its spotlight/laser Actions back where they stood; a redo takes them again', () => {
+    scenes.push({ id: 'scene-1', actions: pointerActions() });
+    // The mock store applies each write, as the real one does.
+    updateScene.mockImplementation((_id: string, patch: { actions?: unknown[] }) => {
+      if (patch.actions) scenes[0]!.actions = patch.actions;
+    });
+    try {
+      useSlideEditSession.getState().seed('scene-1', makeContent());
+      useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+        origin: 'toolbar',
+        history: 'record',
+        operations: [{ type: 'element.delete', elementId: 'text-1' }],
+      });
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'a-speech',
+        'a-other',
+      ]);
+
+      useSlideEditSession.getState().undo();
+      expect(updateScene.mock.calls.at(-1)![1].content.canvas.elements[0].id).toBe('text-1');
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'a-speech',
+        'a-spot',
+        'a-laser',
+        'a-other',
+      ]);
+
+      // A redo of the delete takes exactly those again (Submit never sees a dangling one).
+      useSlideEditSession.getState().redo();
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'a-speech',
+        'a-other',
+      ]);
+      // And a second undo restores them once, never twice.
+      useSlideEditSession.getState().undo();
+      useSlideEditSession.getState().redo();
+      useSlideEditSession.getState().undo();
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'a-speech',
+        'a-spot',
+        'a-laser',
+        'a-other',
+      ]);
+    } finally {
+      updateScene.mockReset();
+    }
+  });
+
+  it('a new session forgets what an earlier one took (no restore across seeds)', () => {
+    scenes.push({ id: 'scene-1', actions: pointerActions() });
+    useSlideEditSession.getState().seed('scene-1', makeContent());
+    useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+      origin: 'toolbar',
+      history: 'record',
+      operations: [{ type: 'element.delete', elementId: 'text-1' }],
+    });
+    useSlideEditSession.getState().seed('scene-1', makeContent());
+    useSlideEditSession.getState().applyOp({
+      type: 'element.update',
+      elementId: 'text-1',
+      patch: { rotate: 9 },
+    });
+    useSlideEditSession.getState().undo();
+    expect(updateScene.mock.calls.at(-1)![1]).not.toHaveProperty('actions');
+  });
+
   it('writes no Actions when none point at a missing element', () => {
     scenes.push({
       id: 'scene-1',
@@ -173,6 +240,41 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
       useSlideEditSession.getState().seed('scene-1', imageContent());
       useSlideEditSession.getState().commitContent(makeContent(), false);
       expect(lastIssues()).toBeUndefined();
+    });
+
+    // ED-11: the flag a delete raised goes with the undo, and comes back with the redo.
+    it('an undo of the image delete lowers the flag it raised; a redo raises it again', () => {
+      const other = { code: 'SPEECH_REGISTER_NONCOMPLIANT', message: 'x' };
+      scenes.push({ id: 'scene-1', actions: imageActions(), generationIssues: [other] });
+      updateScene.mockImplementation(
+        (_id: string, patch: { actions?: unknown[]; generationIssues?: unknown }) => {
+          if (patch.actions) scenes[0]!.actions = patch.actions;
+          if ('generationIssues' in patch) {
+            scenes[0]!.generationIssues = patch.generationIssues as never;
+          }
+        },
+      );
+      try {
+        useSlideEditSession.getState().seed('scene-1', imageContent());
+        deleteImage();
+        expect(scenes[0]!.generationIssues).toEqual([
+          other,
+          { code: CODE, message: expect.any(String) },
+        ]);
+        useSlideEditSession.getState().undo();
+        expect(scenes[0]!.generationIssues).toEqual([other]);
+        expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+          'a-speech',
+          'a-spot',
+        ]);
+        useSlideEditSession.getState().redo();
+        expect(scenes[0]!.generationIssues).toEqual([
+          other,
+          { code: CODE, message: expect.any(String) },
+        ]);
+      } finally {
+        updateScene.mockReset();
+      }
     });
 
     it('a deleted text element, or an image no Action pointed at, is not flagged', () => {

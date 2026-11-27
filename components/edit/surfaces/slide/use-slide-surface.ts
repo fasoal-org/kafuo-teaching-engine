@@ -146,6 +146,36 @@ export function deleteSlideElement(elementId: string): void {
 }
 
 /**
+ * ED-11 (critical items, 27 Nov 2026): delete what the canvas has selected — the
+ * Delete key's action, the same manual delete as the toolbar's trash (its spotlight
+ * Actions go with it, and an undo brings them back). One undo step for the whole
+ * selection; a locked element, and anything no longer on the slide, is kept. Inside a
+ * group only the selected member goes, as the right-click Delete does. `false` when
+ * nothing was deleted.
+ */
+export function deleteSelectedSlideElements(): boolean {
+  const session = useSlideEditSession.getState();
+  const elements = session.history?.present.canvas.elements ?? [];
+  const canvas = useCanvasStore.getState();
+  const selected = canvas.activeGroupElementId
+    ? [canvas.activeGroupElementId]
+    : canvas.activeElementIdList;
+  const deletable = new Set(
+    elements
+      .filter((element) => selected.includes(element.id) && !element.lock)
+      .map((element) => element.id),
+  );
+  if (deletable.size === 0) return false;
+  session.applyTransaction({
+    origin: 'toolbar',
+    history: 'record',
+    operations: [...deletable].map((elementId) => ({ type: 'element.delete' as const, elementId })),
+  });
+  canvas.setActiveElementIdList([]);
+  return true;
+}
+
+/**
  * Move an element to the front (top) or back (bottom) of the z-order.
  * Two-way only — intermediate forward/backward steps stay AI's domain.
  */

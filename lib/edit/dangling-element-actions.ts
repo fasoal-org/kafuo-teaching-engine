@@ -5,7 +5,10 @@
  * no meaning without its element, so it goes with it.
  *
  * Only a manual deletion does this (owner decision, 1 Nov 2026): an undo,
- * a redo, an agent edit or a layout normalization never removes an Action.
+ * a redo, an agent edit or a layout normalization never removes an Action of
+ * its own. ED-11 (27 Nov 2026): an undo that brings a deleted element back
+ * brings back the Actions its deletion took, and a redo of that deletion takes
+ * them again — never any other Action.
  *
  * Pure: the slide edit session calls these on its manual write-throughs.
  */
@@ -52,6 +55,43 @@ export function deletedNarratedImage(
     const elementId = (action as unknown as { elementId?: unknown }).elementId;
     return typeof elementId === 'string' && deletedImages.has(elementId);
   });
+}
+
+/**
+ * ED-11 (critical items, 27 Nov 2026): the spotlight/laser Actions on each of
+ * `elementIds`, with their index in `actions` — what a manual delete takes away,
+ * kept so an undo that brings the element back can bring them back too.
+ */
+export function pointerActionsOn(
+  actions: readonly Action[] | undefined,
+  elementIds: ReadonlySet<string>,
+): Map<string, Array<{ action: Action; index: number }>> {
+  const byElement = new Map<string, Array<{ action: Action; index: number }>>();
+  (actions ?? []).forEach((action, index) => {
+    if (!ELEMENT_POINTER_TYPES.has(action.type)) return;
+    const elementId = (action as unknown as { elementId?: unknown }).elementId;
+    if (typeof elementId !== 'string' || !elementIds.has(elementId)) return;
+    byElement.set(elementId, [...(byElement.get(elementId) ?? []), { action, index }]);
+  });
+  return byElement;
+}
+
+/**
+ * ED-11: `actions` with `restored` put back where they stood (by their old index,
+ * clamped), in index order; an Action whose id is already there is not doubled.
+ */
+export function withActionsRestored(
+  actions: readonly Action[] | undefined,
+  restored: ReadonlyArray<{ action: Action; index: number }>,
+): Action[] {
+  const next = [...(actions ?? [])];
+  const present = new Set(next.map((action) => action.id));
+  for (const { action, index } of [...restored].sort((a, b) => a.index - b.index)) {
+    if (present.has(action.id)) continue;
+    next.splice(Math.min(index, next.length), 0, action);
+    present.add(action.id);
+  }
+  return next;
 }
 
 /**
