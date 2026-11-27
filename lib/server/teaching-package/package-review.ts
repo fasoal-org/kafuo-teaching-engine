@@ -76,6 +76,7 @@ import {
   judgedUnitIds,
   loadReviewBookUnits,
   loadReviewFigures,
+  figureRoomFor,
   pickReviewFigures,
   REVIEW_FIRST_CALL_IMAGE_SHARE,
   REVIEW_IMAGE_ATTEMPTS_PER_CALL,
@@ -205,6 +206,13 @@ export interface FixLoopContext {
   now: () => number;
   /** The run's abort signal (LOW-1): the paid regeneration and TTS stop with it. */
   signal?: AbortSignal;
+  /**
+   * RV-1/RV-4 (g5.v12 only): whether this run can still show a slide's re-check every
+   * readable book figure it wants. False → the fix loop does not pay for that slide's
+   * regeneration; it leaves the slide for the next fresh run (Regenerate flagged).
+   * Absent on every other package.
+   */
+  figureRoom?: (request: Pick<ReviewCallRequest, 'slides' | 'focusIds' | 'alsoFigures'>) => boolean;
 }
 
 export interface FixLoopResult {
@@ -225,12 +233,11 @@ export interface PackageReviewDeps {
   /** Phase 3: regenerate and re-review. Absent → every finding goes to the teacher. */
   fixLoop?: FixLoop;
   loadScenes?: (pool: ConnectableQueryable, stageId: string) => Promise<AppScene[] | null>;
-  /** RV-1 test seam: the g5.v12 book figures of `unitIds` (production: the Stage's). */
+  /** RV-1 test seam: the g5.v12 book figures (`null`: all of the Stage's). */
   loadFigures?: (
     pool: ConnectableQueryable,
     stageId: string,
-    unitIds: ReadonlySet<string>,
-    options?: { withBytes?: boolean },
+    unitIds: ReadonlySet<string> | null,
   ) => Promise<ReviewFigureSet>;
   /** The sweep's tracker: called after the claim and after every renewed lease. */
   onLeaseKept?: () => void;
@@ -256,18 +263,17 @@ export async function loadLiveScenes(
 }
 
 /**
- * RV-1: the Stage's materialized book figures linked to `unitIds` (g5.v12 reviews only),
- * only from this Stage's media; `withBytes: false` reads no file (a run that sends none).
+ * RV-1: the Stage's materialized book figures linked to `unitIds` (`null`: every one),
+ * g5.v12 reviews only, only from this Stage's media.
  */
 export async function loadStageFigures(
   pool: ConnectableQueryable,
   stageId: string,
-  unitIds: ReadonlySet<string>,
-  options: { withBytes?: boolean } = {},
+  unitIds: ReadonlySet<string> | null,
 ): Promise<ReviewFigureSet> {
   const document = (await documentStore(pool).loadDocument(stageId)) as AppDocument | null;
   const outline = document?.outline as AppDocumentOutline | null | undefined;
-  return loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId, ...options });
+  return loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId });
 }
 
 /**
@@ -300,11 +306,17 @@ export function reviewImageTokenBudget(price: number = reviewerImageTokenPriceUs
   return Math.min(REVIEW_IMAGE_MAX_TOKENS_PER_RUN, Math.floor(Number(tokens.toFixed(6))));
 }
 
-/** RV-1: the provider refused the request itself (an image it would not take, say). */
-function rejectedRequest(error: unknown): boolean {
+/**
+ * RV-1: every route refused the request itself (an image it would not take) or declined
+ * it on safety grounds (a classifier on a figure, say) -- never a timeout or an outage.
+ */
+function refusedRequest(error: unknown): boolean {
   return (
     error instanceof TeachingModelUnavailableError &&
-    error.outcomes.some((outcome) => outcome.outcome === 'request_rejected')
+    error.outcomes.length > 0 &&
+    error.outcomes.every(
+      (outcome) => outcome.outcome === 'request_rejected' || outcome.outcome === 'safety_refused',
+    )
   );
 }
 
@@ -789,18 +801,16 @@ export async function runPackageReview(
       )
       .catch(() => null);
     const bookFigures = isBookPartPlacementModel(attempt?.teachingModel);
-    const figureBudget = bookFigures && claimed.runAttempts === 1 ? reviewImageTokenBudget() : 0;
+    // What a fresh first run may send (a hold within it is curable), and this run's share.
+    const freshRunBudget = bookFigures ? reviewImageTokenBudget() : 0;
+    const figureBudget = claimed.runAttempts === 1 ? freshRunBudget : 0;
     let figureSet: ReviewFigureSet | null = null;
     if (bookFigures) {
       try {
-        // The whole slide set's units, and every unit a cited figure belongs to: a
-        // re-check may want a figure its findings were read from (`alsoFigures`).
-        figureSet = await (deps.loadFigures ?? loadStageFigures)(
-          pool,
-          claimed.stageId,
-          judgedUnitIds(slides),
-          { withBytes: figureBudget > 0 },
-        );
+        // EVERY book figure of the Stage: a call wants its judged units' figures and the
+        // ones its findings were read from (`alsoFigures`), whichever unit owns them. A
+        // resumed run reads them too, so each is sorted right (unread, never sendable).
+        figureSet = await (deps.loadFigures ?? loadStageFigures)(pool, claimed.stageId, null);
       } catch (error) {
         log.warn(
           `package review ${claimed.id}: the book figures could not be read; reviewed from text`,
@@ -826,14 +836,26 @@ export async function runPackageReview(
         judgedUnitIds(request.slides, request.focusIds),
         cap,
         request.alsoFigures ?? [],
+        freshRunBudget,
       );
       figureTokensLeft -= picked.tokens;
       return picked;
     };
+    /** RV-1/RV-4: can a slide's re-check still be shown its readable figures? */
+    const figureRoom = (request: Pick<ReviewCallRequest, 'slides' | 'focusIds' | 'alsoFigures'>) =>
+      figureRoomFor(
+        figureSet!,
+        judgedUnitIds(request.slides, request.focusIds),
+        request.alsoFigures ?? [],
+        figureTokensLeft,
+        freshRunBudget,
+      );
     /** How many wanted figures one call did not show (any reason). */
     const unseen = (evidence: ReviewFigureEvidence) =>
       evidence.held.length + evidence.unreadable.length + evidence.unsendable.length;
-    const incomplete = (evidence: ReviewFigureEvidence) => unseen(evidence) > 0;
+    // The figures could not be listed at all: the review did not see the whole book.
+    const incomplete = (evidence: ReviewFigureEvidence) =>
+      unseen(evidence) > 0 || figureSet?.loadFailed === true;
 
     /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
     const recordFailedSpend = async (error: unknown) => {
@@ -875,17 +897,13 @@ export async function runPackageReview(
         return picked ? { ...answered, figureEvidence: picked.evidence } : answered;
       } catch (error) {
         await recordFailedSpend(error);
-        // RV-1 (review 27 Nov 2026): a provider that refuses the request with its figures
-        // (an image it will not take) is asked once more WITHOUT them -- a refused request
-        // is not billed -- so a figure never ends the review `unavailable`. The refused
-        // figures count as unread: that re-check proves nothing about them, and a retry
-        // would meet the same refusal, so nothing retries it automatically.
-        if (
-          picked &&
-          picked.figures.length > 0 &&
-          rejectedRequest(error) &&
-          !deps.signal?.aborted
-        ) {
+        // RV-1 (review 27 Nov 2026): when every route refused the request with its figures
+        // (an image it will not take, or a safety decline over a figure), it is asked once
+        // more WITHOUT them, so a figure never ends the review `unavailable`. A rejected
+        // request is not billed; a safety decline may be, and its spend is recorded above.
+        // The refused figures count as unread: that re-check proves nothing about them,
+        // and a retry would meet the same refusal, so nothing retries it automatically.
+        if (picked && picked.figures.length > 0 && refusedRequest(error) && !deps.signal?.aborted) {
           log.warn(
             `package review ${claimed.id}: the reviewer refused the request with its ${picked.figures.length} book figure(s); asked again without them`,
           );
@@ -1034,6 +1052,7 @@ export async function runPackageReview(
         scenes,
         findings,
         ...(learnerFirst ? { learnerFirst: true } : {}),
+        ...(figureSet ? { figureRoom } : {}),
         heartbeat,
         callReviewer: async (request) => {
           const answered = await callReviewer(request);

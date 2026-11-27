@@ -373,6 +373,38 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         await context.recordProgress(findings, fixes);
         continue;
       }
+      // RV-4: a re-check also wants the figures this slide's findings were read from.
+      const alsoFigures = [
+        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
+      ];
+      // RV-1/RV-4 (g5.v12, review 27 Nov 2026): when this run can no longer show the
+      // re-check the slide's readable figures (its budget is spent, or a resumed run),
+      // a finding that needs them could not close: nothing is paid for the slide, and
+      // its findings wait, never attempted, for the next fresh run (Regenerate flagged).
+      const needsFigures = sceneFindings.some(
+        (finding) =>
+          !SERVER_CHECKS.has(finding.check) &&
+          (finding.severity === 'high' || namedFigures(finding.bookEvidence?.quote).length > 0),
+      );
+      if (
+        context.figureRoom &&
+        needsFigures &&
+        !context.figureRoom({
+          slides: [currentSlides.get(slide.id) ?? slide],
+          focusIds: new Set([slide.id]),
+          alsoFigures,
+        })
+      ) {
+        mark(slide.id, 'NOT_ATTEMPTED');
+        fixes.push({
+          sceneId: slide.id,
+          findingIds: sceneFindings.map((f) => f.id),
+          outcome: 'stopped',
+          code: REREVIEW_FIGURES_HELD,
+        });
+        await context.recordProgress(findings, fixes);
+        continue;
+      }
       // HIGH-1: the lease, renewed AFTER those reads and right before the paid
       // regeneration — a stall in the reads never pays under a lost lease.
       if (!(await context.heartbeat())) {
@@ -398,10 +430,6 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         };
         figureEvidence = answered.figureEvidence ?? null;
       };
-      // RV-4: a re-check also wants the figures this slide's findings were read from.
-      const alsoFigures = [
-        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
-      ];
       // W2 resume (review MED-3): this slide's fix is a replay whose live slide is no
       // longer its result — an evicted run already restored it (or retried it).
       let replayedAway = false;

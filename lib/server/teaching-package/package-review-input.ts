@@ -476,20 +476,19 @@ export function estimateImageTokens(width?: number | null, height?: number | nul
 const FIGURE_NAME = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i;
 
 /**
- * The book figures linked to `unitIds`, read back through the existing crop reader
- * (`readSourceVisualDataUrl`: only the reviewed Stage's media directory, checked against
- * the manifest checksum). These are the figures the generation selected and materialized
- * (`sourceVisuals`); a teacher-guide answer drawing (no unit, `guide_<n>` file) is never
- * one, and neither is a path of another Stage. FAIL-SOFT: a figure whose file cannot be
- * read is listed in `unreadable`, one no call may send (no known size, a request-size
- * guard, another type) in `unsendable`, and its unit is reviewed from its text, as
- * before. `withBytes: false` (a run that may send nothing) lists the figures without
- * reading any file.
+ * The book figures linked to `unitIds` (`null`: every book figure of the Stage), read
+ * back through the existing crop reader (`readSourceVisualDataUrl`: only the reviewed
+ * Stage's media directory, checked against the manifest checksum). These are the figures
+ * the generation selected and materialized (`sourceVisuals`); a teacher-guide answer
+ * drawing (no unit, `guide_<n>` file) is never one, and neither is a path of another
+ * Stage. FAIL-SOFT: a figure whose file cannot be read is listed in `unreadable`, one no
+ * call may send (no known size, a request-size guard, another type) in `unsendable`, and
+ * its unit is reviewed from its text, as before.
  */
 export async function loadReviewFigures(
   sourceVisuals: readonly SourceVisualManifestEntry[] | null | undefined,
-  unitIds: ReadonlySet<string>,
-  options: { stageId?: string; withBytes?: boolean } = {},
+  unitIds: ReadonlySet<string> | null,
+  options: { stageId?: string } = {},
   read: typeof readSourceVisualDataUrl = readSourceVisualDataUrl,
 ): Promise<ReviewFigureSet> {
   const figures: ReviewFigure[] = [];
@@ -498,7 +497,8 @@ export async function loadReviewFigures(
   const stagePrefix = options.stageId ? `/api/classroom-media/${options.stageId}/media/` : null;
   for (const entry of sourceVisuals ?? []) {
     const figureUnits = (entry.sourceContentUnitIds ?? []).map(String);
-    if (!figureUnits.some((id) => unitIds.has(id))) continue;
+    if (figureUnits.length === 0) continue;
+    if (unitIds && !figureUnits.some((id) => unitIds.has(id))) continue;
     const name = FIGURE_NAME.exec(entry.servingPath)?.[1];
     if (!name || (stagePrefix && !entry.servingPath.startsWith(stagePrefix))) continue;
     const sized =
@@ -511,42 +511,52 @@ export async function loadReviewFigures(
       unsendable.push({ name, unitIds: figureUnits });
       continue;
     }
-    let mediaType: ReviewFigureMediaType = 'image/png';
-    let data = '';
-    if (options.withBytes !== false) {
-      const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(
-        () => undefined,
-      );
-      const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
-      if (!parsed) {
-        unreadable.push({ name, unitIds: figureUnits });
-        continue;
-      }
-      if (
-        !REVIEW_FIGURE_TYPES.has(parsed[1]!) ||
-        parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS
-      ) {
-        unsendable.push({ name, unitIds: figureUnits });
-        continue;
-      }
-      mediaType = parsed[1] as ReviewFigureMediaType;
-      data = parsed[2]!;
+    const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(() => undefined);
+    const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+    if (!parsed) {
+      unreadable.push({ name, unitIds: figureUnits });
+      continue;
+    }
+    if (
+      !REVIEW_FIGURE_TYPES.has(parsed[1]!) ||
+      parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS
+    ) {
+      unsendable.push({ name, unitIds: figureUnits });
+      continue;
     }
     figures.push({
       name,
       unitIds: figureUnits,
       pageNumber: entry.pageNumber ?? null,
-      mediaType,
-      data,
+      mediaType: parsed[1] as ReviewFigureMediaType,
+      data: parsed[2]!,
       tokens: estimateImageTokens(entry.width, entry.height),
     });
   }
   return { figures, unreadable, unsendable };
 }
 
-/** Every `src_N` a finding's book quote names (the v12 rubric's «[الشكل src_N]»). */
+const ARABIC_INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+
+/**
+ * Every `src_N` a finding's book quote names (the v12 rubric's «[الشكل src_N]»), in the
+ * form the figures carry: any case, `src_3`, `src-3` or `src 3`, Arabic-Indic digits too.
+ */
 export function namedFigures(quote: string | null | undefined): string[] {
-  return [...new Set((quote ?? '').match(/src_\d+/g) ?? [])];
+  const names = new Set<string>();
+  const pattern = /src[\s_-]?([0-9٠-٩]+)/gi;
+  for (let match = pattern.exec(quote ?? ''); match; match = pattern.exec(quote ?? '')) {
+    const digits = match[1]!
+      .split('')
+      .map((digit) => {
+        const index = ARABIC_INDIC_DIGITS.indexOf(digit);
+        return index >= 0 ? String(index) : digit;
+      })
+      .join('')
+      .replace(/^0+(?=\d)/, '');
+    names.add(`src_${digits}`);
+  }
+  return [...names];
 }
 
 /** The units a call judges: every slide's on a first review, the focused ones' on a re-review. */
@@ -585,25 +595,27 @@ export interface ReviewFigureEvidence {
  * fit is left out, a smaller later one may still fit), at most `REVIEW_CALL_MAX_FIGURES`
  * and `REVIEW_CALL_MAX_FIGURE_BASE64_CHARS`. A call wants the figures of its judged
  * units and every figure `alsoNames` lists (the figures the slide's findings were read
- * from). `evidence` says what it could not show, and whether a fresh run would cure it.
+ * from). `evidence` says what it could not show, and whether a fresh run would cure it:
+ * `freshRunBudget` is what a fresh first run may send in all (`reviewImageTokenBudget`).
  */
 export function pickReviewFigures(
   set: ReviewFigureSet,
   unitIds: ReadonlySet<string>,
   tokenCap: number,
   alsoNames: readonly string[] = [],
+  freshRunBudget: number = REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
 ): { figures: ReviewFigure[]; tokens: number; held: number; evidence: ReviewFigureEvidence } {
   const named = new Set(alsoNames);
   const wants = (figure: { name: string; unitIds: readonly string[] }) =>
     named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id));
   const wanted = set.figures.filter(wants);
-  // A call whose wanted figures no single run could carry holds some on every run: those
+  // A call whose wanted figures no fresh run could carry holds some on every run: those
   // holds are not curable (a retry would pay again and again for the same hold).
   const fitsOneRun =
     wanted.length <= REVIEW_CALL_MAX_FIGURES &&
     wanted.reduce((sum, figure) => sum + figure.data.length, 0) <=
       REVIEW_CALL_MAX_FIGURE_BASE64_CHARS &&
-    wanted.reduce((sum, figure) => sum + figure.tokens, 0) <= REVIEW_IMAGE_MAX_TOKENS_PER_RUN;
+    wanted.reduce((sum, figure) => sum + figure.tokens, 0) <= freshRunBudget;
   const figures: ReviewFigure[] = [];
   let tokens = 0;
   let chars = 0;
@@ -627,11 +639,15 @@ export function pickReviewFigures(
     ...set.unreadable.map((figure) => figure.name),
     ...(set.unsendable ?? []).map((figure) => figure.name),
   ]);
+  // No fresh run may send any figure (no reviewer price): nothing could ever be seen.
+  const neverSent = freshRunBudget <= 0;
   const unreadable = [
     ...set.unreadable.filter(wants).map((figure) => figure.name),
-    ...(fitsOneRun ? [] : notSent),
-    // The figures could not be listed: every figure a finding names is unread.
-    ...(set.loadFailed ? alsoNames.filter((name) => !known.has(name)) : []),
+    ...(fitsOneRun || neverSent ? [] : notSent),
+    // A figure a finding names that the Stage's book figures do not hold (they could not
+    // be listed, or the name is not among them) was never seen: unread, never closed by
+    // this re-check. The set holds EVERY book figure of the Stage (`loadStageFigures`).
+    ...alsoNames.filter((name) => !known.has(name)),
   ];
   return {
     figures,
@@ -639,11 +655,42 @@ export function pickReviewFigures(
     held: notSent.length,
     evidence: {
       sent: [...sent],
-      held: fitsOneRun ? notSent : [],
+      held: fitsOneRun && !neverSent ? notSent : [],
       unreadable: [...new Set(unreadable)],
-      unsendable: (set.unsendable ?? []).filter(wants).map((figure) => figure.name),
+      unsendable: [
+        ...(set.unsendable ?? []).filter(wants).map((figure) => figure.name),
+        ...(neverSent ? notSent : []),
+      ],
     },
   };
+}
+
+/**
+ * RV-1/RV-4 (review 27 Nov 2026): whether one re-check of a slide can still be sent
+ * every readable figure it wants out of `tokensLeft`, so the fix loop never pays for a
+ * regeneration whose re-check would hold them back (a curable hold costs nothing then:
+ * the next fresh run takes it). Wanted figures no fresh run may carry are not a budget
+ * question (those holds are not curable), so they never block.
+ */
+export function figureRoomFor(
+  set: ReviewFigureSet,
+  unitIds: ReadonlySet<string>,
+  alsoNames: readonly string[],
+  tokensLeft: number,
+  freshRunBudget: number,
+): boolean {
+  const named = new Set(alsoNames);
+  const wanted = set.figures.filter(
+    (figure) => named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id)),
+  );
+  const tokens = wanted.reduce((sum, figure) => sum + figure.tokens, 0);
+  const chars = wanted.reduce((sum, figure) => sum + figure.data.length, 0);
+  const fitsOneRun =
+    wanted.length <= REVIEW_CALL_MAX_FIGURES &&
+    chars <= REVIEW_CALL_MAX_FIGURE_BASE64_CHARS &&
+    tokens <= freshRunBudget;
+  if (wanted.length === 0 || !fitsOneRun) return true;
+  return tokens <= tokensLeft;
 }
 
 /** Scenes in display order. */
