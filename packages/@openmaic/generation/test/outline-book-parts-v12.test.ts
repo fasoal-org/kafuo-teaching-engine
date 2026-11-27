@@ -2,6 +2,8 @@
  * g5.v12 (critical items 27 Nov 2026, Wave 2: W2.5, MI-4, MI-5): the book-part outline
  * prompt. Every other caller's prompt is byte-identical (the golden tests pin it).
  */
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { buildOutlinePrompt, sharedFlowBodies } from '../src/outline-generator.js';
@@ -62,6 +64,34 @@ describe('g5.v12 outline prompt', () => {
     expect(contract).toContain('- the big idea / key framing message\n');
     expect(contract).not.toContain('the opening list above is replaced');
     expect(contract).not.toContain("A check's ONE solution slide");
+    // Byte-identical to 693e2d42's contract rendered the same way (sha256 : length).
+    const pin = `${createHash('sha256').update(contract).digest('hex')}:${contract.length}`;
+    expect(pin).toBe('1ef6bebb9844c531ab1fa23eb1e8d88cec15be53fe2199a131eeb009e7a18dfe:15150');
+  });
+
+  it('W2.5 (contract): on v12 the role table, the orientation line and its visual name no objectives and no big idea', () => {
+    const v12 = prompt(true).system;
+    const other = prompt().system;
+    const clauses = [
+      'the big idea (on this lesson: no learning objectives and no big idea)',
+      'its key points are the hook and the short context only — no learning objectives and no big idea — and its visual serves the hook or the context.',
+      'its visual only (tied to the hook or the context)',
+    ];
+    for (const clause of clauses) {
+      expect(v12).toContain(clause);
+      expect(other).not.toContain(clause);
+    }
+  });
+
+  it('W2.5 (example): the v12 example opener plans no objectives and no big idea; others keep them', () => {
+    const v12 = prompt(true).system;
+    const other = prompt().system;
+    const standard =
+      '"keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],';
+    expect(other).toContain(standard);
+    expect(v12).not.toContain(standard);
+    expect(v12).toContain('"keyPoints": ["Framing question", "Why it matters"],');
+    expect(v12).not.toContain('brief context, the learning objectives and the big idea.');
   });
 
   it('MI-5: a check’s single multi-item solution slide is a worked_example, on v12 only', () => {

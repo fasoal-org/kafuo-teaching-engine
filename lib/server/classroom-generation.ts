@@ -1713,6 +1713,10 @@ export async function generateClassroom(
   const correction = options.correction;
   const resumeOutlines = correction?.resumeOutlines;
   const resumeScenes = correction?.resumeScenes;
+  // g5.v12 only (Wave 2, W2.5): a governed book-part run's opening slide lists no
+  // learning objectives and states no big idea, on the canvas and in its narration.
+  const bookPartOpener =
+    input.governed !== undefined && isBookPartPlacementModel(input.governed.teachingModel);
 
   // Web search (optional, graceful degradation). A resumed run re-uses its
   // saved outline candidate, which is the only consumer of research context.
@@ -2821,6 +2825,7 @@ export async function generateClassroom(
                   ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                   ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
                   ...(input.learnerFirst ? { learnerFirst: true } : {}),
+                  ...(bookPartOpener ? { bookPartOpener: true } : {}),
                   ...(outlineAssignedImages && outlineAssignedImages.length > 0
                     ? {
                         assignedImages: outlineAssignedImages,
@@ -3266,6 +3271,7 @@ export async function generateClassroom(
                         ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
                         ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                         ...(input.learnerFirst ? { learnerFirst: true } : {}),
+                        ...(bookPartOpener ? { bookPartOpener: true } : {}),
                         ...(safeOutline.type === 'slide' && hasSlideImages
                           ? {
                               imageNotes: buildNarrationImageNotes(
@@ -3565,6 +3571,7 @@ export async function generateClassroom(
           baselineContent: { elements: canvas.elements as never, background: canvas.background },
           ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
           ...(input.learnerFirst ? { learnerFirst: true } : {}),
+          ...(bookPartOpener ? { bookPartOpener: true } : {}),
           ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
           ...(input.governed ? { onVisualIssue: (issue) => void nativeIssues.push(issue) } : {}),
         });
@@ -3635,6 +3642,7 @@ export async function generateClassroom(
             ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
             ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
             ...(input.learnerFirst ? { learnerFirst: true } : {}),
+            ...(bookPartOpener ? { bookPartOpener: true } : {}),
           }),
         registerPolicy,
         { title: scene.title, outlineId: planned.id },

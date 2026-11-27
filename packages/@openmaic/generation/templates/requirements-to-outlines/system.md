@@ -344,8 +344,9 @@ Rules:
       "contentRole": "orientation",
       "visualPlan": { "mode": "native" },
       "title": "Introduction",
-      "description": "Open the lesson on one slide: title, a framing question, brief context, the learning objectives and the big idea.",
-      "keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],
+{{#if standardOpener}}      "description": "Open the lesson on one slide: title, a framing question, brief context, the learning objectives and the big idea.",
+      "keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],{{/if}}{{#if bookPartPlacement}}      "description": "Open the lesson on one slide: title, a framing question and brief context.",
+      "keyPoints": ["Framing question", "Why it matters"],{{/if}}
       "order": 1{{#if normalizedGrounding}},
       "sourceContentUnitIds": ["2900"]{{/if}}{{#if hasSkillPolicy}},
       "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }{{/if}}

@@ -66,6 +66,7 @@ import {
   stageHasNarrationAudio,
 } from '@/lib/server/teaching-package/narration-audio-issue';
 import {
+  isBookPartPlacementModel,
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
@@ -227,6 +228,8 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
       // g5.v10 (learner-first plan W4): the same canvas rules as the run.
       ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+      // g5.v12 (W2.5): the opener carries no objectives and no big idea, as in the run.
+      ...(isBookPartPlacementModel(input.teachingModel) ? { bookPartOpener: true } : {}),
       ...sacredPrompt,
       ...(correctiveNote ? { correctiveNote } : {}),
       onFailure: (event) => {
@@ -318,6 +321,7 @@ export async function insertOneScene(input: InsertOneSceneInput): Promise<Insert
                 ? { imageNotes: buildNarrationImageNotes(outline, assignedImages, imageMapping) }
                 : {}),
               ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+              ...(isBookPartPlacementModel(input.teachingModel) ? { bookPartOpener: true } : {}),
               ...sacredPrompt,
               onFallback: (info) => {
                 fellBack = info;

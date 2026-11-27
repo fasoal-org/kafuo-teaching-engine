@@ -253,6 +253,11 @@ export interface SceneContentOptions {
    */
   learnerFirst?: boolean;
   /**
+   * Slide only: g5.v12 (Wave 2, W2.5), a book-part lesson. Its opening (`orientation`)
+   * slide lists no learning objectives and states no big idea. Absent → unchanged.
+   */
+  bookPartOpener?: boolean;
+  /**
    * Kafuo Q-4: the Quran and hadith policy, with the protected quotes of the
    * units this scene cites. Absent → every prompt is byte-identical.
    */
@@ -273,6 +278,11 @@ export interface SceneActionsOptions {
    * action prompts render byte-identically to today.
    */
   learnerFirst?: boolean;
+  /**
+   * Slide only: g5.v12 (Wave 2, W2.5). The opening slide's narration frames the hook and
+   * the context, never objectives or a big idea. Absent → unchanged.
+   */
+  bookPartOpener?: boolean;
   /**
    * ONE resolved Teaching Model Flow position (Module 3/4 W1, TAE-RQ-009) —
    * the WHEN this scene teaches, resolved by orchestration. The generator
@@ -703,6 +713,7 @@ export async function generateSceneContent(
             ...learnerFirstSlideVars(options.learnerFirst, isLearnerFirstFrameSlide(outline)),
           },
           options.visibleWorkingSteps,
+          options.bookPartOpener,
         );
       let slide = await generateCanvas();
       if (!slide) return null;
@@ -752,6 +763,8 @@ export async function generateSceneContent(
           textDirection,
           undefined,
           sceneSacredVars(outline, options.sacredText),
+          undefined,
+          options.bookPartOpener,
         );
         const stillMissing = native
           ? plannedVisualIssue({ mode: 'native' }, native.elements)
@@ -1227,6 +1240,8 @@ async function generateSlideContent(
   correctiveNote?: string,
   sourceVars: Record<string, unknown> = {},
   visibleWorkingSteps?: boolean,
+  /** g5.v12 (W2.5): the opener carries no objectives and no big idea. */
+  bookPartOpener?: boolean,
 ): Promise<GeneratedSlideContent | null> {
   // Build assigned images description for the prompt
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
@@ -1355,6 +1370,7 @@ async function generateSlideContent(
       ...(visibleWorkingSteps ? { visibleWorkingSteps } : {}),
       // g5.v10: the learner-first slide vars travel in the same bag.
       ...(sourceVars.hasLearnerFirstSlide === true ? { learnerFirst: true } : {}),
+      ...(bookPartOpener ? { bookPartOpener: true } : {}),
     }),
     ...sourceVars,
   });
@@ -2440,7 +2456,10 @@ export async function generateSceneActions(
       languageDirective: languageDirective || '',
       ...buildSceneFlowContext(options.flowContext),
       ...buildSceneSkillContext(guidance, options.resolvedSkills),
-      ...buildSlideNarrationRoleContext(guidance, learnerFirst ? { learnerFirst } : {}),
+      ...buildSlideNarrationRoleContext(guidance, {
+        ...(learnerFirst ? { learnerFirst } : {}),
+        ...(options.bookPartOpener ? { bookPartOpener: true } : {}),
+      }),
       ...sceneSourceVars(outline, options.sourceUnits, log),
       ...sceneSacredVars(outline, options.sacredText),
     });

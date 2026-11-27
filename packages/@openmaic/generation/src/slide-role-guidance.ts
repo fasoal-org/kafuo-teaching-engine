@@ -140,6 +140,11 @@ export interface SlideRoleGuidanceOptions {
    * invented average-change method. Absent → unchanged.
    */
   learnerFirst?: boolean;
+  /**
+   * g5.v12 (Wave 2, W2.5): the opening slide lists no learning objectives and states no
+   * big idea ({@link BOOK_PART_ORIENTATION_GUIDANCE}). Absent → unchanged.
+   */
+  bookPartOpener?: boolean;
 }
 
 /** Role guidance for the slide CANVAS generator. */
@@ -177,7 +182,9 @@ export function buildSlideRoleContext(
   return {
     hasRoleGuidance: true,
     roleGuidance: [
-      loadVariant(file),
+      file === 'orientation' && options.bookPartOpener
+        ? BOOK_PART_ORIENTATION_GUIDANCE
+        : loadVariant(file),
       ...visibleWorking,
       ...(sourceGrounding ? [sourceGrounding] : []),
       ...(visual ? [visual] : []),
@@ -185,6 +192,39 @@ export function buildSlideRoleContext(
     ].join('\n\n'),
   };
 }
+
+/**
+ * g5.v12 (Wave 2, W2.5): the opening slide of a book-part lesson carries the lesson
+ * title, a hook, a short context and its visual — no learning objectives and no big
+ * idea (the planner is told the same). `orientation.md` with those two lines removed.
+ */
+export const BOOK_PART_ORIENTATION_GUIDANCE = [
+  '**Purpose of this slide.** Open the learning: frame what this lesson is about and why it matters, so the learner starts with direction and curiosity.',
+  [
+    '**It must contain:**',
+    '- the lesson title',
+    '- a hook or framing question that makes the learner want to know more',
+    '- a short context — where this fits and why it matters, from the opening content this slide is given',
+    '- one pedagogically useful supporting visual when media is available; when it is not, build an illustrative visual from native shapes/lines/text; omit a visual only when none would genuinely improve understanding, framing or engagement',
+  ].join('\n'),
+  '**What leads, what supports.** The title and the hook lead. The context supports them as a clearly separated group.',
+  '**Learner engagement.** Invite the learner in with the hook.',
+  [
+    '**Must NOT appear:**',
+    '- a bare title page',
+    '- a list of learning objectives, or a stated big idea or key framing message: this opening carries neither',
+    '- a long syllabus or agenda',
+    "- teaching of the lesson's content itself",
+  ].join('\n'),
+  '**If it does not fit.** An opening belongs on one slide: tighten wording rather than splitting it.',
+  'Arrangement is yours to design: choose the hierarchy, grouping and visual structure that serve this purpose best — no fixed arrangement is expected.',
+].join('\n\n');
+
+/** g5.v12 (W2.5): the opening's narration frames the hook and the context only. */
+const BOOK_PART_NARRATION_RULES: Readonly<Record<string, string>> = {
+  orientation:
+    'Open with the hook, then frame the context. Never list learning objectives or announce a big idea.',
+};
 
 const EXPLANATION_VISUAL_GROUNDING =
   '**Textbook-grounded visual (mandatory).** The visual must stabilise the exact idea taught by this explanation and must follow the authoritative source. Use the selected textbook image when one is available. Otherwise build a native diagram only from the facts, relationships and sequence already supplied for this scene. Do not invent a new example, fact, analogy or context, and do not use decoration as the visual.';
@@ -239,13 +279,14 @@ const LEARNER_FIRST_NARRATION_RULES: Readonly<Record<string, string>> = {
 /** Role guidance for the slide NARRATION (actions) generator. */
 export function buildSlideNarrationRoleContext(
   input: SlideRoleGuidanceInput,
-  options: { learnerFirst?: boolean } = {},
+  options: { learnerFirst?: boolean; bookPartOpener?: boolean } = {},
 ): SlideRoleContext {
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   // The file's first paragraph is its purpose statement.
   const purpose = loadVariant(file).split('\n\n')[0];
   const rule =
+    (options.bookPartOpener ? BOOK_PART_NARRATION_RULES[file] : undefined) ??
     (options.learnerFirst ? LEARNER_FIRST_NARRATION_RULES[file] : undefined) ??
     NARRATION_RULES[file];
   const lines = [

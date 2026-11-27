@@ -78,6 +78,7 @@ import {
   withGuideWrittenQuestions,
 } from '@/lib/server/teaching-package/guide-written-attempts';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
@@ -539,6 +540,8 @@ export async function regenerateOneScene(
       ...(isTeacherParityModel(input.teachingModel) ? { visibleWorkingSteps: true } : {}),
       // g5.v10 (learner-first plan W4): the same canvas rules as the run.
       ...(isLearnerFirstModel(input.teachingModel) ? { learnerFirst: true } : {}),
+      // g5.v12 (W2.5): the opener carries no objectives and no big idea, as in the run.
+      ...(isBookPartPlacementModel(input.teachingModel) ? { bookPartOpener: true } : {}),
       ...sacredPromptOf(input),
       ...(correctiveNote ? { correctiveNote } : {}),
       onFailure: (event) => {
@@ -830,6 +833,7 @@ async function slideActions(
             ...(input.governed ? { resolvedSkills: input.governed.resolvedSkills } : {}),
             ...(imageNotes ? { imageNotes } : {}),
             ...(options.learnerFirst ? { learnerFirst: true } : {}),
+            ...(isBookPartPlacementModel(input.teachingModel) ? { bookPartOpener: true } : {}),
             ...sacredPromptOf(input),
             onFallback: (info) => {
               fellBack = info;
