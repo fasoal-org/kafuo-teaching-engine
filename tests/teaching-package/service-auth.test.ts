@@ -275,6 +275,8 @@ describe('teaching package service auth', () => {
       // The AI package review's lesson-run actions (errors.ts).
       PACKAGE_REVIEW_NOT_READY: 409,
       PACKAGE_REVIEW_IN_PROGRESS: 409,
+      // A-34: a verdict on another revision of the Stage.
+      PACKAGE_REVIEW_STALE: 409,
       NO_REGENERABLE_SLIDES: 409,
       // Kafuo Agent API E3: delete a duplicate slide (delete-duplicate-scene.ts).
       SCENE_NOT_DUPLICATE: 422,

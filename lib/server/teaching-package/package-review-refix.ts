@@ -21,6 +21,7 @@
  */
 import { createHash } from 'node:crypto';
 
+import { readStageFreshnessManifest } from '@openmaic/storage';
 import {
   nodePostgresTransaction,
   type ConnectableQueryable,
@@ -32,6 +33,7 @@ import { readProducingAttemptId } from '@/lib/server/teaching-package/successor-
 import type { TeachingPackageVersion } from '@/lib/types/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { loadLiveScenes } from '@/lib/server/teaching-package/package-review';
+import { reviewIsStale } from '@/lib/server/teaching-package/package-review-freshness';
 import {
   REREVIEW_FIGURES_HELD,
   teacherOnlyReason,
@@ -448,6 +450,27 @@ export async function queueFlaggedSlideRefix(
         'PACKAGE_REVIEW_IN_PROGRESS',
         'the AI review of this package is still running',
       );
+    }
+    // A-34: a verdict on another revision of this Stage (a person edited it since, or a
+    // row from before A-34) is asked again from the start: ONE whole review that only
+    // reviews (`isPressedFirstReview`: its `tpr-rf-` id), never a regeneration over the
+    // edit. Its 202 is what Kafuo adopts; Submit and Approve wait for its verdict.
+    const currentRev = (await readStageFreshnessManifest(version.currentStageId, tx))?.rev ?? 0;
+    if (reviewIsStale(review, currentRev)) {
+      const requeued = await requeueReviewForRefix(tx, {
+        reviewId: review.id,
+        newReviewId,
+        findings: [],
+        now: now(),
+        freshFirstReview: true,
+      });
+      if (!requeued) {
+        throw new TeachingPackageError(
+          'PACKAGE_REVIEW_IN_PROGRESS',
+          'the AI review of this package changed meanwhile',
+        );
+      }
+      return { review: requeued, previousReviewId: review.id, sceneIds: [], replayed: false };
     }
     const scenes = await loadScenes(pool, version.currentStageId);
     if (!scenes) {

@@ -950,6 +950,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       });
       await context.recordProgress(findings, fixes);
     }
-    return { findings, fixes };
+    // A-34: the slides as this loop last saw them, for the reviewed Stage revision.
+    return { findings, fixes, seenScenes: [...scenesById.values()] };
   };
 }

@@ -143,16 +143,20 @@ describe('teaching package schema', () => {
     // A database whose reviewer tables were created before the review fixes.
     await pool.query(`ALTER TABLE teaching_question_reviews DROP COLUMN reviewed_at`);
     await pool.query(`ALTER TABLE teaching_package_reviews DROP COLUMN book_truncated`);
+    // A-34: a table from before the reviewed-revision column.
+    await pool.query(`ALTER TABLE teaching_package_reviews DROP COLUMN reviewed_stage_rev`);
     await ensureTeachingPackageSchema(qp());
     await ensureTeachingPackageSchema(qp());
     const columns = await pool.query<{ table_name: string; column_name: string }>(
       `SELECT table_name, column_name FROM information_schema.columns
         WHERE (table_name = 'teaching_question_reviews' AND column_name = 'reviewed_at')
-           OR (table_name = 'teaching_package_reviews' AND column_name = 'book_truncated')
-        ORDER BY table_name`,
+           OR (table_name = 'teaching_package_reviews'
+               AND column_name IN ('book_truncated', 'reviewed_stage_rev'))
+        ORDER BY table_name, column_name`,
     );
     expect(columns.rows).toEqual([
       { table_name: 'teaching_package_reviews', column_name: 'book_truncated' },
+      { table_name: 'teaching_package_reviews', column_name: 'reviewed_stage_rev' },
       { table_name: 'teaching_question_reviews', column_name: 'reviewed_at' },
     ]);
   });

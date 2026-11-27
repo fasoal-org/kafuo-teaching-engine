@@ -521,6 +521,7 @@ describe('RV-1 + RV-4: the review job', () => {
     leaseOwner: 'w',
     leaseUntil: 2,
     reviewedAt: null,
+    reviewedStageRev: null,
     createdAt: 1,
     startedAt: 1,
     completedAt: null,
@@ -548,6 +549,10 @@ describe('RV-1 + RV-4: the review job', () => {
       /** The provider refuses every request that carries figures. */
       refuseFigures?: boolean;
       refusal?: 'request_rejected' | 'safety_refused';
+      /** A-34: the Stage revision at the end of the run (absent: unreadable). */
+      stageRev?: number;
+      /** A-34: the live slides at the end of the run (absent: as they were at its start). */
+      finalScenes?: AppScene[];
     } = {},
   ) {
     mocks.readAttemptById.mockReset().mockResolvedValue({
@@ -646,6 +651,7 @@ describe('RV-1 + RV-4: the review job', () => {
       if (figureSet instanceof Error) throw figureSet;
       return figureSet;
     });
+    let sceneLoads = 0;
     const run = () =>
       runPackageReview('review-1', {
         pool: {} as never,
@@ -653,8 +659,12 @@ describe('RV-1 + RV-4: the review job', () => {
         workerId: 'w',
         callReviewer: callReviewer as never,
         fixLoop,
-        loadScenes: async () => SCENES,
+        // The run's read at its start, then A-34's read at its end.
+        loadScenes: async () => (sceneLoads++ === 0 ? SCENES : (options.finalScenes ?? SCENES)),
         loadFigures,
+        ...(options.stageRev !== undefined
+          ? { readStageRev: async () => options.stageRev! }
+          : { readStageRev: async () => Promise.reject(new Error('no revision')) }),
       });
     return { run, requests, loadFigures, regenerated };
   }
@@ -1124,6 +1134,40 @@ describe('RV-1 + RV-4: the review job', () => {
     expect(PACKAGE_REVIEW_SYSTEM_V12).toContain(
       "N is the number in that page's BOOK PAGE label, never the page number printed on the page",
     );
+  });
+
+  it('A-34: a finished review records the Stage revision it saw, its own fixes included', async () => {
+    // No finding: the Stage is exactly what the review read.
+    const clean = job('g5.v11', {}, undefined, { firstFindings: [], stageRev: 7 });
+    expect(await clean.run()).toMatchObject({ status: 'passed', reviewedStageRev: 7 });
+    // The fix loop regenerated s2: the Stage holds that fix, which the review re-checked.
+    const FIXED = scene('s2', 2, ['6760'], 'مصحح');
+    const fixed = job('g5.v11', {}, undefined, {
+      stageRev: 9,
+      finalScenes: [SCENES[0]!, FIXED, SCENES[2]!],
+    });
+    expect(await fixed.run()).toMatchObject({ status: 'fixed', reviewedStageRev: 9 });
+  });
+
+  it('A-34: a slide changed under the run, or an unreadable revision: no revision (stale)', async () => {
+    const edited = scene('s1', 1, ['6758'], 'عدّله المعلم');
+    const under = job('g5.v11', {}, undefined, {
+      firstFindings: [],
+      stageRev: 7,
+      finalScenes: [edited, SCENES[1]!, SCENES[2]!],
+    });
+    expect(await under.run()).toMatchObject({ status: 'passed', reviewedStageRev: null });
+    // A slide added, or the fix loop's slide not what the Stage holds: none either.
+    const added = job('g5.v11', {}, undefined, {
+      firstFindings: [],
+      stageRev: 7,
+      finalScenes: [...SCENES, scene('s4', 4, ['6799'])],
+    });
+    expect(await added.run()).toMatchObject({ reviewedStageRev: null });
+    const notTheFix = job('g5.v11', {}, undefined, { stageRev: 9 });
+    expect(await notTheFix.run()).toMatchObject({ status: 'fixed', reviewedStageRev: null });
+    const unreadable = job('g5.v11', {}, undefined, { firstFindings: [] });
+    expect(await unreadable.run()).toMatchObject({ status: 'passed', reviewedStageRev: null });
   });
 
   it('page images, g5.v11: nothing is read or sent even when the Stage has pages', async () => {

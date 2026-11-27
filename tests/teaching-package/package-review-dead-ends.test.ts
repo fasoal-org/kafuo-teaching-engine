@@ -106,6 +106,8 @@ const REVIEW: PackageReview = {
   leaseOwner: null,
   leaseUntil: null,
   reviewedAt: 5,
+  // A-34: the verdict is about the Stage as it is (the fake transaction reads revision 0).
+  reviewedStageRev: 0,
   createdAt: 1,
   startedAt: 1,
   completedAt: 6,

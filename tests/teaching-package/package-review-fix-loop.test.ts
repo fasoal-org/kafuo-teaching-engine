@@ -74,6 +74,7 @@ const REVIEW: PackageReview = {
   leaseOwner: 'w',
   leaseUntil: 1,
   reviewedAt: 1,
+  reviewedStageRev: null,
   createdAt: 1,
   startedAt: 1,
   completedAt: null,

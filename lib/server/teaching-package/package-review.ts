@@ -18,6 +18,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
+import { readStageFreshnessManifest } from '@openmaic/storage';
 import type { Queryable } from '@openmaic/storage/document/pg';
 import {
   nodePostgresTransaction,
@@ -226,6 +227,11 @@ export interface FixLoopContext {
 export interface FixLoopResult {
   findings: StoredFinding[];
   fixes: StoredFix[];
+  /**
+   * A-34: every slide as the loop last saw it, its own writes included. Absent: the
+   * scenes the run started from.
+   */
+  seenScenes?: readonly AppScene[];
 }
 
 export type FixLoop = (context: FixLoopContext) => Promise<FixLoopResult>;
@@ -241,6 +247,8 @@ export interface PackageReviewDeps {
   /** Phase 3: regenerate and re-review. Absent → every finding goes to the teacher. */
   fixLoop?: FixLoop;
   loadScenes?: (pool: ConnectableQueryable, stageId: string) => Promise<AppScene[] | null>;
+  /** A-34 test seam: the Stage's revision now (production: `readStageFreshnessManifest`). */
+  readStageRev?: (pool: ConnectableQueryable, stageId: string) => Promise<number>;
   /** RV-1 test seam: the g5.v12 book figures (`null`: all of the Stage's). */
   loadFigures?: (
     pool: ConnectableQueryable,
@@ -679,6 +687,33 @@ export function stampReviewedDigests(
   });
 }
 
+/** A-34: the Stage's revision now (the one Submit and Approve compare with). */
+export async function readStageRevision(
+  pool: ConnectableQueryable,
+  stageId: string,
+): Promise<number> {
+  const manifest = await readStageFreshnessManifest(stageId, pool as unknown as Queryable);
+  return manifest?.rev ?? 0;
+}
+
+/**
+ * A-34: whether the live slides are exactly the ones a review saw: the same slides, in the
+ * same order, with the same material (`reviewedSceneDigest`).
+ */
+export function sameReviewedSlides(live: readonly AppScene[], seen: readonly AppScene[]): boolean {
+  if (live.length !== seen.length) return false;
+  const byOrder = (scenes: readonly AppScene[]) =>
+    [...scenes].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const a = byOrder(live);
+  const b = byOrder(seen);
+  return a.every(
+    (scene, index) =>
+      scene.id === b[index]!.id &&
+      (scene.order ?? 0) === (b[index]!.order ?? 0) &&
+      reviewedSceneDigest(scene) === reviewedSceneDigest(b[index]!),
+  );
+}
+
 /** Every open finding with no reason yet goes to the teacher (no fix loop runs on it). */
 function teacherOwnedFindings(
   findings: readonly StoredFinding[],
@@ -779,6 +814,24 @@ export async function runPackageReview(
 
   // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
   // its lease failed — so the run that resumes the review owns its ending.
+  /**
+   * A-34: the Stage revision a finished verdict is about: the revision read FIRST, then
+   * the live slides, which must be exactly the ones this run saw (`seen`: the same slides,
+   * order and material). Otherwise -- or on any failed read -- `null` (stale: fail closed).
+   */
+  const revisionReviewed = async (seen: readonly AppScene[]): Promise<number | null> => {
+    try {
+      const rev = await (deps.readStageRev ?? readStageRevision)(pool, claimed.stageId);
+      const live = await (deps.loadScenes ?? loadLiveScenes)(pool, claimed.stageId);
+      return live && sameReviewedSlides(live, seen) ? rev : null;
+    } catch (error) {
+      log.warn(
+        `package review ${claimed.id}: the reviewed Stage revision could not be read`,
+        JSON.stringify(describeErrorSafely(error)),
+      );
+      return null;
+    }
+  };
   const end = async (outcome: ReviewOutcome) => {
     if (deps.signal?.aborted) return null;
     const usage = await reviewSpend();
@@ -1098,6 +1151,8 @@ export async function runPackageReview(
     }
 
     let fixes: StoredFix[] = claimed.fixes;
+    /** A-34: the slides as this run last saw them (the fix loop's writes included). */
+    let seenScenes: readonly AppScene[] = scenes;
     if (deps.fixLoop && findings.length > 0) {
       // g5.v10 quality plan W2: the fix loop rolls back a fix that made a slide worse.
       // A failed read (the run's one read, above) keeps the v1 flow (review LOW: never a
@@ -1133,6 +1188,7 @@ export async function runPackageReview(
       });
       findings = result.findings;
       fixes = result.fixes;
+      seenScenes = result.seenScenes ?? scenes;
     } else {
       // No fix loop: every finding is the teacher's (Phase 2 behaviour).
       findings = teacherOwnedFindings(findings, slides);
@@ -1142,7 +1198,17 @@ export async function runPackageReview(
     // edited since. Review 27 Nov 2026: from what the run saw, never a fresh read of the
     // Stage, which would take in a teacher's edit made during the run as "reviewed".
     findings = stampReviewedDigests(findings, scenes);
-    return await end({ status: reviewStatusOf(findings), findings, fixes });
+    // A-34: the Stage revision this verdict is about -- only when the Stage is still what
+    // the review saw (its own fixes included). The revision is read BEFORE the slides, so
+    // a write in between, or one after, leaves it behind the Stage: stale, never a
+    // teacher's edit taken as reviewed. Any doubt (a changed or unreadable Stage): none.
+    const reviewedStageRev = await revisionReviewed(seenScenes);
+    return await end({
+      status: reviewStatusOf(findings),
+      findings,
+      fixes,
+      reviewedStageRev,
+    });
   } catch (error) {
     // L-1: an evicted run's aborted call is not the review's failure; the
     // eviction exists so the review is resumed.

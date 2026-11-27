@@ -438,6 +438,12 @@ export type TeachingPackageErrorCode =
   | 'PACKAGE_REVIEW_NOT_READY'
   /** The version's AI review (or a flagged-slide regeneration) is still queued or running. */
   | 'PACKAGE_REVIEW_IN_PROGRESS'
+  /**
+   * A-34: the finished AI review is of another revision of the Stage (edited since, or a
+   * row from before A-34): no verdict on what is submitted or approved. Regenerate flagged
+   * asks one fresh review that only reviews.
+   */
+  | 'PACKAGE_REVIEW_STALE'
   /** No open finding sits on a slide a regeneration may fix (only teacher-only issues remain). */
   | 'NO_REGENERABLE_SLIDES'
   // --- Kafuo Agent API E3: delete a duplicate slide (delete-duplicate-scene.ts) ---
@@ -500,6 +506,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   GAME_GENERATION_DEFERRED: 422,
   PACKAGE_REVIEW_NOT_READY: 409,
   PACKAGE_REVIEW_IN_PROGRESS: 409,
+  PACKAGE_REVIEW_STALE: 409,
   NO_REGENERABLE_SLIDES: 409,
   SCENE_NOT_DUPLICATE: 422,
   PART_WOULD_BE_UNTAUGHT: 422,

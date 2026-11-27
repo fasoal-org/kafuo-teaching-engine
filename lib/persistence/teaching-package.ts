@@ -723,6 +723,14 @@ CREATE TABLE IF NOT EXISTS teaching_package_reviews (
 -- and read by the teacher report as one warning line.
 ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS book_truncated BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- A-34 (27 Nov 2026, TE only, never on the wire): the Stage revision the finished
+-- review's verdict is about. Set when the review finishes, only when the Stage is still
+-- what the review saw; NULL on a queued or running review, on one whose Stage changed
+-- under it, and on every row from before this column (all read as stale: fail closed).
+-- A submit or an approval refuses PACKAGE_REVIEW_STALE when it is not the current
+-- revision; Regenerate flagged then asks one fresh review that only reviews.
+ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS reviewed_stage_rev BIGINT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
 CREATE INDEX IF NOT EXISTS tpr_version_idx
   ON teaching_package_reviews (tenant_id, version_id, created_at);

@@ -132,6 +132,12 @@ export interface PackageReview {
   leaseOwner: string | null;
   leaseUntil: number | null;
   reviewedAt: number | null;
+  /**
+   * A-34: the Stage revision this finished verdict is about; `null` while it runs, when
+   * the Stage changed under it, and on a row from before A-34 (stale: fail closed).
+   * TE row only: `packageReviewWire` never sends it.
+   */
+  reviewedStageRev: number | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
@@ -214,6 +220,7 @@ function rowToReview(row: Record<string, unknown>): PackageReview {
     leaseOwner: typeof row.lease_owner === 'string' ? row.lease_owner : null,
     leaseUntil: num(row.lease_until),
     reviewedAt: num(row.reviewed_at),
+    reviewedStageRev: num(row.reviewed_stage_rev),
     createdAt: Number(row.created_at),
     startedAt: num(row.started_at),
     completedAt: num(row.completed_at),
@@ -387,6 +394,11 @@ export interface ReviewOutcome {
    * SET as they are; absent → the running totals stay.
    */
   usage?: { inputTokens: number | null; outputTokens: number | null; costUsd: number | null };
+  /**
+   * A-34: the Stage revision the verdict is about (`null`/absent: none -- the Stage changed
+   * under the run, or the review is `unavailable`). SET as it is.
+   */
+  reviewedStageRev?: number | null;
 }
 
 /**
@@ -410,7 +422,8 @@ export async function finishReview(
             output_tokens = CASE WHEN $9::boolean THEN $11::bigint ELSE output_tokens END,
             cost_usd = CASE WHEN $9::boolean THEN $12::numeric ELSE cost_usd END,
             lease_owner = NULL, lease_until = NULL,
-            completed_at = $8, updated_at = $8
+            completed_at = $8, updated_at = $8,
+            reviewed_stage_rev = $13::bigint
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING *`,
     [
@@ -426,6 +439,7 @@ export async function finishReview(
       outcome.usage?.inputTokens ?? null,
       outcome.usage?.outputTokens ?? null,
       outcome.usage?.costUsd ?? null,
+      outcome.reviewedStageRev ?? null,
     ],
   );
   const row = result.rows[0];
@@ -492,6 +506,22 @@ export async function readStageReviewForUpdate(
   return row ? rowToReview(row) : null;
 }
 
+/** A-34: the newest review of a version's Stage, read without a row lock. */
+export async function readStageReview(
+  queryable: Queryable,
+  input: { tenantId: string; versionId: string; stageId: string },
+): Promise<PackageReview | null> {
+  const result = await queryable.query<Record<string, unknown>>(
+    `SELECT * FROM teaching_package_reviews
+      WHERE tenant_id = $1 AND version_id = $2 AND stage_id = $3
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1`,
+    [input.tenantId, input.versionId, input.stageId],
+  );
+  const row = result.rows[0];
+  return row ? rowToReview(row) : null;
+}
+
 /**
  * Regenerate only the flagged slides (owner, 15 Nov 2026): a finished review
  * goes back to `queued` under a NEW id, with the given findings and no fixes.
@@ -505,18 +535,35 @@ export async function readStageReviewForUpdate(
  *   (`queued_at`), so an old time would release Submit/Approve at once.
  * - Spend restarts (the ledger is summed by review id at the end).
  *
+ * - A-34: the reviewed Stage revision is cleared; the run that finishes it sets it again.
+ * - `freshFirstReview` (A-34: a stale verdict) also clears the first answer
+ *   (`reviewed_at`, summary, provider, model, the D-8 flag), so the run asks ONE whole
+ *   review again -- one that only reviews (`isPressedFirstReview`: a `tpr-rf-` id).
+ *
  * Guarded on a terminal status; `null` when the row moved meanwhile.
  */
 export async function requeueReviewForRefix(
   tx: Queryable,
-  input: { reviewId: string; newReviewId: string; findings: StoredFinding[]; now: number },
+  input: {
+    reviewId: string;
+    newReviewId: string;
+    findings: StoredFinding[];
+    now: number;
+    freshFirstReview?: boolean;
+  },
 ): Promise<PackageReview | null> {
   const result = await tx.query<Record<string, unknown>>(
     `UPDATE teaching_package_reviews
         SET id = $2, status = 'queued', findings = $3::jsonb, fixes = '[]'::jsonb,
             error_code = NULL, input_tokens = NULL, output_tokens = NULL, cost_usd = NULL,
             run_attempts = 0, lease_owner = NULL, lease_until = NULL,
-            started_at = NULL, completed_at = NULL, created_at = $4, updated_at = $4
+            started_at = NULL, completed_at = NULL, created_at = $4, updated_at = $4,
+            reviewed_stage_rev = NULL,
+            reviewed_at = CASE WHEN $6::boolean THEN NULL ELSE reviewed_at END,
+            summary = CASE WHEN $6::boolean THEN NULL ELSE summary END,
+            provider = CASE WHEN $6::boolean THEN NULL ELSE provider END,
+            model = CASE WHEN $6::boolean THEN NULL ELSE model END,
+            book_truncated = CASE WHEN $6::boolean THEN FALSE ELSE book_truncated END
       WHERE id = $1 AND status = ANY($5::text[])
       RETURNING *`,
     [
@@ -525,6 +572,7 @@ export async function requeueReviewForRefix(
       JSON.stringify(input.findings),
       input.now,
       [...TERMINAL_REVIEW_STATUSES],
+      input.freshFirstReview === true,
     ],
   );
   const row = result.rows[0];
