@@ -393,6 +393,9 @@
       "delete": "삭제",
       "deleted": "삭제됨",
       "undo": "실행 취소",
+      "deleteOnlyOfPart": "이 페이지는 레슨의 이 부분에 있는 유일한 페이지입니다(예: 목표를 마무리하는 퀴즈). 이 페이지가 없으면 레슨에 새 슬라이드를 추가할 수 없고 검토를 위해 보낼 수도 없으므로 삭제할 수 없습니다. 대신 다시 생성하세요.",
+      "noPageAfterLastCheck": "레슨의 마지막 확인 퀴즈 뒤에는 페이지를 추가할 수 없습니다. 그 퀴즈 앞에 추가하세요.",
+      "reorderAcrossParts": "이 슬라이드는 레슨의 다른 부분에 속하므로 원래 위치로 돌아갔습니다. 슬라이드는 자신이 속한 부분 안에서만 이동할 수 있습니다.",
       "copySuffix": "(사본)",
       "untitledSlide": "제목 없는 슬라이드",
       "collapse": "패널 접기",
@@ -725,6 +728,9 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "STAGE_GENERATION_IN_PROGRESS": "An AI slide insertion is running on this lesson; try again when it finishes.",
+        "SCENE_CONTENT_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "REGENERATION_PERSISTENCE_FAILED": "The new version was written but could not be saved. Nothing was changed; try again.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
       }
     },
@@ -820,7 +826,8 @@
           "notTeachingSlide": "this is an orientation, summary, check or practice slide, which does not count as teaching the part",
           "lastPart": "this is the slide's only part",
           "alreadyTaught": "the slide already teaches this part",
-          "notTaught": "the slide does not teach this part"
+          "notTaught": "the slide does not teach this part",
+          "otherObjectiveBlock": "this slide is in another part of the lesson; the lesson follows the book, so this part can only move to a slide of its own part"
         }
       },
       "title": "Generate a slide for a lesson part",
@@ -836,6 +843,9 @@
       "positionAfter": "After slide {{number}} — {{title}}",
       "slideRef": "slide {{number}} — {{title}}",
       "offendingSlides": "The slide to fix: {{slides}}.",
+      "missingAfter": "{{slide}} 뒤에 이 레슨에 필요한 페이지가 없습니다(예: 그 목표를 마무리하는 퀴즈가 삭제됨). 그 슬라이드 바로 뒤에 퀴즈를 추가하면 빠진 자리를 채웁니다.",
+      "missingAtStart": "이 레슨의 시작 부분에 필요한 페이지가 없습니다.",
+      "misplacedSlides": "위치가 잘못됨: {{slides}}. 레슨의 원래 부분으로 다시 옮기세요.",
       "positionUnknown": "This place is not saved yet. Wait a moment for your changes to save, then open this again.",
       "stageLabel": "Teaching stage",
       "stageNone": "No teaching stage at this position allows a new slide. Choose another position.",

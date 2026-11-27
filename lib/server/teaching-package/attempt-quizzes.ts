@@ -19,6 +19,10 @@
  * coverage gates count teaching SLIDES only (`teaches()`), so an attempt never changes a
  * coverage, solution or exercise count. Attempts are practice (TD-7): the backend grades
  * them right/wrong and stores nothing.
+ *
+ * g5.v12 (owner, 26 Nov 2026, `bookTextOnly`): an attempt is never asked from a slide
+ * title — a title-only try-it slide takes its check's book lines, and an exercise slide
+ * whose book question cannot be read gets none (see {@link AttemptQuizContext}).
  */
 import type { SceneOutline } from '@/lib/types/generation';
 import type { KafuoBookStructure } from '@/lib/types/teaching-package';
@@ -77,6 +81,53 @@ export interface AttemptQuizContext {
    * are one statement each (`splitInlineQuestions`). Off for every earlier model.
    */
   inlineQuestions?: boolean;
+  /**
+   * g5.v12 only (owner, 26 Nov 2026): an attempt is never asked from a title. A try-it
+   * slide whose key points say nothing but its title gets the check's own book lines;
+   * an exercise slide whose book questions cannot be read gets no attempt. Before, such
+   * a slide gave the model nothing to ask, and it invented an off-lesson question
+   * («س + 5 = 12» in a physics lesson). Every other attempt is built exactly as on
+   * g5.v11 (items, counts, guide plans). Off for every earlier model.
+   */
+  bookTextOnly?: boolean;
+}
+
+/** At most this many book lines in one attempt's key points. */
+const ATTEMPT_MAX_BOOK_LINES = 16;
+
+/** A box title on its own line («✓ تحقق من فهمك», «تأكد:», «تدرب», «مسائل تدريبية»). */
+const BOX_TITLE_LINE =
+  /^(?:[✓✔]\s*)?(?:تحقّ?ق من فهمك|تأكد|تأكّد|تدرب|تدرّب|مسائل تدريبية|تمارين)\s*[::]?\s*$/u;
+
+/**
+ * g5.v12: the book's own lines of each cited unit (the book prints no answers), without
+ * box titles, by unit; a unit whose items all went with the sacred-text rule gives none.
+ * At most {@link ATTEMPT_MAX_BOOK_LINES} lines in all.
+ */
+function bookLinesByUnit(
+  cited: readonly string[],
+  context: AttemptQuizContext,
+): Array<{ id: string; lines: string[] }> {
+  const seen = new Set<string>();
+  let left = ATTEMPT_MAX_BOOK_LINES;
+  return cited.map((id) => {
+    if (context.facts?.[id]?.noItemsLeft) return { id, lines: [] };
+    const lines = (context.unitTexts?.get(id) ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !BOX_TITLE_LINE.test(line) && !seen.has(line))
+      .slice(0, Math.max(left, 0));
+    for (const line of lines) seen.add(line);
+    left -= lines.length;
+    return { id, lines: lines.map(capStatement) };
+  });
+}
+
+/** g5.v12: the slide's key points say nothing but its title (or there are none). */
+function keyPointsAreOnlyTitle(slide: SceneOutline): boolean {
+  const plain = (text: string) => text.replace(/\s+/gu, ' ').trim();
+  const points = (slide.keyPoints ?? []).map(plain).filter((point) => point !== '');
+  return points.every((point) => point === plain(slide.title ?? ''));
 }
 
 function unitsOf(book: Book, element: string): Set<string> {
@@ -387,7 +438,7 @@ function checkAttempt(
   slide: SceneOutline,
   cited: readonly string[],
   context: AttemptQuizContext,
-): SceneOutline {
+): SceneOutline | null {
   let bareItems = 0;
   const bareLines: string[] = [];
   const fromFacts = cited.reduce((total, id) => {
@@ -403,6 +454,23 @@ function checkAttempt(
     }
     return total + labels;
   }, 0);
+  if (context.bookTextOnly && bareItems === 0 && keyPointsAreOnlyTitle(slide)) {
+    // g5.v12: key points that are only the slide's title give nothing to ask, so the
+    // check's own book lines are the items. The count is v11's (a check's labels, else
+    // one), over the checks that gave a line only; with no book line, no attempt.
+    const byUnit = bookLinesByUnit(cited, context).filter((unit) => unit.lines.length > 0);
+    if (byUnit.length === 0) return null;
+    const count = byUnit.reduce(
+      (total, unit) => total + Math.max(context.facts?.[unit.id]?.itemLabels.length ?? 0, 1),
+      0,
+    );
+    return attemptFor(
+      slide,
+      cited,
+      byUnit.flatMap((unit) => unit.lines),
+      count,
+    );
+  }
   // The try-it slide states the items without answers, so its key points are safe.
   const items = bareItems > 0 ? [...slide.keyPoints, ...bareLines] : slide.keyPoints;
   return attemptFor(slide, cited, items, fromFacts > 0 ? fromFacts : slide.keyPoints.length);
@@ -413,10 +481,27 @@ function exerciseAttempt(
   cited: readonly string[],
   context: AttemptQuizContext,
   questions: Record<string, number[]> | undefined,
-): SceneOutline {
+): SceneOutline | null {
   const statements = exerciseStatements(cited, context, questions);
   if (statements.length > 0) return attemptFor(slide, cited, statements, statements.length);
-  // No book text: the planner's titles only — never the solving slide's working.
+  if (context.bookTextOnly) {
+    // g5.v12: never asked from the slide's title. A unit the book prints with no question
+    // number at all (and none picked for this slide) is one question: its own text. A
+    // unit with numbered questions none of which could be read gives nothing (its other
+    // lines may be other slides' questions); nothing at all → no attempt.
+    const whole = bookLinesByUnit(
+      cited.filter(
+        (id) =>
+          !questions?.[id]?.length && (context.facts?.[id]?.questionNumbers?.length ?? 0) === 0,
+      ),
+      context,
+    )
+      .filter((unit) => unit.lines.length > 0)
+      .map((unit) => capStatement(unit.lines.join(' ')));
+    return whole.length > 0 ? attemptFor(slide, cited, whole, whole.length) : null;
+  }
+  // v11 and earlier, with no book text: the planner's titles only — never the solving
+  // slide's working.
   const fromFacts = cited.reduce(
     (total, id) =>
       total + (questions?.[id]?.length ?? context.facts?.[id]?.questionNumbers?.length ?? 1),
@@ -450,16 +535,22 @@ export function insertAttemptQuizzes(
       const questions = context.exerciseSlideQuestions?.[exerciseSlide];
       exerciseSlide += 1;
       if (!present.has(`${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`)) {
-        result.push(exerciseAttempt(outline, exerciseUnits, context, questions));
-        inserted = true;
+        const attempt = exerciseAttempt(outline, exerciseUnits, context, questions);
+        if (attempt) {
+          result.push(attempt);
+          inserted = true;
+        }
       }
     }
     result.push(outline);
     const checkUnits =
       isSlide && outline.contentRole === 'check_understanding' ? citesAny(outline, tryIts) : [];
     if (checkUnits.length > 0 && !present.has(`${outline.id}${ATTEMPT_OUTLINE_SUFFIX}`)) {
-      result.push(checkAttempt(outline, checkUnits, context));
-      inserted = true;
+      const attempt = checkAttempt(outline, checkUnits, context);
+      if (attempt) {
+        result.push(attempt);
+        inserted = true;
+      }
     }
   }
   if (!inserted) return outlines;

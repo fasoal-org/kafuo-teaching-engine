@@ -393,6 +393,9 @@
       "delete": "Löschen",
       "deleted": "Gelöscht",
       "undo": "Rückgängig",
+      "deleteOnlyOfPart": "Dies ist die einzige Seite ihres Lektionsteils (zum Beispiel das Quiz, das ein Lernziel abschließt). Ohne sie nimmt die Lektion keine neue Folie an und kann nicht zur Prüfung gesendet werden, daher kann sie nicht gelöscht werden. Generiere sie stattdessen neu.",
+      "noPageAfterLastCheck": "Nach dem letzten Prüfungsquiz der Lektion kann keine Seite hinzugefügt werden. Füge sie vor diesem Quiz ein.",
+      "reorderAcrossParts": "Diese Folie gehört zu einem anderen Teil der Lektion und wurde daher an ihren Platz zurückgesetzt. Eine Folie kann nur innerhalb ihres eigenen Teils verschoben werden.",
       "copySuffix": "(Kopie)",
       "untitledSlide": "Unbenannte Folie",
       "collapse": "Leiste einklappen",
@@ -725,6 +728,9 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "STAGE_GENERATION_IN_PROGRESS": "An AI slide insertion is running on this lesson; try again when it finishes.",
+        "SCENE_CONTENT_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "REGENERATION_PERSISTENCE_FAILED": "The new version was written but could not be saved. Nothing was changed; try again.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
       }
     },
@@ -820,7 +826,8 @@
           "notTeachingSlide": "this is an orientation, summary, check or practice slide, which does not count as teaching the part",
           "lastPart": "this is the slide's only part",
           "alreadyTaught": "the slide already teaches this part",
-          "notTaught": "the slide does not teach this part"
+          "notTaught": "the slide does not teach this part",
+          "otherObjectiveBlock": "this slide is in another part of the lesson; the lesson follows the book, so this part can only move to a slide of its own part"
         }
       },
       "title": "Generate a slide for a lesson part",
@@ -836,6 +843,9 @@
       "positionAfter": "After slide {{number}} — {{title}}",
       "slideRef": "slide {{number}} — {{title}}",
       "offendingSlides": "The slide to fix: {{slides}}.",
+      "missingAfter": "Nach {{slide}} fehlt eine Seite, die diese Lektion braucht (zum Beispiel wurde das Quiz gelöscht, das dieses Lernziel abschließt). Füge direkt nach dieser Folie ein Quiz hinzu: Es nimmt den fehlenden Platz ein.",
+      "missingAtStart": "Am Anfang dieser Lektion fehlt eine Seite, die sie braucht.",
+      "misplacedSlides": "Nicht an ihrem Platz: {{slides}}. Verschiebe sie zurück in ihren Teil der Lektion.",
       "positionUnknown": "This place is not saved yet. Wait a moment for your changes to save, then open this again.",
       "stageLabel": "Teaching stage",
       "stageNone": "No teaching stage at this position allows a new slide. Choose another position.",

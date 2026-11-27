@@ -44,6 +44,8 @@ interface ManifestUnit {
   title?: string;
   normalizedText?: string;
   blocks: ManifestBlock[];
+  /** The approved snapshot the unit was frozen in (retained on its content-unit row). */
+  approvedSnapshotId?: string;
   /**
    * Optional (Quran/hadith plan Q-3): the unit's protected quotes, exact text.
    * Absent on older backends — the TE then detects ﴿…﴾ spans itself.

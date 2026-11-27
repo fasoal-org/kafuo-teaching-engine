@@ -19,7 +19,19 @@ const mocks = vi.hoisted(() => ({
   runGenerationAttempt: vi.fn(),
   afterCallbacks: [] as Array<() => unknown>,
   pool: { query: () => undefined },
+  /** Overrides the "regenerate as the original" resolution (plan D-18); unset = real. */
+  resolvePin: vi.fn(),
 }));
+
+vi.mock('@/lib/server/teaching-package/original-route-pin', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/server/teaching-package/original-route-pin')>();
+  return {
+    ...actual,
+    resolveOriginalRoutePin: (...args: Parameters<typeof actual.resolveOriginalRoutePin>) =>
+      mocks.resolvePin(...args) ?? actual.resolveOriginalRoutePin(...args),
+  };
+});
 
 vi.mock('next/server', async (importOriginal) => ({
   ...(await importOriginal<typeof import('next/server')>()),
@@ -315,6 +327,44 @@ describe('POST …/agent-resume', () => {
   it('runs the shared body checks: a missing request is 400 before the service', async () => {
     const response = await resume(resumeBody({ request: undefined }));
     expect(response.status).toBe(400);
+    expectNothingRan();
+  });
+
+  it('a pinned regeneration (plan D-18) resumes on the original attempt’s route', async () => {
+    const ROUTE = {
+      primary: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+      fallback: { model: 'qwen:qwen3.7-flash', thinking: 'off' },
+      settingKey: 'teaching_generation.route.BIOLOGY',
+    };
+    mocks.resolvePin.mockReset();
+    mocks.resolvePin.mockImplementationOnce(async (_pool, kafuo) => ({
+      kafuo: { ...kafuo, modelRoute: ROUTE },
+      routePin: { mode: 'original', sourceAttemptId: 'tpa-original' },
+    }));
+    mocks.resumeGenerationAttempt.mockResolvedValue({
+      attempt: { ...attempt, status: 'queued' },
+      resumed: true,
+    });
+    const request = { ...kafuoRequest(), versionId: 'tpv-7', routePin: 'original' };
+    const response = await resume(resumeBody({ request }));
+    expect(response.status).toBe(202);
+    mocks.afterCallbacks[0]!();
+    expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+      routePin: 'original',
+      modelRoute: ROUTE,
+    });
+  });
+
+  it('a pin that cannot be honoured (routing off here) → 409, nothing resumed, even on a dry run', async () => {
+    mocks.resolvePin.mockReset();
+    const request = { ...kafuoRequest(), versionId: 'tpv-7', routePin: 'original' };
+    for (const dryRun of [false, true]) {
+      const response = await resume(resumeBody({ request, dryRun }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'ORIGINAL_ROUTE_UNAVAILABLE' },
+      });
+    }
     expectNothingRan();
   });
 });

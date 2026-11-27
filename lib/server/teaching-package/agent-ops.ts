@@ -49,7 +49,11 @@
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
 import type { AppDocument, AppDocumentOutline } from '@/lib/document-store/persistence-types';
-import { readAllContentUnitsForVersion } from '@/lib/persistence/teaching-package';
+import {
+  readAllContentUnitsForVersion,
+  readRetainedVersionContext,
+} from '@/lib/persistence/teaching-package';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import {
@@ -105,6 +109,7 @@ import {
 } from '@/lib/server/teaching-package/scene-insertion-store';
 import { regenerateSceneNarrationAudio } from '@/lib/server/teaching-package/scene-narration-audio';
 import {
+  bookPartBlocksFor,
   parseSceneRegenerationRequest,
   readSceneRegenerationForGrant,
   regenerateSlideScene,
@@ -436,12 +441,25 @@ async function regenerationDryRun(
         tenantId: grant.tenantId,
       })
     ).units;
+    // g5.v12: the dry run answers with the real run's block rule (book section order
+    // plan); the attempt is read for that version only.
+    const blocks = isBookPartPlacementModel(context.version.teachingModel)
+      ? bookPartBlocksFor(
+          context.version.teachingModel,
+          (
+            await readRetainedVersionContext(context.pool as never, grant.versionId, {
+              tenantId: grant.tenantId,
+            })
+          )?.inputSnapshot,
+        )
+      : null;
     unitIds = resolveContentUnitChange(
       document.scenes.find((scene) => scene.id === input.sceneId),
       document.scenes,
       document.outline,
       units,
       input.request.contentUnitChange,
+      blocks,
     ).unitIds;
   }
   return {
@@ -769,6 +787,7 @@ async function insertionDryRun(
     }),
     insertion.flow,
     outline,
+    document.scenes,
   );
   if (insertion.governed) {
     const preCheck = preCheckExistingSceneSkills(document.scenes, insertion.flow);

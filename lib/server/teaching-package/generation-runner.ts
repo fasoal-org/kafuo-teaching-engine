@@ -50,7 +50,9 @@ import {
 } from '@/lib/server/teaching-package/normalized-content-resource';
 import {
   completeGenerationAttempt,
+  engineBuildSha,
   failGenerationAttempt,
+  recordEngineBuild,
   recordResolvedLlmModel,
   recordSpeechRegister,
   recordSubjectRoute,
@@ -96,6 +98,7 @@ import {
   annotateBookMarkers,
   bookUnitFactsOf,
   exerciseBlockRequirement,
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
   isSacredExerciseElement,
@@ -108,6 +111,10 @@ import {
   teacherParityBook,
   withTypedPracticeUnits,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  buildBookPartMap,
+  placeWithGuard,
+} from '@/lib/server/teaching-package/book-part-placement';
 import {
   repairBookCoverageGaps,
   type BookCoverageRepairContext,
@@ -451,6 +458,9 @@ async function runKafuoAttempt(
   // attempt; nothing below runs for it.
   const route = await resolveAttemptSubjectRoute(attemptId, kafuo, pool);
   if (route.failed) return;
+
+  // S5.5 / G4: the engine build that runs this attempt, recorded before any model call.
+  await recordEngineBuild(pool, attemptId, { sha: engineBuildSha(), resumed: resume !== null });
 
   // The spoken-language register the run is generated under: derived from the
   // same authoritative language + subject code generation receives, and
@@ -1062,6 +1072,74 @@ async function runKafuoAttempt(
           : diagnosed.blocking,
       };
     };
+    // g5.v12 (book section order plan, owner 25 Nov 2026): the slides follow the book part
+    // by part. Never on a resumed `scenes` checkpoint (its Scenes keep their places), nor
+    // on a resumed outline a person re-ordered or re-staged (their correction stands),
+    // and kept only when the re-diagnosis finds no issue the planned order did not have.
+    const personPlacedOutlines = (resume?.editLog ?? []).some(
+      (entry) =>
+        entry.event === 'edited' &&
+        (entry.operations ?? []).some((operation) => {
+          const { op, field } = (operation ?? {}) as { op?: unknown; field?: unknown };
+          return op === 'move' || (op === 'set' && field === 'teachingStage');
+        }),
+    );
+    const bookPartMap =
+      isBookPartPlacementModel(kafuo.teachingModel) && !resumeScenes && !personPlacedOutlines
+        ? buildBookPartMap(kafuo.bookStructure, kafuo.learningObjectives, kafuo.teachingFlow)
+        : null;
+    if (isBookPartPlacementModel(kafuo.teachingModel) && !resumeScenes && !bookPartMap) {
+      log.warn(
+        `Teaching package attempt ${attemptId}: g5.v12 slides keep the planned order (${
+          personPlacedOutlines ? 'a person placed them' : 'no usable book part map'
+        })`,
+      );
+    }
+    // The placement and what it did are kept on the attempt (`bookPartPlacement`, counts
+    // and codes only), so a package shows whether g5.v12 placed its slides. Returns the
+    // placed plan, or `null` when the plan stays as it is.
+    const placeByBookPart = async (planned: SceneOutline[]): Promise<SceneOutline[] | null> => {
+      if (!isBookPartPlacementModel(kafuo.teachingModel) || resumeScenes) return null;
+      const record = async (outcome: Record<string, unknown>) =>
+        patchSnapshot(pool, attemptId, (snapshot) => ({
+          ...snapshot,
+          bookPartPlacement: { ...outcome, generationRun: run, at: Date.now() },
+        })).catch((error) => log.warn('could not record the book-part placement', error));
+      if (!bookPartMap) {
+        await record({ placed: false, skipped: personPlacedOutlines ? 'person_placed' : 'no_map' });
+        return null;
+      }
+      const guarded = placeWithGuard(planned, bookPartMap, kafuo.teachingFlow, (candidate) =>
+        diagnoseOpen(candidate).blocking.map((issue) => issue.code),
+      );
+      const placement = guarded.placement;
+      if (guarded.rolledBackFor.length > 0) {
+        log.warn(
+          `Teaching package attempt ${attemptId}: book-part placement skipped (new issues: ${guarded.rolledBackFor.join(', ')})`,
+        );
+      } else if (placement) {
+        log.info(
+          `Teaching package attempt ${attemptId}: book-part placement moved ${placement.moved} slide(s), ${placement.restaged} into another objective block, ${placement.regroundedQuizIds.length} check quiz(zes) re-grounded${
+            placement.mixedOutlineIds.length > 0
+              ? `; ${placement.mixedOutlineIds.length} slide(s) teach parts of two blocks`
+              : ''
+          }`,
+        );
+      }
+      await record({
+        placed: placement !== null,
+        ...(placement
+          ? {
+              moved: placement.moved,
+              restaged: placement.restaged,
+              regroundedQuizzes: placement.regroundedQuizIds.length,
+              mixedSlides: placement.mixedOutlineIds.length,
+            }
+          : {}),
+        ...(guarded.rolledBackFor.length > 0 ? { rolledBackFor: guarded.rolledBackFor } : {}),
+      });
+      return placement ? guarded.outlines : null;
+    };
     // §3b step 2 (P2): what the plan review layer reads. The approved units carry
     // the planner's own prompt text (`promptUnitText`: no verse or hadith item on
     // a g5.v8 run); the book lines name ids, elements and the required mark only.
@@ -1240,6 +1318,11 @@ async function runKafuoAttempt(
                     ...(droppedGuideIds.size > 0 ? { skipAttemptIds: droppedGuideIds } : {}),
                     // Lesson 2-5 (g5.v11 only): ex 14 on the line of ex 13 gets its own try.
                     ...(isGuideAnswerModel(kafuo.teachingModel) ? { inlineQuestions: true } : {}),
+                    // g5.v12 (owner, 26 Nov 2026): an attempt asks only from the book's own
+                    // question text; with none, no attempt (never an invented question).
+                    ...(isBookPartPlacementModel(kafuo.teachingModel)
+                      ? { bookTextOnly: true }
+                      : {}),
                   });
                   // g5.v11 (plan §8): the approved answers go to the solution slides and
                   // the attempts' hidden keys, never to a try-it slide. Rebuilt on every
@@ -1292,48 +1375,64 @@ async function runKafuoAttempt(
           // Lesson 2-5 (17 Nov 2026, g5.v11): a book example with no slide of its own
           // before its check (only a check's slides cite it) is planned once, after the
           // gates passed; one the plan cannot place is logged — never a pause.
-          ...(coverageBook?.examplesKept && normalizedSource
+          // g5.v12 (book section order plan): then every teaching slide is placed in book
+          // order, inside the objective block that owns its part, and the result is kept
+          // on the attempt.
+          ...((coverageBook?.examplesKept || bookPartMap) && normalizedSource
             ? {
                 refineOutlines: async (outlines: SceneOutline[], aiCall: AICallFn) => {
-                  const missing = missingExampleGaps(outlines, coverageBook);
-                  if (missing.length === 0) return null;
-                  const repaired = await repairBookCoverageGaps(
-                    outlines,
-                    [
-                      {
-                        code: BOOK_COVERAGE_INCOMPLETE,
-                        disposition: 'admin_correctable',
-                        field: 'sourceContentUnitIds',
-                        message: missing.map((gap) => gap.message).join('; '),
-                      },
-                    ],
-                    aiCall,
-                    coverageRepairContext(),
-                    { examples: true },
-                  );
-                  // A new slide that makes the plan fail a gate is rolled back.
-                  const kept = repaired.inserted > 0 && repaired.blocking.length === 0;
-                  const left = missingExampleGaps(
-                    kept ? repaired.outlines : outlines,
-                    coverageBook,
-                  );
-                  if (left.length > 0) {
+                  const refineExamples = async (): Promise<SceneOutline[] | null> => {
+                    if (!coverageBook?.examplesKept) return null;
+                    const missing = missingExampleGaps(outlines, coverageBook);
+                    if (missing.length === 0) return null;
+                    const repaired = await repairBookCoverageGaps(
+                      outlines,
+                      [
+                        {
+                          code: BOOK_COVERAGE_INCOMPLETE,
+                          disposition: 'admin_correctable',
+                          field: 'sourceContentUnitIds',
+                          message: missing.map((gap) => gap.message).join('; '),
+                        },
+                      ],
+                      aiCall,
+                      coverageRepairContext(),
+                      { examples: true },
+                    );
+                    // A new slide that makes the plan fail a gate is rolled back.
+                    const kept = repaired.inserted > 0 && repaired.blocking.length === 0;
+                    const left = missingExampleGaps(
+                      kept ? repaired.outlines : outlines,
+                      coverageBook,
+                    );
+                    if (left.length > 0) {
+                      log.warn(
+                        `Teaching package attempt ${attemptId}: ${left.length} book example(s) still have no slide of their own before their check${
+                          repaired.inserted > 0 && !kept
+                            ? ' (the inserted slide failed a gate and was rolled back)'
+                            : ''
+                        }: ${left.map((gap) => gap.unit.contentUnitId).join(', ')}`,
+                      );
+                    }
+                    if (kept) {
+                      log.info(
+                        `Teaching package attempt ${attemptId}: ${repaired.inserted} book example slide(s) planned before their check`,
+                      );
+                      // §3b (P1): recorded like every other automatic change to the plan.
+                      await recordPlanFixes(bookRepairFixes(outlines, repaired.outlines));
+                    }
+                    return kept ? repaired.outlines : null;
+                  };
+                  const examples = await refineExamples();
+                  // The placement never fails a run: on any error the planned order stays.
+                  const placed = await placeByBookPart(examples ?? outlines).catch((error) => {
                     log.warn(
-                      `Teaching package attempt ${attemptId}: ${left.length} book example(s) still have no slide of their own before their check${
-                        repaired.inserted > 0 && !kept
-                          ? ' (the inserted slide failed a gate and was rolled back)'
-                          : ''
-                      }: ${left.map((gap) => gap.unit.contentUnitId).join(', ')}`,
+                      `Teaching package attempt ${attemptId}: book-part placement failed; the planned order stays`,
+                      error,
                     );
-                  }
-                  if (kept) {
-                    log.info(
-                      `Teaching package attempt ${attemptId}: ${repaired.inserted} book example slide(s) planned before their check`,
-                    );
-                    // §3b (P1): recorded like every other automatic change to the plan.
-                    await recordPlanFixes(bookRepairFixes(outlines, repaired.outlines));
-                  }
-                  return kept ? repaired.outlines : null;
+                    return null;
+                  });
+                  return placed ?? examples;
                 },
               }
             : {}),

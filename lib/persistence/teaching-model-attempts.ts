@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS teaching_model_attempts (
   scene_regeneration_id TEXT,
   scene_insertion_id TEXT,
   review_id TEXT,
+  provider_request_id TEXT,
+  provider_response_id TEXT,
   worker_id TEXT NOT NULL,
   late_completion BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DOUBLE PRECISION NOT NULL,
@@ -267,6 +269,11 @@ BEGIN
   END IF;
 END;
 $$;
+-- S5.5 tracing (source-fidelity s6-s7-readiness §1.4 G4, S8-O2): the provider's
+-- own request id (an HTTP response header) and response id (the response body's
+-- id), NULL when the provider sent none. Nullable, never back-filled.
+ALTER TABLE teaching_model_attempts ADD COLUMN IF NOT EXISTS provider_request_id TEXT;
+ALTER TABLE teaching_model_attempts ADD COLUMN IF NOT EXISTS provider_response_id TEXT;
 `;
 
 export const TEACHING_MODEL_ATTEMPTS_SCHEMA = `${TEACHING_MODEL_ATTEMPT_TABLES}
@@ -314,6 +321,12 @@ export type AttemptAssociation =
       sceneInsertionId?: string | null;
       /** An AI review (package, question set or outline): same rule, its own row id. */
       reviewId?: string | null;
+      /**
+       * The Scene this call writes (S5.5 / S8-O1): a package generation's slide
+       * content and narration calls, and a slide regeneration's calls. NULL for
+       * the lesson-level calls (outline, plan review, agent profiles).
+       */
+      sceneId?: string | null;
     }
   | {
       kind: 'turn';
@@ -397,6 +410,13 @@ export interface AttemptCompletionInput {
   primaryFailureMs: number | null;
   /** Epoch seconds. */
   completedAt: number;
+  /**
+   * The provider's own ids for this call (S5.5 / S8-O2): the request id from
+   * its response headers and the response id from its body. NULL when the
+   * provider sent none; absent keeps the column as it is.
+   */
+  providerRequestId?: string | null;
+  providerResponseId?: string | null;
 }
 
 export interface TeachingModelAttemptRow {
@@ -462,10 +482,24 @@ export interface TeachingModelAttemptRow {
   scene_regeneration_id?: string | null;
   scene_insertion_id?: string | null;
   review_id?: string | null;
+  provider_request_id?: string | null;
+  provider_response_id?: string | null;
   worker_id: string;
   late_completion: boolean;
   created_at: number;
   completed_at: number | null;
+}
+
+/**
+ * A provider id as the ledger keeps it (S8-O2): one trimmed line of at most 200
+ * characters, or NULL. The ids are provider correlation handles, never secrets,
+ * and they are never logged.
+ */
+export function boundProviderId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const single = value.replace(/\s+/g, ' ').trim();
+  if (!single) return null;
+  return single.length <= 200 ? single : single.slice(0, 200);
 }
 
 /** Secret-free, bounded error text (plan §5.1: ≤300 chars). */
@@ -542,7 +576,7 @@ export async function insertStartedAttempt(
       turn?.turnId ?? null,
       turn?.helpSessionId ?? null,
       turn?.studentRef ?? null,
-      turn?.sceneId ?? null,
+      generation?.sceneId ?? turn?.sceneId ?? null,
       turn?.legacyHelpLinkRef ?? null,
       input.workerId,
       generation?.sceneRegenerationId ?? null,
@@ -589,7 +623,9 @@ export async function completeAttempt(
        rate_card_version = $21, cost_usd = $22, cost_basis = $23, cost_unavailable_reason = $24,
        budget_breach = $25,
        ttft_ms = $26, ttft_unavailable_reason = $27, total_ms = $28, primary_failure_ms = $29,
-       completed_at = $30
+       completed_at = $30,
+       provider_request_id = COALESCE($31, provider_request_id),
+       provider_response_id = COALESCE($32, provider_response_id)
      WHERE id = $1 AND accounting_status <> 'complete'
      RETURNING late_completion`,
     [
@@ -623,6 +659,8 @@ export async function completeAttempt(
       completion.totalMs,
       completion.primaryFailureMs,
       completion.completedAt,
+      boundProviderId(completion.providerRequestId),
+      boundProviderId(completion.providerResponseId),
     ],
   );
   const row = result.rows[0];

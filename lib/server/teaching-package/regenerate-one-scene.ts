@@ -36,6 +36,7 @@ import {
   actionContext,
   filterKnownActions,
   outlineFromScene,
+  ownPlanSnapshot,
   withCarriedAssistance,
 } from '@/lib/server/agent-runtime/generation-tools';
 import { sceneContentStage } from '@/lib/server/agent-runtime/generation-ai-call';
@@ -287,8 +288,12 @@ export function regenerationInvariantViolations(
  * `sourceContentUnitIds`), and `buildCompleteScene` copies them from the
  * outline — which would fail the invariant check after both model calls.
  */
-function seededOutline(pre: AppScene, snapshot: AppDocumentOutline | undefined): SceneOutline {
-  const seeded = outlineFromScene(pre as Scene, snapshot);
+function seededOutline(
+  pre: AppScene,
+  snapshot: AppDocumentOutline | undefined,
+  scenes: readonly AppScene[],
+): SceneOutline {
+  const seeded = outlineFromScene(pre as Scene, ownPlanSnapshot(pre, snapshot, scenes));
   const {
     mediaGenerations: _stripped,
     teachingStage: _plannedStage,
@@ -468,7 +473,7 @@ export async function regenerateOneScene(
   // 1. The outline, seeded from the persisted Scene and its stored plan. No AI
   //    image generation: planned media generations are stripped. A moved lesson
   //    part (owner, 14 Nov 2026) replaces the content fields with the re-plan.
-  const seeded = seededOutline(pre, input.outlineSnapshot);
+  const seeded = seededOutline(pre, input.outlineSnapshot, input.scenes);
   const replanned = input.replannedOutline
     ? withSlideIdentity(input.replannedOutline, seeded, input.sourceContentUnitIds)
     : null;
@@ -568,6 +573,16 @@ export async function regenerateOneScene(
       input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
       'the slide content could not be generated; nothing was written',
       contentFailure ? { failure: contentFailure.code } : undefined,
+    );
+  }
+  // Owner, 26 Nov 2026 (local recheck): a regeneration that brings nothing to show is
+  // never saved as a success — a blank page's Regenerate came back with an empty canvas
+  // and the teacher saw «the slide was regenerated» over an empty slide.
+  if (content.elements.length === 0) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      'the regenerated slide came back empty; nothing was written',
+      { failure: 'EMPTY_SLIDE' },
     );
   }
   // Lesson 2-5 (17 Nov 2026): a try on the screen that shows the answer → kept as it was.
@@ -883,7 +898,7 @@ async function regenerateSlideNarration(
     shownSources.has(entry.servingPath),
   );
   const shownIds = new Set(shown.map((entry) => entry.id));
-  const seeded = seededOutline(pre, input.outlineSnapshot);
+  const seeded = seededOutline(pre, input.outlineSnapshot, input.scenes);
   // The outline keeps only the images still shown: a deleted one has no note.
   const outline: SceneOutline = {
     ...seeded,
@@ -946,7 +961,10 @@ async function regenerateQuizScene(
   const generateActions = input.generateActions ?? generateSceneActions;
   const now = input.now ?? Date.now;
 
-  const seeded: SceneOutline = { ...seededOutline(pre, input.outlineSnapshot), type: 'quiz' };
+  const seeded: SceneOutline = {
+    ...seededOutline(pre, input.outlineSnapshot, input.scenes),
+    type: 'quiz',
+  };
   // g5.v11: an attempt's hidden key rebuilt for its current plan (re-review finding 2).
   const guided = guideGuardOf(input, seeded);
   const outline = guided?.outline ?? seeded;

@@ -8,8 +8,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AVERAGE_CHANGE_STEP,
+  BOOK_PART_PLACEMENT_TEACHING_MODEL,
   bookStructureRequirement,
   GUIDE_ANSWER_TEACHING_MODEL,
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
@@ -148,16 +150,16 @@ describe('g5.v11 registration', () => {
     expect(isLearnerFirstModel({ key: 'other', version: 'g5.v11' })).toBe(false);
   });
 
-  it('has its own switch, on for g5.v11 only', () => {
+  it('has its own switch, on for g5.v11 (and g5.v12, built on it) only', () => {
     expect(GUIDE_ANSWER_TEACHING_MODEL).toEqual({ key: 'g5', version: 'g5.v11' });
     expect(isGuideAnswerModel({ key: 'g5', version: 'g5.v11' })).toBe(true);
-    for (const version of ['g5.v8', 'g5.v9', 'g5.v10', 'g5.v110', 'g5.v1 1', 'g5.v12']) {
+    for (const version of ['g5.v8', 'g5.v9', 'g5.v10', 'g5.v110', 'g5.v1 1', 'g5.v13']) {
       expect(isGuideAnswerModel({ key: 'g5', version })).toBe(false);
     }
     expect(isGuideAnswerModel({ key: 'other', version: 'g5.v11' })).toBe(false);
     expect(isGuideAnswerModel(null)).toBe(false);
     expect(isGuideAnswerModel(undefined)).toBe(false);
-    expect(isLearnerFirstModel({ key: 'g5', version: 'g5.v12' })).toBe(false);
+    expect(isLearnerFirstModel({ key: 'g5', version: 'g5.v13' })).toBe(false);
   });
 
   it('marks a g5.v11 coverage book learner-first and teacher-parity, like g5.v10', () => {
@@ -167,5 +169,28 @@ describe('g5.v11 registration', () => {
     expect(v11).toEqual({ ...v10, examplesKept: true });
     expect(v10).not.toHaveProperty('examplesKept');
     expect(v11).toMatchObject({ teacherParity: true, learnerFirst: true });
+  });
+});
+
+// g5.v12 (book section order plan, owner 25 Nov 2026): v11 plus book-part placement.
+describe('g5.v12 registration', () => {
+  it('keeps every g5.v11 behaviour: learner first, guide answers, teacher parity', () => {
+    const model = { key: 'g5', version: 'g5.v12' };
+    expect(isLearnerFirstModel(model)).toBe(true);
+    expect(isGuideAnswerModel(model)).toBe(true);
+    expect(isTeacherParityModel(model)).toBe(true);
+    const v11 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v11' });
+    expect(teacherParityBook(BOOK, model)).toEqual(v11);
+  });
+
+  it('has its own switch, on for g5.v12 only', () => {
+    expect(BOOK_PART_PLACEMENT_TEACHING_MODEL).toEqual({ key: 'g5', version: 'g5.v12' });
+    expect(isBookPartPlacementModel({ key: 'g5', version: 'g5.v12' })).toBe(true);
+    for (const version of ['g5.v7', 'g5.v8', 'g5.v9', 'g5.v10', 'g5.v11', 'g5.v120', 'g5.v13']) {
+      expect(isBookPartPlacementModel({ key: 'g5', version })).toBe(false);
+    }
+    expect(isBookPartPlacementModel({ key: 'other', version: 'g5.v12' })).toBe(false);
+    expect(isBookPartPlacementModel(null)).toBe(false);
+    expect(isBookPartPlacementModel(undefined)).toBe(false);
   });
 });

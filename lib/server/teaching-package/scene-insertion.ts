@@ -89,6 +89,11 @@ import {
 } from '@/lib/server/teaching-package/governed-regeneration';
 import { insertOneScene } from '@/lib/server/teaching-package/insert-one-scene';
 import {
+  VOICE_LEASE_MARGIN_MS,
+  voiceRegeneratedScene,
+} from '@/lib/server/teaching-package/regenerated-scene-voice';
+import { locateFlowOrderProblems } from '@/lib/server/teaching-package/plan-auto-fixes';
+import {
   readSacredQuotePins,
   sacredPolicyModeFor,
 } from '@/lib/server/teaching-package/sacred-text';
@@ -426,6 +431,8 @@ export interface SceneInsertionDeps {
   createRoute?: typeof createInsertionRoute;
   plan?: typeof planInsertedSlide;
   insert?: typeof insertOneScene;
+  /** Voices the inserted slide before it is saved (owner, 25 Nov 2026). */
+  voice?: typeof voiceRegeneratedScene;
   resolveGoverned?: typeof resolveGovernedRegenerationContext;
   verdictStore?: () => Promise<{
     get(profileId: string, checksum: string): Promise<{ verdict: string } | undefined>;
@@ -578,10 +585,49 @@ export function checkPositionAndUnits(
   return { at: position.at, after: position.after, before: position.before };
 }
 
+/**
+ * Owner, 26 Nov 2026: what is actually wrong with a lesson's order, for the teacher —
+ * the slides out of place (`misplacedSceneIds`, the fewest moves that fix the order)
+ * and the flow positions no scene holds any more (`missing`, each with the slide it
+ * belongs after, e.g. a deleted check quiz), instead of every slide of the lesson.
+ */
+export function flowProblemDetails(
+  scenes: readonly AppScene[],
+  flow: readonly TeachingFlowEntry[],
+): {
+  misplacedSceneIds: string[];
+  missing: Array<{ flowIndex: number; stage: string; afterSceneId: string | null }>;
+} {
+  const ordered = orderedScenes(scenes);
+  const problems = locateFlowOrderProblems(ordered as unknown as SceneOutline[], flow);
+  const misplacedSceneIds = problems.misplaced.map((entry) => entry.outlineId);
+  const misplaced = new Set(misplacedSceneIds);
+  // The slide a missing page belongs after: the last slide IN PLACE before it (a
+  // slide dragged out of place never names the gap).
+  const inPlace = ordered.filter((scene) => !misplaced.has(scene.id));
+  return {
+    misplacedSceneIds,
+    missing: problems.missing.map((flowIndex) => ({
+      flowIndex,
+      stage: flow[flowIndex]?.stage ?? '',
+      afterSceneId:
+        [...inPlace]
+          .reverse()
+          .find((scene) => (scene.teachingStage?.flowIndex ?? Infinity) < flowIndex)?.id ?? null,
+    })),
+  };
+}
+
+/**
+ * Refuse a lesson whose scenes do not follow the flow. `detailScenes` are the
+ * scenes the teacher sees (review, 26 Nov 2026): a check of a projection with the
+ * new slide's placeholder names only real slides, never the placeholder.
+ */
 export function exactFlowOrRefuse(
   scenes: readonly AppScene[],
   flow: readonly TeachingFlowEntry[],
   outline: AppDocumentOutline | null | undefined,
+  detailScenes: readonly AppScene[] = scenes,
 ): void {
   const result = validateExactTeachingFlow(scenes, flow, outline?.outlines);
   if (!result.valid) {
@@ -591,6 +637,7 @@ export function exactFlowOrRefuse(
       {
         reason: result.violation.reason,
         offendingSceneIds: result.violation.offendingSceneIds,
+        ...flowProblemDetails(detailScenes, flow),
       },
     );
   }
@@ -847,6 +894,7 @@ export async function insertGeneratedSlide(
       }),
       flow,
       outlineRecord,
+      stageDocument.scenes,
     );
     if (context.governed) {
       const preCheck = preCheckExistingSceneSkills(stageDocument.scenes, flow);
@@ -1111,7 +1159,13 @@ export async function insertGeneratedSlide(
     if (!generated.ok) {
       throw new TeachingPackageError(generated.code, generated.message, generated.details);
     }
-    candidate = generated.scene;
+    // Owner, 25 Nov 2026: the inserted slide is voiced before T2, as a regenerated one
+    // is; a failed or late voice (two minutes before the lease) keeps it marked
+    // exactly as before.
+    candidate = await (deps.voice ?? voiceRegeneratedScene)(generated.scene, stage, {
+      deadlineMs: row.leaseExpiresAt - VOICE_LEASE_MARGIN_MS,
+      now: clock,
+    });
   } catch (error) {
     if (error instanceof TeachingPackageError) return failAndThrow(error);
     // The live answer and a later replay of the stored row share one code.
@@ -1403,7 +1457,12 @@ function buildFinalDocument(
     );
   }
   // §9.5 — exact flow and the policy diagnostics on the real final document.
-  exactFlowOrRefuse(migratedScenes, input.flow, outlineRecord);
+  exactFlowOrRefuse(
+    migratedScenes,
+    input.flow,
+    outlineRecord,
+    migratedScenes.filter((scene) => scene.id !== fresh.id),
+  );
   const violations = policyViolations(
     doc.scenes,
     outlineRecord,

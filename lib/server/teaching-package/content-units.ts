@@ -21,6 +21,8 @@ export interface RetainableManifestUnit {
   title?: string;
   normalizedText?: string;
   blocks?: Array<{ associatedVisualIds?: string[] }>;
+  /** The approved snapshot this unit was frozen in; Kafuo writes it on each unit. */
+  approvedSnapshotId?: string;
 }
 
 /**
@@ -86,7 +88,8 @@ export function retainableContentUnits(manifest: {
       title: unit.title ?? null,
       normalizedText: text,
       contentRevisionId: manifest.contentRevisionId ?? null,
-      approvedSnapshotId: manifest.approvedSnapshotId ?? null,
+      // Kafuo's export puts the snapshot id on each unit, not on the manifest.
+      approvedSnapshotId: unit.approvedSnapshotId ?? manifest.approvedSnapshotId ?? null,
     });
   }
   return rows;

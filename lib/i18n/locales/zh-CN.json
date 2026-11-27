@@ -393,6 +393,9 @@
       "delete": "删除",
       "deleted": "已删除",
       "undo": "撤销",
+      "deleteOnlyOfPart": "这是本课这一部分唯一的页面（例如结束某个目标的测验）。没有它，本课无法添加新幻灯片，也无法提交审核，因此不能删除。请改为重新生成。",
+      "noPageAfterLastCheck": "不能在本课最后一个检测测验之后添加页面。请在该测验之前添加。",
+      "reorderAcrossParts": "这张幻灯片属于本课的另一部分，因此已回到原位。幻灯片只能在其所属部分内移动。",
       "copySuffix": "（副本）",
       "untitledSlide": "未命名幻灯片",
       "collapse": "收起",
@@ -725,6 +728,9 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "STAGE_GENERATION_IN_PROGRESS": "An AI slide insertion is running on this lesson; try again when it finishes.",
+        "SCENE_CONTENT_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "REGENERATION_PERSISTENCE_FAILED": "The new version was written but could not be saved. Nothing was changed; try again.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
       }
     },
@@ -820,7 +826,8 @@
           "notTeachingSlide": "this is an orientation, summary, check or practice slide, which does not count as teaching the part",
           "lastPart": "this is the slide's only part",
           "alreadyTaught": "the slide already teaches this part",
-          "notTaught": "the slide does not teach this part"
+          "notTaught": "the slide does not teach this part",
+          "otherObjectiveBlock": "this slide is in another part of the lesson; the lesson follows the book, so this part can only move to a slide of its own part"
         }
       },
       "title": "Generate a slide for a lesson part",
@@ -836,6 +843,9 @@
       "positionAfter": "After slide {{number}} — {{title}}",
       "slideRef": "slide {{number}} — {{title}}",
       "offendingSlides": "The slide to fix: {{slides}}.",
+      "missingAfter": "{{slide}} 之后缺少本课需要的一个页面（例如结束该目标的测验已被删除）。请在该幻灯片后紧接着添加一个测验：它会补上缺失的位置。",
+      "missingAtStart": "本课开头缺少需要的一个页面。",
+      "misplacedSlides": "位置不对：{{slides}}。请将其移回本课所属的部分。",
       "positionUnknown": "This place is not saved yet. Wait a moment for your changes to save, then open this again.",
       "stageLabel": "Teaching stage",
       "stageNone": "No teaching stage at this position allows a new slide. Choose another position.",

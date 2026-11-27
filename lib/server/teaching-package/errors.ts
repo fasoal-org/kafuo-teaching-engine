@@ -392,6 +392,13 @@ export type TeachingPackageErrorCode =
    * Teaching Engine. Refused before any attempt exists; no other model is used.
    */
   | 'GENERATION_ROUTE_UNAVAILABLE'
+  /**
+   * `routePin: "original"` (plan D-18) cannot be honoured: the version's
+   * producing attempt records no subject route, its code table is no longer
+   * today's, its frozen route can no longer run here, or subject routing is
+   * off. Refused before any attempt exists; never replaced by today's route.
+   */
+  | 'ORIGINAL_ROUTE_UNAVAILABLE'
   // --- Quran and hadith (quran-text-handling-rules-plan Q-5, Q-14) ---
   /**
    * A regenerated or inserted Scene changed, invented, cut, explained or spoke
@@ -661,6 +668,7 @@ const CODE_STATUSES: Record<TeachingPackageErrorCode, number> = {
   TTS_ROUTE_UNAVAILABLE: 409,
   GENERATION_ROUTE_INVALID: 400,
   GENERATION_ROUTE_UNAVAILABLE: 409,
+  ORIGINAL_ROUTE_UNAVAILABLE: 409,
   SACRED_TEXT_ALTERED: 502,
   SACRED_TEXT_CANONICAL_MISMATCH: 422,
 };

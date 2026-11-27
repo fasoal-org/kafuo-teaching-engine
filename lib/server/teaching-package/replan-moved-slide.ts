@@ -32,7 +32,7 @@ import {
 } from '@/lib/server/teaching-package/sacred-text';
 import { eligibleVisualsForUnits } from '@/lib/server/teaching-package/scene-insertion';
 import type { TeachingPackageErrorCode } from '@/lib/server/teaching-package/errors';
-import { outlineFromScene } from '@/lib/server/agent-runtime/generation-tools';
+import { outlineFromScene, ownPlanSnapshot } from '@/lib/server/agent-runtime/generation-tools';
 import type { AppScene, Scene } from '@/lib/types/stage';
 import type { TeachingStageRef } from '@/lib/types/teaching-package';
 
@@ -77,13 +77,18 @@ function stageOf(
 
 /**
  * The slide's classification as the regeneration will keep it: the same
- * reading `regenerateOneScene` seeds from (`outlineFromScene`).
+ * reading `regenerateOneScene` seeds from (`outlineFromScene` over the slide's
+ * own plans, `ownPlanSnapshot`).
  */
 function ownClassification(
   scene: AppScene,
   outlineRecord: AppDocumentOutline | null | undefined,
+  scenes: readonly AppScene[],
 ): { slideType?: string; contentRole?: string; contentKind?: string } {
-  const own = outlineFromScene(scene as Scene, outlineRecord ?? undefined);
+  const own = outlineFromScene(
+    scene as Scene,
+    ownPlanSnapshot(scene, outlineRecord ?? undefined, scenes),
+  );
   return {
     ...(own.slideType !== undefined ? { slideType: own.slideType } : {}),
     ...(own.contentRole !== undefined ? { contentRole: own.contentRole } : {}),
@@ -147,7 +152,7 @@ export async function replanMovedSlide(
     }),
     // The slide's own classification, fixed: the planner plans for it and its
     // own guess is neither used nor validated (the first live move failed on one).
-    fixedClassification: ownClassification(input.scene, input.outlineRecord),
+    fixedClassification: ownClassification(input.scene, input.outlineRecord, input.scenes),
     // The slide keeps its own Skills and classification (applied after planning),
     // so only the visual plan is normalized against the visuals offered here.
     check: (outline) => {

@@ -42,6 +42,9 @@ interface ThumbItemProps {
   readonly onRegenerateAudio?: () => void;
   /** The audio of this scene is being regenerated now. */
   readonly regeneratingAudio?: boolean;
+  /** A drag of this thumbnail starts / ends (the rail checks the dropped order). */
+  readonly onDragStart?: () => void;
+  readonly onDragEnd?: () => void;
 }
 
 function ThumbItemComponent({
@@ -57,6 +60,8 @@ function ThumbItemComponent({
   onDismissNarrationWarning,
   onRegenerateAudio,
   regeneratingAudio = false,
+  onDragStart,
+  onDragEnd,
 }: ThumbItemProps) {
   const { t } = useI18n();
   const issues = scene.generationIssues ?? [];
@@ -70,6 +75,13 @@ function ThumbItemComponent({
       ? 'edit.narrationRegeneration.reviewTitle'
       : 'edit.nav.sceneGenerationIssue',
   );
+  // Owner, 25 Nov 2026: while the slide's missing audio is being generated (the
+  // "Regenerate audio" button), that is work in progress, not a problem: the card
+  // stays calm until the audio settles.
+  const voicingOnly =
+    regeneratingAudio === true &&
+    issues.length > 0 &&
+    issues.every((issue) => issue.code === NARRATION_AUDIO_ISSUE_CODE);
   // The slide/quiz regeneration is the remedy of the other issues only.
   const hasRegenerableIssue = issues.some(
     (issue) =>
@@ -131,6 +143,8 @@ function ThumbItemComponent({
       // tried earlier but broke drag-to-reorder entirely — Reorder.Item
       // needs the layout tracker to compute the drag transform's origin.
       layout="position"
+      {...(onDragStart ? { onDragStart } : {})}
+      {...(onDragEnd ? { onDragEnd } : {})}
       whileDrag={{
         scale: 1.03,
         rotate: -0.4,
@@ -316,7 +330,17 @@ function ThumbItemComponent({
         {/* Generation problems kept on this slide instead of failing the package
             (3 Oct 2026): the reason, in plain words, and the regenerate action
             right here — the reviewer decides; nothing is blocked. */}
-        {(scene.generationIssues?.length ?? 0) > 0 && (
+        {voicingOnly && (
+          <div
+            data-testid="scene-voicing"
+            role="status"
+            aria-busy
+            className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-1 text-[10px] leading-snug text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300"
+          >
+            {t('edit.narrationAudio.running')}
+          </div>
+        )}
+        {!voicingOnly && (scene.generationIssues?.length ?? 0) > 0 && (
           <div
             data-testid="scene-generation-issues"
             className="rounded border border-red-200 bg-red-50 px-1.5 py-1 text-[10px] leading-snug text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"

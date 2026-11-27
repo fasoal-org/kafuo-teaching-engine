@@ -16,6 +16,10 @@ import { duplicateSlideScene } from '@/lib/edit/slide-defaults';
 import {
   createBlankEditableScene,
   insertSceneAtIndex,
+  inOrderOf,
+  isOnlySceneAtItsPosition,
+  keepsTeachingOrder,
+  rebuildsBankCheckQuiz,
   type EditableSceneType,
   teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
@@ -384,6 +388,33 @@ export function SlideNavRail() {
   // more than one scene overall — otherwise the deck would become empty.
   const totalScenes = scenes.length;
 
+  // Owner, 26 Nov 2026: a slide dropped into another part of the lesson broke its
+  // teaching order (every new slide and Submit were then refused). The order before
+  // the drag is kept, and a drop that breaks a sound order is put back with the
+  // reason; moving a slide within its own part stays free. A lesson whose order was
+  // already broken (an older drag) is never put back, so dragging can repair it.
+  const dragStartScenes = useRef<Scene[] | null>(null);
+  const handleDragStart = useCallback(() => {
+    dragStartScenes.current = useStageStore.getState().scenes;
+  }, []);
+  const handleDragEnd = useCallback(() => {
+    const before = dragStartScenes.current;
+    dragStartScenes.current = null;
+    if (!before || !keepsTeachingOrder(before)) return;
+    const current = useStageStore.getState().scenes;
+    if (keepsTeachingOrder(current)) return;
+    // Only the order goes back: a slide regenerated during the drag keeps its new content.
+    const restored = inOrderOf(current, before);
+    if (!restored) return;
+    setScenes(restored);
+    toast.warning(
+      t('edit.nav.reorderAcrossParts', {
+        defaultValue:
+          'This slide belongs to another part of the lesson, so it went back to its place. A slide can only move within its own part.',
+      }),
+    );
+  }, [setScenes, t]);
+
   const onReorderIds = useCallback(
     (newOrder: string[]) => {
       // Fires on every drag step: refuse silently while an insertion runs.
@@ -416,11 +447,26 @@ export function SlideNavRail() {
       // A scene inserted into a Kafuo package stage inherits its teaching
       // stage from the previous scene (the first scene when inserting at 0),
       // so an editor-created scene stays submit-capable; the identity is
-      // never inferred from titles, types, or order.
-      const inheritedTeachingStage = teachingStageForInsertion(scenes, insertIndex);
-      const scene = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
+      // never inferred from titles. Never an objective check quiz's own
+      // position (owner, 26 Nov 2026): after the lesson's last check quiz there
+      // is no valid one, so the page is refused with the reason.
+      const inheritedTeachingStage = teachingStageForInsertion(scenes, insertIndex, type);
+      if (inheritedTeachingStage === null) {
+        toast.warning(
+          t('edit.nav.noPageAfterLastCheck', {
+            defaultValue:
+              "A page cannot be added after the lesson's last check quiz. Add it before that quiz.",
+          }),
+        );
+        return;
+      }
+      const blank = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
         ...(inheritedTeachingStage !== undefined && { teachingStage: inheritedTeachingStage }),
       });
+      // A rebuilt check quiz is served from the question bank like its siblings.
+      const scene: Scene = rebuildsBankCheckQuiz(scenes, inheritedTeachingStage, type)
+        ? { ...blank, questionSource: 'bank' }
+        : blank;
       setScenes(insertSceneAtIndex(scenes, scene, insertIndex));
       setCurrentSceneId(scene.id);
     },
@@ -459,6 +505,18 @@ export function SlideNavRail() {
       // Hold deck-empty guard at the rail layer; the store doesn't enforce.
       if (source.type === 'slide' && slideCount <= 1) return;
       if (totalScenes <= 1) return;
+      // Owner, 26 Nov 2026: a package scene alone at its flow position (an objective's
+      // check quiz, an objective's last slide) is never deleted — without it the lesson
+      // refuses every new slide and Submit, and the teacher cannot put it back.
+      if (isOnlySceneAtItsPosition(scenes, source)) {
+        toast.warning(
+          t('edit.nav.deleteOnlyOfPart', {
+            defaultValue:
+              'This is the only page of its part of the lesson, so it cannot be deleted. Regenerate it instead.',
+          }),
+        );
+        return;
+      }
       const index = scenes.findIndex((s) => s.id === sceneId);
       useDeletedSceneRecycle.getState().capture(source, index);
       deleteScene(sceneId);
@@ -708,6 +766,8 @@ export function SlideNavRail() {
                     <ThumbItem
                       scene={scene}
                       index={index}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
                       active={scene.id === currentSceneId}
                       canDelete={scene.type === 'slide' ? canDeleteSlide : canDeleteAny}
                       onActivate={() => handleActivate(scene.id)}

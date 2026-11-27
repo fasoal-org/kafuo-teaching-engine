@@ -11,6 +11,18 @@ const mocks = vi.hoisted(() => ({
   routedStatus: vi.fn(),
   /** Overrides a generation catalogue model's server availability; unset = real. */
   modelAvailability: vi.fn(),
+  /** The version's producing attempt a `routePin` reads (plan D-18). */
+  retained: vi.fn(),
+  /** The pinned request's replay lookup (plan D-18). */
+  readByRequestId: vi.fn(),
+  /** The pool's raw reads (the pin's frozen-route presence check). */
+  poolQuery: vi.fn(),
+}));
+
+vi.mock('@/lib/persistence/teaching-package', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/persistence/teaching-package')>()),
+  readRetainedVersionContext: (...args: unknown[]) => mocks.retained(...args),
+  readAttemptByRequestId: (...args: unknown[]) => mocks.readByRequestId(...args),
 }));
 
 vi.mock('@/lib/server/speech/teaching-route', async (importOriginal) => {
@@ -46,7 +58,9 @@ vi.mock('@/lib/server/teaching-package/generation-runner', () => ({
   runGenerationAttempt: mocks.runGenerationAttempt,
 }));
 vi.mock('@/lib/persistence/server-provider', () => ({
-  getServerPersistenceProvider: async () => ({ pool: { query: vi.fn() } }),
+  getServerPersistenceProvider: async () => ({
+    pool: { query: (...args: unknown[]) => mocks.poolQuery(...args) },
+  }),
 }));
 
 import { POST } from '@/app/api/teaching-packages/generate/route';
@@ -177,6 +191,11 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv('DATABASE_URL', 'postgres://generate-route-test');
   vi.stubEnv('TEACHING_ENGINE_SERVICE_KEY', SERVICE_KEY);
+  mocks.readByRequestId.mockReset();
+  mocks.readByRequestId.mockResolvedValue(null);
+  mocks.poolQuery.mockReset();
+  mocks.poolQuery.mockResolvedValue({ rows: [] });
+  mocks.retained.mockReset();
 });
 
 describe('POST /api/teaching-packages/generate', () => {
@@ -674,6 +693,156 @@ describe('POST /api/teaching-packages/generate', () => {
         modelRoute: ROUTE,
         planRoute: PLAN,
       });
+    });
+
+    it('routePin "original" (plan D-18): the producing attempt’s frozen routes reach the runner, and the new attempt names it', async () => {
+      const PLAN = {
+        primary: { model: 'anthropic:claude-opus-5-5', thinking: 'high' },
+        fallback: { model: 'openai:gpt-6.1-terra', thinking: 'medium' },
+        settingKey: 'teaching_generation.plan_route.BIOLOGY',
+      };
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.retained.mockResolvedValue({
+        attemptId: 'tpa-original',
+        inputSnapshot: {
+          subjectCode: 'BIOLOGY',
+          policyVersion: 'configured-2026-11',
+          primaryModel: ROUTE.primary.model,
+          fallbackModel: ROUTE.fallback.model,
+          generationRoute: ROUTE,
+          planRoute: PLAN,
+        },
+        sourceText: null,
+        sourceTruncated: false,
+      });
+      // The raw row holds both frozen routes (well-formed, as the parsed snapshot shows).
+      mocks.poolQuery.mockResolvedValue({ rows: [{ has_generation: true, has_plan: true }] });
+      // The real admission writes the pin on the new attempt's snapshot; the fake echoes it.
+      mocks.startGenerationAttempt.mockImplementation(async (_pool, start) => {
+        const created = attempt();
+        return {
+          attempt: {
+            ...created,
+            inputSnapshot: { ...created.inputSnapshot, routePin: start.routePin },
+          },
+          execution: fullBody.generation,
+          created: true,
+        };
+      });
+      const response = await post(kafuoShapedBody({ versionId: 'tpv-7', routePin: 'original' }));
+      expect(response.status).toBe(202);
+      // The 202 echoes the honoured pin (an older TE never does).
+      await expect(response.json()).resolves.toMatchObject({
+        routePin: { applied: 'original', sourceAttemptId: 'tpa-original' },
+      });
+      // Tenant-scoped read of the version's producing attempt.
+      expect(mocks.retained).toHaveBeenCalledWith(expect.anything(), 'tpv-7', {
+        tenantId: 'tenant-77',
+      });
+      const start = mocks.startGenerationAttempt.mock.calls[0]![1];
+      expect(start.routePin).toEqual({ mode: 'original', sourceAttemptId: 'tpa-original' });
+      mocks.afterCallbacks[0]!();
+      expect(mocks.runGenerationAttempt.mock.calls[0]![2]).toMatchObject({
+        routePin: 'original',
+        modelRoute: ROUTE,
+        planRoute: PLAN,
+      });
+    });
+
+    it('an unpinned request reads no producing attempt and its 202 carries no routePin', async () => {
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: attempt(),
+        execution: fullBody.generation,
+        created: true,
+      });
+      const response = await post(kafuoShapedBody({ versionId: 'tpv-7' }));
+      expect(response.status).toBe(202);
+      expect(await response.json()).not.toHaveProperty('routePin');
+      expect(mocks.retained).not.toHaveBeenCalled();
+      expect(mocks.readByRequestId).not.toHaveBeenCalled();
+    });
+
+    it('a transport replay of an admitted pinned attempt returns it with its echo, never re-pinning', async () => {
+      // The pin could no longer resolve (its attempt is now the producing one, or a key
+      // left); the replay must still get the attempt it already made, not a 409.
+      mocks.retained.mockResolvedValue(null);
+      const existing = {
+        ...attempt(),
+        id: 'tpa-pinned',
+        inputSnapshot: {
+          ...attempt().inputSnapshot,
+          routePin: { mode: 'original', sourceAttemptId: 'tpa-original' },
+        },
+      };
+      mocks.readByRequestId.mockResolvedValue(existing);
+      mocks.startGenerationAttempt.mockResolvedValue({
+        attempt: existing,
+        execution: fullBody.generation,
+        created: false,
+      });
+      const response = await post(kafuoShapedBody({ versionId: 'tpv-7', routePin: 'original' }));
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        attempt: { id: 'tpa-pinned' },
+        routePin: { applied: 'original', sourceAttemptId: 'tpa-original' },
+      });
+      // The lookup used the request's own aggregate and requestId.
+      expect(mocks.readByRequestId).toHaveBeenCalledWith(
+        expect.anything(),
+        { tenantId: 'tenant-77', learningItem: { type: 'lesson', id: '901' } },
+        'kafuo-req-77',
+      );
+      expect(mocks.retained).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
+    });
+
+    it('a malformed frozen planning route under a pin → 409 ORIGINAL_ROUTE_UNAVAILABLE, never planning on the generation route', async () => {
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.retained.mockResolvedValue({
+        attemptId: 'tpa-original',
+        // readRetainedVersionContext already dropped the malformed planRoute.
+        inputSnapshot: {
+          subjectCode: 'BIOLOGY',
+          policyVersion: 'configured-2026-11',
+          generationRoute: ROUTE,
+        },
+        sourceText: null,
+        sourceTruncated: false,
+      });
+      mocks.poolQuery.mockResolvedValue({ rows: [{ has_generation: true, has_plan: true }] });
+      const response = await post(kafuoShapedBody({ versionId: 'tpv-7', routePin: 'original' }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'ORIGINAL_ROUTE_UNAVAILABLE', details: { field: 'planRoute' } },
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('routePin "original" on an original whose code table is no longer today’s → 409 ORIGINAL_ROUTE_UNAVAILABLE, before any attempt', async () => {
+      mocks.modelAvailability.mockReturnValue(available);
+      mocks.retained.mockResolvedValue({
+        attemptId: 'tpa-original',
+        inputSnapshot: {
+          subjectCode: 'BIOLOGY',
+          policyVersion: 'r1-2026-09',
+          // retired from the table on 31 Oct 2026
+          primaryModel: 'openai:gpt-5.6-luna',
+          fallbackModel: 'qwen:qwen3.7-flash',
+        },
+        sourceText: null,
+        sourceTruncated: false,
+      });
+      const response = await post(kafuoShapedBody({ versionId: 'tpv-7', routePin: 'original' }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: 'ORIGINAL_ROUTE_UNAVAILABLE',
+          details: { versionId: 'tpv-7', sourceAttemptId: 'tpa-original' },
+        },
+      });
+      expect(mocks.startGenerationAttempt).not.toHaveBeenCalled();
+      expect(mocks.afterCallbacks).toHaveLength(0);
     });
 
     it('the primary is checked first', async () => {

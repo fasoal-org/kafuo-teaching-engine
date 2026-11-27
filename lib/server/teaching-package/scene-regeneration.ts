@@ -32,10 +32,16 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import { buildBookPartMap } from '@/lib/server/teaching-package/book-part-placement';
+import {
+  VOICE_LEASE_MARGIN_MS,
+  voiceRegeneratedScene,
+} from '@/lib/server/teaching-package/regenerated-scene-voice';
 import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import {
   checkSlideImageAddition,
@@ -79,7 +85,7 @@ import {
 } from '@/lib/server/teaching-package/scene-regeneration-store';
 import { sceneRegenerationSessionRef } from '@/lib/server/teaching-package/editor-grant';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
+import type { GenerationInputSnapshot, TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 import { createLogger } from '@/lib/logger';
 
@@ -235,6 +241,9 @@ export function sceneRegenerationRequestDigest(
  *   count as teaching (`isTeachingSlide`), so a part moved onto it is untaught;
  * - `wouldBeUntaught`: no other teaching slide cites the part, so removing it here
  *   would leave it untaught — whatever order the two calls arrive in.
+ * - `otherObjectiveBlock` (g5.v12 only, book section order plan, 25 Nov 2026): the
+ *   slide sits in another objective's block than the one owning the part, so the
+ *   part would leave its place in the book's order.
  */
 export function resolveContentUnitChange(
   scene: AppDocument['scenes'][number] | undefined,
@@ -242,6 +251,8 @@ export function resolveContentUnitChange(
   outline: AppDocument['outline'],
   units: readonly ContentUnitRow[],
   change: ContentUnitChange,
+  /** g5.v12 ({@link bookPartBlocksFor}): which objective block owns a part. */
+  blocks?: BookPartBlocks | null,
 ): { unitIds: string[]; directive: string } {
   if (!scene) throw new TeachingPackageError('NOT_FOUND', 'scene not found');
   if (scene.type !== 'slide' || scene.content.type !== 'slide') {
@@ -255,6 +266,28 @@ export function resolveContentUnitChange(
   if (change.op === 'add') {
     if (!isTeachingSlide(scene)) throw invalid('contentUnitChange', 'notTeachingSlide');
     if (current.includes(unit.unitId)) throw invalid('contentUnitChange', 'alreadyTaught');
+    // Only a slide that sits in an objective block can be in the wrong one; a part may
+    // still move inside the block it is taught in now (a person's placement stands).
+    const owner = blocks?.ownerBlockOf(unit.unitId);
+    const target = scene.teachingStage?.flowIndex;
+    if (
+      owner !== undefined &&
+      target !== undefined &&
+      blocks?.isObjectiveBlock(target) &&
+      target !== owner
+    ) {
+      const taughtIn = new Set(
+        scenes
+          .filter(
+            (other) =>
+              other.id !== scene.id &&
+              isTeachingSlide(other) &&
+              citedContentUnitIds(other, record).includes(unit.unitId),
+          )
+          .map((other) => other.teachingStage?.flowIndex),
+      );
+      if (!taughtIn.has(target)) throw invalid('contentUnitChange', 'otherObjectiveBlock');
+    }
     next = [...current, unit.unitId];
   } else {
     if (!current.includes(unit.unitId)) throw invalid('contentUnitChange', 'notTaught');
@@ -272,6 +305,38 @@ export function resolveContentUnitChange(
   const orderOf = new Map(units.map((row) => [row.unitId, row.orderIndex]));
   next.sort((a, b) => (orderOf.get(a) ?? Infinity) - (orderOf.get(b) ?? Infinity));
   return { unitIds: next, directive: contentUnitDirective(change.op, unit) };
+}
+
+/** g5.v12: which objective block owns a part, and which flow positions are blocks. */
+export interface BookPartBlocks {
+  ownerBlockOf: (unitId: string) => number | undefined;
+  isObjectiveBlock: (flowIndex: number) => boolean;
+}
+
+/**
+ * The book-part blocks of a g5.v12 version, from its retained attempt (the request's
+ * book map and objectives). `null` on every other version, or when the attempt cannot
+ * carry them; then a part moves as before.
+ */
+export function bookPartBlocksFor(
+  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
+  snapshot:
+    | Pick<GenerationInputSnapshot, 'bookStructure' | 'learningObjectives' | 'teachingFlow'>
+    | null
+    | undefined,
+): BookPartBlocks | null {
+  if (!snapshot || !isBookPartPlacementModel(teachingModel)) return null;
+  const map = buildBookPartMap(
+    snapshot.bookStructure,
+    snapshot.learningObjectives ?? [],
+    snapshot.teachingFlow ?? [],
+  );
+  if (!map) return null;
+  const blocks = new Set(map.blocks);
+  return {
+    ownerBlockOf: (unitId) => map.units.get(unitId)?.flowIndex,
+    isObjectiveBlock: (flowIndex) => blocks.has(flowIndex),
+  };
 }
 
 /** The model-facing directive for a moved part; its text is untrusted source material. */
@@ -379,6 +444,8 @@ export interface SceneRegenerationDeps {
   /** Test seams. */
   createRoute?: typeof createRegenerationRoute;
   regenerate?: typeof regenerateOneScene;
+  /** Voices the new slide before it is saved (owner, 25 Nov 2026); test seam. */
+  voice?: typeof voiceRegeneratedScene;
   /** A moved lesson part's re-plan (owner, 14 Nov 2026). */
   replan?: typeof replanMovedSlide;
   /** An added textbook image's re-plan (phase 2 F3.3). */
@@ -507,6 +574,8 @@ export async function regenerateSlideScene(
       deps.imageVisuals,
     );
   }
+  // g5.v12 (book section order plan): a part moves only within the objective block
+  // that owns it, so the slides keep following the book.
   const unitChange = request.contentUnitChange
     ? resolveContentUnitChange(
         stageDocument.scenes.find((scene) => scene.id === sceneId),
@@ -514,6 +583,7 @@ export async function regenerateSlideScene(
         stageDocument.outline,
         versionUnits,
         request.contentUnitChange,
+        bookPartBlocksFor(version.teachingModel, retained?.inputSnapshot),
       )
     : null;
 
@@ -528,6 +598,7 @@ export async function regenerateSlideScene(
         versionId: grant.versionId,
         regenerationId,
         generationAttemptId: retained?.attemptId ?? null,
+        sceneId,
         learningItem: version.learningItem,
         snapshotSubjectCode: subjectCode,
         // The package's frozen generation model route (teaching-generation-
@@ -776,6 +847,16 @@ export async function regenerateSlideScene(
         { regenerationId: row.id, imageIds: lostImageIds },
       );
     }
+    // Owner, 25 Nov 2026: the new slide is voiced before T2, so it is saved with its
+    // audio in this run's one write (no red "audio missing" card, Restore unchanged),
+    // after every check that could still refuse it (no TTS paid for a refused slide).
+    // A failed or late voice keeps the slide marked exactly as before; it stops two
+    // minutes before the lease so T2 still commits.
+    candidate = await (deps.voice ?? voiceRegeneratedScene)(candidate, stage, {
+      ...(deps.signal ? { signal: deps.signal } : {}),
+      deadlineMs: row.leaseExpiresAt - VOICE_LEASE_MARGIN_MS,
+      now: clock,
+    });
   } catch (error) {
     if (error instanceof TeachingPackageError) {
       if (!(error.details as { regenerationId?: string } | undefined)?.regenerationId) {

@@ -24,6 +24,11 @@ import {
   parseKafuoGenerationRequest,
 } from '@/lib/server/teaching-package/kafuo-request';
 import { assertKafuoFlowWithoutGames } from '@/lib/server/teaching-package/kafuo-game-deferral';
+import { readAttemptByRequestId } from '@/lib/persistence/teaching-package';
+import {
+  resolveOriginalRoutePin,
+  routePinEchoOf,
+} from '@/lib/server/teaching-package/original-route-pin';
 import { runGenerationAttempt } from '@/lib/server/teaching-package/generation-runner';
 import {
   readJsonObject,
@@ -101,7 +106,7 @@ export async function POST(req: NextRequest) {
       // runner the Kafuo context — whose `contentResource.url` lives in
       // memory only from here on.
       const { request, aggregate } = parseKafuoGenerationRequest(body);
-      const { start, kafuo } = buildKafuoStartRequest(request, aggregate);
+      let { start, kafuo } = buildKafuoStartRequest(request, aggregate);
       // Subject routing (Kafuo R1 contracts §6, AMB-04): under
       // TEACHING_SUBJECT_ROUTING=enforced an unrouted subject — `code: null`
       // from the Backend, or a code outside the policy table — is refused
@@ -133,12 +138,32 @@ export async function POST(req: NextRequest) {
       // (GENERATION_ROUTE_INVALID).
       assertConfiguredGenerationRouteAvailable(kafuo);
       const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+      // "Regenerate as the original" (plan D-18): the version's producing attempt's
+      // route replaces any route, refused before any attempt row when it cannot run.
+      // A transport replay of an attempt already admitted under this requestId is
+      // answered with that attempt (startGenerationAttempt's own replay), never re-pinned:
+      // the pin could no longer resolve once the attempt it made became the producing one.
+      const replayed =
+        kafuo.routePin && request.requestId
+          ? await readAttemptByRequestId(pool, aggregate, request.requestId)
+          : null;
+      const pinned = replayed ? null : await resolveOriginalRoutePin(pool as never, kafuo);
+      if (pinned) {
+        kafuo = pinned.kafuo;
+        start = { ...start, routePin: pinned.routePin };
+      }
       const { attempt, execution, created } = await startGenerationAttempt(pool, start);
       // Only a newly inserted attempt is executed. An idempotency replay
       // returns the existing attempt untouched — scheduling the runner for one
       // would restart a terminal attempt (the ATTEMPT_RECLAIMED_STALE loop).
       if (created) after(() => runGenerationAttempt(attempt.id, execution, kafuo));
-      return NextResponse.json({ attempt }, { status: 202 });
+      // D-18: an honoured pin is echoed from the attempt's own snapshot (a replay too), so
+      // a Backend that sent one can tell this Teaching Engine from one that ignored it.
+      const routePinEcho = routePinEchoOf(attempt);
+      return NextResponse.json(
+        { attempt, ...(routePinEcho ? { routePin: routePinEcho } : {}) },
+        { status: 202 },
+      );
     }
 
     const tenantId = LEGACY_TENANT_ID;

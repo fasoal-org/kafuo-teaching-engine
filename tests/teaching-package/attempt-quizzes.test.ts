@@ -151,6 +151,62 @@ describe('engine-placed attempt quizzes', () => {
     expect(bare!.keyPoints).toEqual(['exer1']);
   });
 
+  it('g5.v12: an attempt asks from the book text only, and is left out when the book gives none (owner, 26 Nov 2026)', () => {
+    // The production case: a slide whose key points are only a title, and a model that
+    // then invented «س + 5 = 12» in a physics lesson.
+    const titled = (outline: SceneOutline, title: string) => ({ ...outline, title });
+    const titleOnly = [
+      titled(
+        slide('try1', 'check_understanding', ['6234'], ['إيجاد القيم المجهولة']),
+        'إيجاد القيم المجهولة',
+      ),
+      titled(slide('exer1', 'worked_example', ['6247'], ['تمارين']), 'تمارين'),
+    ];
+    const unitTexts = new Map([
+      ['6234', 'تحقق من فهمك:\nاحسب تسارع جسم كتلته 2 kg تؤثر فيه قوة محصلة 10 N.'],
+      // The book prints no question number: the unit is one question, its own text.
+      ['6247', 'ما القوة المحصلة المؤثرة في صندوق يُدفع بقوتين متعاكستين؟'],
+    ]);
+    const withText = insertAttemptQuizzes(titleOnly, BOOK, { unitTexts, bookTextOnly: true });
+    const tryAttempt = withText.find((o) => o.id === `try1${ATTEMPT_OUTLINE_SUFFIX}`)!;
+    // The check's own book line (its box title dropped), one question as the check has.
+    expect(tryAttempt.keyPoints).toEqual(['احسب تسارع جسم كتلته 2 kg تؤثر فيه قوة محصلة 10 N.']);
+    expect(tryAttempt.quizConfig?.questionCount).toBe(1);
+    const exerciseAttempt = withText.find((o) => o.id === `exer1${ATTEMPT_OUTLINE_SUFFIX}`)!;
+    expect(exerciseAttempt.keyPoints).toEqual([
+      'ما القوة المحصلة المؤثرة في صندوق يُدفع بقوتين متعاكستين؟',
+    ]);
+    // Numbered questions picked for this slide but none readable: no attempt, never a
+    // title or another slide's questions.
+    const picked = insertAttemptQuizzes([titleOnly[1]!], BOOK, {
+      unitTexts,
+      bookTextOnly: true,
+      exerciseSlideQuestions: [{ '6247': [31] }],
+    });
+    expect(picked.some((o) => o.id === `exer1${ATTEMPT_OUTLINE_SUFFIX}`)).toBe(false);
+    // A check whose items all went with the sacred-text rule gives no line and no attempt.
+    const sacred = insertAttemptQuizzes([titleOnly[0]!], BOOK, {
+      unitTexts,
+      bookTextOnly: true,
+      facts: { '6234': { itemLabels: [], noItemsLeft: true } as never },
+    });
+    expect(sacred.some((o) => o.id === `try1${ATTEMPT_OUTLINE_SUFFIX}`)).toBe(false);
+    expect(withText.filter(isAttemptOutline).flatMap((o) => o.keyPoints)).not.toContain(
+      'إيجاد القيم المجهولة',
+    );
+    // No book text: no attempt at all, never one asked from a title.
+    expect(insertAttemptQuizzes(titleOnly, BOOK, { bookTextOnly: true })).toBe(titleOnly);
+    // Real key points (the items the slide states) keep v11's attempt exactly.
+    const stated = [slide('try1', 'check_understanding', ['6234'], ['١أ', '١ب'])];
+    const v12 = insertAttemptQuizzes(stated, BOOK, { unitTexts, bookTextOnly: true });
+    expect(v12).toEqual(insertAttemptQuizzes(stated, BOOK, { unitTexts }));
+    // Every earlier model keeps today's attempts.
+    const before = insertAttemptQuizzes(titleOnly, BOOK);
+    expect(before.find((o) => o.id === `try1${ATTEMPT_OUTLINE_SUFFIX}`)!.keyPoints).toEqual([
+      'إيجاد القيم المجهولة',
+    ]);
+  });
+
   it('is idempotent: a resumed outline that holds its attempts is returned as is', () => {
     const once = insertAttemptQuizzes(OUTLINES, BOOK);
     expect(insertAttemptQuizzes(once, BOOK)).toBe(once);

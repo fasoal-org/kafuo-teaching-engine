@@ -91,9 +91,12 @@ const TEACHER_PARITY_VERSIONS: ReadonlySet<string> = new Set([
   // `docs/frds/teacher-guide-answer-referee-plan-2026-11-16.md`) is g5.v10 plus the
   // approved guide answers, so it keeps every v8/v9/v10 gate.
   'g5.v11',
+  // g5.v12 (book section order plan `docs/frds/book-section-order-fix-plan-2026-11-25.md`)
+  // is g5.v11 plus the engine placing every teaching slide by its book part.
+  'g5.v12',
 ]);
 
-/** The ONE g5.v8/g5.v9/g5.v10/g5.v11 switch: an explicit Teaching Model identity check. */
+/** The ONE g5.v8–g5.v12 teacher-parity switch: an explicit Teaching Model identity check. */
 export function isTeacherParityModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
@@ -118,13 +121,28 @@ export const LEARNER_FIRST_TEACHING_MODEL = { key: 'g5', version: 'g5.v10' } as 
  */
 export const GUIDE_ANSWER_TEACHING_MODEL = { key: 'g5', version: 'g5.v11' } as const;
 
+/**
+ * g5.v12 (book section order plan, owner 25 Nov 2026): g5.v11 plus the engine placing every
+ * teaching slide by its book part, in book order, inside the objective block that owns that
+ * part. Its own behaviour ships behind {@link isBookPartPlacementModel} only; every g5.v11
+ * behaviour (learner first, guide answers, teacher parity) applies to it unchanged.
+ */
+export const BOOK_PART_PLACEMENT_TEACHING_MODEL = { key: 'g5', version: 'g5.v12' } as const;
+
 /** The Teaching Model versions that get every g5.v10 learner-first behaviour. */
 const LEARNER_FIRST_VERSIONS: ReadonlySet<string> = new Set([
   LEARNER_FIRST_TEACHING_MODEL.version,
   GUIDE_ANSWER_TEACHING_MODEL.version,
+  BOOK_PART_PLACEMENT_TEACHING_MODEL.version,
 ]);
 
-/** The ONE g5.v10/g5.v11 learner-first switch: an explicit Teaching Model identity check. */
+/** The Teaching Model versions that get every g5.v11 guide-answer behaviour. */
+const GUIDE_ANSWER_VERSIONS: ReadonlySet<string> = new Set([
+  GUIDE_ANSWER_TEACHING_MODEL.version,
+  BOOK_PART_PLACEMENT_TEACHING_MODEL.version,
+]);
+
+/** The ONE g5.v10–g5.v12 learner-first switch: an explicit Teaching Model identity check. */
 export function isLearnerFirstModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
@@ -135,13 +153,24 @@ export function isLearnerFirstModel(
   );
 }
 
-/** The ONE g5.v11 switch (the approved teacher-guide answers): an explicit identity check. */
+/** The ONE g5.v11/g5.v12 switch (the approved teacher-guide answers): an explicit identity check. */
 export function isGuideAnswerModel(
   model: { key?: string | null; version?: string | null } | null | undefined,
 ): boolean {
   return (
     model?.key === GUIDE_ANSWER_TEACHING_MODEL.key &&
-    model?.version === GUIDE_ANSWER_TEACHING_MODEL.version
+    typeof model?.version === 'string' &&
+    GUIDE_ANSWER_VERSIONS.has(model.version)
+  );
+}
+
+/** The ONE g5.v12 switch (book-part placement): an explicit Teaching Model identity check. */
+export function isBookPartPlacementModel(
+  model: { key?: string | null; version?: string | null } | null | undefined,
+): boolean {
+  return (
+    model?.key === BOOK_PART_PLACEMENT_TEACHING_MODEL.key &&
+    model?.version === BOOK_PART_PLACEMENT_TEACHING_MODEL.version
   );
 }
 

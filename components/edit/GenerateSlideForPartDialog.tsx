@@ -176,14 +176,63 @@ export function insertionFailureMessage(code: string, t: Translate): string {
     : t('edit.slideInsertion.errors.generic', { code });
 }
 
-/** The slides a refusal names (`details.offendingSceneIds`), as "slide N — title". */
+/**
+ * The slides a refusal names, as "slide N — title". Owner, 26 Nov 2026: when the server
+ * says what is actually wrong with the order, only that is said — each missing page with
+ * the slide it belongs after (a deleted check quiz), then only the slides out of place —
+ * never every slide of the lesson. Otherwise `details.offendingSceneIds`, as before.
+ */
 export function offendingSlidesText(
   details: unknown,
   scenes: readonly InsertionSceneRef[],
   t: Translate,
   locale: string,
 ): string | null {
-  const ids = (details as { offendingSceneIds?: unknown } | null | undefined)?.offendingSceneIds;
+  const record = (details ?? null) as {
+    offendingSceneIds?: unknown;
+    misplacedSceneIds?: unknown;
+    missing?: unknown;
+  } | null;
+  const refOf = (id: unknown) => {
+    const index = scenes.findIndex((scene) => scene.id === id);
+    return index < 0
+      ? null
+      : t('edit.slideInsertion.slideRef', { number: index + 1, title: scenes[index]!.title });
+  };
+  if (Array.isArray(record?.missing) && Array.isArray(record?.misplacedSceneIds)) {
+    const parts = (record.missing as Array<{ afterSceneId?: unknown }>).flatMap((entry) => {
+      if (entry?.afterSceneId === null) {
+        return [
+          t('edit.slideInsertion.missingAtStart', {
+            defaultValue: 'A page this lesson needs is missing at its start.',
+          }),
+        ];
+      }
+      // A slide this editor does not show is never named, and never read as "the start".
+      const after = refOf(entry?.afterSceneId);
+      if (!after) return [];
+      return [
+        t('edit.slideInsertion.missingAfter', {
+          slide: after,
+          defaultValue: `A page this lesson needs is missing after ${after} (for example the quiz that closes that objective was deleted). Add a quiz right after that slide: it takes the missing place.`,
+        }),
+      ];
+    });
+    const misplaced = (record.misplacedSceneIds as unknown[]).flatMap((id) => {
+      const ref = refOf(id);
+      return ref ? [ref] : [];
+    });
+    if (misplaced.length > 0) {
+      parts.push(
+        t('edit.slideInsertion.misplacedSlides', {
+          slides: joinList(misplaced, locale),
+          defaultValue: `Out of place: ${joinList(misplaced, locale)}. Move it back to its part of the lesson.`,
+        }),
+      );
+    }
+    if (parts.length > 0) return parts.join(' ');
+  }
+  const ids = record?.offendingSceneIds;
   if (!Array.isArray(ids)) return null;
   const items = ids.flatMap((id) => {
     const index = scenes.findIndex((scene) => scene.id === id);

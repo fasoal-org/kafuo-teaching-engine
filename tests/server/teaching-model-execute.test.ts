@@ -792,6 +792,84 @@ describe('executeTeachingCall / executeTeachingStream', () => {
     });
   });
 
+  describe('provider request and response ids (S5.5 / S8-O2)', () => {
+    it('records the provider ids and the Scene; an SDK-generated id is not a provider id', async () => {
+      mocks.callLLM.mockResolvedValueOnce(
+        ok('نص الشريحة.', {
+          response: {
+            id: 'chatcmpl-abc123',
+            headers: { 'x-request-id': 'req_openai_1', 'content-type': 'application/json' },
+          },
+        }),
+      );
+      const ctx = {
+        ...generationCtx,
+        association: { ...generationCtx.association, sceneId: 'scene_s1' },
+      };
+      await execute.executeTeachingCall(policy, ctx, SMALL, opts());
+      const [row] = await rows('tma-1');
+      expect(row).toMatchObject({
+        scene_id: 'scene_s1',
+        provider_request_id: 'req_openai_1',
+        provider_response_id: 'chatcmpl-abc123',
+      });
+
+      // Anthropic names its header `request-id`; the AI SDK's own `aitxt-` id is dropped.
+      mocks.callLLM.mockResolvedValueOnce(
+        ok('نص.', {
+          response: {
+            id: 'aitxt-0123456789abcdefghijklmn',
+            headers: { 'request-id': 'req_ant_2' },
+          },
+        }),
+      );
+      await execute.executeTeachingCall(policy, generationCtx, SMALL, opts());
+      const [second] = await rows('tma-2');
+      expect(second).toMatchObject({
+        scene_id: null,
+        provider_request_id: 'req_ant_2',
+        provider_response_id: null,
+      });
+    });
+
+    it('a failed call keeps the request id its error response carried, and no response id', async () => {
+      mocks.callLLM
+        .mockRejectedValueOnce(
+          apiError(503, { responseHeaders: { 'x-request-id': 'req_failed_1' } }),
+        )
+        .mockResolvedValueOnce(ok('الجواب.'));
+      await execute.executeTeachingCall(policy, generationCtx, SMALL, opts());
+      const [primary, fallback] = await rows('tma-1', 'tma-2');
+      expect(primary).toMatchObject({
+        outcome: 'provider_error',
+        provider_request_id: 'req_failed_1',
+        provider_response_id: null,
+      });
+      // No response metadata at all: both NULL.
+      expect(fallback).toMatchObject({ provider_request_id: null, provider_response_id: null });
+    });
+
+    it('a stream records the final step’s response id and request id', async () => {
+      mocks.streamLLM.mockImplementationOnce(() => ({
+        ...streamOf([
+          { type: 'text-delta', text: 'الجواب.' },
+          { type: 'finish', finishReason: 'stop' },
+        ]),
+        response: Promise.resolve({
+          id: 'msg_01Stream',
+          headers: { 'request-id': 'req_stream_1' },
+        }),
+      }));
+      const sink = { onDelta: vi.fn(), onRestart: vi.fn(), onFinish: vi.fn() };
+      await execute.executeTeachingStream(policy, turnCtx, SMALL, sink, opts());
+      const [row] = await rows('tma-1');
+      expect(row).toMatchObject({
+        provider_request_id: 'req_stream_1',
+        provider_response_id: 'msg_01Stream',
+      });
+    });
+  });
+
   describe('streaming', () => {
     const sink = () => ({ onDelta: vi.fn(), onRestart: vi.fn(), onFinish: vi.fn() });
 

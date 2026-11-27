@@ -393,6 +393,9 @@
       "delete": "Xóa",
       "deleted": "Đã xóa",
       "undo": "Hoàn tác",
+      "deleteOnlyOfPart": "Đây là trang duy nhất trong phần này của bài học (ví dụ bài kiểm tra kết thúc một mục tiêu). Thiếu trang này, bài học không nhận thêm slide mới và không thể gửi duyệt, nên không thể xóa. Hãy tạo lại trang này.",
+      "noPageAfterLastCheck": "Không thể thêm trang sau bài kiểm tra cuối cùng của bài học. Hãy thêm trước bài kiểm tra đó.",
+      "reorderAcrossParts": "Slide này thuộc một phần khác của bài học nên đã quay về vị trí cũ. Chỉ có thể di chuyển slide trong phần của chính nó.",
       "copySuffix": "(bản sao)",
       "untitledSlide": "Slide chưa có tiêu đề",
       "collapse": "Thu gọn thanh bên",
@@ -725,6 +728,9 @@
         "SUBJECT_ROUTE_UNAVAILABLE": "No AI model is configured for this lesson's subject.",
         "READ_ONLY_GRANT": "This editor session can only view the package.",
         "STAGE_GENERATION_IN_PROGRESS": "An AI slide insertion is running on this lesson; try again when it finishes.",
+        "SCENE_CONTENT_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "GOVERNED_SCENE_GENERATION_FAILED": "The AI could not write a new version that passes the lesson's checks. Nothing was changed: the slide is as it was. Try again, or write the requirements differently.",
+        "REGENERATION_PERSISTENCE_FAILED": "The new version was written but could not be saved. Nothing was changed; try again.",
         "generic": "The slide could not be regenerated ({{code}}). Nothing was saved."
       }
     },
@@ -820,7 +826,8 @@
           "notTeachingSlide": "this is an orientation, summary, check or practice slide, which does not count as teaching the part",
           "lastPart": "this is the slide's only part",
           "alreadyTaught": "the slide already teaches this part",
-          "notTaught": "the slide does not teach this part"
+          "notTaught": "the slide does not teach this part",
+          "otherObjectiveBlock": "this slide is in another part of the lesson; the lesson follows the book, so this part can only move to a slide of its own part"
         }
       },
       "title": "Generate a slide for a lesson part",
@@ -836,6 +843,9 @@
       "positionAfter": "After slide {{number}} — {{title}}",
       "slideRef": "slide {{number}} — {{title}}",
       "offendingSlides": "The slide to fix: {{slides}}.",
+      "missingAfter": "Thiếu một trang bài học cần sau {{slide}} (ví dụ bài kiểm tra kết thúc mục tiêu đó đã bị xóa). Hãy thêm một bài kiểm tra ngay sau slide đó: nó sẽ lấp vào vị trí còn thiếu.",
+      "missingAtStart": "Thiếu một trang bài học cần ở phần đầu.",
+      "misplacedSlides": "Sai vị trí: {{slides}}. Hãy chuyển nó về đúng phần của bài học.",
       "positionUnknown": "This place is not saved yet. Wait a moment for your changes to save, then open this again.",
       "stageLabel": "Teaching stage",
       "stageNone": "No teaching stage at this position allows a new slide. Choose another position.",

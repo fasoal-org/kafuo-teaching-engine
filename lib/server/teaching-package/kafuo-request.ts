@@ -36,10 +36,15 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import type { StartGenerationAttemptRequest } from '@/lib/server/teaching-package/generation';
 import {
   bookStructureRequirement,
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  bookPartsRequirement,
+  buildBookPartMap,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
@@ -684,6 +689,42 @@ function assertConfiguredRouteAvailable(
 }
 
 /**
+ * The optional top-level `routePin` (teaching-generation-model-admin-config-
+ * plan-2026-11-18 D-18, S6 G1(b)). Absent stays absent. `"original"` is the
+ * one value: a regeneration (`versionId`) runs on the route its version's
+ * producing attempt ran on, resolved by `resolveOriginalRoutePin` at
+ * admission. A pin beside a sent `modelRoute` / `planRoute`, on an initial
+ * generation, or with any other value is refused with
+ * GENERATION_ROUTE_INVALID — never silently dropped.
+ */
+function parseRoutePin(
+  body: Record<string, unknown>,
+  sent: { modelRoute?: GenerationModelRoute; planRoute?: GenerationModelRoute },
+): 'original' | undefined {
+  const raw = body.routePin;
+  if (raw === undefined) return undefined;
+  if (raw !== 'original') {
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_INVALID',
+      'routePin must be "original" when present',
+    );
+  }
+  if (typeof body.versionId !== 'string' || body.versionId === '') {
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_INVALID',
+      'routePin "original" needs versionId: only a regeneration has an original attempt',
+    );
+  }
+  if (sent.modelRoute || sent.planRoute) {
+    throw new TeachingPackageError(
+      'GENERATION_ROUTE_INVALID',
+      'routePin "original" is sent without modelRoute and planRoute: the original attempt decides both',
+    );
+  }
+  return 'original';
+}
+
+/**
  * Parse and validate the structured Kafuo generation request (FRD §9.2).
  * Duplicate stage keys are allowed — identity is `(flowIndex, stage)`.
  * `generation` accepts capability switches ONLY; provider ids, model ids, and
@@ -936,6 +977,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     body.planRoute === undefined
       ? undefined
       : parseGenerationModelRoute(body.planRoute, 'planRoute');
+  const routePin = parseRoutePin(body, { modelRoute, planRoute });
   const bookStructure = parseBookStructure(body.bookStructure);
   // g5.v11 only (D-20, 16 Nov 2026): parsed, digested and kept on a g5.v11 request
   // alone. Every other Teaching Model ignores the block entirely, so a malformed one
@@ -961,6 +1003,7 @@ export function parseKafuoGenerationRequest(body: Record<string, unknown>): {
     ...(narration ? { narration } : {}),
     ...(modelRoute ? { modelRoute } : {}),
     ...(planRoute ? { planRoute } : {}),
+    ...(routePin ? { routePin } : {}),
     ...(bookStructure ? { bookStructure } : {}),
     ...(teacherGuide ? { teacherGuide } : {}),
   };
@@ -1066,6 +1109,12 @@ export function canonicalRequestPayload(request: KafuoGenerationRequest): Record
       fallback: { model: fallback.model, thinking: fallback.thinking },
       settingKey,
     };
+  }
+  // "Regenerate as the original" (plan D-18) decides which models write and plan the
+  // package, so it is covered (vector 11 = vector 1 + versionId + routePin), mirrored by
+  // the Backend's `semantic_payload`. Absent stays absent: every other digest is unchanged.
+  if (request.routePin !== undefined) {
+    payload.routePin = request.routePin;
   }
   // g5.v7: the book map decides what is planned, so it is covered; absent stays absent.
   if (request.bookStructure !== undefined) {
@@ -1602,6 +1651,12 @@ export interface KafuoGenerationContext {
    * on the generation policy itself.
    */
   planRoute?: GenerationModelRoute;
+  /**
+   * The request's `routePin` (plan D-18). `resolveOriginalRoutePin` replaces
+   * `modelRoute` / `planRoute` above with the producing attempt's before the
+   * runner reads them, so the runner itself never reads the pin.
+   */
+  routePin?: 'original';
   /** g5.v7: the book map the coverage gate and the source markers read. */
   bookStructure?: KafuoBookStructure;
   /**
@@ -1624,7 +1679,17 @@ export function buildKafuoStartRequest(
     // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
     learnerFirst: isLearnerFirstModel(request.teachingModel),
   });
-  const requirement = `${buildKafuoRequirement(request)}${book}`;
+  // g5.v12 (book section order plan, owner 25 Nov 2026): the lesson's parts in book
+  // order, each with the objective block it belongs to. Absent on every other version.
+  const partMap = isBookPartPlacementModel(request.teachingModel)
+    ? buildBookPartMap(
+        request.bookStructure,
+        request.learningObjectives,
+        request.teachingModel.flow,
+      )
+    : null;
+  const parts = partMap ? bookPartsRequirement(partMap, request.teachingModel.flow) : '';
+  const requirement = `${buildKafuoRequirement(request)}${book}${parts}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
   // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B, D-20:
@@ -1690,6 +1755,7 @@ export function buildKafuoStartRequest(
       ...(ttsRoute ? { ttsRoute } : {}),
       ...(request.modelRoute ? { modelRoute: request.modelRoute } : {}),
       ...(request.planRoute ? { planRoute: request.planRoute } : {}),
+      ...(request.routePin ? { routePin: request.routePin } : {}),
       ...(request.bookStructure ? { bookStructure: request.bookStructure } : {}),
       ...(teacherGuide ? { teacherGuide } : {}),
     },

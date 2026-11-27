@@ -48,6 +48,8 @@ export interface RegenerationRouteInput {
   regenerationId: string;
   /** The producing generation attempt (ledger association). */
   generationAttemptId: string | null;
+  /** The Scene being regenerated: its ledger rows name it (S5.5 / S8-O1). */
+  sceneId?: string | null;
   learningItem: { type: string; id: string } | null;
   /** The producing attempt's snapshot subject. */
   snapshotSubjectCode: string | undefined;
@@ -132,6 +134,7 @@ export async function createRegenerationRoute(
               learningItemType: input.learningItem?.type ?? null,
               learningItemId: input.learningItem?.id ?? null,
               sceneRegenerationId: input.regenerationId,
+              ...(input.sceneId ? { sceneId: input.sceneId } : {}),
             },
           },
           {
