@@ -25,7 +25,9 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
   const text: ShapeText = elementInfo.text || {
     content: '',
     align: 'middle',
-    defaultFontName: 'Microsoft YaHei',
+    // ED-10 (critical items, 27 Nov 2026): no CJK default font; empty inherits the app's
+    // font (Arabic/Latin).
+    defaultFontName: '',
     defaultColor: '#333333',
   };
   const { ref: textRef, innerHTML } = useLineDirections<HTMLDivElement>(text.content);

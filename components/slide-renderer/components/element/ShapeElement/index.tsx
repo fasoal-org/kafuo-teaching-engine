@@ -59,7 +59,9 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
     const defaultText: ShapeText = {
       content: '',
       align: 'middle',
-      defaultFontName: 'Microsoft Yahei',
+      // ED-10 (critical items, 27 Nov 2026): no CJK default font. Empty inherits the
+      // app's font (Arabic/Latin), as a new text box does, and the font box reads «Default».
+      defaultFontName: '',
       defaultColor: '#000000',
     };
     if (!elementInfo.text) return defaultText;

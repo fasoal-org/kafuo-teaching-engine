@@ -30,6 +30,7 @@ import type { AlignmentLineProps } from '@/lib/types/edit';
 import type { ContextmenuItem } from './EditableElement';
 import type { SlideContent } from '@/lib/types/stage';
 import { useCanvasOperations } from '@/lib/hooks/use-canvas-operations';
+import { useI18n } from '@/lib/hooks/use-i18n';
 import { createTextElementAtCanvasPoint } from '@/lib/edit/slide-edit-elements';
 import { createElementId } from '@/lib/edit/element-id';
 import {
@@ -63,6 +64,7 @@ export interface CanvasProps {
  * </SceneProvider>
  */
 export function Canvas(_props: CanvasProps) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   useSyncCanvasViewportFromSlide();
@@ -192,51 +194,52 @@ export function Canvas(_props: CanvasProps) {
     setLinkDialogVisible(true);
   };
 
+  // ED-10 (critical items, 27 Nov 2026): the blank-area menu speaks the teacher's language.
   const contextmenus = (): ContextmenuItem[] => {
     return [
       {
-        text: '粘贴',
+        text: t('edit.canvasMenu.paste'),
         subText: 'Ctrl + V',
         handler: pasteElement,
       },
       {
-        text: '全选',
+        text: t('edit.canvasMenu.selectAll'),
         subText: 'Ctrl + A',
         handler: selectAllElements,
       },
       {
-        text: '标尺',
+        text: t('edit.canvasMenu.ruler'),
         subText: showRuler ? '√' : '',
         handler: () => setRulerState(!showRuler),
       },
       {
-        text: '网格线',
+        text: t('edit.canvasMenu.gridLines'),
         handler: () => setGridLineSize(gridLineSize ? 0 : 50),
         children: [
           {
-            text: '无',
+            text: t('edit.canvasMenu.gridNone'),
             subText: gridLineSize === 0 ? '√' : '',
             handler: () => setGridLineSize(0),
           },
           {
-            text: '小',
+            text: t('edit.canvasMenu.gridSmall'),
             subText: gridLineSize === 25 ? '√' : '',
             handler: () => setGridLineSize(25),
           },
           {
-            text: '中',
+            text: t('edit.canvasMenu.gridMedium'),
             subText: gridLineSize === 50 ? '√' : '',
             handler: () => setGridLineSize(50),
           },
           {
-            text: '大',
+            text: t('edit.canvasMenu.gridLarge'),
             subText: gridLineSize === 100 ? '√' : '',
             handler: () => setGridLineSize(100),
           },
         ],
       },
       {
-        text: '重置当前页',
+        text: t('edit.canvasMenu.resetSlide'),
         handler: deleteAllElements,
       },
     ];
