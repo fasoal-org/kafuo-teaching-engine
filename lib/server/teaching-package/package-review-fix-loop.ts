@@ -39,8 +39,8 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   namedBookImages,
   namedPages,
-  reviewedSceneDigest,
   sceneToReviewSlide,
+  slideInputDigest,
   type ReviewFigureEvidence,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -262,16 +262,16 @@ function neighbourhood(slides: readonly ReviewSlide[], changed: ReviewSlide): Re
 
 /** Review LOW: the same slide but for its narration audio references. */
 function sameMaterialWithoutAudio(a: AppScene, b: AppScene): boolean {
-  return (
-    reviewedSceneDigest(withoutNarrationAudio(a)) === reviewedSceneDigest(withoutNarrationAudio(b))
-  );
+  return slideInputDigest(withoutNarrationAudio(a)) === slideInputDigest(withoutNarrationAudio(b));
 }
 
 /** What the reviewer saw, compared with what the database holds now. */
 function sceneChanged(live: AppScene, reviewed: AppScene | undefined): boolean {
   if (!reviewed) return true;
   // The same material, compared key-order-blind (MEDIUM-A: JSONB reorders keys).
-  return reviewedSceneDigest(live) !== reviewedSceneDigest(reviewed);
+  // Review of 9009dfc4 (MEDIUM-B): what the reviewer reads of it; a layout-only change
+  // (an auto-height autosave) is no edit.
+  return slideInputDigest(live) !== slideInputDigest(reviewed);
 }
 
 export interface FixLoopDeps {
@@ -385,7 +385,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
        * the ones it added, so a finding it never judged keeps the edit visible.
        */
       const seenAs = (scene: AppScene, added: readonly StoredFinding[] = []) => {
-        const digest = reviewedSceneDigest(scene);
+        const digest = slideInputDigest(scene);
         const judged = recheckOnly ? new Set([...sceneFindings, ...added]) : null;
         for (const finding of findings) {
           if (finding.targetId !== slide.id || (judged && !judged.has(finding))) continue;
@@ -431,7 +431,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         sceneFindings.some(
           (finding) =>
             finding.sceneDigest !== undefined &&
-            finding.sceneDigest !== reviewedSceneDigest(live.scene),
+            finding.sceneDigest !== slideInputDigest(live.scene),
         )
       ) {
         recheckOnly = true;

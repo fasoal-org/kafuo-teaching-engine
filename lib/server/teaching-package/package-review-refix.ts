@@ -42,9 +42,9 @@ import {
   teacherOnlyReason,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
-  reviewedSceneDigest,
   reviewInputDigest,
   reviewSlidesOf,
+  slideInputDigest,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -529,7 +529,10 @@ export async function queueFlaggedSlideRefix(
     const seed = seedRefixFindings(
       review.findings,
       reviewSlidesOf(scenes),
-      new Map(scenes.map((scene) => [scene.id, reviewedSceneDigest(scene)])),
+      // Review of 9009dfc4 (MEDIUM-B): "edited" is a change to what the reviewer reads of
+      // the slide; a layout-only change (sizes, positions) is not one -- the slide follows
+      // the normal regenerate path (a regeneration may replace a layout tweak).
+      new Map(scenes.map((scene) => [scene.id, slideInputDigest(scene)])),
       review.fixes,
     );
     if (seed.sceneIds.length === 0) {

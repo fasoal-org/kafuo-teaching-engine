@@ -62,8 +62,10 @@ export interface StoredFinding {
   status: 'open' | 'fixed';
   teacherReason: TeacherReason | null;
   /**
-   * The target slide's `reviewedSceneDigest` when the review finished (15 Nov
-   * 2026); absent on reviews finished before, and on a finding with no slide.
+   * The target slide as the review saw it (15 Nov 2026): since the review of 9009dfc4
+   * (MEDIUM-B), its `slideInputDigest` -- what the reviewer reads of it, so a layout-only
+   * change is no edit (a digest stored before differs once). Absent on reviews finished
+   * before 15 Nov, and on a finding with no slide.
    */
   sceneDigest?: string;
   /**
@@ -497,7 +499,13 @@ export async function finishReview(
             completed_at = $8, updated_at = $8,
             reviewed_stage_rev = $13::bigint,
             reviewed_stage_digest = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $14::text END,
-            review_baseline = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $15::jsonb END
+            -- Review of 9009dfc4 (LOW-A): an unavailable end keeps what its first answer
+            -- read, so the next flagged run can still stamp a verdict.
+            review_baseline = CASE
+              WHEN $13::bigint IS NOT NULL THEN $15::jsonb
+              WHEN $3 = 'unavailable' THEN review_baseline
+              ELSE NULL
+            END
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING *`,
     [

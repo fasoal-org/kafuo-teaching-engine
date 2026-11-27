@@ -46,7 +46,7 @@ vi.mock('@openmaic/storage/server/reference', async (importOriginal) => ({
 import { stampReviewedDigests } from '@/lib/server/teaching-package/package-review';
 import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
-  reviewedSceneDigest,
+  slideInputDigest,
   reviewSlidesOf,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -485,7 +485,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
   });
 
   it('a teacher who fixes a flagged slide by hand: one re-check of their edit closes it (press, loop, press)', async () => {
-    const live = new Map([['s2', reviewedSceneDigest(SCENES[1]!)]]);
+    const live = new Map([['s2', slideInputDigest(SCENES[1]!)]]);
     const slides = reviewSlidesOf(SCENES);
     const stored = [
       finding('p1', {
@@ -538,6 +538,40 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(second.sceneIds).toEqual([]);
   });
 
+  it('MEDIUM-B (9009dfc4): an auto-height-only change on a flagged slide is no edit: it is regenerated', async () => {
+    // The live s2 differs from the reviewed one only in its text box's size and place.
+    const reviewed = SCENES[1]!;
+    const resized = {
+      ...reviewed,
+      content: {
+        type: 'slide',
+        canvas: { elements: [{ id: 'e', type: 'text', content: 'ب', height: 84, top: 30 }] },
+      },
+    } as unknown as AppScene;
+    const slides = reviewSlidesOf([SCENES[0]!, resized]);
+    const flagged = finding('f1', {
+      teacherReason: 'STILL_WRONG',
+      sceneDigest: slideInputDigest(reviewed),
+    });
+    // The press: not an edit, so the normal regenerate path (never re-check only).
+    const seed = seedRefixFindings(
+      [flagged],
+      slides,
+      new Map([
+        ['s1', slideInputDigest(SCENES[0]!)],
+        ['s2', slideInputDigest(resized)],
+      ]),
+    );
+    expect(seed.findings[0]).toMatchObject({ teacherReason: null });
+    expect(seed.findings[0]!.recheckOnly).toBeUndefined();
+    expect(seed.sceneIds).toEqual(['s2']);
+    // The run (M-2 guard): the resized live slide is still what the review read.
+    const { run, regenerate } = loop(() => []);
+    regenerate.mockRejectedValue(new Error('refused'));
+    await run([finding('f1', { sceneDigest: slideInputDigest(resized) })]);
+    expect(regenerate).toHaveBeenCalledTimes(1);
+  });
+
   it('M-2: a slide edited before the run read it is re-checked, never regenerated over', async () => {
     // A resume, or an edit between a press and the sweep: the run's own read of the slide
     // is the edit, but the finding records the slide the review saw.
@@ -546,19 +580,19 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(regenerate).not.toHaveBeenCalled();
     expect(result.findings[0]).toMatchObject({
       status: 'fixed',
-      sceneDigest: reviewedSceneDigest(SCENES[1]!),
+      sceneDigest: slideInputDigest(SCENES[1]!),
     });
     // The slide as the review saw it: regenerated as before.
     const same = loop(() => []);
     same.regenerate.mockRejectedValue(new Error('refused'));
-    await same.run([finding('f1', { sceneDigest: reviewedSceneDigest(SCENES[1]!) })]);
+    await same.run([finding('f1', { sceneDigest: slideInputDigest(SCENES[1]!) })]);
     expect(same.regenerate).toHaveBeenCalledTimes(1);
   });
 
   it('a re-checked slide records itself as the re-check saw it (review 27 Nov 2026, HIGH)', async () => {
     const { run } = loop(() => []);
     const result = await run([finding('f1', { recheckOnly: true, sceneDigest: 'before-edit' })]);
-    expect(result.findings[0]!.sceneDigest).toBe(reviewedSceneDigest(SCENES[1]!));
+    expect(result.findings[0]!.sceneDigest).toBe(slideInputDigest(SCENES[1]!));
   });
 });
 
@@ -634,8 +668,8 @@ describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () =
     );
     expect(stamped.map((f) => f.sceneDigest)).toEqual([
       'seen-by-fix',
-      reviewedSceneDigest(SCENES[0]!),
+      slideInputDigest(SCENES[0]!),
     ]);
-    expect(stamped[0]!.sceneDigest).not.toBe(reviewedSceneDigest(edited));
+    expect(stamped[0]!.sceneDigest).not.toBe(slideInputDigest(edited));
   });
 });

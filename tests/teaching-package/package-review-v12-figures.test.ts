@@ -77,6 +77,7 @@ import {
   reviewBaselineOf,
   reviewInputDigest,
   reviewSlidesOf,
+  slideInputDigest,
   REVIEW_CALL_MAX_FIGURES,
   REVIEW_FIGURE_MAX_BASE64_CHARS,
   REVIEW_FIGURE_MAX_SIDE_PX,
@@ -1229,16 +1230,31 @@ describe('RV-1 + RV-4: the review job', () => {
         code: null,
         regenerationId: 'tpsr-s2',
       };
-      const ok = job('g5.v11', { ...after, runAttempts: 2, fixes: [fix] }, undefined, {
-        stageRev: 7,
-        startScenes: rewritten,
+      // The evicted run closed its finding and recorded the slide as its fix left it.
+      const closed = {
+        id: 'f1',
+        ...HIGH_ON_S2,
+        targetTitle: 'شريحة 2',
+        targetOrder: 2,
+        status: 'fixed' as const,
+        teacherReason: null,
+        sceneDigest: slideInputDigest(FIXED),
+      } as StoredFinding;
+      const resumedWith = (startScenes: AppScene[]) =>
+        job('g5.v11', { ...after, runAttempts: 2, fixes: [fix], findings: [closed] }, undefined, {
+          stageRev: 7,
+          startScenes,
+        }).run();
+      expect(await resumedWith(rewritten)).toMatchObject({ reviewedStageRev: 7 });
+      // Another slide edited meanwhile: no stamp.
+      expect(await resumedWith([SCENES[0]!, FIXED, edited[2]!])).toMatchObject({
+        reviewedStageRev: null,
       });
-      expect(await ok.run()).toMatchObject({ reviewedStageRev: 7 });
-      const plusEdit = job('g5.v11', { ...after, runAttempts: 2, fixes: [fix] }, undefined, {
-        stageRev: 7,
-        startScenes: [SCENES[0]!, FIXED, edited[2]!],
+      // Review of 9009dfc4 (LOW-B): the rewritten slide itself edited after its fix: no stamp.
+      const editedAfterFix = scene('s2', 2, ['6760'], 'مصحح ثم عدّله المعلم');
+      expect(await resumedWith([SCENES[0]!, editedAfterFix, SCENES[2]!])).toMatchObject({
+        reviewedStageRev: null,
       });
-      expect(await plusEdit.run()).toMatchObject({ reviewedStageRev: null });
     });
 
     it('a row from before A-34 (no baseline): no stamp', async () => {

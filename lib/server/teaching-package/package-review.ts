@@ -84,9 +84,9 @@ import {
   REVIEW_IMAGE_BUDGET_USD,
   REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
   reviewBaselineOf,
-  reviewedSceneDigest,
   reviewInputDigest,
   reviewSlidesOf,
+  slideInputDigest,
   startsFromBaseline,
   withGuideAnswers,
   withReviewPages,
@@ -695,7 +695,9 @@ export function stampReviewedDigests(
   findings: readonly StoredFinding[],
   readAtStart: readonly AppScene[],
 ): StoredFinding[] {
-  const atStart = new Map(readAtStart.map((scene) => [scene.id, reviewedSceneDigest(scene)]));
+  // Review of 9009dfc4 (MEDIUM-B): a slide's review input (`slideInputDigest`), so a
+  // layout-only change (sizes, positions: an auto-height autosave) is never an edit.
+  const atStart = new Map(readAtStart.map((scene) => [scene.id, slideInputDigest(scene)]));
   return findings.map((finding) => {
     if (finding.sceneDigest !== undefined || !finding.targetId) return finding;
     const digest = atStart.get(finding.targetId);
@@ -1159,14 +1161,21 @@ export async function runPackageReview(
     // stored first answer or the last verdict read -- the slides an earlier run of this
     // review rewrote aside. Otherwise an edit made in between (after the first answer, or
     // between a press and the sweep) was never reviewed, and this run stamps no verdict.
-    const rewritten = new Set(
+    // LOW-B: each rewritten slide with the digest that run recorded on its findings after
+    // the fix (`seenAs`), so an edit made on it since is caught too.
+    const rewritten = new Map<string, string | undefined>(
       claimed.fixes
         .filter(
           (fix) =>
             Boolean(fix.regenerationId) &&
             (fix.outcome === 'fixed' || fix.outcome === 'still_wrong'),
         )
-        .map((fix) => fix.sceneId),
+        .map((fix) => [
+          fix.sceneId,
+          claimed.findings.find(
+            (finding) => finding.targetId === fix.sceneId && finding.sceneDigest !== undefined,
+          )?.sceneDigest,
+        ]),
     );
     const startsFromReviewed =
       claimed.reviewedAt === null || startsFromBaseline(claimed.reviewBaseline, scenes, rewritten);

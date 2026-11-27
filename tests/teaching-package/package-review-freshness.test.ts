@@ -24,7 +24,11 @@ import {
   refuseStaleReview,
   reviewIsStale,
 } from '@/lib/server/teaching-package/package-review-freshness';
-import { reviewInputDigest } from '@/lib/server/teaching-package/package-review-input';
+import {
+  reviewBaselineOf,
+  reviewInputDigest,
+  reviewSlidesOf,
+} from '@/lib/server/teaching-package/package-review-input';
 import { queueFlaggedSlideRefix } from '@/lib/server/teaching-package/package-review-refix';
 import {
   claimReview,
@@ -32,6 +36,7 @@ import {
   insertQueuedReview,
   packageReviewWire,
   readPackageReview,
+  saveReviewProgress,
   type PackageReview,
 } from '@/lib/server/teaching-package/package-review-store';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
@@ -346,13 +351,47 @@ describe('A-34b: a verdict is stale only when what the reviewer reads changed', 
     await expect(refuse()).resolves.toBeUndefined();
   });
 
-  it('LOW: a letter coloured inside a word stays fresh (the reviewer reads the word whole)', async () => {
+  it('a tag inside a word is read as the reviewer reads it (a space): stale, failing safe; a superscript stays «10 3»', async () => {
+    // Review of 9009dfc4 (MEDIUM-A): the reviewer keeps `stripTags` on every model, so
+    // `10<sup>3</sup>` is never read as 103; a coloured letter costs one extra review.
     await finished('passed');
     await update(
       `data = jsonb_set(data, '{content,canvas,elements,0,content}',
          '"<p>الماء يغ<span style=\\"color:red\\">ل</span>ي عند 100</p>"')`,
     );
-    await expect(refuse()).resolves.toBeUndefined();
+    await expect(refuse()).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_STALE' });
+    const [slide] = reviewSlidesOf([
+      {
+        ...makeSlideScene('x', STAGE, 1),
+        content: {
+          type: 'slide',
+          canvas: {
+            elements: [{ id: 'e', type: 'text', content: '<p>المسافة 10<sup>3</sup> متر</p>' }],
+          },
+        },
+      } as unknown as AppScene,
+    ]);
+    expect(slide!.visibleText).toBe('المسافة 10 3 متر');
+  });
+
+  it('LOW-A (9009dfc4): an unavailable end keeps what its first answer read; an unstamped verdict drops it', async () => {
+    const baseline = reviewBaselineOf(await readStageScenesOn(qp(), STAGE));
+    const end = async (id: string, status: 'unavailable' | 'passed') => {
+      await insertQueuedReview(qp(), {
+        id,
+        aggregate: { tenantId: TENANT, learningItem: ITEM },
+        versionId: VERSION,
+        attemptId: `tpa-${id}`,
+        stageId: STAGE,
+        subjectCode: null,
+        now: 2,
+      });
+      await claimReview(qp(), id, { workerId: 'w', now: 3, leaseMs: 60_000 });
+      await saveReviewProgress(qp(), id, 'w', { reviewedAt: 3, reviewBaseline: baseline }, 3);
+      return (await finishReview(qp(), id, 'w', { status, errorCode: null }, 4))!;
+    };
+    expect((await end('tpr-unavailable', 'unavailable')).reviewBaseline).toEqual(baseline);
+    expect((await end('tpr-unstamped', 'passed')).reviewBaseline).toBeNull();
   });
 
   it('an unavailable review is left to its own rule, never counted stale', async () => {

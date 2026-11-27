@@ -58,7 +58,7 @@ import {
   REVIEW_GUIDE_ANSWER_PREFIX,
   REVIEW_GUIDE_FIGURE_VISUAL,
   REVIEW_MODEL_ANSWER_PREFIX,
-  reviewedSceneDigest,
+  slideInputDigest,
   reviewSlidesOf,
   slideVisuals,
   withGuideAnswers,
@@ -594,7 +594,7 @@ describe('the package review fixes a slide kept with a GUIDE_ANSWER_LEAK issue',
       fixes: [{ sceneId: 'try', outcome: 'refused', code: 'SCENE_CONTENT_GENERATION_FAILED' }],
     });
     // Nothing was written: the review last saw the slide as it was, its issue in place.
-    expect(finished!.findings[0]!.sceneDigest).toBe(reviewedSceneDigest(LEAKING));
+    expect(finished!.findings[0]!.sceneDigest).toBe(slideInputDigest(LEAKING));
     expect(LEAKING.generationIssues).toEqual([ISSUE]);
   });
 
