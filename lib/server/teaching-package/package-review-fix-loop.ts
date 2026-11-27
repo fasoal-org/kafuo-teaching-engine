@@ -38,6 +38,7 @@ import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   namedBookImages,
+  namedPages,
   reviewedSceneDigest,
   sceneToReviewSlide,
   type ReviewFigureEvidence,
@@ -458,6 +459,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           slides: [currentSlides.get(slide.id) ?? slide],
           focusIds: new Set([slide.id]),
           alsoFigures,
+          // Review LOW: a page's crops may stand in for it only when they settle every
+          // finding of the slide (none HIGH, none read from a whole page).
+          cropsSuffice: !sceneFindings.some(
+            (finding) =>
+              finding.severity === 'high' || namedPages(finding.bookEvidence?.quote).length > 0,
+          ),
         })
       ) {
         // A re-check-only slide keeps waiting for its re-check (the next press re-checks it).

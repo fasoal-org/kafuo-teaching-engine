@@ -69,8 +69,10 @@ describe('A-34b: a verdict is stale only when what the reviewer reads changed', 
 
   const currentRev = async () => (await readStageFreshnessManifest(STAGE, qp()))?.rev ?? 0;
   const liveDigest = async () => reviewInputDigest(await readStageScenesOn(qp(), STAGE));
-  const version = { id: VERSION, tenantId: TENANT, currentStageId: STAGE };
+  const version = { id: VERSION, tenantId: TENANT, currentStageId: STAGE, status: 'draft' };
   const refuse = async () => refuseStaleReview(qp(), version, await currentRev());
+  const setStatus = (status: string) =>
+    pool.query(`UPDATE teaching_package_versions SET status = $2 WHERE id = $1`, [VERSION, status]);
 
   beforeEach(async () => {
     const db = new PGlite();
@@ -302,6 +304,55 @@ describe('A-34b: a verdict is stale only when what the reviewer reads changed', 
     await finished('passed');
     await update(`data = data`);
     await expect(press()).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+  });
+
+  it('HIGH-1: a rejected version a teacher edits gets its fresh review from a press', async () => {
+    const done = await finished('passed');
+    await setStatus('rejected');
+    await editText();
+    const queued = await press();
+    expect(queued).toMatchObject({ previousReviewId: done.id, sceneIds: [], replayed: false });
+    expect(queued.review).toMatchObject({ status: 'queued', reviewedAt: null, findings: [] });
+  });
+
+  it('MEDIUM-1: no press opens on a version in review; the refusal names Start Edit first', async () => {
+    await finished('passed', 'none');
+    await setStatus('in_review');
+    await expect(press()).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+    await expect(
+      refuseStaleReview(qp(), { ...version, status: 'in_review' }, await currentRev()),
+    ).rejects.toMatchObject({
+      code: 'PACKAGE_REVIEW_STALE',
+      details: { remedy: 'start_edit_then_regenerate_flagged' },
+      message: expect.stringContaining('start an edit'),
+    });
+    await expect(refuse()).rejects.toMatchObject({
+      details: { remedy: 'regenerate_flagged' },
+    });
+    await expect(
+      refuseStaleReview(qp(), { ...version, status: 'rejected' }, await currentRev()),
+    ).rejects.toMatchObject({ details: { remedy: 'regenerate_flagged' } });
+  });
+
+  it('LOW: renumbering the slides without moving one stays fresh', async () => {
+    await finished('passed');
+    await pool.query(
+      `UPDATE document_scenes
+          SET scene_order = scene_order * 10,
+              data = jsonb_set(data, '{order}', to_jsonb((data->>'order')::int * 10))
+        WHERE stage_id = $1`,
+      [STAGE],
+    );
+    await expect(refuse()).resolves.toBeUndefined();
+  });
+
+  it('LOW: a letter coloured inside a word stays fresh (the reviewer reads the word whole)', async () => {
+    await finished('passed');
+    await update(
+      `data = jsonb_set(data, '{content,canvas,elements,0,content}',
+         '"<p>الماء يغ<span style=\\"color:red\\">ل</span>ي عند 100</p>"')`,
+    );
+    await expect(refuse()).resolves.toBeUndefined();
   });
 
   it('an unavailable review is left to its own rule, never counted stale', async () => {

@@ -734,6 +734,11 @@ ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS reviewed_stage_rev
 -- with this unchanged (an editor auto-height pass, a save that changed nothing) is still
 -- fresh; NULL is stale, like the revision.
 ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS reviewed_stage_digest TEXT;
+-- A-34 (review MEDIUM-2): what the stored first answer, or the last verdict, read --
+-- {"digest": the review input, "slides": {slide id: its review input}}. Kept through a
+-- flagged-slide requeue, so a run that starts on an edit made after it (a resume, or an
+-- edit between a press and the sweep) never stamps that edit as reviewed.
+ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS review_baseline JSONB;
 
 CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
 CREATE INDEX IF NOT EXISTS tpr_version_idx

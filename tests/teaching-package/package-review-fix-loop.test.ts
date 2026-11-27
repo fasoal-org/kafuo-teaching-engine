@@ -76,6 +76,7 @@ const REVIEW: PackageReview = {
   reviewedAt: 1,
   reviewedStageRev: null,
   reviewedStageDigest: null,
+  reviewBaseline: null,
   createdAt: 1,
   startedAt: 1,
   completedAt: null,

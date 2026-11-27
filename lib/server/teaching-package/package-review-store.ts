@@ -108,6 +108,36 @@ export interface StoredFix {
   retryForFigures?: string[];
 }
 
+/** Review MEDIUM-2: the review input a first answer or a verdict read (`review_baseline`). */
+export interface ReviewBaseline {
+  /** `reviewInputDigest` of the slides read. */
+  digest: string;
+  /** The slide ids in their sequence. */
+  sequence: string[];
+  /** Each slide's `slideInputDigest`, by id. */
+  slides: Record<string, string>;
+}
+
+function baselineOf(value: unknown): ReviewBaseline | null {
+  const raw = (
+    typeof value === 'string' ? JSON.parse(value) : value
+  ) as Partial<ReviewBaseline> | null;
+  if (
+    !raw ||
+    typeof raw.digest !== 'string' ||
+    !Array.isArray(raw.sequence) ||
+    typeof raw.slides !== 'object' ||
+    !raw.slides
+  ) {
+    return null;
+  }
+  return {
+    digest: raw.digest,
+    sequence: raw.sequence.map(String),
+    slides: raw.slides as Record<string, string>,
+  };
+}
+
 export interface PackageReview {
   id: string;
   tenantId: string;
@@ -143,6 +173,11 @@ export interface PackageReview {
    * `reviewedStageRev`; `null` with it. TE row only.
    */
   reviewedStageDigest: string | null;
+  /**
+   * Review MEDIUM-2: what the stored first answer, or the last verdict, read (the whole
+   * review input and each slide's). Kept through a flagged-slide requeue. TE row only.
+   */
+  reviewBaseline: ReviewBaseline | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
@@ -249,6 +284,7 @@ function rowToReview(row: Record<string, unknown>): PackageReview {
     reviewedStageRev: num(row.reviewed_stage_rev),
     reviewedStageDigest:
       typeof row.reviewed_stage_digest === 'string' ? row.reviewed_stage_digest : null,
+    reviewBaseline: baselineOf(row.review_baseline ?? null),
     createdAt: Number(row.created_at),
     startedAt: num(row.started_at),
     completedAt: num(row.completed_at),
@@ -367,6 +403,8 @@ export interface ReviewProgress {
   reviewedAt?: number;
   /** D-8: saved with the first answer. */
   bookTruncated?: boolean;
+  /** Review MEDIUM-2: saved with the first answer -- what it read. */
+  reviewBaseline?: ReviewBaseline;
 }
 
 /** Store progress under the worker's lease (the first answer, then each fix). */
@@ -389,6 +427,7 @@ export async function saveReviewProgress(
             cost_usd = CASE WHEN $10::numeric IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + $10::numeric END,
             reviewed_at = COALESCE($11, reviewed_at),
             book_truncated = COALESCE($13::boolean, book_truncated),
+            review_baseline = COALESCE($14::jsonb, review_baseline),
             updated_at = $12
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING id`,
@@ -406,6 +445,7 @@ export async function saveReviewProgress(
       progress.reviewedAt ?? null,
       now,
       progress.bookTruncated ?? null,
+      progress.reviewBaseline ? JSON.stringify(progress.reviewBaseline) : null,
     ],
   );
   return result.rows.length > 0;
@@ -429,6 +469,8 @@ export interface ReviewOutcome {
   reviewedStageRev?: number | null;
   /** A-34b: the review input that verdict read (`null`/absent with the revision). */
   reviewedStageDigest?: string | null;
+  /** Review MEDIUM-2: what the stamped verdict read, kept for the next run (with the revision). */
+  reviewBaseline?: ReviewBaseline | null;
 }
 
 /**
@@ -454,7 +496,8 @@ export async function finishReview(
             lease_owner = NULL, lease_until = NULL,
             completed_at = $8, updated_at = $8,
             reviewed_stage_rev = $13::bigint,
-            reviewed_stage_digest = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $14::text END
+            reviewed_stage_digest = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $14::text END,
+            review_baseline = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $15::jsonb END
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING *`,
     [
@@ -472,6 +515,7 @@ export async function finishReview(
       outcome.usage?.costUsd ?? null,
       outcome.reviewedStageRev ?? null,
       outcome.reviewedStageDigest ?? null,
+      outcome.reviewBaseline ? JSON.stringify(outcome.reviewBaseline) : null,
     ],
   );
   const row = result.rows[0];
@@ -591,6 +635,9 @@ export async function requeueReviewForRefix(
             run_attempts = 0, lease_owner = NULL, lease_until = NULL,
             started_at = NULL, completed_at = NULL, created_at = $4, updated_at = $4,
             reviewed_stage_rev = NULL, reviewed_stage_digest = NULL,
+            -- Review MEDIUM-2: a flagged-slide run keeps the baseline it must start from; a
+            -- fresh first review sets its own with its first answer.
+            review_baseline = CASE WHEN $6::boolean THEN NULL ELSE review_baseline END,
             reviewed_at = CASE WHEN $6::boolean THEN NULL ELSE reviewed_at END,
             summary = CASE WHEN $6::boolean THEN NULL ELSE summary END,
             provider = CASE WHEN $6::boolean THEN NULL ELSE provider END,

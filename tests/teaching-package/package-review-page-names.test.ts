@@ -101,7 +101,8 @@ function loop(set: ReviewFigureSet) {
       return scene ? { rev: 1, scene } : null;
     },
   });
-  const run = (quote: string) =>
+  const figureRoom = vi.fn((_request: { cropsSuffice?: boolean }) => true);
+  const run = (quote: string, severity: 'high' | 'medium' = 'high') =>
     fixLoop({
       pool: {} as never,
       review: REVIEW,
@@ -115,7 +116,7 @@ function loop(set: ReviewFigureSet) {
           targetTitle: 'شريحة 2',
           targetOrder: 2,
           check: 'S3',
-          severity: 'high',
+          severity,
           bookEvidence: { quote, unitId: 'u1' },
           whatIsWrong: 'w',
           fixNote: 'n',
@@ -123,13 +124,13 @@ function loop(set: ReviewFigureSet) {
           teacherReason: null,
         } as StoredFinding,
       ],
-      figureRoom: () => true,
+      figureRoom,
       heartbeat: async () => true,
       callReviewer: callReviewer as never,
       recordProgress: vi.fn(async () => {}),
       now: () => 1,
     } as never);
-  return { run, regenerate, callReviewer, evidences };
+  return { run, regenerate, callReviewer, evidences, figureRoom };
 }
 
 const QUOTE = '«[الشكل src_2]» العدد 25، كما في تمرين صفحة 45';
@@ -219,8 +220,11 @@ describe('LOW: a whole page that does not fit still sends its cheaper crops', ()
     };
     const set: ReviewFigureSet = { figures: [page], unreadable: [] };
     // 1,000 left: no whole page, but its 600 tokens of crops fit.
-    expect(figureRoomFor(set, new Set(['u1']), [], 1_000, 60_000)).toBe(true);
-    expect(figureRoomFor(set, new Set(['u1']), [], 500, 60_000)).toBe(false);
+    const cropsSuffice = { cropsSuffice: true };
+    expect(figureRoomFor(set, new Set(['u1']), [], 1_000, 60_000, cropsSuffice)).toBe(true);
+    expect(figureRoomFor(set, new Set(['u1']), [], 500, 60_000, cropsSuffice)).toBe(false);
+    // A slide with a HIGH finding, or one read from a page: the crops are no stand-in.
+    expect(figureRoomFor(set, new Set(['u1']), [], 1_000, 60_000)).toBe(false);
     // The reviewer's probe: both crops sent in place of the page.
     const picked = pickReviewFigures(set, new Set(['u1']), 1_000, [], 60_000);
     expect(picked.figures.map((figure) => figure.name)).toEqual(['src_1', 'src_2']);
@@ -250,6 +254,17 @@ describe('re-check of ef78fd7a/4bc87796: page names the TE cannot place', () => 
     expect(
       pickReviewFigures(CROPS, new Set(['u1']), 60_000, named, 60_000).evidence.unreadable,
     ).toEqual([]);
+  });
+
+  it('LOW: the fix loop lets crops stand in for a page only when no finding is HIGH or names a page', async () => {
+    const asked = async (quote: string, severity: 'high' | 'medium') => {
+      const { run, figureRoom } = loop(CROPS);
+      await run(quote, severity);
+      return figureRoom.mock.calls[0]![0].cropsSuffice;
+    };
+    expect(await asked('«[الشكل src_2]» 25', 'medium')).toBe(true);
+    expect(await asked('«[الشكل src_2]» 25', 'high')).toBe(false);
+    expect(await asked('«[الصفحة 13]» 25', 'medium')).toBe(false);
   });
 
   it('LOW: «[صفحة N]» names a page too; without brackets nothing does', () => {

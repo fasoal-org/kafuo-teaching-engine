@@ -74,6 +74,7 @@ import {
   loadReviewFigures,
   namedFigures,
   pickReviewFigures,
+  reviewBaselineOf,
   reviewInputDigest,
   reviewSlidesOf,
   REVIEW_CALL_MAX_FIGURES,
@@ -527,6 +528,7 @@ describe('RV-1 + RV-4: the review job', () => {
     reviewedAt: null,
     reviewedStageRev: null,
     reviewedStageDigest: null,
+    reviewBaseline: null,
     createdAt: 1,
     startedAt: 1,
     completedAt: null,
@@ -556,6 +558,8 @@ describe('RV-1 + RV-4: the review job', () => {
       refusal?: 'request_rejected' | 'safety_refused';
       /** A-34: the Stage revision at the end of the run (absent: unreadable). */
       stageRev?: number;
+      /** MEDIUM-2: the live slides at the run's start (absent: `SCENES`). */
+      startScenes?: AppScene[];
       /** A-34: the live slides at the end of the run (absent: as they were at its start). */
       finalScenes?: AppScene[];
     } = {},
@@ -665,7 +669,10 @@ describe('RV-1 + RV-4: the review job', () => {
         callReviewer: callReviewer as never,
         fixLoop,
         // The run's read at its start, then A-34's read at its end.
-        loadScenes: async () => (sceneLoads++ === 0 ? SCENES : (options.finalScenes ?? SCENES)),
+        loadScenes: async () =>
+          sceneLoads++ === 0
+            ? (options.startScenes ?? SCENES)
+            : (options.finalScenes ?? options.startScenes ?? SCENES),
         loadFigures,
         ...(options.stageRev !== undefined
           ? { readStageRev: async () => options.stageRev! }
@@ -1176,6 +1183,74 @@ describe('RV-1 + RV-4: the review job', () => {
       status: 'passed',
       reviewedStageRev: 8,
       reviewedStageDigest: reviewInputDigest(SCENES),
+    });
+  });
+
+  describe('MEDIUM-2: a run that did not ask for the first answer stamps only from a reviewed start', () => {
+    // A slide no finding is on: the fix loop never handles it, so only the baseline sees it.
+    const edited = [SCENES[0]!, SCENES[1]!, scene('s3', 3, ['6799'], 'عدّله المعلم')];
+    // The stored first answer (or the last verdict) read SCENES.
+    const after = { reviewedAt: 4, reviewBaseline: reviewBaselineOf(SCENES) };
+
+    it('a resume whose slides are the ones the first answer read: stamped', async () => {
+      const resumed = job('g5.v11', { ...after, runAttempts: 2 }, undefined, { stageRev: 5 });
+      expect(await resumed.run()).toMatchObject({ status: 'passed', reviewedStageRev: 5 });
+    });
+
+    it('an edit between the first answer and the resume: no stamp (stale)', async () => {
+      const resumed = job('g5.v11', { ...after, runAttempts: 2 }, undefined, {
+        stageRev: 5,
+        startScenes: edited,
+      });
+      expect(await resumed.run()).toMatchObject({
+        status: 'passed',
+        reviewedStageRev: null,
+        reviewedStageDigest: null,
+      });
+    });
+
+    it('an edit between the press and the sweep: no stamp (stale)', async () => {
+      // The press kept the verdict's baseline through the requeue; the sweep's run starts
+      // on an edit made since.
+      const flagged = job('g5.v11', { ...after, id: 'tpr-flagged', fixes: [] }, undefined, {
+        stageRev: 6,
+        startScenes: edited,
+      });
+      expect(await flagged.run()).toMatchObject({ reviewedStageRev: null });
+    });
+
+    it('a resume after the evicted run rewrote a slide: that slide is its own; the rest must match', async () => {
+      const FIXED = scene('s2', 2, ['6760'], 'مصحح');
+      const rewritten = [SCENES[0]!, FIXED, SCENES[2]!];
+      const fix = {
+        sceneId: 's2',
+        findingIds: [],
+        outcome: 'fixed' as const,
+        code: null,
+        regenerationId: 'tpsr-s2',
+      };
+      const ok = job('g5.v11', { ...after, runAttempts: 2, fixes: [fix] }, undefined, {
+        stageRev: 7,
+        startScenes: rewritten,
+      });
+      expect(await ok.run()).toMatchObject({ reviewedStageRev: 7 });
+      const plusEdit = job('g5.v11', { ...after, runAttempts: 2, fixes: [fix] }, undefined, {
+        stageRev: 7,
+        startScenes: [SCENES[0]!, FIXED, edited[2]!],
+      });
+      expect(await plusEdit.run()).toMatchObject({ reviewedStageRev: null });
+    });
+
+    it('a row from before A-34 (no baseline): no stamp', async () => {
+      const legacy = job('g5.v11', { reviewedAt: 4, runAttempts: 2 }, undefined, { stageRev: 5 });
+      expect(await legacy.run()).toMatchObject({ reviewedStageRev: null });
+    });
+
+    it('the first answer stores the baseline it read; the stamped verdict keeps the one it read', async () => {
+      const first = job('g5.v11', {}, undefined, { firstFindings: [], stageRev: 3 });
+      const finished = await first.run();
+      expect(firstSave()).toMatchObject({ reviewBaseline: reviewBaselineOf(SCENES) });
+      expect(finished).toMatchObject({ reviewBaseline: reviewBaselineOf(SCENES) });
     });
   });
 

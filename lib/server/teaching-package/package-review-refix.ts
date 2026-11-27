@@ -78,6 +78,13 @@ export interface RefixSeed {
   sceneIds: string[];
 }
 
+/**
+ * A-34 (review HIGH-1): the statuses whose stale verdict a press asks again -- the ones a
+ * teacher edits and Submit refuses `PACKAGE_REVIEW_STALE` on. A version in review takes
+ * Start Edit first (`details.remedy`). Every other press path stays draft-only.
+ */
+const STALE_REMEDY_STATUSES: ReadonlySet<string> = new Set(['draft', 'rejected']);
+
 /** Dead end (c): an `unavailable` review a new run would end the same way. */
 const PERMANENTLY_UNAVAILABLE: ReadonlySet<string> = new Set([
   'NO_BOOK_SOURCE',
@@ -384,6 +391,47 @@ export async function queueFlaggedSlideRefix(
         replayed: true,
       };
     }
+    // A-34/A-34b: a verdict on what the reviewer no longer sees (a person changed the
+    // slides it read since, or a row from before A-34) is asked again from the start: ONE
+    // whole review that only reviews (`isPressedFirstReview`: its `tpr-rf-` id), never a
+    // regeneration over the edit. Its 202 is what Kafuo adopts; Submit and Approve wait
+    // for its verdict. The same rule, and reader, as Submit's.
+    // Review of 911b5e58..febbdcd9 (HIGH-1): it regenerates nothing, so it serves a draft
+    // AND a rejected version a teacher edits, before the draft-only flagged-slide path.
+    if (review && STALE_REMEDY_STATUSES.has(version.status)) {
+      const currentRev = (await readStageFreshnessManifest(version.currentStageId, tx))?.rev ?? 0;
+      const stale = await reviewIsStale(review, currentRev, async () =>
+        reviewInputDigest(await readStageScenesOn(tx, version.currentStageId)),
+      );
+      if (stale) {
+        if (
+          await generationInFlight(tx, {
+            tenantId: input.tenantId,
+            type: version.learningItem.type,
+            id: version.learningItem.id,
+          })
+        ) {
+          throw new TeachingPackageError(
+            'GENERATION_IN_PROGRESS',
+            'a generation of this learning item is in progress',
+          );
+        }
+        const requeued = await requeueReviewForRefix(tx, {
+          reviewId: review.id,
+          newReviewId,
+          findings: [],
+          now: now(),
+          freshFirstReview: true,
+        });
+        if (!requeued) {
+          throw new TeachingPackageError(
+            'PACKAGE_REVIEW_IN_PROGRESS',
+            'the AI review of this package changed meanwhile',
+          );
+        }
+        return { review: requeued, previousReviewId: review.id, sceneIds: [], replayed: false };
+      }
+    }
     if (version.status !== 'draft') {
       throw new TeachingPackageError(
         'INVALID_TRANSITION',
@@ -473,31 +521,6 @@ export async function queueFlaggedSlideRefix(
         'PACKAGE_REVIEW_IN_PROGRESS',
         'the AI review of this package is still running',
       );
-    }
-    // A-34/A-34b: a verdict on what the reviewer no longer sees (a person changed the
-    // slides it read since, or a row from before A-34) is asked again from the start: ONE
-    // whole review that only reviews (`isPressedFirstReview`: its `tpr-rf-` id), never a
-    // regeneration over the edit. Its 202 is what Kafuo adopts; Submit and Approve wait
-    // for its verdict. The same rule, and reader, as Submit's.
-    const currentRev = (await readStageFreshnessManifest(version.currentStageId, tx))?.rev ?? 0;
-    const stale = await reviewIsStale(review, currentRev, async () =>
-      reviewInputDigest(await readStageScenesOn(tx, version.currentStageId)),
-    );
-    if (stale) {
-      const requeued = await requeueReviewForRefix(tx, {
-        reviewId: review.id,
-        newReviewId,
-        findings: [],
-        now: now(),
-        freshFirstReview: true,
-      });
-      if (!requeued) {
-        throw new TeachingPackageError(
-          'PACKAGE_REVIEW_IN_PROGRESS',
-          'the AI review of this package changed meanwhile',
-        );
-      }
-      return { review: requeued, previousReviewId: review.id, sceneIds: [], replayed: false };
     }
     const scenes = await loadScenes(pool, version.currentStageId);
     if (!scenes) {

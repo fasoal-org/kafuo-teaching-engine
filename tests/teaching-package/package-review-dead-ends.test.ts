@@ -115,6 +115,7 @@ const REVIEW: PackageReview = {
   // A-34: the verdict is about the Stage as it is (the fake transaction reads revision 0).
   reviewedStageRev: 0,
   reviewedStageDigest: 'as-reviewed',
+  reviewBaseline: null,
   createdAt: 1,
   startedAt: 1,
   completedAt: 6,

@@ -19,6 +19,13 @@
  * Every Teaching Model: this is approval safety, not planner text. A review still queued or
  * running, an `unavailable` one (Kafuo's own rule decides those) and a version with no
  * review at all are not this gate's to refuse.
+ *
+ * Coverage (review of 911b5e58..febbdcd9): the gate sees exactly what the reviewer reads
+ * (`reviewInputDigest`). What a learner sees and the reviewer never reads is outside both
+ * the review and this gate, so a change to it keeps the verdict: sub- and superscript
+ * (`<sub>` / `<sup>`: H₂O and H²O read alike), whiteboard actions (`wb_draw_text` and the
+ * like), which non-book image a slide shows, visible text past the reviewer's 6,000
+ * characters per slide, and scenes that are neither a slide nor a quiz.
  */
 import type { Queryable } from '@openmaic/storage/document/pg';
 
@@ -71,7 +78,7 @@ export async function readStageScenesOn(tx: Queryable, stageId: string): Promise
  */
 export async function refuseStaleReview(
   tx: Queryable,
-  version: { id: string; tenantId: string; currentStageId: string },
+  version: { id: string; tenantId: string; currentStageId: string; status: string },
   currentRev: number,
 ): Promise<void> {
   const review = await readStageReview(tx, {
@@ -84,9 +91,19 @@ export async function refuseStaleReview(
     reviewInputDigest(await readStageScenesOn(tx, version.currentStageId)),
   );
   if (!stale) return;
+  // Review MEDIUM-1: the refusal names the remedy that applies to this status -- a version
+  // in review (an Approve) takes Start Edit first, since a press asks again only for a
+  // draft or a rejected version.
+  const inReview = version.status === 'in_review';
   throw new TeachingPackageError(
     'PACKAGE_REVIEW_STALE',
-    'the AI review is of an earlier version of these slides; press Regenerate flagged to review them again',
-    { reviewedStageRev: review.reviewedStageRev, currentRev },
+    inReview
+      ? 'the AI review is of an earlier version of these slides; start an edit, press Regenerate flagged to review them again, then submit'
+      : 'the AI review is of an earlier version of these slides; press Regenerate flagged to review them again',
+    {
+      reviewedStageRev: review.reviewedStageRev,
+      currentRev,
+      remedy: inReview ? 'start_edit_then_regenerate_flagged' : 'regenerate_flagged',
+    },
   );
 }

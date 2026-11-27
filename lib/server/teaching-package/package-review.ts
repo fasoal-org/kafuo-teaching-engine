@@ -83,9 +83,11 @@ import {
   REVIEW_IMAGE_ATTEMPTS_PER_CALL,
   REVIEW_IMAGE_BUDGET_USD,
   REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
+  reviewBaselineOf,
   reviewedSceneDigest,
   reviewInputDigest,
   reviewSlidesOf,
+  startsFromBaseline,
   withGuideAnswers,
   withReviewPages,
   type ReviewBookUnit,
@@ -222,8 +224,16 @@ export interface FixLoopContext {
    * regeneration; it leaves the slide for the next fresh run (Regenerate flagged).
    * Absent on every other package.
    */
-  figureRoom?: (request: Pick<ReviewCallRequest, 'slides' | 'focusIds' | 'alsoFigures'>) => boolean;
+  figureRoom?: (request: FigureRoomRequest) => boolean;
 }
+
+/**
+ * A re-check's room question. `cropsSuffice` (review LOW): no finding of the slide is HIGH
+ * or names a page, so a page's crops may stand in for a page that does not fit.
+ */
+export type FigureRoomRequest = Pick<ReviewCallRequest, 'slides' | 'focusIds' | 'alsoFigures'> & {
+  cropsSuffice?: boolean;
+};
 
 export interface FixLoopResult {
   findings: StoredFinding[];
@@ -938,13 +948,14 @@ export async function runPackageReview(
       return picked;
     };
     /** RV-1/RV-4: can a slide's re-check still be shown its readable figures? */
-    const figureRoom = (request: Pick<ReviewCallRequest, 'slides' | 'focusIds' | 'alsoFigures'>) =>
+    const figureRoom = (request: FigureRoomRequest) =>
       figureRoomFor(
         figureSet!,
         judgedUnitIds(request.slides, request.focusIds),
         request.alsoFigures ?? [],
         figureTokensLeft,
         freshRunBudget,
+        { cropsSuffice: request.cropsSuffice === true },
       );
     /** How many wanted figures one call did not show (any reason). */
     const unseen = (evidence: ReviewFigureEvidence) =>
@@ -1128,6 +1139,8 @@ export async function runPackageReview(
         model: call.modelString,
         reviewedAt: now(),
         bookTruncated,
+        // Review MEDIUM-2: what this first answer read, for a run that resumes it.
+        reviewBaseline: reviewBaselineOf(scenes),
       });
       review = {
         ...claimed,
@@ -1141,6 +1154,22 @@ export async function runPackageReview(
       // A resume: the first answer is stored; never pay for it twice.
       findings = claimed.findings;
     }
+    // Review MEDIUM-2: a run that did not ask for the first answer (a resume, or a
+    // flagged-slide run) starts from slides someone read only if they are the ones the
+    // stored first answer or the last verdict read -- the slides an earlier run of this
+    // review rewrote aside. Otherwise an edit made in between (after the first answer, or
+    // between a press and the sweep) was never reviewed, and this run stamps no verdict.
+    const rewritten = new Set(
+      claimed.fixes
+        .filter(
+          (fix) =>
+            Boolean(fix.regenerationId) &&
+            (fix.outcome === 'fixed' || fix.outcome === 'still_wrong'),
+        )
+        .map((fix) => fix.sceneId),
+    );
+    const startsFromReviewed =
+      claimed.reviewedAt === null || startsFromBaseline(claimed.reviewBaseline, scenes, rewritten);
 
     let fixes: StoredFix[] = claimed.fixes;
     /** A-34: the slides as this run last saw them (the fix loop's writes included). */
@@ -1194,14 +1223,16 @@ export async function runPackageReview(
     // Stage as this run did (its own fixes included). The revision is read BEFORE the
     // slides, so a write in between, or one after, leaves it behind the Stage: the gate
     // then compares the review input, never takes a teacher's edit as reviewed. Any doubt
-    // (a changed or unreadable Stage): none.
-    const reviewed = await revisionReviewed(seenScenes);
+    // (a changed or unreadable Stage, or a run that started on an unreviewed edit): none.
+    const reviewed = startsFromReviewed ? await revisionReviewed(seenScenes) : null;
     return await end({
       status: reviewStatusOf(findings),
       findings,
       fixes,
       reviewedStageRev: reviewed?.rev ?? null,
       reviewedStageDigest: reviewed?.digest ?? null,
+      // What this verdict read: the next flagged-slide run must start from it.
+      reviewBaseline: reviewed ? reviewBaselineOf(seenScenes) : null,
     });
   } catch (error) {
     // L-1: an evicted run's aborted call is not the review's failure; the

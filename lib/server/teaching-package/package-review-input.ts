@@ -27,6 +27,7 @@ import {
   type ResolvedTeacherGuide,
 } from '@/lib/server/teaching-package/guide-answers';
 import { readSourceVisualDataUrl } from '@/lib/server/teaching-package/source-visual-bytes';
+import type { ReviewBaseline } from '@/lib/server/teaching-package/package-review-store';
 import type { SourceVisualManifestEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -175,15 +176,29 @@ export function stripTags(html: string): string {
     .trim();
 }
 
+/** Every tag but a line or block break (`<br>`, `</p>`, `</div>`, `</li>`, `</hN>`). */
+const INLINE_TAG = /<(?!br\b|\/(?:p|div|li|h[1-6])\b)[^>]*>/gi;
+
+/**
+ * The text of slide or quiz HTML as the package reviewer reads it (review of
+ * 911b5e58..febbdcd9, LOW): an inline tag is removed with no space added, so a letter
+ * coloured inside a word (`كت<span>ا</span>ب`) reads as the word whole and leaves the
+ * review input (and A-34b's digest) as it was; only line and block breaks still separate
+ * text. The shared `stripTags` (agent reads, question review) is unchanged.
+ */
+export function reviewHtmlText(html: string): string {
+  return stripTags(html.replace(INLINE_TAG, ''));
+}
+
 type CanvasElement = Record<string, unknown>;
 
 function elementText(element: CanvasElement): string | null {
   if (element.type === 'text' && typeof element.content === 'string') {
-    return stripTags(element.content) || null;
+    return reviewHtmlText(element.content) || null;
   }
   if (element.type === 'shape') {
     const shapeText = (element.text as { content?: unknown } | undefined)?.content;
-    return typeof shapeText === 'string' ? stripTags(shapeText) || null : null;
+    return typeof shapeText === 'string' ? reviewHtmlText(shapeText) || null : null;
   }
   if (element.type === 'latex' && typeof element.latex === 'string') {
     return `$${element.latex}$`;
@@ -197,7 +212,7 @@ function elementText(element: CanvasElement): string | null {
           typeof cell === 'object' &&
           cell !== null &&
           typeof (cell as { text?: unknown }).text === 'string'
-            ? stripTags((cell as { text: string }).text)
+            ? reviewHtmlText((cell as { text: string }).text)
             : '',
         )
         .filter(Boolean);
@@ -291,15 +306,16 @@ export function sceneToReviewSlide(scene: AppScene): ReviewSlide {
   } else if (content?.type === 'quiz') {
     questions = ((content.questions as Array<Record<string, unknown>> | undefined) ?? []).map(
       (question) => ({
-        question: typeof question.question === 'string' ? stripTags(question.question) : '',
+        question: typeof question.question === 'string' ? reviewHtmlText(question.question) : '',
         options: ((question.options as Array<Record<string, unknown>> | undefined) ?? []).map(
           (option) => ({
             value: String(option.value ?? ''),
-            label: typeof option.label === 'string' ? stripTags(option.label) : '',
+            label: typeof option.label === 'string' ? reviewHtmlText(option.label) : '',
           }),
         ),
         answer: Array.isArray(question.answer) ? (question.answer as unknown[]).map(String) : [],
-        explanation: typeof question.analysis === 'string' ? stripTags(question.analysis) : null,
+        explanation:
+          typeof question.analysis === 'string' ? reviewHtmlText(question.analysis) : null,
       }),
     );
   }
@@ -877,6 +893,7 @@ export function figureRoomFor(
   alsoNames: readonly string[],
   tokensLeft: number,
   freshRunBudget: number,
+  options: { cropsSuffice?: boolean } = {},
 ): boolean {
   const wanted = set.figures.filter(wantsBookImage(unitIds, alsoNames, false));
   const tokens = wanted.reduce((sum, figure) => sum + figure.tokens, 0);
@@ -887,7 +904,10 @@ export function figureRoomFor(
     tokens <= freshRunBudget;
   if (wanted.length === 0 || !fitsOneRun) return true;
   // Review LOW: a whole page that does not fit is sent as its cheaper crops
-  // (`pickReviewFigures`), so the room is priced with them too.
+  // (`pickReviewFigures`), so the room is priced with them too -- only when the crops
+  // suffice (`cropsSuffice`: no finding of the slide is HIGH or names a page). Otherwise
+  // the held page would hold the finding again after a paid regeneration.
+  if (options.cropsSuffice !== true) return tokens <= tokensLeft;
   const cheapest = wanted.reduce((sum, figure) => {
     const crops = figure.coveredFigures ?? [];
     const cropTokens = crops.reduce((total, crop) => total + crop.tokens, 0);
@@ -941,26 +961,63 @@ export function canonicalJson(value: unknown): string {
  * the review input itself (`reviewSlidesOf`, the exact slides every reviewer call is
  * built from), in slide order. A verdict stays fresh while this is unchanged.
  *
- * It covers, per slide: its id, its place in the order and its order number (a reorder,
- * an added or a deleted slide all change it), title, scene type, content role, cited
- * units, the visible text (text boxes, shape text, LaTeX, table cells; HTML tags
- * stripped; clipped where the reviewer's copy is), the narration text, a quiz's
- * questions, options, answers and explanations, pictures by book image id, charts by
- * their values, drawn line lengths, arrow and text-free shape counts, and the bank-quiz
- * flag.
+ * It covers the slide SEQUENCE -- each slide's id in its place (a reorder, an added or a
+ * deleted slide all change it) -- and, per slide: title, scene type, content role, cited
+ * units, the visible text (text boxes, shape text, LaTeX, table cells; inline tags removed
+ * with no space, line and block breaks kept: `reviewHtmlText`; clipped where the
+ * reviewer's copy is), the narration text, a quiz's questions, options, answers and
+ * explanations, pictures by book image id, charts by their values, drawn line lengths,
+ * arrow and text-free shape counts, and the bank-quiz flag.
  *
- * It ignores what the reviewer never reads: element positions and sizes (so a text
+ * It ignores what the reviewer never reads: the stored `order` numbers themselves (a
+ * renumbering that moves no slide stays fresh), element positions and sizes (so a text
  * auto-height pass, or any layout-only move of a text box, picture or shape, stays fresh),
- * styles and HTML markup around the same text, narration audio references, alignment
- * baselines, and every other field of the Scene.
+ * styles and inline markup around the same text (a coloured letter inside a word), narration
+ * audio references, alignment baselines, and every other field of the Scene.
  */
 export function reviewInputDigest(scenes: readonly AppScene[]): string {
-  // Ties in `order` are broken by id, so every reader of the Stage gives one digest.
+  // Ties in `order` are broken by id, so every reader of the Stage gives one sequence.
   const ordered = [...scenes].sort(
     (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
-  return createHash('sha256')
-    .update(canonicalJson(reviewSlidesOf(ordered)))
-    .digest('base64url')
-    .slice(0, 32);
+  // The sequence is the array; the order numbers are dropped (review LOW).
+  const slides = reviewSlidesOf(ordered).map(({ order: _order, ...slide }) => slide);
+  return createHash('sha256').update(canonicalJson(slides)).digest('base64url').slice(0, 32);
+}
+
+/** Review MEDIUM-2: one slide's review input (`reviewInputDigest`'s material, one slide). */
+export function slideInputDigest(scene: AppScene): string {
+  const { order: _order, ...slide } = sceneToReviewSlide(scene);
+  return createHash('sha256').update(canonicalJson(slide)).digest('base64url').slice(0, 22);
+}
+
+/** Review MEDIUM-2: the baseline a first answer or a verdict records of the slides it read. */
+export function reviewBaselineOf(scenes: readonly AppScene[]): ReviewBaseline {
+  const ordered = [...scenes].sort(
+    (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  return {
+    digest: reviewInputDigest(ordered),
+    sequence: ordered.map((scene) => scene.id),
+    slides: Object.fromEntries(ordered.map((scene) => [scene.id, slideInputDigest(scene)])),
+  };
+}
+
+/**
+ * Review MEDIUM-2: whether a run that did not ask for the first answer starts from the
+ * slides its baseline read -- the same slides in the same sequence, and each one the same
+ * review input except the slides an earlier run of this review rewrote (`rewritten`: a
+ * resume after a fix). No baseline (a row from before A-34): no.
+ */
+export function startsFromBaseline(
+  baseline: ReviewBaseline | null,
+  scenes: readonly AppScene[],
+  rewritten: ReadonlySet<string>,
+): boolean {
+  if (!baseline) return false;
+  const now = reviewBaselineOf(scenes);
+  if (now.sequence.length !== baseline.sequence.length) return false;
+  if (now.sequence.some((id, index) => baseline.sequence[index] !== id)) return false;
+  if (rewritten.size === 0) return now.digest === baseline.digest;
+  return now.sequence.every((id) => rewritten.has(id) || now.slides[id] === baseline.slides[id]);
 }
