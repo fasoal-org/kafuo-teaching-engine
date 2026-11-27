@@ -1307,10 +1307,14 @@ async function runKafuoAttempt(
       reaskUsed = true;
       reaskViolations = violations.map((issue) => issue.code);
       // Recorded at the decision, so a run that then pauses keeps it (wave 1 review, L1).
+      // A write that fails never skips the re-ask (re-review N2): the success record
+      // writes it again.
       await patchSnapshot(pool, attemptId, (snapshot) => ({
         ...snapshot,
         plannerReask: { asked: true, violations: reaskViolations },
-      }));
+      })).catch((error: unknown) =>
+        log.warn(`Teaching package attempt ${attemptId}: could not record the re-ask`, error),
+      );
       log.warn(
         `Teaching package attempt ${attemptId} run ${run}: the plan breaks ${violations.length} book rule(s) no deterministic fix repairs (${[...new Set(violations.map((issue) => issue.code))].join(', ')}); the planner is asked once more with them`,
       );

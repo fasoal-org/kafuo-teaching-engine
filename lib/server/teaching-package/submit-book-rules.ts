@@ -165,19 +165,37 @@ export async function checkSubmitBookRules(
   const sceneAt = (index: number | undefined): string | null =>
     index === undefined ? null : (projected[index]?.scene.id ?? null);
   const asPlanned = projected.map(({ outline: entry }) => entry);
+  const cites = (entry: SceneOutline, unitId: string) =>
+    (entry.sourceContentUnitIds ?? []).some((id) => String(id) === unitId);
+  // A solution before its try-it is fixed by moving or deleting THAT slide, so the
+  // finding names it (wave 1 re-review, N4): the first solution citing the check that
+  // comes before the check's first try-it.
+  const earlySolutionAt = (unitId: string): number | undefined => {
+    const tryAt = asPlanned.findIndex(
+      (entry) => entry.contentRole === 'check_understanding' && cites(entry, unitId),
+    );
+    if (tryAt < 0) return undefined;
+    const at = asPlanned
+      .slice(0, tryAt)
+      .findIndex((entry) => entry.contentRole === 'worked_example' && cites(entry, unitId));
+    return at < 0 ? undefined : at;
+  };
   const gaps = findBookCoverageGaps(asPlanned, coverageBook)
     // The gaps that need no unit facts: a section without its slide, a check without its
     // try-it or its solution, a solution before its try-it. The recall and the exercises
     // blocks are judged against facts the attempt pinned only on a checkpoint (which items
     // survived the verse strip), so they are not re-judged here (review 27 Nov 2026, LOW).
     .filter((gap) => SUBMIT_RECHECKED_GAP_KINDS.has(gap.kind))
-    .map((gap) => ({
-      sceneId: null,
-      unitId: gap.unit.contentUnitId,
-      code: 'BOOK_COVERAGE_INCOMPLETE',
-      message: gap.message,
-      ...(gap.kind === 'solution_before_try_it' ? { notBySlide: true as const } : {}),
-    }));
+    .map((gap) => {
+      const early = gap.kind === 'solution_before_try_it';
+      return {
+        sceneId: early ? sceneAt(earlySolutionAt(gap.unit.contentUnitId)) : null,
+        unitId: gap.unit.contentUnitId,
+        code: 'BOOK_COVERAGE_INCOMPLETE',
+        message: gap.message,
+        ...(early ? { notBySlide: true as const } : {}),
+      };
+    });
   const merged = mergedCheckSlides(asPlanned, coverageBook).map((group) => ({
     sceneId: sceneAt(group.index),
     unitId: null,

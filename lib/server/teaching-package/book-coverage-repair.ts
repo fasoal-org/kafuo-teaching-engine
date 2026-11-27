@@ -29,6 +29,7 @@ import {
   findBookCoverageGaps,
   IDEAS_MERGED,
   ideasMergedSlides,
+  isIdeaUnit,
   isSacredExerciseElement,
   mergedCheckSlides,
   missingExampleGaps,
@@ -355,12 +356,18 @@ function placeAnchorlessTeaching(
     entry.stage === stage.key ? scenePolicyFor(entry)?.contentRoles : undefined;
   const intro = INTRO_KIND.test(String(gap.unit.kind ?? ''));
   const base = roleFor(gap);
+  // g5.v12: an orientation slide never teaches an idea (M1), so an idea's slide is an
+  // explanation or it is not placed — never an orientation the gate would still count
+  // as a gap (wave 1 re-review, N1).
+  const ideaOnV12 = book.bookPartPlacement === true && isIdeaUnit(gap.unit);
   const preferred =
-    intro && base === 'explanation'
-      ? ['orientation', 'explanation']
-      : base === 'explanation'
-        ? ['explanation', 'orientation']
-        : [base];
+    ideaOnV12 && base === 'explanation'
+      ? ['explanation']
+      : intro && base === 'explanation'
+        ? ['orientation', 'explanation']
+        : base === 'explanation'
+          ? ['explanation', 'orientation']
+          : [base];
   const placedRole = allowed ? preferred.find((role) => allowed.includes(role)) : base;
   if (!placedRole) return gap;
   return {

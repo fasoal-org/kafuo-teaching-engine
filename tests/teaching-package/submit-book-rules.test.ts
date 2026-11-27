@@ -426,8 +426,10 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
       unitIds: string[];
       findings: Array<{ unitId?: string; message: string }>;
     };
+    // N4 (re-review): the finding names the slide to move or delete.
     expect(details.findings).toEqual([
       expect.objectContaining({
+        sceneId: 'sol1-early',
         unitId: 'u2',
         message: expect.stringContaining('before its try-it'),
       }),

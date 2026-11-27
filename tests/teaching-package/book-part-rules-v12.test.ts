@@ -486,6 +486,51 @@ describe('review 27 Nov 2026: an idea is taught by a teaching slide of its own',
     ).toBe(false);
   });
 
+  it('N1 (wave 1 re-review): an intro-kind idea opening its part is repaired as an explanation, never an orientation', async () => {
+    // A stage that allows orientation (an intro unit took it before M1): on g5.v12 the
+    // repair plans the idea's slide as an explanation, so the gap closes in one round.
+    const roles = ['orientation', 'explanation', 'worked_example', 'check_understanding'];
+    const flow = FLOW.map((entry) =>
+      entry.stage === 'outcome_visual_explanations'
+        ? {
+            ...entry,
+            scenePolicy: {
+              sceneTypes: ['slide', 'quiz'],
+              cardinality: 'one_or_more',
+              contentRoles: roles,
+            },
+          }
+        : entry,
+    ) as TeachingFlowEntry[];
+    const small: KafuoBookStructure = {
+      templateVersionId: '4',
+      rules: [],
+      units: [
+        unit('k1', 'key_concept', 1),
+        { contentUnitId: 'i2', kind: 'PART_INTRO', element: null, required: true, partIndex: 2 },
+        unit('k2', 'key_concept', 2),
+      ],
+    };
+    const coverage = teacherParityBook(small, V12)!;
+    const diagnose = (outlines: SceneOutline[]) => ({
+      outlines,
+      blocking: findBookCoverageDiagnostics(outlines, coverage),
+    });
+    const plan = [slide('c1', 1, ['k1']), slide('c2', 3, ['k2'])];
+    expect(
+      findBookCoverageGaps(plan, coverage).map((gap) => [gap.unit.contentUnitId, gap.kind]),
+    ).toEqual([['i2', 'missing_teaching']]);
+    const planner = planning();
+    const repaired = await repairBookCoverageGaps(plan, diagnose(plan).blocking, aiCall, {
+      ...repairContext(planner, { coverage, unitsBook: small, diagnose }),
+      flow,
+    });
+    const asked = planner.mock.calls.map(([input]) => input);
+    expect(asked.map((input) => [...input.unitIds])).toEqual([['i2']]);
+    expect(asked[0]!.instruction).toContain('contentRole explanation');
+    expect(findBookCoverageGaps(repaired.outlines, coverage)).toEqual([]);
+  });
+
   it('a plan that teaches every listed unit names none', () => {
     const plan = [
       slide('c', 1, ['6756']),

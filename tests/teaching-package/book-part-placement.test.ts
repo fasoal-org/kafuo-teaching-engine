@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookPartMapRefusal,
   bookPartsRequirement,
   buildBookPartMap,
   placeOutlinesByBookPart,
@@ -161,6 +162,27 @@ describe('buildBookPartMap', () => {
       OBJECTIVES[2]!,
     ];
     expect(buildBookPartMap(BOOK, split, FLOW)).toBeNull();
+  });
+
+  it('M4 (wave 1 review): each of those is a refusal, with its reason; nothing to lay is not', () => {
+    const noUnits = OBJECTIVES.map(({ contentUnitIds: _units, ...rest }) => rest);
+    expect(bookPartMapRefusal(BOOK, noUnits, FLOW)).toMatch(/carries no contentUnitIds/);
+    expect(bookPartMapRefusal(BOOK, OBJECTIVES.slice(0, 2), FLOW)).toMatch(/objective block/);
+    const split = [
+      { ...OBJECTIVES[0]!, contentUnitIds: ['p1-kc'] },
+      { ...OBJECTIVES[1]!, contentUnitIds: ['p1-note', 'p2-kc', 'p3-kc', 'p3-ex', 'p3-check'] },
+      OBJECTIVES[2]!,
+    ];
+    expect(bookPartMapRefusal(BOOK, split, FLOW)).toMatch(/part 1 is split/);
+    expect(bookPartMapRefusal(BOOK, OBJECTIVES, FLOW)).toBeNull();
+    expect(bookPartMapRefusal(undefined, noUnits, FLOW)).toBeNull();
+    // N3 (re-review): a book with no part content is never refused, whatever the objectives.
+    const noParts: KafuoBookStructure = {
+      ...BOOK,
+      units: BOOK.units.map(({ partIndex: _part, ...rest }) => rest),
+    };
+    expect(bookPartMapRefusal(noParts, noUnits, FLOW)).toBeNull();
+    expect(bookPartMapRefusal(noParts, OBJECTIVES.slice(0, 2), FLOW)).toBeNull();
   });
 });
 

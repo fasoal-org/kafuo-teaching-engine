@@ -152,7 +152,9 @@ function bookParts(
   flow: readonly TeachingFlowEntry[],
 ): { map: BookPartMap | null; refused: string | null } {
   const refuse = (refused: string) => ({ map: null, refused });
-  if (!book) return { map: null, refused: null };
+  // Nothing to lay (no book map, or a book with no part content) is never a refusal
+  // (wave 1 re-review, N3: this is decided before the objectives are read).
+  if (!book || !book.units.some((unit) => isPartUnit(unit))) return { map: null, refused: null };
   if (objectives.length === 0) return refuse('the request carries no learning objectives');
   const blocks = flow.flatMap((entry, index) =>
     entry.stage === OBJECTIVE_EXPLANATION_STAGE ? [index] : [],
