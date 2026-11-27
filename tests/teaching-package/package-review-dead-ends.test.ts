@@ -46,7 +46,7 @@ vi.mock('@openmaic/storage/server/reference', async (importOriginal) => ({
 import { stampReviewedDigests } from '@/lib/server/teaching-package/package-review';
 import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
-  slideInputDigest,
+  sceneEditDigest,
   reviewSlidesOf,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -358,6 +358,8 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
   function loop(
     rereview: () => Array<Record<string, unknown>>,
     heartbeat: () => Promise<boolean> = async () => true,
+    /** The Stage as the run reads it (review of 7d7dddc6: a slide edited before the run). */
+    live: readonly AppScene[] = SCENES,
   ) {
     const regenerate = vi.fn();
     const regenerateAudio = vi.fn();
@@ -375,7 +377,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
         currentStageId: 'stage-2',
       })) as never,
       readScene: async (_pool, _stage, sceneId) => {
-        const scene = SCENES.find((candidate) => candidate.id === sceneId);
+        const scene = live.find((candidate) => candidate.id === sceneId);
         return scene ? { rev: 1, scene } : null;
       },
     });
@@ -384,8 +386,8 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
         pool: {} as never,
         review: { ...REVIEW, status: 'running' },
         units: [{ id: 'u1', title: null, role: null, text: 'نص' }],
-        slides: reviewSlidesOf(SCENES),
-        scenes: SCENES,
+        slides: reviewSlidesOf(live),
+        scenes: live,
         findings,
         heartbeat,
         callReviewer: callReviewer as never,
@@ -485,7 +487,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
   });
 
   it('a teacher who fixes a flagged slide by hand: one re-check of their edit closes it (press, loop, press)', async () => {
-    const live = new Map([['s2', slideInputDigest(SCENES[1]!)]]);
+    const live = new Map([['s2', sceneEditDigest(SCENES[1]!)]]);
     const slides = reviewSlidesOf(SCENES);
     const stored = [
       finding('p1', {
@@ -551,26 +553,189 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     const slides = reviewSlidesOf([SCENES[0]!, resized]);
     const flagged = finding('f1', {
       teacherReason: 'STILL_WRONG',
-      sceneDigest: slideInputDigest(reviewed),
+      sceneDigest: sceneEditDigest(reviewed),
     });
     // The press: not an edit, so the normal regenerate path (never re-check only).
     const seed = seedRefixFindings(
       [flagged],
       slides,
       new Map([
-        ['s1', slideInputDigest(SCENES[0]!)],
-        ['s2', slideInputDigest(resized)],
+        ['s1', sceneEditDigest(SCENES[0]!)],
+        ['s2', sceneEditDigest(resized)],
       ]),
     );
     expect(seed.findings[0]).toMatchObject({ teacherReason: null });
     expect(seed.findings[0]!.recheckOnly).toBeUndefined();
     expect(seed.sceneIds).toEqual(['s2']);
-    // The run (M-2 guard): the resized live slide is still what the review read.
-    const { run, regenerate } = loop(() => []);
+    // The run (M-2 guard) reads the resized slide against the finding the review stamped:
+    // geometry is no edit, so it is still what the review read.
+    const { run, regenerate } = loop(() => [], undefined, [SCENES[0]!, resized]);
     regenerate.mockRejectedValue(new Error('refused'));
-    await run([finding('f1', { sceneDigest: slideInputDigest(resized) })]);
+    await run([finding('f1', { sceneDigest: sceneEditDigest(reviewed) })]);
     expect(regenerate).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Review of 7d7dddc6 (MEDIUM-2, the reviewer's probes made tests): s2 as the review saw
+   * it, with a wrong whiteboard formula, a generated picture, H^2O for H_2O, a voice, a
+   * speed and a fill; each element placed and sized.
+   */
+  function rich(
+    opts: {
+      wb?: string;
+      img?: string;
+      html?: string;
+      voice?: string;
+      speed?: number;
+      fill?: string;
+    } = {},
+  ): AppScene {
+    return {
+      ...SCENES[1]!,
+      content: {
+        type: 'slide',
+        canvas: {
+          elements: [
+            {
+              id: 'e',
+              type: 'text',
+              content: opts.html ?? '<p>H<sup>2</sup>O</p>',
+              fill: opts.fill ?? '#ffffff',
+              left: 40,
+              top: 30,
+              width: 400,
+              height: 60,
+              rotate: 0,
+            },
+            {
+              id: 'i',
+              type: 'image',
+              src: opts.img ?? '/api/classroom-media/stage-2/media/gen_1.png',
+              left: 500,
+              top: 30,
+              width: 240,
+              height: 240,
+              rotate: 0,
+            },
+          ],
+        },
+      },
+      actions: [
+        {
+          id: 'a',
+          type: 'speech',
+          text: 'شرح ب',
+          voice: opts.voice ?? 'v1',
+          speed: opts.speed ?? 1,
+        },
+        { id: 'w', type: 'wb_draw_text', content: opts.wb ?? '2+2=5' },
+      ],
+    } as unknown as AppScene;
+  }
+
+  /** `rich()` with every element moved, resized and turned (an autosave, a drag). */
+  function moved(): AppScene {
+    const scene = structuredClone(rich());
+    const elements = (
+      scene.content as unknown as { canvas: { elements: Array<Record<string, number>> } }
+    ).canvas.elements;
+    for (const element of elements) {
+      element.left! += 12;
+      element.top! += 8;
+      element.width! += 20;
+      element.height! += 24;
+      element.rotate = 5;
+    }
+    return scene;
+  }
+
+  /** `rich()` voiced: its narration audio written, nothing else. */
+  function voiced(): AppScene {
+    const scene = structuredClone(rich());
+    const speech = (scene.actions as unknown as Array<Record<string, unknown>>)[0]!;
+    speech.audioId = 'asset-1';
+    speech.audioUrl = 'asset-1';
+    speech.audioProvenance = {
+      fingerprint: 'fp1:x',
+      policyVersion: null,
+      policyStatus: 'approved',
+      originalDigest: 'd',
+      responseFormat: 'mp3',
+    };
+    return scene;
+  }
+
+  const EDITS: Array<[string, () => AppScene]> = [
+    ['a whiteboard formula fixed', () => rich({ wb: '2+2=4' })],
+    [
+      'a generated picture replaced',
+      () => rich({ img: '/api/classroom-media/stage-2/media/upload_9.png' }),
+    ],
+    ['a superscript fixed to a subscript', () => rich({ html: '<p>H<sub>2</sub>O</p>' })],
+    ['another voice', () => rich({ voice: 'v2' })],
+    ['another speed', () => rich({ speed: 1.25 })],
+    ['a style change', () => rich({ fill: '#ffeecc' })],
+  ];
+
+  for (const [name, edit] of EDITS) {
+    it(`7d7dddc6: ${name} is an edit: the press and the run re-check it, never regenerate over it`, async () => {
+      const reviewed = rich();
+      const live = edit();
+      expect(sceneEditDigest(live)).not.toBe(sceneEditDigest(reviewed));
+      // The press: the flagged slide's finding is re-checked as the teacher made it.
+      const seed = seedRefixFindings(
+        [finding('f1', { teacherReason: 'STILL_WRONG', sceneDigest: sceneEditDigest(reviewed) })],
+        reviewSlidesOf([SCENES[0]!, live]),
+        new Map([
+          ['s1', sceneEditDigest(SCENES[0]!)],
+          ['s2', sceneEditDigest(live)],
+        ]),
+      );
+      expect(seed.findings[0]).toMatchObject({ teacherReason: null, recheckOnly: true });
+      expect(seed.sceneIds).toEqual(['s2']);
+      // The run (M-2 guard), the edit made before the run read the slide: re-checked as is.
+      const { run, regenerate, regenerateAudio, callReviewer } = loop(() => [], undefined, [
+        SCENES[0]!,
+        live,
+      ]);
+      const result = await run([finding('f1', { sceneDigest: sceneEditDigest(reviewed) })]);
+      expect(regenerate).not.toHaveBeenCalled();
+      expect(regenerateAudio).not.toHaveBeenCalled();
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      expect(result.findings[0]).toMatchObject({
+        status: 'fixed',
+        sceneDigest: sceneEditDigest(live),
+      });
+    });
+  }
+
+  const NOT_EDITS: Array<[string, () => AppScene]> = [
+    ['a move, a resize and a turn', moved],
+    ['its narration voiced', voiced],
+  ];
+
+  for (const [name, change] of NOT_EDITS) {
+    it(`7d7dddc6: ${name} is no edit: the flagged slide is regenerated`, async () => {
+      const reviewed = rich();
+      const live = change();
+      expect(sceneEditDigest(live)).toBe(sceneEditDigest(reviewed));
+      const seed = seedRefixFindings(
+        [finding('f1', { teacherReason: 'STILL_WRONG', sceneDigest: sceneEditDigest(reviewed) })],
+        reviewSlidesOf([SCENES[0]!, live]),
+        new Map([
+          ['s1', sceneEditDigest(SCENES[0]!)],
+          ['s2', sceneEditDigest(live)],
+        ]),
+      );
+      expect(seed.findings[0]).toMatchObject({ teacherReason: null });
+      expect(seed.findings[0]!.recheckOnly).toBeUndefined();
+      expect(seed.sceneIds).toEqual(['s2']);
+      const { run, regenerate } = loop(() => [], undefined, [SCENES[0]!, live]);
+      regenerate.mockRejectedValue(new Error('refused'));
+      await run([finding('f1', { sceneDigest: sceneEditDigest(reviewed) })]);
+      expect(regenerate).toHaveBeenCalledTimes(1);
+    });
+  }
 
   it('M-2: a slide edited before the run read it is re-checked, never regenerated over', async () => {
     // A resume, or an edit between a press and the sweep: the run's own read of the slide
@@ -580,19 +745,19 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(regenerate).not.toHaveBeenCalled();
     expect(result.findings[0]).toMatchObject({
       status: 'fixed',
-      sceneDigest: slideInputDigest(SCENES[1]!),
+      sceneDigest: sceneEditDigest(SCENES[1]!),
     });
     // The slide as the review saw it: regenerated as before.
     const same = loop(() => []);
     same.regenerate.mockRejectedValue(new Error('refused'));
-    await same.run([finding('f1', { sceneDigest: slideInputDigest(SCENES[1]!) })]);
+    await same.run([finding('f1', { sceneDigest: sceneEditDigest(SCENES[1]!) })]);
     expect(same.regenerate).toHaveBeenCalledTimes(1);
   });
 
   it('a re-checked slide records itself as the re-check saw it (review 27 Nov 2026, HIGH)', async () => {
     const { run } = loop(() => []);
     const result = await run([finding('f1', { recheckOnly: true, sceneDigest: 'before-edit' })]);
-    expect(result.findings[0]!.sceneDigest).toBe(slideInputDigest(SCENES[1]!));
+    expect(result.findings[0]!.sceneDigest).toBe(sceneEditDigest(SCENES[1]!));
   });
 });
 
@@ -666,10 +831,7 @@ describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () =
       // The run started from these; s2 was edited later, which this never reads.
       SCENES,
     );
-    expect(stamped.map((f) => f.sceneDigest)).toEqual([
-      'seen-by-fix',
-      slideInputDigest(SCENES[0]!),
-    ]);
-    expect(stamped[0]!.sceneDigest).not.toBe(slideInputDigest(edited));
+    expect(stamped.map((f) => f.sceneDigest)).toEqual(['seen-by-fix', sceneEditDigest(SCENES[0]!)]);
+    expect(stamped[0]!.sceneDigest).not.toBe(sceneEditDigest(edited));
   });
 });

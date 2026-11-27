@@ -2,15 +2,16 @@
  * Review of ef78fd7a/4bc87796 (MEDIUM-A, the reviewer's PGlite probe made a test): JSONB
  * reorders object keys on every read, so a slide's digests must not depend on key order.
  * Written, read back, and voiced in memory (the way scene TTS appends its audio fields),
- * one slide gives one digest -- per slide (`reviewedSceneDigest`) and for the whole
- * review input (`reviewInputDigest`, A-34b).
+ * one slide gives one digest -- per slide (`sceneEditDigest`) and for the whole
+ * review input (`reviewInputDigest`, A-34b). Since the review of 7d7dddc6 the slide digest
+ * is the edit rule: any change but geometry and narration audio.
  */
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
 
 import {
   canonicalJson,
-  reviewedSceneDigest,
+  sceneEditDigest,
   reviewInputDigest,
 } from '@/lib/server/teaching-package/package-review-input';
 import type { AppScene } from '@/lib/types/stage';
@@ -45,11 +46,56 @@ describe('a slide digest is blind to key order', () => {
     const reread = (await db.query<{ data: AppScene }>('SELECT data FROM s')).rows[0]!.data;
     await db.close();
     // The written slide and its read-back agree; so do the voiced slide and its read-back.
-    expect(reviewedSceneDigest(live)).toBe(reviewedSceneDigest(stored as unknown as AppScene));
-    expect(reviewedSceneDigest(voiced)).toBe(reviewedSceneDigest(reread));
+    expect(sceneEditDigest(live)).toBe(sceneEditDigest(stored as unknown as AppScene));
+    expect(sceneEditDigest(voiced)).toBe(sceneEditDigest(reread));
     expect(reviewInputDigest([voiced])).toBe(reviewInputDigest([reread]));
     // Audio is not what the reviewer reads: the voiced slide's review input is the live one.
     expect(reviewInputDigest([voiced])).toBe(reviewInputDigest([live]));
+    // Review of 7d7dddc6: nor is voicing a slide an edit of it.
+    expect(sceneEditDigest(voiced)).toBe(sceneEditDigest(live));
+  });
+
+  it('review of 7d7dddc6: geometry is no edit, inside a group too; content and voice are', () => {
+    const scene = (at: number, text: string, voice = 'v1') =>
+      ({
+        id: 's',
+        title: 't',
+        content: {
+          type: 'slide',
+          canvas: {
+            elements: [
+              {
+                id: 'g',
+                type: 'group',
+                left: at,
+                top: at,
+                width: 300,
+                height: 100,
+                rotate: 0,
+                elements: [
+                  {
+                    id: 'c',
+                    type: 'text',
+                    content: text,
+                    left: at + 4,
+                    top: 2,
+                    width: 90,
+                    height: 40,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        actions: [{ id: 'a', type: 'speech', text: 'شرح', voice, speed: 1 }],
+      }) as unknown as AppScene;
+    expect(sceneEditDigest(scene(5, '<p>H<sub>2</sub>O</p>'))).toBe(
+      sceneEditDigest(scene(60, '<p>H<sub>2</sub>O</p>')),
+    );
+    expect(sceneEditDigest(scene(5, '<p>H<sub>2</sub>O</p>'))).not.toBe(
+      sceneEditDigest(scene(5, '<p>H<sup>2</sup>O</p>')),
+    );
+    expect(sceneEditDigest(scene(5, 'أ'))).not.toBe(sceneEditDigest(scene(5, 'أ', 'v2')));
   });
 
   it('canonical JSON sorts every object’s keys, keeps array order, drops undefined', () => {

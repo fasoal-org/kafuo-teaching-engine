@@ -44,7 +44,7 @@ import {
 import {
   reviewInputDigest,
   reviewSlidesOf,
-  slideInputDigest,
+  sceneEditDigest,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -529,10 +529,11 @@ export async function queueFlaggedSlideRefix(
     const seed = seedRefixFindings(
       review.findings,
       reviewSlidesOf(scenes),
-      // Review of 9009dfc4 (MEDIUM-B): "edited" is a change to what the reviewer reads of
-      // the slide; a layout-only change (sizes, positions) is not one -- the slide follows
-      // the normal regenerate path (a regeneration may replace a layout tweak).
-      new Map(scenes.map((scene) => [scene.id, slideInputDigest(scene)])),
+      // Review of 7d7dddc6 (MEDIUM-2): an edit is any change but geometry and narration
+      // audio (`sceneEditDigest`): an auto-height save or a move is none, so the slide follows the
+      // normal regenerate path; a whiteboard fix, a replaced picture, a sub/superscript, a
+      // voice or a style change is one, so it is re-checked and never regenerated over.
+      new Map(scenes.map((scene) => [scene.id, sceneEditDigest(scene)])),
       review.fixes,
     );
     if (seed.sceneIds.length === 0) {

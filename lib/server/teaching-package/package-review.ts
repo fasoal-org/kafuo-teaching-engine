@@ -86,7 +86,7 @@ import {
   reviewBaselineOf,
   reviewInputDigest,
   reviewSlidesOf,
-  slideInputDigest,
+  sceneEditDigest,
   startsFromBaseline,
   withGuideAnswers,
   withReviewPages,
@@ -695,9 +695,9 @@ export function stampReviewedDigests(
   findings: readonly StoredFinding[],
   readAtStart: readonly AppScene[],
 ): StoredFinding[] {
-  // Review of 9009dfc4 (MEDIUM-B): a slide's review input (`slideInputDigest`), so a
-  // layout-only change (sizes, positions: an auto-height autosave) is never an edit.
-  const atStart = new Map(readAtStart.map((scene) => [scene.id, slideInputDigest(scene)]));
+  // Review of 7d7dddc6 (MEDIUM-2): `sceneEditDigest`, any change but geometry and narration
+  // audio -- the digest the Agent API reads back as `reviewed_scene_digest`.
+  const atStart = new Map(readAtStart.map((scene) => [scene.id, sceneEditDigest(scene)]));
   return findings.map((finding) => {
     if (finding.sceneDigest !== undefined || !finding.targetId) return finding;
     const digest = atStart.get(finding.targetId);

@@ -62,10 +62,11 @@ export interface StoredFinding {
   status: 'open' | 'fixed';
   teacherReason: TeacherReason | null;
   /**
-   * The target slide as the review saw it (15 Nov 2026): since the review of 9009dfc4
-   * (MEDIUM-B), its `slideInputDigest` -- what the reviewer reads of it, so a layout-only
-   * change is no edit (a digest stored before differs once). Absent on reviews finished
-   * before 15 Nov, and on a finding with no slide.
+   * The target slide as the review saw it (15 Nov 2026): since the review of 7d7dddc6,
+   * its `sceneEditDigest` -- the whole scene (audio aside) minus each element's position,
+   * size and rotation, so only a move or a resize is no edit (a digest stored before
+   * differs once). The Agent API reads it back as `reviewed_scene_digest`. Absent on
+   * reviews finished before 15 Nov, and on a finding with no slide.
    */
   sceneDigest?: string;
   /**

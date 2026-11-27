@@ -39,8 +39,8 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   namedBookImages,
   namedPages,
+  sceneEditDigest,
   sceneToReviewSlide,
-  slideInputDigest,
   type ReviewFigureEvidence,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -56,7 +56,6 @@ import type {
   TeacherReason,
 } from '@/lib/server/teaching-package/package-review-store';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
-import { withoutNarrationAudio } from '@/lib/server/teaching-package/narration-audio-alignment';
 import { regenerateSceneNarrationAudio } from '@/lib/server/teaching-package/scene-narration-audio';
 import {
   regenerateSlideScene,
@@ -260,18 +259,20 @@ function neighbourhood(slides: readonly ReviewSlide[], changed: ReviewSlide): Re
   return ordered.slice(Math.max(0, index - 1), index + 2);
 }
 
-/** Review LOW: the same slide but for its narration audio references. */
+/**
+ * Review LOW: the same slide but for its narration audio references (and geometry), which
+ * `sceneEditDigest` leaves out itself (review of 7d7dddc6).
+ */
 function sameMaterialWithoutAudio(a: AppScene, b: AppScene): boolean {
-  return slideInputDigest(withoutNarrationAudio(a)) === slideInputDigest(withoutNarrationAudio(b));
+  return sceneEditDigest(a) === sceneEditDigest(b);
 }
 
 /** What the reviewer saw, compared with what the database holds now. */
 function sceneChanged(live: AppScene, reviewed: AppScene | undefined): boolean {
   if (!reviewed) return true;
-  // The same material, compared key-order-blind (MEDIUM-A: JSONB reorders keys).
-  // Review of 9009dfc4 (MEDIUM-B): what the reviewer reads of it; a layout-only change
-  // (an auto-height autosave) is no edit.
-  return slideInputDigest(live) !== slideInputDigest(reviewed);
+  // Review of 7d7dddc6 (MEDIUM-2): an edit is any change but geometry and narration audio
+  // (`sceneEditDigest`, key-order-blind): an auto-height autosave or a move is none.
+  return sceneEditDigest(live) !== sceneEditDigest(reviewed);
 }
 
 export interface FixLoopDeps {
@@ -385,7 +386,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
        * the ones it added, so a finding it never judged keeps the edit visible.
        */
       const seenAs = (scene: AppScene, added: readonly StoredFinding[] = []) => {
-        const digest = slideInputDigest(scene);
+        const digest = sceneEditDigest(scene);
         const judged = recheckOnly ? new Set([...sceneFindings, ...added]) : null;
         for (const finding of findings) {
           if (finding.targetId !== slide.id || (judged && !judged.has(finding))) continue;
@@ -431,7 +432,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         sceneFindings.some(
           (finding) =>
             finding.sceneDigest !== undefined &&
-            finding.sceneDigest !== slideInputDigest(live.scene),
+            finding.sceneDigest !== sceneEditDigest(live.scene),
         )
       ) {
         recheckOnly = true;

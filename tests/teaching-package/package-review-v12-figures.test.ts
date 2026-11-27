@@ -77,7 +77,7 @@ import {
   reviewBaselineOf,
   reviewInputDigest,
   reviewSlidesOf,
-  slideInputDigest,
+  sceneEditDigest,
   REVIEW_CALL_MAX_FIGURES,
   REVIEW_FIGURE_MAX_BASE64_CHARS,
   REVIEW_FIGURE_MAX_SIDE_PX,
@@ -1238,7 +1238,7 @@ describe('RV-1 + RV-4: the review job', () => {
         targetOrder: 2,
         status: 'fixed' as const,
         teacherReason: null,
-        sceneDigest: slideInputDigest(FIXED),
+        sceneDigest: sceneEditDigest(FIXED),
       } as StoredFinding;
       const resumedWith = (startScenes: AppScene[]) =>
         job('g5.v11', { ...after, runAttempts: 2, fixes: [fix], findings: [closed] }, undefined, {

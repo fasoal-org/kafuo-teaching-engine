@@ -7,7 +7,7 @@
  * (slide numbers), `stripTags` / `slideVisuals` (text), `citedContentUnitIds`
  * (part links, Help's rule), `deriveSceneAlignment`, the Teaching Skills
  * inspection and validators, `NARRATION_AUDIO_ISSUE_CODE`, `isBankQuizScene`
- * and `reviewedSceneDigest` (the engine review's finding digest).
+ * and `sceneEditDigest` (the engine review's finding digest).
  */
 import { SLIDE_CANVAS_HEIGHT, SLIDE_CANVAS_WIDTH } from '@openmaic/generation';
 
@@ -16,10 +16,7 @@ import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import { citedContentUnitIds } from '@/lib/server/teaching-package/content-unit-coverage';
 import { NARRATION_AUDIO_ISSUE_CODE } from '@/lib/server/teaching-package/narration-audio-issue';
-import {
-  reviewedSceneDigest,
-  slideVisuals,
-} from '@/lib/server/teaching-package/package-review-input';
+import { sceneEditDigest, slideVisuals } from '@/lib/server/teaching-package/package-review-input';
 import { buildStageTeachingSkillsInspection } from '@/lib/server/teaching-package/scene-inspection';
 import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import { elementBBox, findLayoutOverlaps, type BBox, type LayoutOverlap } from './layout';
@@ -542,7 +539,9 @@ export function projectAgentScenes(input: ProjectScenesInput): AgentScenesProjec
             how: 'regenerate_slide',
           }
         : null,
-      reviewed_scene_digest: reviewedSceneDigest(scene),
+      // Review of 7d7dddc6 (MEDIUM-1): the digest the review's findings carry
+      // (`sceneEditDigest`), so Kafuo's per-finding `stale` compares like with like.
+      reviewed_scene_digest: sceneEditDigest(scene),
     };
   });
 

@@ -16,7 +16,8 @@ import {
   type SceneRegenerationSummary,
 } from '@/lib/server/teaching-package/agent-read/scenes';
 import { collectSkillRequirementChecks } from '@/lib/server/teaching-package/agent-read/skills';
-import { reviewedSceneDigest } from '@/lib/server/teaching-package/package-review-input';
+import { stampReviewedDigests } from '@/lib/server/teaching-package/package-review';
+import { sceneEditDigest } from '@/lib/server/teaching-package/package-review-input';
 import type { AppScene } from '@/lib/types/stage';
 import type { SourceVisualManifestEntry, TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { makeSlideScene } from '../../agent-runtime/_stage-fixtures';
@@ -273,7 +274,28 @@ describe('projectAgentScenes', () => {
     expect(chem.numbers).toEqual([98.08]);
     expect(chem.part_ids).toEqual(['5012']);
     expect(chem.source_block_ids).toEqual(['61520', '61530']);
-    expect(chem.reviewed_scene_digest).toBe(reviewedSceneDigest(chemistry));
+    expect(chem.reviewed_scene_digest).toBe(sceneEditDigest(chemistry));
+    // Review of 7d7dddc6 (MEDIUM-1): a finding the review stamped on the unchanged slide
+    // carries the very digest the Agent API reads back, so Kafuo's `stale` is false.
+    const [stamped] = stampReviewedDigests(
+      [
+        {
+          id: 'f1',
+          targetId: 'scene-chem',
+          targetTitle: 't',
+          targetOrder: 1,
+          check: 'S1',
+          severity: 'high',
+          bookEvidence: { quote: 'q', unitId: null },
+          whatIsWrong: 'w',
+          fixNote: 'n',
+          status: 'open',
+          teacherReason: null,
+        },
+      ],
+      [chemistry],
+    );
+    expect(stamped!.sceneDigest).toBe(chem.reviewed_scene_digest);
   });
 
   it('maps elements: boxes, the textbook image and its source blocks, the table rows', () => {

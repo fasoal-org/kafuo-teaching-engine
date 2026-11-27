@@ -26,6 +26,7 @@ import {
   guideItemKey,
   type ResolvedTeacherGuide,
 } from '@/lib/server/teaching-package/guide-answers';
+import { withoutNarrationAudio } from '@/lib/server/teaching-package/narration-audio-alignment';
 import { readSourceVisualDataUrl } from '@/lib/server/teaching-package/source-visual-bytes';
 import type { ReviewBaseline } from '@/lib/server/teaching-package/package-review-store';
 import type { SourceVisualManifestEntry } from '@/lib/types/teaching-package';
@@ -913,16 +914,54 @@ export function reviewSlidesOf(scenes: readonly AppScene[]): ReviewSlide[] {
  * same material the fix loop's "slide changed" guard compares). Stored on each
  * finding when a review finishes, so the flagged-slide regeneration can leave
  * out a slide a person edited since (15 Nov 2026). Content only: a scene
- * revision counter also moves on a save that changed nothing.
+ * revision counter also moves on a save that changed nothing. The Agent API's
+ * `reviewed_scene_digest` is this digest, so its per-finding `stale` keeps working.
+ *
+ * Review of 7d7dddc6 (MEDIUM-2), the rule: an edit is any change to the scene, ignoring
+ * GEOMETRY only -- each canvas element's `left`, `top`, `width`, `height` and `rotate`
+ * (groups' elements too) are left out, so a layout-only change (an auto-height autosave, a
+ * moved box) is no edit. Everything else a teacher edits stays in: every action
+ * (whiteboard drawing, narration text, voice and speed), every image source, the HTML with
+ * its styles and sub- or superscript. Narration AUDIO stays out as before (each speech
+ * action's `audioId`, `audioUrl`, `audioProvenance`, `audioInvalidated`): voicing a slide
+ * is no edit of it.
  */
-export function reviewedSceneDigest(scene: AppScene): string {
+export function sceneEditDigest(scene: AppScene): string {
   // Review of ef78fd7a/4bc87796 (MEDIUM-A): canonical, so a slide built in memory (a
   // voiced scene) and the same slide read back from JSONB (which reorders keys) agree.
   // A digest stored before this differs once; nothing is approved in production yet.
   return createHash('sha256')
-    .update(canonicalJson({ title: scene.title, content: scene.content, actions: scene.actions }))
+    .update(
+      canonicalJson({
+        title: scene.title,
+        content: withoutGeometry(scene.content),
+        actions: withoutNarrationAudio(scene).actions,
+      }),
+    )
     .digest('base64url')
     .slice(0, 22);
+}
+
+/** The element fields that place an element, and nothing else (review of 7d7dddc6). */
+const GEOMETRY_FIELDS: ReadonlySet<string> = new Set(['left', 'top', 'width', 'height', 'rotate']);
+
+/** A Scene's content with every canvas element's geometry fields left out. */
+function withoutGeometry(content: unknown): unknown {
+  const canvas = (content as { canvas?: { elements?: unknown } } | null | undefined)?.canvas;
+  if (!canvas || !Array.isArray(canvas.elements)) return content;
+  const strip = (element: unknown): unknown => {
+    if (!element || typeof element !== 'object' || Array.isArray(element)) return element;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(element as Record<string, unknown>)) {
+      if (GEOMETRY_FIELDS.has(key)) continue;
+      out[key] = key === 'elements' && Array.isArray(value) ? value.map(strip) : value;
+    }
+    return out;
+  };
+  return {
+    ...(content as Record<string, unknown>),
+    canvas: { ...canvas, elements: canvas.elements.map(strip) },
+  };
 }
 
 /** JSON with every object's keys in sorted order (arrays keep theirs), `undefined` dropped. */
@@ -994,9 +1033,9 @@ export function reviewBaselineOf(scenes: readonly AppScene[]): ReviewBaseline {
  * slides its baseline read -- the same slides in the same sequence, and each one the same
  * review input. A slide an earlier run of this review rewrote (a resume after a fix) is
  * compared instead with the digest that run recorded on its findings after the fix
- * (`rewritten`: slide id → that `slideInputDigest`; review of 9009dfc4, LOW-B), so an edit
- * made on it since is caught too; none recorded fails closed. No baseline (a row from
- * before A-34): no.
+ * (`rewritten`: slide id → that finding digest, a `sceneEditDigest`; review of 9009dfc4,
+ * LOW-B), so an edit made on it since is caught too; none recorded fails closed. No
+ * baseline (a row from before A-34): no.
  */
 export function startsFromBaseline(
   baseline: ReviewBaseline | null,
@@ -1008,9 +1047,10 @@ export function startsFromBaseline(
   if (now.sequence.length !== baseline.sequence.length) return false;
   if (now.sequence.some((id, index) => baseline.sequence[index] !== id)) return false;
   if (rewritten.size === 0) return now.digest === baseline.digest;
+  const byId = new Map(scenes.map((scene) => [scene.id, scene]));
   return now.sequence.every((id) =>
     rewritten.has(id)
-      ? rewritten.get(id) !== undefined && now.slides[id] === rewritten.get(id)
+      ? rewritten.get(id) !== undefined && sceneEditDigest(byId.get(id)!) === rewritten.get(id)
       : now.slides[id] === baseline.slides[id],
   );
 }
