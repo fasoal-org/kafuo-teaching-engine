@@ -187,6 +187,30 @@ describe('flowPositionDeleteRefusal', () => {
     ).resolves.toBeNull();
   });
 
+  // g5.v12 (A-32): a check quiz the run dropped leaves its position empty from the start.
+  // The guard is a delta check, and the rail's order check only needs ascending positions,
+  // so a teacher's save, drag or Restore on such a lesson is never refused for that gap.
+  it('A-32: a package whose check quiz was dropped keeps saving, reordering and deleting', async () => {
+    const dropped = STORED.filter((row) => row.id !== 'q1');
+    const reordered = [dropped[1]!, dropped[0]!, dropped[2]!];
+    expect(
+      await flowPositionDeleteRefusal(
+        put('/documents/stage-1', document(reordered)),
+        '/documents/stage-1',
+        reader(dropped),
+      ),
+    ).toBeNull();
+    expect(
+      await flowPositionDeleteRefusal(
+        new Request('http://localhost/documents/stage-1/scenes/s1b', { method: 'DELETE' }),
+        '/documents/stage-1/scenes/s1b',
+        reader(dropped),
+      ),
+    ).toBeNull();
+    const { keepsTeachingOrder } = await import('@/lib/edit/scene-defaults');
+    expect(keepsTeachingOrder(dropped)).toBe(true);
+  });
+
   it('the editor maps exactly this code to its terminal resync', () => {
     expect(FLOW_POSITION_REFUSAL_CODE).toBe(SCENE_DELETE_EMPTIES_FLOW_POSITION);
   });

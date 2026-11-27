@@ -354,8 +354,17 @@ describe('generateClassroom: one bounded re-ask of the planner (g5.v12, EN-4)', 
     outlineAnswers(answer('first plan'));
     await generateWith({ collectOutlineIssues: () => [] });
     expect(outlineCalls()[0]![4].bookPartPlacement).toBe(true);
+    // W2.5 (scene writer): the canvas and the narration of a g5.v12 run get bookPartOpener.
+    const lastOptions = (mock: { mock: { calls: unknown[][] } }, at: number) =>
+      mock.mock.calls.at(-1)?.[at] as Record<string, unknown> | undefined;
+    expect(mocks.generateSceneContent).toHaveBeenCalled();
+    expect(lastOptions(mocks.generateSceneContent, 2)?.bookPartOpener).toBe(true);
+    expect(mocks.generateSceneActions).toHaveBeenCalled();
+    expect(lastOptions(mocks.generateSceneActions, 3)?.bookPartOpener).toBe(true);
 
     mocks.generateSceneOutlinesFromRequirements.mockClear();
+    mocks.generateSceneContent.mockClear();
+    mocks.generateSceneActions.mockClear();
     outlineAnswers(answer('first plan'));
     const { generateClassroom } = await import('@/lib/server/classroom-generation');
     await generateClassroom(
@@ -366,6 +375,10 @@ describe('generateClassroom: one bounded re-ask of the planner (g5.v12, EN-4)', 
       { baseUrl: 'http://localhost', correction: { collectOutlineIssues: () => [] } },
     );
     expect(outlineCalls()[0]![4]).not.toHaveProperty('bookPartPlacement');
+    expect(mocks.generateSceneContent).toHaveBeenCalled();
+    expect(lastOptions(mocks.generateSceneContent, 2)).not.toHaveProperty('bookPartOpener');
+    expect(mocks.generateSceneActions).toHaveBeenCalled();
+    expect(lastOptions(mocks.generateSceneActions, 3)).not.toHaveProperty('bookPartOpener');
   });
 
   it('Wave 2 (MI-3): a g5.v12 planner gets its own subject Skill body, so subjects differ', async () => {
