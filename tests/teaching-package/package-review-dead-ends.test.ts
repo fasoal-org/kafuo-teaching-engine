@@ -47,6 +47,7 @@ import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/packag
 import { reviewSlidesOf } from '@/lib/server/teaching-package/package-review-input';
 import {
   queueFlaggedSlideRefix,
+  queueSuccessorStageReview,
   refixReviewId,
 } from '@/lib/server/teaching-package/package-review-refix';
 import {
@@ -202,6 +203,38 @@ describe('dead end (a): an edit successor gets one first review of its Stage', (
     await expect(refix({}, null, null)).rejects.toMatchObject({
       code: 'PACKAGE_REVIEW_NOT_READY',
     });
+    expect(mocks.insertQueuedReview).not.toHaveBeenCalled();
+  });
+
+  it('at submit (slot-5 wires it): one review of a successor Stage that has none, else nothing', async () => {
+    const submit = async (version: Record<string, unknown>, review: PackageReview | null) => {
+      mocks.readVersionForUpdate.mockReset().mockResolvedValue({
+        id: 'tpv-2',
+        tenantId: 't-1',
+        learningItem: { type: 'lesson', id: '227' },
+        status: 'in_review',
+        currentStageId: 'stage-2',
+        currentAttemptId: null,
+        ...version,
+      });
+      mocks.readStageReviewForUpdate.mockReset().mockResolvedValue(review);
+      mocks.readProducingAttemptId
+        .mockReset()
+        .mockResolvedValue({ attemptId: 'tpa-1', own: false });
+      mocks.readAttemptById.mockReset().mockResolvedValue({ inputSnapshot: {} });
+      mocks.insertQueuedReview.mockReset().mockImplementation(async (_tx, input) => input.id);
+      mocks.readPackageReview
+        .mockReset()
+        .mockImplementation(async (_tx, id) => ({ ...REVIEW, id, status: 'queued' }));
+      return queueSuccessorStageReview({} as never, { tenantId: 't-1', versionId: 'tpv-2' });
+    };
+    expect(await submit({}, null)).toMatchObject({ status: 'queued' });
+    expect(mocks.insertQueuedReview.mock.calls[0]![1]).toMatchObject({
+      attemptId: 'tpa-1#stage:stage-2',
+      subjectCode: null,
+    });
+    expect(await submit({}, REVIEW)).toBeNull();
+    expect(await submit({ currentAttemptId: 'tpa-9' }, null)).toBeNull();
     expect(mocks.insertQueuedReview).not.toHaveBeenCalled();
   });
 

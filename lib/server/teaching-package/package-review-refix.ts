@@ -43,6 +43,7 @@ import {
 } from '@/lib/server/teaching-package/package-review-input';
 import {
   insertQueuedReview,
+  newPackageReviewId,
   readPackageReview,
   readStageReviewForUpdate,
   requeueReviewForRefix,
@@ -255,6 +256,33 @@ async function queueStageReview(
     now,
   });
   return readPackageReview(tx, storedId, { tenantId: version.tenantId });
+}
+
+/**
+ * Dead end (a) at submit: the first review of an edit successor's current Stage, when it
+ * has none yet. For `submitForReview` to call after its commit (best effort; it never
+ * fails a submit). The review runs on the submitted version, so its fix loop stops at
+ * once and any finding waits for the teacher: Start Edit, then Regenerate flagged.
+ * `null` when nothing was queued (an attempt of its own, a review of this Stage already,
+ * no producing attempt). One per Stage, like the press.
+ */
+export async function queueSuccessorStageReview(
+  pool: ConnectableQueryable,
+  input: { tenantId: string; versionId: string },
+  deps: { now?: () => number } = {},
+): Promise<PackageReview | null> {
+  const now = deps.now ?? Date.now;
+  return nodePostgresTransaction(pool)(async (tx: Queryable) => {
+    const version = await readVersionForUpdate(tx, input.versionId, { tenantId: input.tenantId });
+    if (!version || version.currentAttemptId !== null) return null;
+    const existing = await readStageReviewForUpdate(tx, {
+      tenantId: input.tenantId,
+      versionId: version.id,
+      stageId: version.currentStageId,
+    });
+    if (existing) return null;
+    return queueStageReview(tx, version, newPackageReviewId(), now());
+  });
 }
 
 /**
