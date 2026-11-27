@@ -1831,7 +1831,12 @@ async function runKafuoAttempt(
         // Scenes the violation can be scoped to are regenerated on resume
         // (plan §3.5). A violation that cannot be scoped keeps the historical
         // compensate-and-fail behaviour.
-        const pending = pendingForFlowViolation(result, flowCheck.violation, kafuo.teachingFlow);
+        // g5.v12 (A-32): a dropped check quiz is not pending; a resume never pays for it.
+        const pending = pendingForFlowViolation(
+          result,
+          flowCheck.violation,
+          kafuo.teachingFlow,
+        ).filter((outlineId) => !droppedCheckQuizIds.has(outlineId));
         if (pending.length > 0) {
           const { paused } = await pauseAttemptForCorrection(
             pool,

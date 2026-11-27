@@ -31,7 +31,7 @@ import {
   buildBookPartMap,
   listedPartUnitIds,
 } from '@/lib/server/teaching-package/book-part-placement';
-import { submitBlockers, submitForReview } from '@/lib/server/teaching-package/lifecycle';
+import { approve, submitBlockers, submitForReview } from '@/lib/server/teaching-package/lifecycle';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
@@ -423,7 +423,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
         },
       ] as unknown as AppDocumentOutline['outlines'];
 
-    it('Submit passes; the check’s try-it and solution slides are still taught', async () => {
+    it('Submit and approve pass; the check’s try-it and solution slides are still taught', async () => {
       const versionId = await seedBookVersion({
         version: 'g5.v12',
         scenes: withoutQ1,
@@ -433,6 +433,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
 
       expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
       expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      expect((await approve(tx(), command(versionId))).status).toBe('approved');
       const ids = withoutQ1('x').map((scene) => scene.id);
       expect(ids).toEqual(expect.arrayContaining(['try1', 'sol1']));
       expect(ids).not.toContain('q1');
