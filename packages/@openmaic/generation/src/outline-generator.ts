@@ -140,6 +140,20 @@ export interface OutlinePromptContext {
    */
   normalizedGrounding?: boolean;
   /**
+   * g5.v12 only (critical items, Wave 2: W2.5, MI-4, MI-5): the book-part planner. The
+   * opener is built from what the request sends (no learning-objectives list, no big
+   * idea), a check's single multi-item solution slide is a `worked_example`, and a flow
+   * body shared by several objective positions is sent once. Absent → every outline
+   * prompt is byte-identical.
+   */
+  bookPartPlacement?: boolean;
+  /**
+   * g5.v12 only (Wave 2, MI-3): the subject's Teaching Skill body (its SKILL.md), sent to
+   * the planner ranked above the flow text, so each subject plans with its own Skill.
+   * Absent → the prompt is byte-identical.
+   */
+  subjectSkillText?: string;
+  /**
    * This run is governed by Teaching Skills (Module 2 W10). The caller derives
    * the governance mode ONCE from the request marker and passes it here as a
    * value; it is never re-derived from `teachingFlow` entries. When true, the
@@ -533,6 +547,40 @@ export function resolveImageTextPolicyText(
   return 'If the image contains text, labels, or annotations, the prompt must explicitly specify that all text in the image should be in the course language (for example, "all labels in Chinese" for zh-CN courses, "all labels in English" for en-US courses). For purely visual images without text, language does not matter';
 }
 
+/** «For Learning Objective <ref>: '<statement>'.» then the body the objectives share. */
+const OBJECTIVE_ENTRY = /^(For Learning Objective [^:\n]+: '[\s\S]*?'\.)\s+(\S[\s\S]*)$/;
+
+/**
+ * g5.v12 (MI-4): each flow position's instruction line, with a body that two or more
+ * objective positions repeat word for word replaced by a reference to it, and those
+ * bodies, each listed once. `null` when no body is shared (nothing changes).
+ */
+export function sharedFlowBodies(
+  instructions: readonly string[],
+): { lines: string[]; bodies: string[] } | null {
+  const parsed = instructions.map((text) => OBJECTIVE_ENTRY.exec(text));
+  const counts = new Map<string, number>();
+  for (const match of parsed) {
+    if (match) counts.set(match[2]!, (counts.get(match[2]!) ?? 0) + 1);
+  }
+  const repeated = [...counts.entries()].filter(([, count]) => count >= 2).map(([body]) => body);
+  if (repeated.length === 0) return null;
+  const tag = (body: string) => `S${repeated.indexOf(body) + 1}`;
+  const lines = instructions.map((text, index) => {
+    const match = parsed[index];
+    return match && repeated.includes(match[2]!)
+      ? `${match[1]} Then follow the shared instructions ${tag(match[2]!)} below.`
+      : text;
+  });
+  const bodies = repeated.map((body) => {
+    const positions = parsed
+      .map((match, index) => (match && match[2] === body ? index : -1))
+      .filter((index) => index >= 0);
+    return `SHARED INSTRUCTIONS ${tag(body)} (flow positions ${positions.join(', ')}): "${body}"`;
+  });
+  return { lines, bodies };
+}
+
 /** Build the byte-stable system and user prompts for outline generation. */
 export function buildOutlinePrompt(
   requirements: UserRequirements,
@@ -558,15 +606,22 @@ export function buildOutlinePrompt(
   // Teaching Model versions that predate scene policies — render exactly as
   // before, and their stage-keyed legacy rules are described by the fixed
   // prompt text they always had.
+  // g5.v12 (MI-4): an objective position's instructions are its own line plus a body
+  // every objective shares; that body is sent once, after the list.
+  const shared =
+    hasTeachingFlow && context.bookPartPlacement === true
+      ? sharedFlowBodies(teachingFlow!.map((entry) => entry.instructions))
+      : null;
   const teachingFlowText = hasTeachingFlow
-    ? teachingFlow!
-        .map(
+    ? [
+        ...teachingFlow!.map(
           (entry, index) =>
-            `${index}. stage="${entry.stage}" instructions="${entry.instructions}"${
+            `${index}. stage="${entry.stage}" instructions="${shared?.lines[index] ?? entry.instructions}"${
               entry.scenePolicy ? ` policy="${describeScenePolicy(entry.scenePolicy)}"` : ''
             }`,
-        )
-        .join('\n')
+        ),
+        ...(shared?.bodies ?? []),
+      ].join('\n')
     : '';
   const hasScenePolicies = hasTeachingFlow && flowHasScenePolicies(teachingFlow);
   // The governance mode is an explicit declaration, never inferred from the
@@ -597,6 +652,12 @@ export function buildOutlinePrompt(
     // states its textbook-grounded positions through the policy instead.
     hasLegacyFlowVisualRule: hasTeachingFlow && !hasScenePolicies,
     normalizedGrounding: context.normalizedGrounding ?? false,
+    // g5.v12 (W2.5): the book-part opener and classification lines replace the standard
+    // ones; every other caller keeps them (the loader's default).
+    bookPartPlacement: context.bookPartPlacement === true,
+    standardOpener: context.bookPartPlacement !== true,
+    hasSubjectSkill: Boolean(context.subjectSkillText?.trim()),
+    subjectSkillText: context.subjectSkillText?.trim() ?? '',
     hasSkillPolicy,
     skillPolicyText,
     hasUnavailableRuntimes: unavailableRuntimesText !== '',

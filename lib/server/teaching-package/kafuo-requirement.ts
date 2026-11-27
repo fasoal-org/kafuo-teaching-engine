@@ -6,6 +6,7 @@
  * fixed-order and stable for the same normalized input, so requirement
  * digests and audits stay reproducible (KTE-AC-005).
  */
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import type {
   KafuoLearningItemContext,
   LearningObjectiveRef,
@@ -20,6 +21,44 @@ interface RequirementInput {
 
 function section(title: string, lines: string[]): string {
   return [`## ${title}`, '', ...lines, ''].join('\n');
+}
+
+/** «For Learning Objective <ref>: '<statement>'.» then the body the objectives share. */
+const OBJECTIVE_ENTRY = /^(For Learning Objective [^:\n]+: '[\s\S]*?'\.)\s+(\S[\s\S]*)$/;
+
+/**
+ * The flow list. g5.v12 only (critical items, Wave 2: MI-4): the Backend pins every
+ * objective position as its own line plus one body all objectives share, so that body is
+ * listed once after the positions instead of once per objective. Every other model:
+ * one line per position, exactly as before.
+ */
+function flowLines(teachingModel: RequirementInput['teachingModel']): string[] {
+  const plain = teachingModel.flow.map(
+    (entry, index) => `- flowIndex ${index} | stage "${entry.stage}" | ${entry.instructions}`,
+  );
+  if (!isBookPartPlacementModel(teachingModel)) return plain;
+  const parsed = teachingModel.flow.map((entry) => OBJECTIVE_ENTRY.exec(entry.instructions));
+  const counts = new Map<string, number>();
+  for (const match of parsed) {
+    if (match) counts.set(match[2]!, (counts.get(match[2]!) ?? 0) + 1);
+  }
+  const shared = [...counts.entries()].filter(([, count]) => count >= 2).map(([body]) => body);
+  if (shared.length === 0) return plain;
+  const tag = (body: string) => `S${shared.indexOf(body) + 1}`;
+  return [
+    ...teachingModel.flow.map((entry, index) => {
+      const match = parsed[index];
+      return match && shared.includes(match[2]!)
+        ? `- flowIndex ${index} | stage "${entry.stage}" | ${match[1]} Then follow the shared instructions ${tag(match[2]!)} below.`
+        : plain[index]!;
+    }),
+    ...shared.map((body) => {
+      const positions = parsed
+        .map((match, index) => (match && match[2] === body ? index : -1))
+        .filter((index) => index >= 0);
+      return `- SHARED INSTRUCTIONS ${tag(body)} (flowIndex ${positions.join(', ')}): ${body}`;
+    }),
+  ];
 }
 
 export function buildDeterministicKafuoRequirement(input: RequirementInput): string {
@@ -76,9 +115,7 @@ export function buildDeterministicKafuoRequirement(input: RequirementInput): str
       'list. Outline order covers the flow positions in order with no gaps, no reordering, and',
       'no re-entry: one flow position may produce ONE OR MORE consecutive outlines.',
       '',
-      ...teachingModel.flow.map(
-        (entry, index) => `- flowIndex ${index} | stage "${entry.stage}" | ${entry.instructions}`,
-      ),
+      ...flowLines(teachingModel),
     ],
   );
 

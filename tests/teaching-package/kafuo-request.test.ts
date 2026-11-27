@@ -540,6 +540,41 @@ describe('buildKafuoStartRequest', () => {
     expect(v11).not.toContain('ONE CHECK PER SLIDE');
     expect(v11).not.toContain('LESSON PARTS IN BOOK ORDER');
   });
+
+  it('Wave 2 (MI-4): the flow body every v12 objective shares is listed once; v11 unchanged', () => {
+    const BODY = 'Teach every unit of this objective block in book order, one idea per slide.';
+    const flow = [
+      { stage: 'lesson_opener', instructions: 'Open the lesson.' },
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: `For Learning Objective 7001: 'Explain photosynthesis.'. ${BODY}`,
+      },
+      { stage: 'outcome_check_understanding', instructions: 'Check 1.' },
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: `For Learning Objective 7002: 'Explain respiration.'. ${BODY}`,
+      },
+      { stage: 'outcome_check_understanding', instructions: 'Check 2.' },
+    ];
+    const learningObjectives = [
+      { objectiveRef: '7001', snapshot: { statement: 'Explain photosynthesis.' } },
+      { objectiveRef: '7002', snapshot: { statement: 'Explain respiration.' } },
+    ];
+    const requirementFor = (version: string) => {
+      const { request, aggregate } = parseKafuoGenerationRequest(
+        body({ teachingModel: { key: 'g5', version, flow }, learningObjectives }),
+      );
+      return buildKafuoStartRequest(request, aggregate).start.generation.requirement;
+    };
+    const count = (text: string) => text.split(BODY).length - 1;
+    const v12 = requirementFor('g5.v12');
+    expect(count(v12)).toBe(1);
+    expect(v12).toContain('- SHARED INSTRUCTIONS S1 (flowIndex 1, 3): ');
+    expect(v12).toContain(
+      "For Learning Objective 7002: 'Explain respiration.'. Then follow the shared instructions S1 below.",
+    );
+    expect(count(requirementFor('g5.v11'))).toBe(2);
+  });
 });
 
 describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {

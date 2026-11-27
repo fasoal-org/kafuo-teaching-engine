@@ -96,6 +96,8 @@ import {
   verifyCheckQuizKeys,
   type CheckQuizReference,
 } from '@/lib/server/teaching-package/check-quiz-keys';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
+import { subjectTeachingSkillFor } from '@/lib/server/teaching-package/subject-teaching-skills';
 import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
 import { withGuideWrittenQuestions } from '@/lib/server/teaching-package/guide-written-attempts';
 import { retitledExerciseSolution } from '@/lib/server/teaching-package/exercise-slide-title';
@@ -1836,6 +1838,26 @@ export async function generateClassroom(
     // per run on the same routed call (same stage, attempt and run), and keeps a
     // capped copy of every answer that needed a repair or was refused.
     const checkAnswers = Boolean(correction);
+    // g5.v12 only (Wave 2, MI-3): the planner reads its subject's own Teaching Skill body,
+    // ranked above the flow text (each subject's SKILL.md, resolved from the flow's own
+    // policies). Never on any other model.
+    const bookPartPlanner =
+      input.governed !== undefined && isBookPartPlacementModel(input.governed.teachingModel);
+    const subjectSkillText = (() => {
+      if (!bookPartPlanner || !input.governed) return undefined;
+      const subjectSkill = subjectTeachingSkillFor(input.subjectCode);
+      if (!subjectSkill) return undefined;
+      try {
+        return [...resolveFlowSkillPolicies(input.governed.flow).values()].find(
+          (definition) =>
+            definition.skillId === subjectSkill.skillId &&
+            definition.version === subjectSkill.version,
+        )?.content;
+      } catch (error) {
+        log.warn('The subject Teaching Skill could not be resolved for the planner:', error);
+        return undefined;
+      }
+    })();
     let badAnswerRerollUsed = false;
     // The empty-plan re-plan below is one extra outline call too (g5.v12 EN-4 bound).
     let emptyPlanReplanned = false;
@@ -1894,6 +1916,11 @@ export async function generateClassroom(
           // W1: the outline contract boolean DERIVES from the single governed-mode
           // predicate — no second discriminator exists anywhere in the pipeline.
           ...(input.governed ? { skillPolicy: true } : {}),
+          // g5.v12 only (Wave 2, W2.5 / MI-4): the opener carries no objectives list and
+          // no big idea, and the shared flow body is sent once.
+          ...(bookPartPlanner
+            ? { bookPartPlacement: true, ...(subjectSkillText ? { subjectSkillText } : {}) }
+            : {}),
           ...(correctiveContext ? { correctiveContext } : {}),
           // Authoritative lesson language → embedded-text policy for planned
           // images (RTL lessons get text-free images with native labels).

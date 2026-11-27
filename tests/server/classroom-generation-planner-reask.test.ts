@@ -350,6 +350,54 @@ describe('generateClassroom: one bounded re-ask of the planner (g5.v12, EN-4)', 
     expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual(['first plan']);
   });
 
+  it('Wave 2 (W2.5, MI-4): a governed g5.v12 outline call carries bookPartPlacement; g5.v11 does not', async () => {
+    outlineAnswers(answer('first plan'));
+    await generateWith({ collectOutlineIssues: () => [] });
+    expect(outlineCalls()[0]![4].bookPartPlacement).toBe(true);
+
+    mocks.generateSceneOutlinesFromRequirements.mockClear();
+    outlineAnswers(answer('first plan'));
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    await generateClassroom(
+      {
+        requirement: 'Teach sink basics',
+        governed: { ...GOVERNED_CONTEXT, teachingModel: { key: 'g5', version: 'g5.v11' } },
+      },
+      { baseUrl: 'http://localhost', correction: { collectOutlineIssues: () => [] } },
+    );
+    expect(outlineCalls()[0]![4]).not.toHaveProperty('bookPartPlacement');
+  });
+
+  it('Wave 2 (MI-3): a g5.v12 planner gets its own subject Skill body, so subjects differ', async () => {
+    const withSubjectSkill = (skillId: string): GovernedGenerationContext => ({
+      ...GOVERNED_CONTEXT,
+      flow: GOVERNED_CONTEXT.flow.map((entry) => ({
+        ...entry,
+        skillPolicy: {
+          required: [],
+          preferred: [{ skillId, version: 'v1' }],
+          allowed: [{ skillId, version: 'v1' }],
+          combinationRestrictions: [],
+        },
+      })),
+    });
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const skillTextFor = async (subjectCode: string, skillId: string) => {
+      mocks.generateSceneOutlinesFromRequirements.mockClear();
+      outlineAnswers(answer('first plan'));
+      await generateClassroom(
+        { requirement: 'Teach', governed: withSubjectSkill(skillId), subjectCode },
+        { baseUrl: 'http://localhost', correction: { collectOutlineIssues: () => [] } },
+      );
+      return outlineCalls()[0]![4].subjectSkillText as string | undefined;
+    };
+    const physics = await skillTextFor('PHYSICS', 'physics-conceptual-teaching');
+    const chemistry = await skillTextFor('CHEMISTRY', 'chemistry-scientific-teaching');
+    expect(physics).toBeTruthy();
+    expect(chemistry).toBeTruthy();
+    expect(physics).not.toBe(chemistry);
+  });
+
   it('without the hook a run makes exactly one outline call (every model before g5.v12)', async () => {
     outlineAnswers(answer('first plan'), answer('second plan'));
 

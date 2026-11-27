@@ -81,7 +81,15 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 - **Clear Purpose**: Each scene has a clear teaching function
 - **Logical Flow**: Scenes form a natural teaching progression
 - **Experience Design**: Consider learning experience and emotional response from the student's perspective
-{{#if hasTeachingFlow}}
+{{#if hasSubjectSkill}}
+---
+
+## The subject's Teaching Skill (ranked ABOVE the flow instructions below)
+
+This lesson's subject is taught with this Skill. Where a flow instruction below and this Skill differ on how to teach the subject, follow the Skill; the flow still decides the order and positions.
+
+{{subjectSkillText}}
+{{/if}}{{#if hasTeachingFlow}}
 ---
 
 ## Authoritative Teaching Model Flow (MANDATORY)
@@ -481,7 +489,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 
 4. `type` is one of `"slide"`, `"quiz"`, `"interactive"`, `"pbl"`.
    - Every `slide` scene carries `slideType`, and every instructional slide a `contentRole`, chosen by pedagogical intent (only a purely structural `contents` / `transition` / `end` slide omits the role); `explanation`, `activity` and `practice` MAY add a `contentKind` from their own list, and every other role omits `contentKind`. `practice` + `independent` also carries an `assistancePlan` with `hint` and `explanation`, and its `description` / `keyPoints` hold the task only. `quiz`, `interactive` and `pbl` scenes carry none of these fields. A missing or unknown `contentRole` or `slideType` invalidates the entire response; a `contentKind` outside the role's own list is discarded.
-   - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.
+{{#if standardOpener}}   - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}{{#if bookPartPlacement}}   - The lesson opens with one `cover` + `orientation` slide built only from the opening content the request gives (no learning-objectives list, no big idea) — no separate learning-objectives slide, no `contents` slide, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.

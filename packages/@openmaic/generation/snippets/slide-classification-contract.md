@@ -60,7 +60,8 @@ Assistance plan — `assistancePlan` (planner-only, never shown to the learner):
 
 Telling close roles apart:
 
-- `example` vs `worked_example`: a brief illustration vs a complete, reasoned solution.
+- `example` vs `worked_example`: a brief illustration vs a complete, reasoned solution.{{#if bookPartPlacement}}
+- A check's ONE solution slide that solves every item of that check together (1A, 1B, …) is a `worked_example`, however many items it solves.{{/if}}
 - `worked_example` vs `procedure`: one specific problem solved vs the general steps to reuse on any problem.
 - `activity` vs `practice`: building new understanding by doing vs applying what was already taught.
 
@@ -101,9 +102,9 @@ The first instructional slide of a lesson is normally `"type": "slide"`, `"slide
 - the lesson title
 - a hook or framing question
 - a short introduction / context
-- concise learning objectives
-- one pedagogically useful supporting visual — tied to the hook, the context or the big idea, never decoration
-- the big idea / key framing message
+{{#if standardOpener}}- concise learning objectives
+{{/if}}- one pedagogically useful supporting visual — tied to the hook, the context or the big idea, never decoration{{#if standardOpener}}
+- the big idea / key framing message{{/if}}
 
 The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-only, never shown to the learner) on this slide:
 

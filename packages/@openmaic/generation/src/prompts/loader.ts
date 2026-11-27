@@ -22,6 +22,9 @@ const PROMPT_VARIABLE_DEFAULTS = {
     projectSummary:
       '(No generated milestones are available; introduce the project topic without inventing any.)',
   },
+  // The opener's objectives and big-idea rules render unless a g5.v12 run replaces them
+  // (`bookPartPlacement`, Wave 2 W2.5): every other caller keeps them byte for byte.
+  'requirements-to-outlines': { standardOpener: true },
 } satisfies PromptVariableDefaults;
 
 function isMissingFileError(error: unknown): boolean {
