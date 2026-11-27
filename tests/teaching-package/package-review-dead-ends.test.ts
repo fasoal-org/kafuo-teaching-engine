@@ -53,6 +53,7 @@ import {
   queueFlaggedSlideRefix,
   queueSuccessorStageReview,
   refixReviewId,
+  seedRefixFindings,
 } from '@/lib/server/teaching-package/package-review-refix';
 import {
   isPressedFirstReview,
@@ -468,6 +469,39 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(regenerateAudio).not.toHaveBeenCalled();
     expect(result.findings[0]).toMatchObject({ status: 'fixed' });
     expect(result.fixes[0]).toMatchObject({ outcome: 'fixed', code: null });
+  });
+
+  it('a re-check of a person’s edit never stamps a finding it did not judge (press, loop, press)', async () => {
+    const live = new Map([['s2', reviewedSceneDigest(SCENES[1]!)]]);
+    const slides = reviewSlidesOf(SCENES);
+    const stored = [
+      finding('p1', {
+        teacherReason: 'REREVIEW_UNAVAILABLE',
+        heldFor: 'person',
+        sceneDigest: 'before-edit',
+      }),
+      finding('n1', { check: 'S4', teacherReason: 'STILL_WRONG', sceneDigest: 'before-edit' }),
+    ];
+    // The person edited s2: p1 is re-checked as they made it, n1 is left alone.
+    const first = seedRefixFindings(stored, slides, live);
+    expect(first.findings.map((f) => [f.id, f.teacherReason, f.recheckOnly])).toEqual([
+      ['p1', null, true],
+      ['n1', 'VERSION_CHANGED', undefined],
+    ]);
+    const { run, regenerate } = loop(() => []);
+    const result = await run(first.findings);
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(result.findings.map((f) => [f.id, f.status, f.sceneDigest])).toEqual([
+      ['p1', 'fixed', live.get('s2')],
+      ['n1', 'open', 'before-edit'],
+    ]);
+    // The next press still sees the edit under n1: never regenerated over it.
+    const second = seedRefixFindings(result.findings, slides, live);
+    expect(second.findings.find((f) => f.id === 'n1')).toMatchObject({
+      teacherReason: 'VERSION_CHANGED',
+      sceneDigest: 'before-edit',
+    });
+    expect(second.sceneIds).toEqual([]);
   });
 
   it('a re-checked slide records itself as the re-check saw it (review 27 Nov 2026, HIGH)', async () => {

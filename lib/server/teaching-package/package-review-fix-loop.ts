@@ -369,14 +369,19 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         holdFor('recheck');
       };
       /**
-       * Review 27 Nov 2026 (HIGH): this slide's findings record the slide as this fix last
+       * Review 27 Nov 2026 (HIGH): the findings this fix judged record the slide as it last
        * saw it (`sceneDigest`), never as the Stage is when the run ends -- so a person's
-       * edit made meanwhile stays visible to the next press, which leaves it alone.
+       * edit made meanwhile stays visible to the next press, which leaves it alone. A slide
+       * the fix wrote stamps every finding on it (the slide is now the fix's); a re-check
+       * only (the live slide may be a person's edit) stamps only the findings it judged and
+       * the ones it added, so a finding it never judged keeps the edit visible.
        */
-      const seenAs = (scene: AppScene) => {
+      const seenAs = (scene: AppScene, added: readonly StoredFinding[] = []) => {
         const digest = reviewedSceneDigest(scene);
+        const judged = recheckOnly ? new Set([...sceneFindings, ...added]) : null;
         for (const finding of findings) {
-          if (finding.targetId === slide.id) finding.sceneDigest = digest;
+          if (finding.targetId !== slide.id || (judged && !judged.has(finding))) continue;
+          finding.sceneDigest = digest;
         }
       };
       if (stopped) {
@@ -905,31 +910,30 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         usedIds.add(id);
         return id;
       };
-      findings.push(
-        ...rereview
-          .filter((finding) => !alreadyOpen.has(finding.check))
-          .map((finding, index) => {
-            const added: StoredFinding = {
-              id: freshId(`r-${slide.order}-${index + 1}`),
-              targetId: slide.id,
-              targetTitle: changed.title,
-              targetOrder: changed.order,
-              check: finding.check,
-              severity: finding.severity,
-              bookEvidence: finding.bookEvidence,
-              whatIsWrong: finding.whatIsWrong,
-              fixNote: finding.fixNote,
-              status: 'open',
-              teacherReason: null,
-            };
-            // A new error the one regeneration did not target was never attempted.
-            added.teacherReason = originalChecks.has(finding.check)
-              ? 'STILL_WRONG'
-              : (teacherOnlyReason(added, nowSlides) ?? 'NOT_ATTEMPTED');
-            return added;
-          }),
-      );
-      seenAs(regenerated);
+      const addedFindings = rereview
+        .filter((finding) => !alreadyOpen.has(finding.check))
+        .map((finding, index) => {
+          const added: StoredFinding = {
+            id: freshId(`r-${slide.order}-${index + 1}`),
+            targetId: slide.id,
+            targetTitle: changed.title,
+            targetOrder: changed.order,
+            check: finding.check,
+            severity: finding.severity,
+            bookEvidence: finding.bookEvidence,
+            whatIsWrong: finding.whatIsWrong,
+            fixNote: finding.fixNote,
+            status: 'open',
+            teacherReason: null,
+          };
+          // A new error the one regeneration did not target was never attempted.
+          added.teacherReason = originalChecks.has(finding.check)
+            ? 'STILL_WRONG'
+            : (teacherOnlyReason(added, nowSlides) ?? 'NOT_ATTEMPTED');
+          return added;
+        });
+      findings.push(...addedFindings);
+      seenAs(regenerated, addedFindings);
       fixes.push({
         sceneId: slide.id,
         findingIds: sceneFindings.map((f) => f.id),
