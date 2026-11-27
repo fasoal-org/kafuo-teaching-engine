@@ -37,7 +37,9 @@ import { createLogger } from '@/lib/logger';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
+  namedFigures,
   sceneToReviewSlide,
+  type ReviewFigureEvidence,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -109,8 +111,9 @@ const SEVERITY_RANK: Readonly<Record<string, number>> = { low: 1, medium: 2, hig
 const SERVER_CHECKS: ReadonlySet<string> = new Set([GENERATION_ISSUE_CHECK, LABEL_SCRIPT_CHECK]);
 
 /**
- * RV-1/RV-4 (g5.v12): the fix code of a slide whose re-check held back book figures of
- * its units, so a HIGH finding on it stayed open (`REREVIEW_UNAVAILABLE`).
+ * RV-1/RV-4 (g5.v12): the fix code of a slide whose re-check did not see book figures
+ * a finding needed, so it stayed open (`REREVIEW_UNAVAILABLE`). A flagged-slide
+ * regeneration retries exactly these (`seedRefixFindings`).
  */
 export const REREVIEW_FIGURES_HELD = 'REREVIEW_FIGURES_HELD';
 
@@ -380,20 +383,25 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       let regenerated: AppScene;
       let regenerationId: string | null = null;
-      // RV-5: the model that served this slide's last answered re-review.
+      // RV-5: the model that served this slide's last answered re-review (an earlier,
+      // answered one of this slide's fix when the last could not run).
       let served: Pick<StoredFix, 'reviewModel' | 'reviewProvider'> = {
         reviewModel: null,
         reviewProvider: null,
       };
-      // RV-1/RV-4 (g5.v12): book figures of this slide's units that re-review did not see.
-      let figuresHeld = 0;
+      // RV-1/RV-4 (g5.v12): the book figures the deciding re-check could and could not see.
+      let figureEvidence: ReviewFigureEvidence | null = null;
       const noteServed = (answered: ReviewCallAnswer) => {
         served = {
           reviewModel: answered.call.modelString ?? null,
           reviewProvider: answered.call.provider ?? null,
         };
-        figuresHeld = answered.figuresHeld ?? 0;
+        figureEvidence = answered.figureEvidence ?? null;
       };
+      // RV-4: a re-check also wants the figures this slide's findings were read from.
+      const alsoFigures = [
+        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
+      ];
       // W2 resume (review MED-3): this slide's fix is a replay whose live slide is no
       // longer its result — an evicted run already restored it (or retried it).
       let replayedAway = false;
@@ -509,6 +517,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
               units: context.units,
               slides: neighbourhood(around, candidate),
               focusIds: new Set([slide.id]),
+              ...(alsoFigures.length > 0 ? { alsoFigures } : {}),
             });
             noteServed(answered);
             return answered.answer.findings.filter((finding) => finding.targetId === slide.id);
@@ -659,6 +668,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             units: context.units,
             slides: neighbourhood(nowSlides, changed),
             focusIds: new Set([slide.id]),
+            ...(alsoFigures.length > 0 ? { alsoFigures } : {}),
           });
           noteServed(answered);
           rereview = answered.answer.findings.filter((finding) => finding.targetId === slide.id);
@@ -718,14 +728,40 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // the re-check of its slide reports any HIGH error. G1/G2 keep their own
       // deterministic re-check from the live scene (above). Medium and low
       // findings keep L-2. No new status, no extra regeneration.
-      const rereviewHasHigh = rereview.some((finding) => finding.severity === 'high');
+      // Review 27 Nov 2026: an error already open on this slide outside this fix (a
+      // teacher-only check, say) is not this fix's failure: it never holds a fixed
+      // finding open (else every Regenerate press would pay again for nothing).
+      const openOutside = new Set(
+        findings
+          .filter(
+            (finding) =>
+              finding.targetId === slide.id &&
+              finding.status === 'open' &&
+              !sceneFindings.includes(finding),
+          )
+          .map((finding) => finding.check),
+      );
+      const rereviewHasHigh = rereview.some(
+        (finding) => finding.severity === 'high' && !openOutside.has(finding.check),
+      );
+      const reviewerCheck = (finding: StoredFinding) => !SERVER_CHECKS.has(finding.check);
       const reviewerHigh = (finding: StoredFinding) =>
-        finding.severity === 'high' && !SERVER_CHECKS.has(finding.check);
+        finding.severity === 'high' && reviewerCheck(finding);
       const highStillOpen = (finding: StoredFinding) => reviewerHigh(finding) && rereviewHasHigh;
-      // RV-1/RV-4 (g5.v12): a re-check that could not see the book figures of its slide's
-      // units (the run's cap, or a resumed run) is no proof for a HIGH finding: it stays
-      // open, as a re-check that could not run (`REREVIEW_UNAVAILABLE`).
-      const evidenceHeld = (finding: StoredFinding) => reviewerHigh(finding) && figuresHeld > 0;
+      // RV-1/RV-4 (g5.v12): a re-check that did not see the evidence is no proof; the
+      // finding stays open as a re-check that could not run (`REREVIEW_UNAVAILABLE`):
+      // - any finding read from a book figure (its quote names `src_N`) the re-check did
+      //   not see (held back, or unreadable now);
+      // - a HIGH finding whose re-check held back any readable figure it wanted (the
+      //   run's cap, a call limit, a resumed run, a provider refusal of the figures).
+      // Never on another package: only a g5.v12 call reports `figureEvidence`.
+      const evidence = figureEvidence as ReviewFigureEvidence | null;
+      const unseen = new Set(evidence ? [...evidence.held, ...evidence.unreadable] : []);
+      const evidenceHeld = (finding: StoredFinding) =>
+        evidence !== null &&
+        reviewerCheck(finding) &&
+        (namedFigures(finding.bookEvidence?.quote).some((name) => unseen.has(name)) ||
+          (finding.severity === 'high' && evidence.held.length > 0));
       let heldOpen = false;
       let stillWrong = false;
       for (const finding of sceneFindings) {
@@ -805,7 +841,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         sceneId: slide.id,
         findingIds: sceneFindings.map((f) => f.id),
         outcome: stillWrong || heldOpen ? 'still_wrong' : 'fixed',
-        code: audioCode ?? (heldOpen ? REREVIEW_FIGURES_HELD : null),
+        // The held code wins: `seedRefixFindings` reads it to retry these findings.
+        code: heldOpen ? REREVIEW_FIGURES_HELD : audioCode,
         regenerationId,
         ...served,
       });

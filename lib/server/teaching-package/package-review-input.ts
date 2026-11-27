@@ -387,10 +387,30 @@ export async function loadReviewBookUnits(
  */
 export const REVIEW_IMAGE_BUDGET_USD = 0.3;
 export const REVIEW_IMAGE_ATTEMPTS_PER_CALL = 2;
+/**
+ * A hard ceiling on the figure tokens of one review run, whatever the rate card says
+ * (review 27 Nov: an underpriced `MODEL_RATE_CARD_OVERRIDES_JSON` entry must never
+ * widen the budget). 30,000 is the budget at today's $5/M.
+ */
+export const REVIEW_IMAGE_MAX_TOKENS_PER_RUN = 30_000;
 /** The first (whole-package) call's share, so re-reviews always keep the rest. */
 export const REVIEW_FIRST_CALL_IMAGE_SHARE = 2 / 3;
-/** A figure whose size is unknown is counted at the providers' largest image. */
-export const REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE = 1_600;
+/**
+ * Opus 5.5's high-resolution tier (Claude API reference: 2576 px on the long edge,
+ * about 3.75 MP, up to about 4,784 tokens per image). A figure with no known size is
+ * never sent (`loadReviewFigures`); this is the count of the largest image.
+ */
+export const REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE = 4_784;
+/**
+ * Request-size guards (review 27 Nov 2026), so a figure never makes the provider refuse
+ * the call: one figure at most 3.75 MB (5 MB as base64, the per-image limit) and 2000 px
+ * on each side (the limit when a request holds more than 20 images); one call at most 20
+ * figures and 20 MB of base64 (the request limit is 32 MB, the text included).
+ */
+export const REVIEW_FIGURE_MAX_BASE64_CHARS = 5_000_000;
+export const REVIEW_FIGURE_MAX_SIDE_PX = 2_000;
+export const REVIEW_CALL_MAX_FIGURES = 20;
+export const REVIEW_CALL_MAX_FIGURE_BASE64_CHARS = 20_000_000;
 /** Only these reach the reviewer (both providers read them; a GIF may be animated). */
 const REVIEW_FIGURE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
@@ -409,23 +429,36 @@ export interface ReviewFigure {
   tokens: number;
 }
 
+/** A linked figure the reviewer could not be shown (its unit is reviewed from text). */
+export interface UnreadableReviewFigure {
+  name: string;
+  unitIds: string[];
+}
+
 export interface ReviewFigureSet {
   figures: ReviewFigure[];
-  /** Linked figures that could not be read or are of another type (reviewed from text). */
-  unreadable: number;
+  /**
+   * Linked figures that could not be read, are of another type, have no known size or
+   * break a request-size guard. A finding that names one cannot be closed without it.
+   */
+  unreadable: UnreadableReviewFigure[];
 }
 
 /**
  * An ESTIMATE of one image's input tokens, the larger of the two reviewer providers'
- * documented rules: Anthropic scales an image to at most 1568 px on its long edge and
- * about 1.15 MP, then counts width × height / 750; OpenAI (high detail) fits it in
+ * documented rules: Claude Opus 5.5 (high-resolution tier) scales an image to at most
+ * 2576 px on its long edge and about 3.75 MP, then counts width × height / 750, at most
+ * about 4,784; OpenAI (high detail; GPT-6 Sol's rule is assumed the same) fits it in
  * 2048 px, scales its short side to at most 768 px, and counts 85 + 170 per 512-px tile.
  * No provider call: the real count is only known from the ledger after a paid call.
  */
 export function estimateImageTokens(width?: number | null, height?: number | null): number {
   if (!width || !height || width <= 0 || height <= 0) return REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE;
-  const a = Math.min(1, 1568 / Math.max(width, height), Math.sqrt(1_150_000 / (width * height)));
-  const anthropic = Math.ceil((width * a * (height * a)) / 750);
+  const a = Math.min(1, 2576 / Math.max(width, height), Math.sqrt(3_750_000 / (width * height)));
+  const anthropic = Math.min(
+    REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE,
+    Math.ceil((width * a * (height * a)) / 750),
+  );
   const fit = Math.min(1, 2048 / Math.max(width, height));
   const short = Math.min(1, 768 / Math.min(width * fit, height * fit));
   const tiles = Math.ceil((width * fit * short) / 512) * Math.ceil((height * fit * short) / 512);
@@ -437,40 +470,71 @@ const FIGURE_NAME = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i;
 
 /**
  * The book figures linked to `unitIds`, read back through the existing crop reader
- * (`readSourceVisualDataUrl`: only this Stage's media directory, checked against the
- * manifest checksum). These are the figures the generation selected and materialized
+ * (`readSourceVisualDataUrl`: only the reviewed Stage's media directory, checked against
+ * the manifest checksum). These are the figures the generation selected and materialized
  * (`sourceVisuals`); a teacher-guide answer drawing (no unit, `guide_<n>` file) is never
- * one. FAIL-SOFT: a figure that cannot be read, or is not PNG/JPEG/WebP, is counted in
- * `unreadable` and its unit is reviewed from its text, exactly as before.
+ * one, and neither is a path of another Stage. FAIL-SOFT: a figure that cannot be read,
+ * is not PNG/JPEG/WebP, has no known size or breaks a request-size guard is listed in
+ * `unreadable` and its unit is reviewed from its text, as before. `withBytes: false` (a
+ * run that may send nothing) lists the figures without reading any file.
  */
 export async function loadReviewFigures(
   sourceVisuals: readonly SourceVisualManifestEntry[] | null | undefined,
   unitIds: ReadonlySet<string>,
+  options: { stageId?: string; withBytes?: boolean } = {},
   read: typeof readSourceVisualDataUrl = readSourceVisualDataUrl,
 ): Promise<ReviewFigureSet> {
   const figures: ReviewFigure[] = [];
-  let unreadable = 0;
+  const unreadable: UnreadableReviewFigure[] = [];
+  const stagePrefix = options.stageId ? `/api/classroom-media/${options.stageId}/media/` : null;
   for (const entry of sourceVisuals ?? []) {
-    const linked = (entry.sourceContentUnitIds ?? []).map(String).filter((id) => unitIds.has(id));
-    if (linked.length === 0) continue;
+    const figureUnits = (entry.sourceContentUnitIds ?? []).map(String);
+    if (!figureUnits.some((id) => unitIds.has(id))) continue;
     const name = FIGURE_NAME.exec(entry.servingPath)?.[1];
-    if (!name) continue;
-    const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(() => undefined);
-    const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
-    if (!parsed || !REVIEW_FIGURE_TYPES.has(parsed[1]!)) {
-      unreadable += 1;
+    if (!name || (stagePrefix && !entry.servingPath.startsWith(stagePrefix))) continue;
+    const sized =
+      typeof entry.width === 'number' &&
+      typeof entry.height === 'number' &&
+      entry.width > 0 &&
+      entry.height > 0 &&
+      Math.max(entry.width, entry.height) <= REVIEW_FIGURE_MAX_SIDE_PX;
+    if (!sized) {
+      unreadable.push({ name, unitIds: figureUnits });
       continue;
+    }
+    let mediaType: ReviewFigureMediaType = 'image/png';
+    let data = '';
+    if (options.withBytes !== false) {
+      const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(
+        () => undefined,
+      );
+      const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+      if (
+        !parsed ||
+        !REVIEW_FIGURE_TYPES.has(parsed[1]!) ||
+        parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS
+      ) {
+        unreadable.push({ name, unitIds: figureUnits });
+        continue;
+      }
+      mediaType = parsed[1] as ReviewFigureMediaType;
+      data = parsed[2]!;
     }
     figures.push({
       name,
-      unitIds: (entry.sourceContentUnitIds ?? []).map(String),
+      unitIds: figureUnits,
       pageNumber: entry.pageNumber ?? null,
-      mediaType: parsed[1] as ReviewFigureMediaType,
-      data: parsed[2]!,
+      mediaType,
+      data,
       tokens: estimateImageTokens(entry.width, entry.height),
     });
   }
   return { figures, unreadable };
+}
+
+/** Every `src_N` a finding's book quote names (the v12 rubric's «[الشكل src_N]»). */
+export function namedFigures(quote: string | null | undefined): string[] {
+  return [...new Set((quote ?? '').match(/src_\d+/g) ?? [])];
 }
 
 /** The units a call judges: every slide's on a first review, the focused ones' on a re-review. */
@@ -482,25 +546,61 @@ export function judgedUnitIds(
   return new Set(judged.flatMap((slide) => slide.citedUnitIds.map(String)));
 }
 
+/** What one call could show of the figures it wanted (names only). */
+export interface ReviewFigureEvidence {
+  /** Sent with the call. */
+  sent: string[];
+  /** Readable but not sent: the run's cap, a call limit, or a run that may send none. */
+  held: string[];
+  /** Wanted but unreadable (`ReviewFigureSet.unreadable`). */
+  unreadable: string[];
+}
+
 /**
  * Pick one call's figures within `tokenCap`, in manifest order (a figure that does not
- * fit is left out, a smaller later one may still fit). `held` is how many figures the
- * call's judged units have that were not sent: a re-check without them is not proof.
+ * fit is left out, a smaller later one may still fit), at most `REVIEW_CALL_MAX_FIGURES`
+ * and `REVIEW_CALL_MAX_FIGURE_BASE64_CHARS`. A call wants the figures of its judged
+ * units and every figure `alsoNames` lists (the figures the slide's findings were read
+ * from). `evidence` says what it could not show: a re-check without them is no proof.
  */
 export function pickReviewFigures(
   set: ReviewFigureSet,
   unitIds: ReadonlySet<string>,
   tokenCap: number,
-): { figures: ReviewFigure[]; tokens: number; held: number } {
-  const wanted = set.figures.filter((figure) => figure.unitIds.some((id) => unitIds.has(id)));
+  alsoNames: readonly string[] = [],
+): { figures: ReviewFigure[]; tokens: number; held: number; evidence: ReviewFigureEvidence } {
+  const named = new Set(alsoNames);
+  const wants = (figure: { name: string; unitIds: readonly string[] }) =>
+    named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id));
+  const wanted = set.figures.filter(wants);
   const figures: ReviewFigure[] = [];
   let tokens = 0;
+  let chars = 0;
   for (const figure of wanted) {
-    if (tokens + figure.tokens > tokenCap) continue;
+    if (
+      !figure.data ||
+      tokens + figure.tokens > tokenCap ||
+      figures.length >= REVIEW_CALL_MAX_FIGURES ||
+      chars + figure.data.length > REVIEW_CALL_MAX_FIGURE_BASE64_CHARS
+    ) {
+      continue;
+    }
     figures.push(figure);
     tokens += figure.tokens;
+    chars += figure.data.length;
   }
-  return { figures, tokens, held: wanted.length - figures.length };
+  const sent = new Set(figures.map((figure) => figure.name));
+  const held = wanted.filter((figure) => !sent.has(figure.name)).map((figure) => figure.name);
+  return {
+    figures,
+    tokens,
+    held: held.length,
+    evidence: {
+      sent: [...sent],
+      held,
+      unreadable: set.unreadable.filter(wants).map((figure) => figure.name),
+    },
+  };
 }
 
 /** Scenes in display order. */

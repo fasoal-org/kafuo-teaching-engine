@@ -605,6 +605,20 @@ describe('package review fix loop (D-1)', () => {
       ]);
     });
 
+    it('an error already open on the slide outside this fix never holds a fixed finding open', async () => {
+      // s2's teacher-only S5 (HIGH) stays open; the re-check reports it again, and only it.
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2'), finding('f9', 's2', 'S5')],
+        rereview: (focus) => [{ ...relabelled(focus, 'high'), check: 'S5' }],
+      });
+      const result = await run();
+      expect(result.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+        ['f1', 'S2', 'fixed', null],
+        ['f9', 'S5', 'open', 'S5_TEACHER_ONLY'],
+      ]);
+    });
+
     it('no re-check, no closure: a failed re-review keeps every HIGH finding open', async () => {
       const { run } = setup({
         scenes,

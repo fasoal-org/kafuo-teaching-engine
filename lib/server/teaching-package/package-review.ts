@@ -56,7 +56,10 @@ import {
   isLearnerFirstModel,
 } from '@/lib/server/teaching-package/book-coverage';
 import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
-import { TeachingCallAbortedError } from '@/lib/server/teaching-model/execute';
+import {
+  TeachingCallAbortedError,
+  TeachingModelUnavailableError,
+} from '@/lib/server/teaching-model/execute';
 import { loadRateCard, type RateCard } from '@/lib/server/teaching-model/rate-card';
 import {
   runReviewerCall,
@@ -77,11 +80,13 @@ import {
   REVIEW_FIRST_CALL_IMAGE_SHARE,
   REVIEW_IMAGE_ATTEMPTS_PER_CALL,
   REVIEW_IMAGE_BUDGET_USD,
+  REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
   reviewedSceneDigest,
   reviewSlidesOf,
   withGuideAnswers,
   type ReviewBookUnit,
   type ReviewFigure,
+  type ReviewFigureEvidence,
   type ReviewFigureSet,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -153,8 +158,13 @@ export interface ReviewCallRequest {
    * the owner's cap (`pickReviewFigures`). Absent on every other package.
    */
   figures?: readonly ReviewFigure[];
-  /** RV-1: a figure of the lesson could not be read (the figures' heading says so). */
+  /** RV-1: a figure this call wanted is not sent (the figures' heading says so). */
   figuresIncomplete?: boolean;
+  /**
+   * RV-1/RV-4 (set by the fix loop on a re-check): the figures the slide's findings were
+   * read from (`namedFigures` of their quotes), wanted even when another unit owns them.
+   */
+  alsoFigures?: readonly string[];
 }
 
 export interface ReviewCallAnswer {
@@ -167,11 +177,12 @@ export interface ReviewCallAnswer {
     attemptIds?: readonly string[];
   };
   /**
-   * RV-1/RV-4 (g5.v12): how many book figures of this call's judged units were NOT
-   * sent (the run's cap, or a resumed run). A re-check that could not see them is
-   * no proof that a HIGH finding is fixed. Absent or 0: nothing was held back.
+   * RV-1/RV-4 (g5.v12 only): which wanted book figures this call showed, held back (the
+   * run's cap, a call limit, a resumed run, a provider refusal of the figures) or could
+   * not read. A re-check that did not see them is no proof: the fix loop keeps the
+   * findings they concern open. Absent on every other package.
    */
-  figuresHeld?: number;
+  figureEvidence?: ReviewFigureEvidence;
 }
 
 /** The fix loop's view of one claimed review (Phase 3 fills it). */
@@ -219,6 +230,7 @@ export interface PackageReviewDeps {
     pool: ConnectableQueryable,
     stageId: string,
     unitIds: ReadonlySet<string>,
+    options?: { withBytes?: boolean },
   ) => Promise<ReviewFigureSet>;
   /** The sweep's tracker: called after the claim and after every renewed lease. */
   onLeaseKept?: () => void;
@@ -243,15 +255,19 @@ export async function loadLiveScenes(
   return document ? (document.scenes as AppScene[]) : null;
 }
 
-/** RV-1: the Stage's materialized book figures linked to `unitIds` (g5.v12 reviews only). */
+/**
+ * RV-1: the Stage's materialized book figures linked to `unitIds` (g5.v12 reviews only),
+ * only from this Stage's media; `withBytes: false` reads no file (a run that sends none).
+ */
 export async function loadStageFigures(
   pool: ConnectableQueryable,
   stageId: string,
   unitIds: ReadonlySet<string>,
+  options: { withBytes?: boolean } = {},
 ): Promise<ReviewFigureSet> {
   const document = (await documentStore(pool).loadDocument(stageId)) as AppDocument | null;
   const outline = document?.outline as AppDocumentOutline | null | undefined;
-  return loadReviewFigures(outline?.sourceVisuals, unitIds);
+  return loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId, ...options });
 }
 
 /**
@@ -273,13 +289,23 @@ export function reviewerImageTokenPriceUsd(card: RateCard = loadRateCard()): num
 
 /**
  * RV-1: the figure tokens one review run may send in all: the owner's $0.30, at the
- * highest figure-token price, for two paid attempts per call. 30,000 at today's rates.
+ * highest figure-token price, for two paid attempts per call, and never more than
+ * `REVIEW_IMAGE_MAX_TOKENS_PER_RUN` (an underpriced override cannot widen it). 30,000
+ * at today's rates.
  */
 export function reviewImageTokenBudget(price: number = reviewerImageTokenPriceUsd()): number {
   if (!(price > 0)) return 0;
   // Rounded to 6 places first: 0.3 / 1e-5 is 29999.999… in floating point.
   const tokens = REVIEW_IMAGE_BUDGET_USD / (price * REVIEW_IMAGE_ATTEMPTS_PER_CALL);
-  return Math.floor(Number(tokens.toFixed(6)));
+  return Math.min(REVIEW_IMAGE_MAX_TOKENS_PER_RUN, Math.floor(Number(tokens.toFixed(6))));
+}
+
+/** RV-1: the provider refused the request itself (an image it would not take, say). */
+function rejectedRequest(error: unknown): boolean {
+  return (
+    error instanceof TeachingModelUnavailableError &&
+    error.outcomes.some((outcome) => outcome.outcome === 'request_rejected')
+  );
 }
 
 /** RV-1: the figures as the reviewer call sends them, each after its label. */
@@ -747,11 +773,11 @@ export async function runPackageReview(
     // RV-1 (owner §2, 27 Nov 2026), g5.v12 only: the book figures of the units the slides
     // cite, read once per run through the existing crop reader. They are SENT only in a
     // review's first run (`runAttempts === 1`; a flagged-slide run is a first run too), so
-    // the cap holds across resumes; a resumed run reviews from text, and its re-checks
-    // report the figures they held back (RV-4: no proof). A failed read (the attempt, the
-    // Stage outline or a figure) only reviews that unit from its text, as before, and is
-    // logged; it never ends the review `unavailable`. Every other package reviews exactly
-    // as before.
+    // the cap holds across resumes of one review; a resumed run reviews from text (no file
+    // is read), and its re-checks report the figures they held back (RV-4: no proof). A
+    // failed read (the attempt, the Stage outline or a figure) only reviews that unit from
+    // its text, as before, and is logged; it never ends the review `unavailable`. Every
+    // other package reviews exactly as before.
     //
     // The attempt is read ONCE per run, here, for every model gate of the job (the
     // deterministic findings of the first answer, the figures, the fix loop's
@@ -762,28 +788,32 @@ export async function runPackageReview(
         () => null,
       )
       .catch(() => null);
+    const bookFigures = isBookPartPlacementModel(attempt?.teachingModel);
+    const figureBudget = bookFigures && claimed.runAttempts === 1 ? reviewImageTokenBudget() : 0;
     let figureSet: ReviewFigureSet | null = null;
-    if (isBookPartPlacementModel(attempt?.teachingModel)) {
+    if (bookFigures) {
       try {
+        // The whole slide set's units, and every unit a cited figure belongs to: a
+        // re-check may want a figure its findings were read from (`alsoFigures`).
         figureSet = await (deps.loadFigures ?? loadStageFigures)(
           pool,
           claimed.stageId,
           judgedUnitIds(slides),
+          { withBytes: figureBudget > 0 },
         );
       } catch (error) {
         log.warn(
           `package review ${claimed.id}: the book figures could not be read; reviewed from text`,
           JSON.stringify(describeErrorSafely(error)),
         );
-        figureSet = { figures: [], unreadable: 0 };
+        figureSet = { figures: [], unreadable: [] };
       }
-      if (figureSet.unreadable > 0) {
+      if (figureSet.unreadable.length > 0) {
         log.warn(
-          `package review ${claimed.id}: ${figureSet.unreadable} book figure(s) could not be read; their units are reviewed from text`,
+          `package review ${claimed.id}: ${figureSet.unreadable.length} book figure(s) could not be read; their units are reviewed from text`,
         );
       }
     }
-    const figureBudget = figureSet && claimed.runAttempts === 1 ? reviewImageTokenBudget() : 0;
     let figureTokensLeft = figureBudget;
     /** One call's figures within what the run has left (the first call: its share). */
     const pickFigures = (request: ReviewCallRequest) => {
@@ -794,10 +824,13 @@ export async function runPackageReview(
         figureSet!,
         judgedUnitIds(request.slides, request.focusIds),
         cap,
+        request.alsoFigures ?? [],
       );
       figureTokensLeft -= picked.tokens;
       return picked;
     };
+    const incomplete = (evidence: ReviewFigureEvidence) =>
+      evidence.held.length > 0 || evidence.unreadable.length > 0;
 
     /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
     const recordFailedSpend = async (error: unknown) => {
@@ -824,22 +857,46 @@ export async function runPackageReview(
       if (deps.signal?.aborted) throw new TeachingCallAbortedError([]);
       // RV-1: counted against the run's cap before the call (a failed call may have paid).
       const picked = figureSet ? pickFigures(request) : null;
-      try {
-        const answered = await (deps.callReviewer ?? callPackageReviewer)({
+      const send = (figures: readonly ReviewFigure[], evidence: ReviewFigureEvidence | null) =>
+        (deps.callReviewer ?? callPackageReviewer)({
           ...request,
           bookTruncated: book.truncated,
-          ...(picked && picked.figures.length > 0
-            ? {
-                figures: picked.figures,
-                ...(figureSet!.unreadable > 0 ? { figuresIncomplete: true } : {}),
-              }
+          ...(figures.length > 0
+            ? { figures, ...(evidence && incomplete(evidence) ? { figuresIncomplete: true } : {}) }
             : {}),
           ...(deps.signal ? { signal: deps.signal } : {}),
           pool,
         });
-        return picked && picked.held > 0 ? { ...answered, figuresHeld: picked.held } : answered;
+      try {
+        const answered = await send(picked?.figures ?? [], picked?.evidence ?? null);
+        return picked ? { ...answered, figureEvidence: picked.evidence } : answered;
       } catch (error) {
         await recordFailedSpend(error);
+        // RV-1 (review 27 Nov 2026): a provider that refuses the request with its figures
+        // (an image it will not take) is asked once more WITHOUT them -- a refused request
+        // is not billed -- so a figure never ends the review `unavailable`. The figures
+        // count as held back: that re-check proves nothing about them.
+        if (
+          picked &&
+          picked.figures.length > 0 &&
+          rejectedRequest(error) &&
+          !deps.signal?.aborted
+        ) {
+          log.warn(
+            `package review ${claimed.id}: the reviewer refused the request with its ${picked.figures.length} book figure(s); asked again without them`,
+          );
+          const evidence: ReviewFigureEvidence = {
+            sent: [],
+            held: [...picked.evidence.sent, ...picked.evidence.held],
+            unreadable: picked.evidence.unreadable,
+          };
+          try {
+            return { ...(await send([], evidence)), figureEvidence: evidence };
+          } catch (retryError) {
+            await recordFailedSpend(retryError);
+            throw retryError;
+          }
+        }
         throw error;
       }
     };
@@ -911,7 +968,11 @@ export async function runPackageReview(
         return null;
       }
       // The paid first review: the whole package in one call.
-      const { answer, call } = await callReviewer({ review: claimed, units: book.units, slides });
+      const { answer, call, figureEvidence } = await callReviewer({
+        review: claimed,
+        units: book.units,
+        slides,
+      });
       // An answer that arrives after the eviction is the resumed run's to get.
       if (deps.signal?.aborted) return null;
       findings = [
@@ -920,13 +981,26 @@ export async function runPackageReview(
         ...issueFindings,
         ...labelFindings,
       ];
+      // RV-1 (review 27 Nov 2026): a g5.v12 first review that could not see every book
+      // figure of its units (the call's share, a resumed run, a figure it could not read)
+      // did not read the whole book: the stored D-8 flag says so, so the Admin shows its
+      // warning line, exactly as for a cut book text.
+      const figuresCut = figureEvidence ? incomplete(figureEvidence) : false;
+      if (figuresCut) {
+        log.warn(
+          `package review ${claimed.id}: the first review did not see ${
+            figureEvidence!.held.length + figureEvidence!.unreadable.length
+          } book figure(s) of its units`,
+        );
+      }
+      const bookTruncated = book.truncated || figuresCut;
       await recordUsage(call, {
         summary: answer.summary,
         findings,
         provider: call.provider,
         model: call.modelString,
         reviewedAt: now(),
-        bookTruncated: book.truncated,
+        bookTruncated,
       });
       review = {
         ...claimed,
@@ -934,7 +1008,7 @@ export async function runPackageReview(
         findings,
         provider: call.provider,
         model: call.modelString,
-        bookTruncated: book.truncated,
+        bookTruncated,
       };
     } else {
       // A resume: the first answer is stored; never pay for it twice.

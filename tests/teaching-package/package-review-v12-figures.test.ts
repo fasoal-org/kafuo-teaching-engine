@@ -71,9 +71,15 @@ import {
   estimateImageTokens,
   judgedUnitIds,
   loadReviewFigures,
+  namedFigures,
   pickReviewFigures,
+  reviewSlidesOf,
+  REVIEW_CALL_MAX_FIGURES,
+  REVIEW_FIGURE_MAX_BASE64_CHARS,
+  REVIEW_FIGURE_MAX_SIDE_PX,
   REVIEW_IMAGE_ATTEMPTS_PER_CALL,
   REVIEW_IMAGE_BUDGET_USD,
+  REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
   REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE,
   type ReviewFigure,
   type ReviewFigureSet,
@@ -86,7 +92,12 @@ import {
   PACKAGE_REVIEW_SYSTEM_V11,
   PACKAGE_REVIEW_SYSTEM_V12,
 } from '@/lib/server/teaching-package/package-review-prompt';
-import type { PackageReview } from '@/lib/server/teaching-package/package-review-store';
+import type {
+  PackageReview,
+  StoredFinding,
+} from '@/lib/server/teaching-package/package-review-store';
+import { seedRefixFindings } from '@/lib/server/teaching-package/package-review-refix';
+import { TeachingModelUnavailableError } from '@/lib/server/teaching-model/execute';
 import type { SourceVisualManifestEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -130,9 +141,12 @@ describe('RV-1: the figure token estimate and the cap', () => {
     expect(estimateImageTokens(319, 297)).toBe(255);
     // 659×433: OpenAI two tiles = 425.
     expect(estimateImageTokens(659, 433)).toBe(425);
-    // A full page (1654×2339 at 200 dpi): Anthropic about 1,533.
-    expect(estimateImageTokens(1654, 2339)).toBeGreaterThan(1400);
-    expect(estimateImageTokens(1654, 2339)).toBeLessThanOrEqual(REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE);
+    // Opus 5.5 is in the high-resolution tier (review 27 Nov 2026): a 2400×1800 crop is
+    // 4.32 MP, scaled to 3.75 MP: about 4,784 tokens, never the old ~1,533.
+    expect(estimateImageTokens(2400, 1800)).toBe(4_784);
+    expect(REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE).toBe(4_784);
+    // 1500×1000 (1.5 MP, under every limit): 2,000 tokens.
+    expect(estimateImageTokens(1500, 1000)).toBe(2_000);
     expect(estimateImageTokens(undefined, 200)).toBe(REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE);
   });
 
@@ -147,6 +161,8 @@ describe('RV-1: the figure token estimate and the cap', () => {
     // An unpriced model sends no figure at all, never an unbounded cap.
     expect(reviewImageTokenBudget(0)).toBe(0);
     expect(reviewerImageTokenPriceUsd({ version: 'x', entries: {} } as never)).toBe(0);
+    // An underpriced rate-card override never widens the budget.
+    expect(reviewImageTokenBudget(1e-9)).toBe(REVIEW_IMAGE_MAX_TOKENS_PER_RUN);
   });
 });
 
@@ -187,16 +203,60 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
         }),
       ],
       new Set(['6758', '6760']),
+      { stageId: 'stage-1' },
       read as never,
     );
     expect(set.figures.map((figure) => [figure.name, figure.unitIds, figure.data])).toEqual([
       ['src_1', ['6758'], '1111'],
     ]);
     expect(set.figures[0]).toMatchObject({ mediaType: 'image/jpeg', pageNumber: 11, tokens: 255 });
-    // src_3 (missing) and src_4 (a GIF) are counted, not thrown.
-    expect(set.unreadable).toBe(2);
+    // src_3 (missing) and src_4 (a GIF) are listed by name, not thrown.
+    expect(set.unreadable).toEqual([
+      { name: 'src_3', unitIds: ['6758'] },
+      { name: 'src_4', unitIds: ['6760'] },
+    ]);
     expect(read).toHaveBeenCalledWith(entry(1, []).servingPath, { sha256: entry(1, []).sha256 });
     expect(read).not.toHaveBeenCalledWith(entry(2, []).servingPath, expect.anything());
+  });
+
+  it('guards the request size: no size, too wide, too large, or another Stage is never sent', async () => {
+    const big = 'A'.repeat(REVIEW_FIGURE_MAX_BASE64_CHARS + 4);
+    const read = vi.fn(async (path: string) =>
+      path.includes('src_3_') ? `data:image/png;base64,${big}` : 'data:image/png;base64,AAAA',
+    );
+    const set = await loadReviewFigures(
+      [
+        entry(1, ['u'], { width: undefined }),
+        entry(2, ['u'], { width: REVIEW_FIGURE_MAX_SIDE_PX + 1 }),
+        entry(3, ['u']),
+        entry(4, ['u'], { servingPath: '/api/classroom-media/stage-9/media/src_4_abcdef12.png' }),
+        entry(5, ['u']),
+      ],
+      new Set(['u']),
+      { stageId: 'stage-1' },
+      read as never,
+    );
+    expect(set.figures.map((figure) => figure.name)).toEqual(['src_5']);
+    expect(set.unreadable.map((figure) => figure.name)).toEqual(['src_1', 'src_2', 'src_3']);
+    // Another Stage's file is never read nor listed; a sizeless or too-wide one is not read.
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('a run that may send nothing lists the figures without reading a file', async () => {
+    const read = vi.fn(async () => 'data:image/png;base64,AAAA');
+    const set = await loadReviewFigures(
+      [entry(1, ['u'])],
+      new Set(['u']),
+      { withBytes: false },
+      read as never,
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(set.figures).toMatchObject([{ name: 'src_1', data: '' }]);
+    // A figure without its bytes is never sent, whatever the cap.
+    expect(pickReviewFigures(set, new Set(['u']), 10_000)).toMatchObject({
+      figures: [],
+      evidence: { sent: [], held: ['src_1'], unreadable: [] },
+    });
   });
 
   it('picks one call’s figures within its cap and counts what it held back', () => {
@@ -210,15 +270,32 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
     });
     const set: ReviewFigureSet = {
       figures: [fig('src_1', 'a', 300), fig('src_2', 'b', 900), fig('src_3', 'a', 200)],
-      unreadable: 0,
+      unreadable: [{ name: 'src_7', unitIds: ['a'] }],
     };
     expect(pickReviewFigures(set, new Set(['a', 'b']), 600)).toMatchObject({
       tokens: 500,
       held: 1,
       figures: [{ name: 'src_1' }, { name: 'src_3' }],
+      evidence: { sent: ['src_1', 'src_3'], held: ['src_2'], unreadable: ['src_7'] },
     });
     expect(pickReviewFigures(set, new Set(['b']), 10_000)).toMatchObject({ held: 0, tokens: 900 });
     expect(pickReviewFigures(set, new Set(['a']), 0)).toMatchObject({ figures: [], held: 2 });
+    // A figure a finding was read from is wanted even when another unit owns it.
+    expect(pickReviewFigures(set, new Set(['b']), 10_000, ['src_1'])).toMatchObject({
+      figures: [{ name: 'src_1' }, { name: 'src_2' }],
+    });
+    // At most 20 figures in one call.
+    const many: ReviewFigureSet = {
+      figures: Array.from({ length: 25 }, (_, n) => fig(`src_${n + 1}`, 'a', 10)),
+      unreadable: [],
+    };
+    expect(pickReviewFigures(many, new Set(['a']), 10_000)).toMatchObject({
+      held: 25 - REVIEW_CALL_MAX_FIGURES,
+    });
+    expect(namedFigures('[الشكل src_2] 25 °C، وفي الشكل src_12 أيضًا src_2')).toEqual([
+      'src_2',
+      'src_12',
+    ]);
     expect([
       ...judgedUnitIds(
         [
@@ -419,10 +496,20 @@ describe('RV-1 + RV-4: the review job', () => {
     fixNote: 'اكتب 25',
   };
 
+  const TEXT_HIGH_ON_S2 = {
+    ...HIGH_ON_S2,
+    bookEvidence: { quote: 'درجة الغليان 25', unitId: '6760' },
+  };
+
   function job(
     version: string,
     claimed: Partial<PackageReview> = {},
-    figureSet: ReviewFigureSet = { figures: [FIG_A, FIG_B], unreadable: 0 },
+    figureSet: ReviewFigureSet = { figures: [FIG_A, FIG_B], unreadable: [] },
+    options: {
+      firstFindings?: Array<Record<string, unknown>>;
+      /** The provider refuses every request that carries figures. */
+      refuseFigures?: boolean;
+    } = {},
   ) {
     mocks.readAttemptById.mockReset().mockResolvedValue({
       teachingModel: { key: 'g5', version },
@@ -453,9 +540,19 @@ describe('RV-1 + RV-4: the review job', () => {
     const requests: ReviewCallRequest[] = [];
     const callReviewer = vi.fn(async (request: ReviewCallRequest) => {
       requests.push(request);
+      if (options.refuseFigures && request.figures?.length) {
+        throw new TeachingModelUnavailableError('rejected', {
+          attemptIds: [],
+          outcomes: [{ role: 'primary', outcome: 'request_rejected' }],
+          retryable: false,
+        });
+      }
       // The first review reports a HIGH error on s2; the re-check of s2 is clean.
       return {
-        answer: { summary: 's', findings: request.focusIds ? [] : [HIGH_ON_S2] },
+        answer: {
+          summary: 's',
+          findings: request.focusIds ? [] : (options.firstFindings ?? [HIGH_ON_S2]),
+        },
         call: {
           provider: 'anthropic' as const,
           modelString: 'anthropic:claude-opus-5-5',
@@ -510,13 +607,21 @@ describe('RV-1 + RV-4: the review job', () => {
     return { run, requests, loadFigures };
   }
 
+  const firstSave = () =>
+    (mocks.saveReviewProgress.mock.calls[0] as unknown as [unknown, string, string, object])[3];
+
   it('g5.v12: the first review sees every judged figure, a re-check only its slide’s; the HIGH finding closes', async () => {
     const { run, requests, loadFigures } = job('g5.v12');
     const finished = await run();
-    expect(loadFigures).toHaveBeenCalledWith({}, 'stage-1', new Set(['6758', '6760', '6799']));
+    expect(loadFigures).toHaveBeenCalledWith({}, 'stage-1', new Set(['6758', '6760', '6799']), {
+      withBytes: true,
+    });
     expect(requests.map((request) => (request.figures ?? []).map((figure) => figure.name))).toEqual(
       [['src_1', 'src_2'], ['src_2']],
     );
+    // The re-check wants the figure its finding was read from.
+    expect(requests[1]!.alsoFigures).toEqual(['src_2']);
+    expect(firstSave()).toMatchObject({ bookTruncated: false });
     expect(finished).toMatchObject({
       status: 'fixed',
       findings: [{ id: 'f1', status: 'fixed', teacherReason: null }],
@@ -524,8 +629,23 @@ describe('RV-1 + RV-4: the review job', () => {
     });
   });
 
-  it('g5.v12, a resumed run: no figure is sent, and its re-check closes no HIGH finding', async () => {
-    const { run, requests } = job('g5.v12', {
+  it('g5.v12: a provider that refuses the figures is asked once more without them; never unavailable', async () => {
+    const { run, requests } = job('g5.v12', {}, undefined, { refuseFigures: true });
+    const finished = await run();
+    // First call refused with its figures, asked again without; the re-check likewise.
+    expect(requests.map((request) => (request.figures ?? []).length)).toEqual([2, 0, 1, 0]);
+    // The first review did not see the figures: the D-8 flag is set.
+    expect(firstSave()).toMatchObject({ bookTruncated: true });
+    // The re-check did not see src_2, which the finding was read from: it stays open.
+    expect(finished).toMatchObject({
+      status: 'needs_teacher',
+      findings: [{ id: 'f1', status: 'open', teacherReason: 'REREVIEW_UNAVAILABLE' }],
+      fixes: [{ sceneId: 's2', outcome: 'still_wrong', code: REREVIEW_FIGURES_HELD }],
+    });
+  });
+
+  it('g5.v12, a resumed run: no figure is read or sent, and its re-check closes no HIGH finding', async () => {
+    const { run, requests, loadFigures } = job('g5.v12', {
       runAttempts: 2,
       reviewedAt: 4,
       findings: [
@@ -540,6 +660,9 @@ describe('RV-1 + RV-4: the review job', () => {
       ],
     });
     const finished = await run();
+    expect(loadFigures).toHaveBeenCalledWith(expect.anything(), 'stage-1', expect.any(Set), {
+      withBytes: false,
+    });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.figures).toBeUndefined();
     expect(finished).toMatchObject({
@@ -549,11 +672,57 @@ describe('RV-1 + RV-4: the review job', () => {
     });
   });
 
-  it('g5.v12: an unreadable figure set reviews from text and never ends the review unavailable', async () => {
-    const { run, requests } = job('g5.v12', {}, { figures: [], unreadable: 2 });
-    const finished = await run();
-    expect(requests.every((request) => request.figures === undefined)).toBe(true);
-    expect(finished?.status).toBe('fixed');
+  it('g5.v12: an unreadable figure reviews from text; only a finding read from it waits', async () => {
+    const unreadable: ReviewFigureSet = {
+      figures: [],
+      unreadable: [{ name: 'src_2', unitIds: ['6760'] }],
+    };
+    // A finding read from the unreadable figure cannot be closed without it.
+    const fromFigure = job('g5.v12', {}, unreadable);
+    const held = await fromFigure.run();
+    expect(fromFigure.requests.every((request) => request.figures === undefined)).toBe(true);
+    expect(firstSave()).toMatchObject({ bookTruncated: true });
+    expect(held).toMatchObject({
+      status: 'needs_teacher',
+      findings: [{ id: 'f1', status: 'open', teacherReason: 'REREVIEW_UNAVAILABLE' }],
+    });
+    // A finding read from the text closes on its re-check; never `unavailable`.
+    const fromText = job('g5.v12', {}, unreadable, { firstFindings: [TEXT_HIGH_ON_S2] });
+    expect(await fromText.run()).toMatchObject({
+      status: 'fixed',
+      findings: [{ id: 'f1', status: 'fixed' }],
+    });
+  });
+
+  it('a flagged-slide regeneration retries a finding held only for its figures, nothing else', () => {
+    const open = (id: string, reason: string) =>
+      ({
+        id,
+        targetId: 's2',
+        targetTitle: 'شريحة 2',
+        targetOrder: 2,
+        check: 'S3',
+        severity: 'high',
+        bookEvidence: { quote: '[الشكل src_2] 25', unitId: '6760' },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+        status: 'open',
+        teacherReason: reason,
+      }) as StoredFinding;
+    const seed = seedRefixFindings(
+      [open('f1', 'REREVIEW_UNAVAILABLE'), { ...open('f2', 'REREVIEW_UNAVAILABLE'), check: 'S1' }],
+      reviewSlidesOf(SCENES),
+      new Map(),
+      [
+        { sceneId: 's2', findingIds: ['f1'], outcome: 'still_wrong', code: REREVIEW_FIGURES_HELD },
+        { sceneId: 's2', findingIds: ['f2'], outcome: 'still_wrong', code: 'REREVIEW_UNAVAILABLE' },
+      ],
+    );
+    expect(seed.findings.map((finding) => [finding.id, finding.teacherReason])).toEqual([
+      ['f1', null],
+      ['f2', 'REREVIEW_UNAVAILABLE'],
+    ]);
+    expect(seed.sceneIds).toEqual(['s2']);
   });
 
   it('g5.v11: no figure is read or sent, and the review runs exactly as before', async () => {

@@ -30,7 +30,10 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 import { readVersionForUpdate } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { loadLiveScenes } from '@/lib/server/teaching-package/package-review';
-import { teacherOnlyReason } from '@/lib/server/teaching-package/package-review-fix-loop';
+import {
+  REREVIEW_FIGURES_HELD,
+  teacherOnlyReason,
+} from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
   reviewedSceneDigest,
   reviewSlidesOf,
@@ -41,6 +44,7 @@ import {
   requeueReviewForRefix,
   type PackageReview,
   type StoredFinding,
+  type StoredFix,
 } from '@/lib/server/teaching-package/package-review-store';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -90,16 +94,26 @@ export function seedRefixFindings(
   findings: readonly StoredFinding[],
   slides: readonly ReviewSlide[],
   liveDigests: ReadonlyMap<string, string> = new Map(),
+  fixes: readonly StoredFix[] = [],
 ): RefixSeed {
   const edited = (finding: StoredFinding) =>
     finding.sceneDigest !== undefined &&
     liveDigests.size > 0 &&
     liveDigests.get(finding.targetId) !== finding.sceneDigest;
+  // RV-1/RV-4 (g5.v12 only, 27 Nov 2026): a finding left open only because its re-check
+  // did not see the book figures it needed is tried again (its slide regenerated and
+  // re-checked, with this run's own figure budget), so it never waits on a person for
+  // a re-check alone. Every other `REREVIEW_UNAVAILABLE` stays as it is.
+  const figuresHeld = new Set(
+    fixes.filter((fix) => fix.code === REREVIEW_FIGURES_HELD).flatMap((fix) => fix.findingIds),
+  );
+  const retried = (finding: StoredFinding) =>
+    finding.teacherReason === null ||
+    RETRIED_REASONS.has(finding.teacherReason) ||
+    (finding.teacherReason === 'REREVIEW_UNAVAILABLE' && figuresHeld.has(finding.id));
   const reasoned = findings.map((finding): StoredFinding => {
     if (finding.status !== 'open') return { ...finding };
-    if (finding.teacherReason !== null && !RETRIED_REASONS.has(finding.teacherReason)) {
-      return { ...finding };
-    }
+    if (!retried(finding)) return { ...finding };
     const teacherOnly = teacherOnlyReason({ ...finding, teacherReason: null }, slides);
     return {
       ...finding,
@@ -270,6 +284,7 @@ export async function queueFlaggedSlideRefix(
       review.findings,
       reviewSlidesOf(scenes),
       new Map(scenes.map((scene) => [scene.id, reviewedSceneDigest(scene)])),
+      review.fixes,
     );
     if (seed.sceneIds.length === 0) {
       throw new TeachingPackageError(
