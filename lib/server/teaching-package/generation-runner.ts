@@ -137,6 +137,7 @@ import {
 import { applyPlanAutoFixes } from '@/lib/server/teaching-package/plan-auto-fixes';
 import {
   PLAN_REVIEW_PROMPT_VERSION,
+  PLAN_REVIEW_V12_UNIT_TEXT_CAPS,
   reviewPlan,
   type PlanReviewContext,
 } from '@/lib/server/teaching-package/plan-review';
@@ -1442,6 +1443,11 @@ async function runKafuoAttempt(
           pendingOutlineIds: null,
           ...(coverageBook ? { bookStructure: coverageBook } : {}),
         },
+        // g5.v12 (RV-3): a long unit is judged whole, within the total cap. Every other
+        // Teaching Model keeps the 400 / 12,000 caps byte for byte.
+        ...(isBookPartPlacementModel(kafuo.teachingModel)
+          ? { unitTextCaps: PLAN_REVIEW_V12_UNIT_TEXT_CAPS }
+          : {}),
       };
     };
     let reservedStageId: string | null = resumeScenes?.stageId ?? null;
