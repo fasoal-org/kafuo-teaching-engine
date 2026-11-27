@@ -528,7 +528,7 @@ describe('regenerateOneScene — quiz', () => {
 
   // g5.v12 (QZ-2, Q-AK): a banked check quiz is regenerated from its references only.
   const REFERENCE: CheckQuizReference = {
-    tag: 'R1',
+    tag: 'ITEM_1',
     item: {
       contentUnitId: 'u2',
       label: '1',
@@ -541,7 +541,7 @@ describe('regenerateOneScene — quiz', () => {
     question: 'ما الحد التالي؟ 2، 4، 6، ...',
   };
   const tagged = (key: string) =>
-    JSON.stringify([{ ...JSON.parse(QUESTIONS)[0], reference: 'R1', answer: [key] }]);
+    JSON.stringify([{ ...JSON.parse(QUESTIONS)[0], reference: 'ITEM_1', answer: [key] }]);
 
   it('QZ-2: no reference refuses the regeneration before any model call; nothing is written', async () => {
     const { result, prompts } = await run(tagged('B'), {

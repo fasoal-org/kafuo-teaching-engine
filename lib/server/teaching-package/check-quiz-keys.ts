@@ -10,7 +10,7 @@
  *   keyed items (`ResolvedTeacherGuide.keyed`) whose unit the quiz cites. Nothing else is a
  *   reference: a per-unit book `reference_answer` is not in the request contract.
  * - The quiz is written from them: one question per reference, each tagged with its
- *   reference (`R1`…), a single-answer question whose correct option states the approved
+ *   reference (`ITEM_1`…), a single-answer question whose correct option states the approved
  *   answer (`referenceDirective`).
  * - A code comparator checks every key: the tagged reference must exist, the question must
  *   have exactly one correct option, that option must state the approved answer and no
@@ -55,7 +55,7 @@ const CHECK_QUIZ_STAGE = 'outcome_check_understanding';
 const REFERENCE_FIELD = 'reference';
 
 export interface CheckQuizReference {
-  /** The tag a question names it by: `R1`, `R2`, … in the quiz's own order. */
+  /** The tag a question names it by: `ITEM_1`, `ITEM_2`, … in the quiz's own order. */
   tag: string;
   item: KeyedGuideItem;
   /** The book's own question text for the item, when its unit text is known. */
@@ -93,7 +93,7 @@ export function checkQuizReferences(
       .map((item, index) => {
         const text = unitTexts?.get(String(item.contentUnitId));
         const question = text ? guideItemQuestionText(text, item).trim() : '';
-        return { tag: `R${index + 1}`, item, question: question || null };
+        return { tag: `ITEM_${index + 1}`, item, question: question || null };
       })
   );
 }
@@ -108,7 +108,7 @@ export function referenceDirective(references: readonly CheckQuizReference[]): s
   return [
     'ANSWER KEYS ARE CHECKED BY CODE. Write the questions ONLY from the book items below, at most one question per item:',
     ...references.map(describeReference),
-    `Every question: "type": "single", exactly one correct option, and a "${REFERENCE_FIELD}" field naming its item ("R1", …). Its correct option must state that item's approved answer exactly (the same number and unit, the same truth value, the same words), and no other option may state it. A true/false question states the book's own statement word for word, never negated. Never write an item tag (R1, …) in a question, an option or an explanation. A question that names no item, names an unknown item, or keys anything but the approved answer is removed.`,
+    `Every question: "type": "single", exactly one correct option, and a "${REFERENCE_FIELD}" field naming its item ("ITEM_1", …). Its correct option must state that item's approved answer exactly (the same number and unit, the same truth value, the same words), and no other option may state it. A true/false question states the book's own statement word for word, never negated. Never write an item tag (ITEM_1, …) in a question, an option or an explanation. A question that names no item, names an unknown item, or keys anything but the approved answer is removed.`,
   ].join('\n');
 }
 
@@ -185,8 +185,11 @@ export function verifyCheckQuizKeys(
   return { verified, failed };
 }
 
-/** «R1», «book item 3أ»: the directive's internal tags, never for a learner. */
-const INTERNAL_TAG = /\bR\d+\b|book item/i;
+/**
+ * «ITEM_1», «book item 3أ»: the directive's internal tags, never for a learner. A scheme
+ * no textbook prints (a physics book names resistors R1 and R2: re-review).
+ */
+const INTERNAL_TAG = /\bITEM_\d+\b|book item/i;
 
 /** A negation word: a key or a statement that carries one says the opposite. */
 const NEGATION = /(?:^|\s)(?:لا|ليس|ليست|لم|لن|غير|not|no|never)(?=\s|$)/gu;

@@ -215,7 +215,7 @@ describe('generateClassroom — W6 bank check quiz', () => {
 describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
   // The approved answer of the one book item the check quiz cites: the text «One».
   const REFERENCE = {
-    tag: 'R1',
+    tag: 'ITEM_1',
     item: {
       contentUnitId: 'u2',
       label: '1',
@@ -246,7 +246,7 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
                 id: 'q1',
                 type: 'single',
                 question: 'Pick one',
-                reference: 'R1',
+                reference: 'ITEM_1',
                 options: [
                   { value: 'A', label: 'One' },
                   { value: 'B', label: 'Two' },

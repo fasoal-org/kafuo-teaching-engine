@@ -38,6 +38,11 @@ const GUIDE = {
   ],
 };
 
+// The tags the references carry, in book order.
+const T1 = 'ITEM_1';
+const T2 = 'ITEM_2';
+const T3 = 'ITEM_3';
+
 const checkQuiz = (units: string[], extra: Partial<SceneOutline> = {}): SceneOutline =>
   ({
     id: 'q1',
@@ -86,8 +91,8 @@ describe('which quizzes are gated', () => {
       new Map([['u2', 'ماذا قرأت؟\n(١) احسب الضغط']]),
     );
     expect(references.map((reference) => [reference.tag, reference.item.contentUnitId])).toEqual([
-      ['R1', 'u2'],
-      ['R2', 'u5'],
+      [T1, 'u2'],
+      [T2, 'u5'],
     ]);
     expect(references[0]!.question).toContain('احسب الضغط');
     // No guide (today on g5.v12: the Backend sends it for g5.v11 only): no reference.
@@ -104,14 +109,14 @@ describe('verifyCheckQuizKeys', () => {
     new Map([['u5', `(١) ${STATEMENT}`]]),
   );
   const statement = (labels: string[], key: string, stem = `صح أم خطأ: ${STATEMENT}`) =>
-    question('R2', labels, [key], 'single', stem);
+    question(T2, labels, [key], 'single', stem);
 
   it('keeps a question whose key states the approved answer, without its tag', () => {
     const result = verifyCheckQuizKeys(
       [
-        question('R1', ['150 Pa', '300 Pa'], ['B']),
+        question(T1, ['150 Pa', '300 Pa'], ['B']),
         statement(['صحيحة', 'خاطئة'], 'A'),
-        question('R3', ['الحجم', 'الكتلة'], ['B']),
+        question(T3, ['الحجم', 'الكتلة'], ['B']),
       ],
       references,
     );
@@ -120,12 +125,20 @@ describe('verifyCheckQuizKeys', () => {
     for (const kept of result.verified) expect(kept).not.toHaveProperty('reference');
   });
 
+  it('a physics stem naming resistors R1 and R2 is not mistaken for an internal tag', () => {
+    const result = verifyCheckQuizKeys(
+      [question(T1, ['150 Pa', '300 Pa'], ['B'], 'single', 'المقاومتان R1 و R2 على التوالي')],
+      references,
+    );
+    expect(result.failed).toEqual([]);
+  });
+
   it('drops a wrong key (the fixture), an untagged question and an unknown tag', () => {
     const result = verifyCheckQuizKeys(
       [
-        question('R1', ['150 Pa', '300 Pa'], ['A']), // keys 150: the wrong number
+        question(T1, ['150 Pa', '300 Pa'], ['A']), // keys 150: the wrong number
         question(undefined, ['x', 'y'], ['A']),
-        question('R9', ['x', 'y'], ['A']),
+        question('ITEM_9', ['x', 'y'], ['A']),
         statement(['صحيحة', 'خاطئة'], 'B'), // keys «false»
       ],
       references,
@@ -142,11 +155,11 @@ describe('verifyCheckQuizKeys', () => {
   it('drops what code cannot check: two keys, a multiple question, a second question on one item', () => {
     const result = verifyCheckQuizKeys(
       [
-        question('R1', ['300 Pa', '300 Pa'], ['A', 'B']),
-        question('R1', ['300 Pa', '300'], ['A']),
-        question('R2', ['صحيحة', 'خاطئة'], ['A'], 'multiple', `صح أم خطأ: ${STATEMENT}`),
-        question('R3', ['الحجم', 'الكتلة'], ['B']),
-        question('R3', ['الكتلة', 'الحجم'], ['A']),
+        question(T1, ['300 Pa', '300 Pa'], ['A', 'B']),
+        question(T1, ['300 Pa', '300'], ['A']),
+        question(T2, ['صحيحة', 'خاطئة'], ['A'], 'multiple', `صح أم خطأ: ${STATEMENT}`),
+        question(T3, ['الحجم', 'الكتلة'], ['B']),
+        question(T3, ['الكتلة', 'الحجم'], ['A']),
       ],
       references,
     );
@@ -167,14 +180,14 @@ describe('verifyCheckQuizKeys', () => {
         // A statement that is not the book's own.
         statement(['صحيحة', 'خاطئة'], 'A', 'صح أم خطأ: الوزن ثابت في كل مكان'),
         // «ليس الكتلة» contains «الكتلة» but says the opposite.
-        question('R3', ['الحجم', 'ليس الكتلة'], ['B']),
+        question(T3, ['الحجم', 'ليس الكتلة'], ['B']),
         // A number key with a negation.
-        question('R1', ['150 Pa', 'ليس 300 Pa'], ['B']),
+        question(T1, ['150 Pa', 'ليس 300 Pa'], ['B']),
         // The internal tag echoed to a learner.
-        { ...question('R1', ['150 Pa', '300 Pa'], ['B']), question: 'R1: احسب الضغط' },
+        { ...question(T1, ['150 Pa', '300 Pa'], ['B']), question: `${T1}: احسب الضغط` },
         // Two options sharing one value.
         {
-          ...question('R1', ['150 Pa', '300 Pa'], ['B']),
+          ...question(T1, ['150 Pa', '300 Pa'], ['B']),
           options: [
             { label: '150 Pa', value: 'B' },
             { label: '300 Pa', value: 'B' },
@@ -201,11 +214,11 @@ describe('verifyCheckQuizKeys', () => {
 
   it('the directive and the correction name each item and its approved answer, never an id', () => {
     const directive = referenceDirective(references);
-    expect(directive).toContain('R1');
+    expect(directive).toContain(T1);
     expect(directive).toContain('300 Pa');
     expect(directive).not.toContain('u2');
     const correction = keyCorrection(
-      [{ index: 0, tag: 'R1', reason: 'its key is not the approved answer' }],
+      [{ index: 0, tag: T1, reason: 'its key is not the approved answer' }],
       references,
     );
     expect(correction).toContain('question 1: its key is not the approved answer');
