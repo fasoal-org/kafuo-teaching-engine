@@ -43,7 +43,9 @@ import {
 } from '@/lib/server/teaching-package/package-review-input';
 import {
   insertQueuedReview,
+  isPressedFirstReview,
   newPackageReviewId,
+  REFIX_REVIEW_ID_PREFIX,
   readPackageReview,
   readStageReviewForUpdate,
   requeueReviewForRefix,
@@ -119,27 +121,38 @@ export function seedRefixFindings(
   // see the book figures a fresh run sends (RV-1: the run's budget, a resumed run). Each
   // press now re-checks that live slide ONCE, without paying for a regeneration
   // (`recheckOnly`). What it waits for is read from the finding (`heldFor`, kept across
-  // presses), else from its fix entry (a row from before 27 Nov):
+  // presses):
   // - `recheck`: re-checked only;
   // - `audio`: its narration audio failed too -- regenerated, so its audio is made again;
   // - `person`: a figure hold no retry cures (an unread or refused figure) -- left as it
-  //   is, so no press pays for it again;
-  // - unknown (no field, no fix entry left): regenerated, the safe remedy (audio included).
+  //   is, so no press pays for it again.
+  // A row from before 27 Nov has no `heldFor`. Its fix entry's code is the audio failure
+  // when there was one (any TeachingPackageError code), else `REREVIEW_UNAVAILABLE`; so
+  // only that exact code is a plain re-check. A figure hold (`REREVIEW_FIGURES_HELD`)
+  // kept no audio code: a curable one is regenerated (its audio may have failed), any
+  // other waits for a person. Another code, or no fix entry: regenerated, the safe remedy.
   const heldFor = (finding: StoredFinding): NonNullable<StoredFinding['heldFor']> | null => {
     if (finding.teacherReason !== 'REREVIEW_UNAVAILABLE') return null;
     if (finding.heldFor) return finding.heldFor;
     const fix = fixOf.get(finding.id);
-    if (!fix) return 'audio';
-    if (fix.code === REREVIEW_FIGURES_HELD) {
-      return (fix.retryForFigures ?? []).includes(finding.id) ? 'recheck' : 'person';
+    if (fix?.code === REREVIEW_FIGURES_HELD) {
+      return (fix.retryForFigures ?? []).includes(finding.id) ? 'audio' : 'person';
     }
-    return (fix.code ?? '').startsWith('NARRATION_AUDIO') ? 'audio' : 'recheck';
+    return fix?.code === 'REREVIEW_UNAVAILABLE' ? 'recheck' : 'audio';
+  };
+  // Review 27 Nov 2026: a held finding whose slide a person edited since is re-checked
+  // as the person made it (a re-check never regenerates), once per edit: the re-check
+  // records the slide it saw. A `person` hold is no dead end once its slide is edited.
+  const recheckEdit = (finding: StoredFinding) => {
+    const held = heldFor(finding);
+    return (held === 'recheck' || held === 'person') && edited(finding);
   };
   const retried = (finding: StoredFinding) =>
     finding.teacherReason === null ||
     RETRIED_REASONS.has(finding.teacherReason) ||
     heldFor(finding) === 'recheck' ||
-    heldFor(finding) === 'audio';
+    heldFor(finding) === 'audio' ||
+    recheckEdit(finding);
   const reasoned = findings.map((finding): StoredFinding => {
     // A marker is worked out again on every press, never carried forward; `heldFor`
     // stays only on a finding that is left as it is.
@@ -147,11 +160,12 @@ export function seedRefixFindings(
     if (base.status !== 'open') return base;
     if (!retried(finding)) return finding.heldFor ? { ...base, heldFor: finding.heldFor } : base;
     const teacherOnly = teacherOnlyReason({ ...base, teacherReason: null }, slides);
-    const teacherReason = teacherOnly ?? (edited(base) ? 'VERSION_CHANGED' : null);
+    const teacherReason =
+      teacherOnly ?? (edited(base) && !recheckEdit(finding) ? 'VERSION_CHANGED' : null);
     return {
       ...base,
       teacherReason,
-      ...(teacherReason === null && heldFor(finding) === 'recheck'
+      ...(teacherReason === null && (heldFor(finding) === 'recheck' || recheckEdit(finding))
         ? { recheckOnly: true as const }
         : {}),
     };
@@ -205,7 +219,7 @@ export function refixReviewId(tenantId: string, versionId: string, idempotencyKe
     .update(`${tenantId}\u0000${versionId}\u0000${idempotencyKey}`)
     .digest('base64url')
     .slice(0, 16);
-  return `tpr-rf-${digest}`;
+  return `${REFIX_REVIEW_ID_PREFIX}${digest}`;
 }
 
 export interface QueueRefixInput {
@@ -255,7 +269,8 @@ async function queueStageReview(
 ): Promise<PackageReview | null> {
   const producing = await readProducingAttemptId(tx, version.id);
   if (!producing) return null;
-  const attempt = await readAttemptById(tx, producing.attemptId).catch(() => null);
+  // Review of 103f9c1c: no catch -- a failed read inside the transaction aborts it anyway.
+  const attempt = await readAttemptById(tx, producing.attemptId);
   const subjectCode = (attempt?.inputSnapshot as { subjectCode?: unknown } | undefined)
     ?.subjectCode;
   const storedId = await insertQueuedReview(tx, {
@@ -273,10 +288,12 @@ async function queueStageReview(
 /**
  * Dead end (a) at submit: the first review of an edit successor's current Stage, when it
  * has none yet. For `submitForReview` to call after its commit (best effort; it never
- * fails a submit). The review runs on the submitted version, so its fix loop stops at
- * once and any finding waits for the teacher: Start Edit, then Regenerate flagged.
- * `null` when nothing was queued (an attempt of its own, a review of this Stage already,
- * no producing attempt). One per Stage, like the press.
+ * fails a submit). Not wired yet: the call lands in `lifecycle.ts` (TE slot-5).
+ * A Stage review only reviews (`isPressedFirstReview`), so no slide is regenerated even
+ * when the teacher presses Start Edit while it runs; any finding waits for the teacher:
+ * Start Edit, then Regenerate flagged. `null` when nothing was queued (an attempt of its
+ * own, a review of this Stage already, no producing attempt). One per Stage, like the
+ * press.
  */
 export async function queueSuccessorStageReview(
   pool: ConnectableQueryable,
@@ -364,9 +381,11 @@ export async function queueFlaggedSlideRefix(
     if (!review) {
       // Dead end (a), 27 Nov 2026: an edit successor (no attempt of its own) never had a
       // review, so Kafuo refuses its approval forever (TEACHING_PACKAGE_REVIEW_MISSING).
-      // A press queues ONE first review of its current Stage; its `review_completed`
-      // creates Kafuo's row. A version with an attempt of its own and no review was not
-      // reviewed on purpose (Kafuo keeps a cleared row for it): still "not ready".
+      // A press queues ONE first review of its current Stage, which only reviews (no slide
+      // of the teacher's edit is regenerated: `isPressedFirstReview`); its
+      // `review_completed` creates Kafuo's row. A version with an attempt of its own and
+      // no review was not reviewed on purpose (Kafuo keeps a cleared row for it): still
+      // "not ready".
       if (version.currentAttemptId === null) {
         const queued = await queueStageReview(tx, version, newReviewId, now());
         if (queued)
@@ -378,12 +397,33 @@ export async function queueFlaggedSlideRefix(
       );
     }
     if (review.reviewedAt === null) {
+      // Review 27 Nov 2026: a first review a press or a submit queued, still on its way, is
+      // "in progress" (Kafuo adopts it from that refusal), never "not ready". A generation's
+      // own first review keeps "not ready" until it answers.
+      if (
+        (review.status === 'queued' || review.status === 'running') &&
+        isPressedFirstReview(review)
+      ) {
+        throw new TeachingPackageError(
+          'PACKAGE_REVIEW_IN_PROGRESS',
+          'the AI review of this package is still running',
+        );
+      }
       // Dead end (c): a review that ended `unavailable` before its first answer (both
       // routes down, say) is asked again from the start -- one whole-package review per
-      // press, never a slide regeneration.
+      // press, never a slide regeneration (`isPressedFirstReview`: it only reviews).
       // Review of c3f02fdc: a cause another run cannot cure (no book, no version) is not
-      // re-asked -- it would end the same way on every press.
-      if (review.status === 'unavailable' && !PERMANENTLY_UNAVAILABLE.has(review.errorCode ?? '')) {
+      // re-asked -- it would end the same way on every press. Review 27 Nov 2026: nor is a
+      // review that used up its runs after a press already re-asked it (each run may pay
+      // for a first call; a second exhaustion is no outage a further press cures).
+      const exhaustedAgain =
+        review.errorCode === 'REVIEW_ATTEMPTS_EXHAUSTED' &&
+        review.id.startsWith(REFIX_REVIEW_ID_PREFIX);
+      if (
+        review.status === 'unavailable' &&
+        !PERMANENTLY_UNAVAILABLE.has(review.errorCode ?? '') &&
+        !exhaustedAgain
+      ) {
         const requeued = await requeueReviewForRefix(tx, {
           reviewId: review.id,
           newReviewId,

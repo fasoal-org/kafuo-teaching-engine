@@ -43,14 +43,19 @@ vi.mock('@openmaic/storage/server/reference', async (importOriginal) => ({
     work({ query: async () => ({ rows: [] }) }),
 }));
 
+import { stampReviewedDigests } from '@/lib/server/teaching-package/package-review';
 import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
-import { reviewSlidesOf } from '@/lib/server/teaching-package/package-review-input';
+import {
+  reviewedSceneDigest,
+  reviewSlidesOf,
+} from '@/lib/server/teaching-package/package-review-input';
 import {
   queueFlaggedSlideRefix,
   queueSuccessorStageReview,
   refixReviewId,
 } from '@/lib/server/teaching-package/package-review-refix';
 import {
+  isPressedFirstReview,
   packageReviewWire,
   reviewSourceAttemptId,
   stageReviewAttemptId,
@@ -336,7 +341,10 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(packageReviewWire(queued.review).findings[2]).not.toHaveProperty('heldFor');
   });
 
-  function loop(rereview: () => Array<Record<string, unknown>>) {
+  function loop(
+    rereview: () => Array<Record<string, unknown>>,
+    heartbeat: () => Promise<boolean> = async () => true,
+  ) {
     const regenerate = vi.fn();
     const regenerateAudio = vi.fn();
     const callReviewer = vi.fn(async () => ({
@@ -365,7 +373,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
         slides: reviewSlidesOf(SCENES),
         scenes: SCENES,
         findings,
-        heartbeat: async () => true,
+        heartbeat,
         callReviewer: callReviewer as never,
         recordProgress: vi.fn(async () => {}),
         now: () => 1,
@@ -430,5 +438,99 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     regenerate.mockRejectedValue(new Error('refused'));
     await run([finding('f1', { recheckOnly: true }), finding('f2', { check: 'S3' })]);
     expect(regenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a run that stops before the re-check leaves it waiting for its re-check, never a regeneration', async () => {
+    const { run, callReviewer } = loop(
+      () => [],
+      async () => false,
+    );
+    const result = await run([finding('f1', { recheckOnly: true })]);
+    expect(callReviewer).not.toHaveBeenCalled();
+    expect(result.findings[0]).toMatchObject({
+      teacherReason: 'REREVIEW_UNAVAILABLE',
+      heldFor: 'recheck',
+    });
+    expect(result.findings[0]).not.toHaveProperty('recheckOnly');
+  });
+
+  it('a lease check that throws on a re-check-only slide is no audio failure', async () => {
+    let beats = 0;
+    const { run, regenerateAudio } = loop(
+      () => [],
+      async () => {
+        beats += 1;
+        if (beats === 2) throw new Error('database blip');
+        return true;
+      },
+    );
+    const result = await run([finding('f1', { recheckOnly: true })]);
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(result.findings[0]).toMatchObject({ status: 'fixed' });
+    expect(result.fixes[0]).toMatchObject({ outcome: 'fixed', code: null });
+  });
+
+  it('a re-checked slide records itself as the re-check saw it (review 27 Nov 2026, HIGH)', async () => {
+    const { run } = loop(() => []);
+    const result = await run([finding('f1', { recheckOnly: true, sceneDigest: 'before-edit' })]);
+    expect(result.findings[0]!.sceneDigest).toBe(reviewedSceneDigest(SCENES[1]!));
+  });
+});
+
+describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () => {
+  it('a second press while a pressed first review is on its way is "in progress" (Kafuo adopts it)', async () => {
+    await expect(
+      refix({}, { ...REVIEW, id: 'tpr-rf-earlier', status: 'queued', reviewedAt: null }),
+    ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_IN_PROGRESS' });
+    // A Stage review the submit queued (a plain id, the Stage key).
+    await expect(
+      refix(
+        {},
+        {
+          ...REVIEW,
+          id: 'tpr-submit',
+          attemptId: 'tpa-1#stage:stage-2',
+          status: 'running',
+          reviewedAt: null,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_IN_PROGRESS' });
+    expect(mocks.requeueReviewForRefix).not.toHaveBeenCalled();
+    expect(mocks.insertQueuedReview).not.toHaveBeenCalled();
+  });
+
+  it('a review that used up its runs is re-asked once, never again after a press re-asked it', async () => {
+    const exhausted = {
+      ...REVIEW,
+      status: 'unavailable' as const,
+      reviewedAt: null,
+      errorCode: 'REVIEW_ATTEMPTS_EXHAUSTED',
+    };
+    await refix({ currentAttemptId: 'tpa-1' }, exhausted);
+    expect(mocks.requeueReviewForRefix).toHaveBeenCalledTimes(1);
+    await expect(
+      refix({ currentAttemptId: 'tpa-1' }, { ...exhausted, id: 'tpr-rf-earlier' }),
+    ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_NOT_READY' });
+    expect(mocks.requeueReviewForRefix).not.toHaveBeenCalled();
+  });
+
+  it('only a press or a submit asks for a review-only first answer', () => {
+    expect(isPressedFirstReview({ id: 'tpr-rf-abc', attemptId: 'tpa-1' })).toBe(true);
+    expect(isPressedFirstReview({ id: 'tpr-x', attemptId: 'tpa-1#stage:stage-2' })).toBe(true);
+    expect(isPressedFirstReview({ id: 'tpr-x', attemptId: 'tpa-1' })).toBe(false);
+  });
+
+  it('the end of a run keeps each digest as the review saw it, never the Stage as it is then', () => {
+    const edited = slide('s2', 2, 'عدّله المعلم');
+    const stamped = stampReviewedDigests(
+      [finding('f1', { sceneDigest: 'seen-by-fix' }), finding('f2', { targetId: 's1' })],
+      // The run started from these; s2 was edited later, which this never reads.
+      SCENES,
+    );
+    expect(stamped.map((f) => f.sceneDigest)).toEqual([
+      'seen-by-fix',
+      reviewedSceneDigest(SCENES[0]!),
+    ]);
+    expect(stamped[0]!.sceneDigest).not.toBe(reviewedSceneDigest(edited));
   });
 });

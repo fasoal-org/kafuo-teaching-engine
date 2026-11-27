@@ -161,6 +161,23 @@ export function reviewSourceAttemptId(attemptId: string): string {
   return at >= 0 ? attemptId.slice(0, at) : attemptId;
 }
 
+/** The id prefix of a review a Regenerate-flagged press queued (`refixReviewId`). */
+export const REFIX_REVIEW_ID_PREFIX = 'tpr-rf-';
+
+/**
+ * Review 27 Nov 2026: a review whose FIRST answer a press or a submit asked for -- a
+ * Stage review (dead end (a)) or a re-asked `unavailable` one (dead end (c)). It only
+ * reviews: its findings go to the teacher, and the next press regenerates their slides.
+ * (A press's ordinary flagged-slide run keeps its stored first answer, so it is never
+ * asked for one.)
+ */
+export function isPressedFirstReview(review: Pick<PackageReview, 'id' | 'attemptId'>): boolean {
+  return (
+    review.id.startsWith(REFIX_REVIEW_ID_PREFIX) ||
+    reviewSourceAttemptId(review.attemptId) !== review.attemptId
+  );
+}
+
 function num(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   const n = Number(value);

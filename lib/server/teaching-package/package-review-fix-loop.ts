@@ -38,6 +38,7 @@ import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   namedFigures,
+  reviewedSceneDigest,
   sceneToReviewSlide,
   type ReviewFigureEvidence,
   type ReviewSlide,
@@ -336,47 +337,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
     let stopped = false;
 
     for (const slide of targets) {
-      if (stopped) {
-        mark(slide.id, 'VERSION_CHANGED');
-        continue;
-      }
-      if (handled.has(slide.id)) {
-        // A resume: this slide was already handled by an earlier run.
-        mark(slide.id, 'STILL_WRONG');
-        continue;
-      }
       const sceneFindings = findings.filter(
         (finding) =>
           finding.targetId === slide.id &&
           finding.status === 'open' &&
           finding.teacherReason === null,
       );
-      // The second guard (plan §4.6): still the draft on the reviewed Stage, and
-      // the slide is what the reviewer read. Checked before every paid step.
-      const version = await readVersion(pool, review.versionId);
-      const live = await readScene(pool, review.stageId, slide.id);
-      if (
-        !version ||
-        version.status !== 'draft' ||
-        version.currentStageId !== review.stageId ||
-        !live ||
-        sceneChanged(live.scene, scenesById.get(slide.id))
-      ) {
-        stopped = true;
-        mark(slide.id, 'VERSION_CHANGED');
-        fixes.push({
-          sceneId: slide.id,
-          findingIds: sceneFindings.map((f) => f.id),
-          outcome: 'stopped',
-          code: 'VERSION_CHANGED',
-        });
-        await context.recordProgress(findings, fixes);
-        continue;
-      }
-      // RV-4: a re-check also wants the figures this slide's findings were read from.
-      const alsoFigures = [
-        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
-      ];
       // Dead end (b), 27 Nov 2026: every finding of this slide waits only for the re-check
       // its regenerated slide never got (`seedRefixFindings`): re-check the live slide, and
       // pay for no regeneration and no narration audio. The marker is used once.
@@ -392,6 +358,62 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           if (finding.teacherReason === 'REREVIEW_UNAVAILABLE') finding.heldFor = kind;
         }
       };
+      /**
+       * Review 27 Nov 2026: a run that stops before this slide's re-check (an earlier
+       * stop, a resume, a changed version, a lost lease) leaves a re-check-only slide
+       * waiting for its re-check, never for a regeneration it already had.
+       */
+      const markStopped = (reason: TeacherReason) => {
+        if (!recheckOnly) return mark(slide.id, reason);
+        mark(slide.id, 'REREVIEW_UNAVAILABLE');
+        holdFor('recheck');
+      };
+      /**
+       * Review 27 Nov 2026 (HIGH): this slide's findings record the slide as this fix last
+       * saw it (`sceneDigest`), never as the Stage is when the run ends -- so a person's
+       * edit made meanwhile stays visible to the next press, which leaves it alone.
+       */
+      const seenAs = (scene: AppScene) => {
+        const digest = reviewedSceneDigest(scene);
+        for (const finding of findings) {
+          if (finding.targetId === slide.id) finding.sceneDigest = digest;
+        }
+      };
+      if (stopped) {
+        markStopped('VERSION_CHANGED');
+        continue;
+      }
+      if (handled.has(slide.id)) {
+        // A resume: this slide was already handled by an earlier run.
+        markStopped('STILL_WRONG');
+        continue;
+      }
+      // The second guard (plan §4.6): still the draft on the reviewed Stage, and
+      // the slide is what the reviewer read. Checked before every paid step.
+      const version = await readVersion(pool, review.versionId);
+      const live = await readScene(pool, review.stageId, slide.id);
+      if (
+        !version ||
+        version.status !== 'draft' ||
+        version.currentStageId !== review.stageId ||
+        !live ||
+        sceneChanged(live.scene, scenesById.get(slide.id))
+      ) {
+        stopped = true;
+        markStopped('VERSION_CHANGED');
+        fixes.push({
+          sceneId: slide.id,
+          findingIds: sceneFindings.map((f) => f.id),
+          outcome: 'stopped',
+          code: 'VERSION_CHANGED',
+        });
+        await context.recordProgress(findings, fixes);
+        continue;
+      }
+      // RV-4: a re-check also wants the figures this slide's findings were read from.
+      const alsoFigures = [
+        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
+      ];
       // RV-1/RV-4 (g5.v12, review 27 Nov 2026): when this run can no longer show the
       // re-check the slide's readable figures (its budget is spent, or a resumed run),
       // a finding that needs them could not close: nothing is paid for the slide, and
@@ -411,8 +433,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         })
       ) {
         // A re-check-only slide keeps waiting for its re-check (the next press re-checks it).
-        mark(slide.id, recheckOnly ? 'REREVIEW_UNAVAILABLE' : 'NOT_ATTEMPTED');
-        if (recheckOnly) holdFor('recheck');
+        markStopped('NOT_ATTEMPTED');
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
@@ -426,7 +447,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // regeneration — a stall in the reads never pays under a lost lease.
       if (!(await context.heartbeat())) {
         stopped = true;
-        mark(slide.id, 'VERSION_CHANGED');
+        markStopped('VERSION_CHANGED');
         continue;
       }
 
@@ -593,6 +614,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           scenesById.set(slide.id, restored);
           currentSlides.set(slide.id, sceneToReviewSlide(restored));
           for (const finding of sceneFindings) finding.teacherReason = 'STILL_WRONG';
+          seenAs(restored);
           fixes.push({
             sceneId: slide.id,
             findingIds: sceneFindings.map((f) => f.id),
@@ -674,12 +696,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           `review ${review.id}: lease check after regenerating ${slide.id} failed; no audio`,
           JSON.stringify(describeErrorSafely(error)),
         );
-        audioCode = 'NARRATION_AUDIO_FAILED';
+        // Review 27 Nov 2026: a re-check-only slide made no new slide and wants no audio.
+        if (!recheckOnly) audioCode = 'NARRATION_AUDIO_FAILED';
         leaseKept = true;
       }
       if (!leaseKept) {
         stopped = true;
-        mark(slide.id, 'VERSION_CHANGED');
+        markStopped('VERSION_CHANGED');
         continue;
       }
 
@@ -735,6 +758,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         mark(slide.id, 'REREVIEW_UNAVAILABLE');
         // The next press re-checks it, or regenerates it when its audio failed too.
         holdFor(audioCode !== null ? 'audio' : 'recheck');
+        seenAs(regenerated);
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
@@ -905,6 +929,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             return added;
           }),
       );
+      seenAs(regenerated);
       fixes.push({
         sceneId: slide.id,
         findingIds: sceneFindings.map((f) => f.id),

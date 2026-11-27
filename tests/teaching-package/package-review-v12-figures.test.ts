@@ -909,21 +909,81 @@ describe('RV-1 + RV-4: the review job', () => {
         { sceneId: 's2', findingIds: ['f3'], outcome: 'still_wrong', code: 'REREVIEW_UNAVAILABLE' },
       ],
     );
-    // f1 (curable) and f3 (its re-check call failed) are re-checked only; f2 waits.
+    // A row from before `heldFor` (review 27 Nov 2026): f3 (its re-check call failed, no
+    // audio code) is re-checked only; f1 (a curable figure hold, whose code hid any audio
+    // failure) is regenerated, its audio with it; f2 (an unread figure) waits.
     expect(
       seed.findings.map((finding) => [finding.id, finding.teacherReason, finding.recheckOnly]),
     ).toEqual([
-      ['f1', null, true],
+      ['f1', null, undefined],
       ['f2', 'REREVIEW_UNAVAILABLE', undefined],
       ['f3', null, true],
     ]);
     expect(seed.sceneIds).toEqual(['s2']);
   });
 
+  it('a held finding is re-checked once its slide is edited; a legacy audio code is regenerated', () => {
+    const open = (id: string, extra: Partial<StoredFinding>) =>
+      ({
+        id,
+        targetId: 's2',
+        targetTitle: 'شريحة 2',
+        targetOrder: 2,
+        check: 'S3',
+        severity: 'high',
+        bookEvidence: { quote: '[الشكل src_2] 25', unitId: '6760' },
+        whatIsWrong: 'w',
+        fixNote: 'n',
+        status: 'open',
+        teacherReason: 'REREVIEW_UNAVAILABLE',
+        sceneDigest: 'reviewed',
+        ...extra,
+      }) as StoredFinding;
+    const findings = [
+      open('p1', { heldFor: 'person' }),
+      open('r1', { heldFor: 'recheck', check: 'S1' }),
+      open('n1', { teacherReason: 'STILL_WRONG', check: 'S4' }),
+    ];
+    const slides = reviewSlidesOf(SCENES);
+    // Not edited: the person hold waits, the curable one is re-checked.
+    const asReviewed = seedRefixFindings(findings, slides, new Map([['s2', 'reviewed']]));
+    expect(
+      asReviewed.findings.map((finding) => [
+        finding.id,
+        finding.teacherReason,
+        finding.recheckOnly,
+      ]),
+    ).toEqual([
+      ['p1', 'REREVIEW_UNAVAILABLE', undefined],
+      ['r1', null, true],
+      ['n1', null, undefined],
+    ]);
+    // A person edited s2: both holds are re-checked as the person made it (never
+    // regenerated); the finding that would regenerate is left as VERSION_CHANGED.
+    const edited = seedRefixFindings(findings, slides, new Map([['s2', 'edited']]));
+    expect(
+      edited.findings.map((finding) => [finding.id, finding.teacherReason, finding.recheckOnly]),
+    ).toEqual([
+      ['p1', null, true],
+      ['r1', null, true],
+      ['n1', 'VERSION_CHANGED', undefined],
+    ]);
+    // A row from before `heldFor` whose audio failed with any code: regenerated.
+    const legacy = seedRefixFindings([open('a1', { sceneDigest: undefined })], slides, new Map(), [
+      { sceneId: 's2', findingIds: ['a1'], outcome: 'still_wrong', code: 'ABORTED' },
+    ]);
+    expect(legacy.findings[0]).toMatchObject({ id: 'a1', teacherReason: null });
+    expect(legacy.findings[0]!.recheckOnly).toBeUndefined();
+  });
+
   it('dead end (a): a stage review reads its producing attempt, and its event names that attempt', async () => {
-    const { run } = job('g5.v11', { attemptId: 'attempt-1#stage:stage-1' });
+    const { run, regenerated } = job('g5.v11', { attemptId: 'attempt-1#stage:stage-1' });
     const finished = await run();
-    expect(finished?.status).toBe('fixed');
+    // Review 27 Nov 2026: a Stage review only reviews -- the teacher's edit is never
+    // regenerated in that run; its finding waits for the next press.
+    expect(finished?.status).toBe('needs_teacher');
+    expect(regenerated).toEqual([]);
+    expect(finished?.findings).toMatchObject([{ id: 'f1', teacherReason: 'NOT_ATTEMPTED' }]);
     expect(mocks.readAttemptById).toHaveBeenCalledWith(expect.anything(), 'attempt-1');
     expect(mocks.readAttemptById).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -942,6 +1002,17 @@ describe('RV-1 + RV-4: the review job', () => {
     ];
     expect(type).toBe('teaching_package.review_completed');
     expect(payload().review.attemptId).toBe('attempt-1');
+  });
+
+  it('dead end (c): a first answer a press re-asked only reviews; a resume regenerates nothing either', async () => {
+    const { run, regenerated } = job('g5.v11', { id: 'tpr-rf-abc', reviewedAt: null });
+    const finished = await run();
+    expect(finished?.status).toBe('needs_teacher');
+    expect(regenerated).toEqual([]);
+    // The stored first answer already says it is the teacher's.
+    expect(firstSave()).toMatchObject({
+      findings: [expect.objectContaining({ id: 'f1', teacherReason: 'NOT_ATTEMPTED' })],
+    });
   });
 
   it('g5.v11: no figure is read or sent, and the review runs exactly as before', async () => {

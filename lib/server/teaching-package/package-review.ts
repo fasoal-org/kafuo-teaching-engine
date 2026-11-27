@@ -113,6 +113,7 @@ import {
 import {
   claimReview,
   finishReview,
+  isPressedFirstReview,
   listClaimableReviewIds,
   packageReviewWire,
   releaseReviewLease,
@@ -637,16 +638,35 @@ export function labelScriptFindings(
 /** The most Latin label runs one fix note names (the cited units' own, in book order). */
 const MAX_NAMED_LABEL_RUNS = 8;
 
-/** Each finding on a slide carries that slide's digest as it is in `scenes` now. */
-export function withSceneDigests(
+/**
+ * Review 27 Nov 2026 (HIGH): each finding keeps its slide as the REVIEW last saw it,
+ * never as the Stage is when the run ends -- a teacher's edit made during the run must
+ * stay visible to the next press, which then never regenerates over it. The fix loop
+ * records a slide it re-checked as it saw it (`sceneDigest`); any other finding keeps
+ * the digest it has, else (a first answer) the slide as this run read it at its start.
+ */
+export function stampReviewedDigests(
   findings: readonly StoredFinding[],
-  scenes: readonly AppScene[],
+  readAtStart: readonly AppScene[],
 ): StoredFinding[] {
-  const digests = new Map(scenes.map((scene) => [scene.id, reviewedSceneDigest(scene)]));
+  const atStart = new Map(readAtStart.map((scene) => [scene.id, reviewedSceneDigest(scene)]));
   return findings.map((finding) => {
-    const digest = finding.targetId ? digests.get(finding.targetId) : undefined;
+    if (finding.sceneDigest !== undefined || !finding.targetId) return finding;
+    const digest = atStart.get(finding.targetId);
     return digest ? { ...finding, sceneDigest: digest } : finding;
   });
+}
+
+/** Every open finding with no reason yet goes to the teacher (no fix loop runs on it). */
+function teacherOwnedFindings(
+  findings: readonly StoredFinding[],
+  slides: readonly ReviewSlide[],
+): StoredFinding[] {
+  return findings.map((finding) =>
+    finding.status === 'open' && finding.teacherReason === null
+      ? { ...finding, teacherReason: teacherOnlyReason(finding, slides) ?? 'NOT_ATTEMPTED' }
+      : finding,
+  );
 }
 
 /** Status from the findings (plan §4.4, §4.10): nothing → passed; all fixed → fixed. */
@@ -1011,6 +1031,14 @@ export async function runPackageReview(
         ...issueFindings,
         ...labelFindings,
       ];
+      // Review 27 Nov 2026 (dead ends (a), (c)): a first answer a press or a submit asked
+      // for only reviews -- no slide is regenerated in that run (the Stage may be a
+      // teacher's edit). Its findings are stored as the teacher's (NOT_ATTEMPTED), so a
+      // resumed run regenerates nothing either; the next press regenerates their slides.
+      if (isPressedFirstReview(claimed)) findings = teacherOwnedFindings(findings, slides);
+      // Review 27 Nov 2026 (HIGH): the first answer records each slide as it read it, so a
+      // resumed run never takes a person's edit made meanwhile as reviewed.
+      findings = stampReviewedDigests(findings, scenes);
       // RV-1 (review 27 Nov 2026): a g5.v12 first review that could not see every book
       // figure of its units (the call's share, a resumed run, a figure it could not read)
       // did not read the whole book: the stored D-8 flag says so, so the Admin shows its
@@ -1083,19 +1111,13 @@ export async function runPackageReview(
       fixes = result.fixes;
     } else {
       // No fix loop: every finding is the teacher's (Phase 2 behaviour).
-      findings = findings.map((finding) =>
-        finding.status === 'open' && finding.teacherReason === null
-          ? { ...finding, teacherReason: teacherOnlyReason(finding, slides) ?? 'NOT_ATTEMPTED' }
-          : finding,
-      );
+      findings = teacherOwnedFindings(findings, slides);
     }
     // 15 Nov 2026: each finding keeps its slide as the review last saw it (after
     // any fix), so a flagged-slide regeneration never overwrites a slide a person
-    // edited since. A failed read keeps the in-memory scenes (best effort).
-    const finalScenes =
-      (await (deps.loadScenes ?? loadLiveScenes)(pool, claimed.stageId).catch(() => null)) ??
-      scenes;
-    findings = withSceneDigests(findings, finalScenes);
+    // edited since. Review 27 Nov 2026: from what the run saw, never a fresh read of the
+    // Stage, which would take in a teacher's edit made during the run as "reviewed".
+    findings = stampReviewedDigests(findings, scenes);
     return await end({ status: reviewStatusOf(findings), findings, fixes });
   } catch (error) {
     // L-1: an evicted run's aborted call is not the review's failure; the
