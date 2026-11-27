@@ -1108,6 +1108,24 @@ describe('RV-1 + RV-4: the review job', () => {
     expect(firstSave()).toMatchObject({ bookTruncated: true });
   });
 
+  it('page images: a whole measured lesson fits the first call (214: 8 pages; 226: 4; 227: 6)', async () => {
+    const eight: ReviewFigureSet = {
+      figures: Array.from({ length: 8 }, (_, n) =>
+        // 1216×1568, the widest measured page: 2,542 tokens each.
+        pageFig(n + 1, [['6758', '6760', '6799'][n % 3]!], [], 2_542),
+      ),
+      unreadable: [],
+    };
+    const { run, requests } = job('g5.v12', {}, eight, { firstFindings: [TEXT_HIGH_ON_S2] });
+    await run();
+    expect(requests[0]!.figures).toHaveLength(8);
+    expect(firstSave()).toMatchObject({ bookTruncated: false });
+    // The rubric says which page number a finding names: the label's, never the printed one.
+    expect(PACKAGE_REVIEW_SYSTEM_V12).toContain(
+      "N is the number in that page's BOOK PAGE label, never the page number printed on the page",
+    );
+  });
+
   it('page images, g5.v11: nothing is read or sent even when the Stage has pages', async () => {
     const { run, requests, loadFigures } = job('g5.v11', {}, PAGES);
     await run();
