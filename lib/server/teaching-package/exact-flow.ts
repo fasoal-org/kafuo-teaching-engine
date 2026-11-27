@@ -196,17 +196,7 @@ export function validateExactTeachingFlow(
   // and no Scene sits there. Nothing else marks an outline, so every other model and
   // every unmarked position is checked exactly as before.
   const present = new Set(indices);
-  const droppedAt = new Set(
-    (outlines ?? [])
-      .filter(
-        (outline) =>
-          outline.checkQuizDropped &&
-          droppedCheckQuizOutlineIds?.has(outline.id) === true &&
-          outline.teachingStage &&
-          flow[outline.teachingStage.flowIndex]?.stage === 'outcome_check_understanding',
-      )
-      .map((outline) => outline.teachingStage!.flowIndex),
-  );
+  const droppedAt = droppedCheckQuizPositions(flow, outlines, droppedCheckQuizOutlineIds);
   const required =
     droppedAt.size === 0
       ? expected
@@ -243,6 +233,37 @@ export function validateExactTeachingFlow(
       expected,
     },
   };
+}
+
+/**
+ * g5.v12 only (QZ-2, decision A-32): the check-quiz flow positions the run dropped — a
+ * marked plan entry the server recorded ({@link readDroppedCheckQuizOutlineIds}) at an
+ * `outcome_check_understanding` position. The exact-flow gate lets them be empty, and a
+ * refusal's details never name them as missing. Empty when no ids are given.
+ */
+export function droppedCheckQuizPositions(
+  flow: readonly { stage: string }[],
+  outlines:
+    | ReadonlyArray<{
+        id: string;
+        teachingStage?: { key: string; flowIndex: number };
+        checkQuizDropped?: unknown;
+      }>
+    | undefined,
+  droppedCheckQuizOutlineIds: ReadonlySet<string> | undefined,
+): Set<number> {
+  if (!droppedCheckQuizOutlineIds || droppedCheckQuizOutlineIds.size === 0) return new Set();
+  return new Set(
+    (outlines ?? [])
+      .filter(
+        (outline) =>
+          outline.checkQuizDropped &&
+          droppedCheckQuizOutlineIds.has(outline.id) &&
+          outline.teachingStage &&
+          flow[outline.teachingStage.flowIndex]?.stage === 'outcome_check_understanding',
+      )
+      .map((outline) => outline.teachingStage!.flowIndex),
+  );
 }
 
 /**

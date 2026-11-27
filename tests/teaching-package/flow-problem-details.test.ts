@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { flowProblemDetails } from '@/lib/server/teaching-package/scene-insertion';
+import { droppedCheckQuizPositions } from '@/lib/server/teaching-package/exact-flow';
+import {
+  exactFlowOrRefuse,
+  flowProblemDetails,
+} from '@/lib/server/teaching-package/scene-insertion';
 import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
@@ -115,5 +119,47 @@ describe('the rail drag check agrees with the exact-flow check', () => {
         expect(keepsTeachingOrder(dropped)).toBe(validateExactTeachingFlow(dropped, FLOW).valid);
       }
     }
+  });
+});
+
+// g5.v12 (A-32): a check quiz the run dropped leaves its page empty by design; a refusal
+// for another problem never names it as missing.
+describe('flowProblemDetails — a dropped check quiz (A-32)', () => {
+  // q1 was dropped by the run; q2 was deleted by a teacher.
+  const scenes = [scene('cover', 1, 0), scene('s1', 2, 1), scene('s3', 3, 3)];
+  const outlines = [
+    {
+      id: 'q1',
+      teachingStage: { key: FLOW[2]!.stage, flowIndex: 2 },
+      checkQuizDropped: { reason: 'unverified_answer_key', sceneId: 'q1' },
+    },
+  ];
+
+  it('the recorded drop is left out of `missing`; the other empty page stays', () => {
+    const positions = droppedCheckQuizPositions(FLOW, outlines, new Set(['q1']));
+    expect([...positions]).toEqual([2]);
+    expect(flowProblemDetails(scenes, FLOW, positions)).toEqual({
+      misplacedSceneIds: [],
+      missing: [{ flowIndex: 4, stage: 'outcome_check_understanding', afterSceneId: 's3' }],
+    });
+  });
+
+  it('an unrecorded marker is still named missing', () => {
+    const positions = droppedCheckQuizPositions(FLOW, outlines, new Set());
+    expect(positions.size).toBe(0);
+    expect(flowProblemDetails(scenes, FLOW, positions).missing.map((m) => m.flowIndex)).toEqual([
+      2, 4,
+    ]);
+  });
+
+  it('the insertion refusal carries the same details', () => {
+    let caught: unknown;
+    try {
+      exactFlowOrRefuse(scenes, FLOW, { outlines } as never, scenes, new Set(['q1']));
+    } catch (error) {
+      caught = error;
+    }
+    const details = (caught as { details?: { missing?: Array<{ flowIndex: number }> } }).details;
+    expect(details?.missing?.map((m) => m.flowIndex)).toEqual([4]);
   });
 });

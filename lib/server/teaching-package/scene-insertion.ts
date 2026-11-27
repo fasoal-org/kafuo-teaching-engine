@@ -86,6 +86,7 @@ import {
   type TeachingPackageErrorCode,
 } from '@/lib/server/teaching-package/errors';
 import {
+  droppedCheckQuizPositions,
   readDroppedCheckQuizOutlineIds,
   readFlowForVersion,
   readTeachingSkillsGovernanceForVersion,
@@ -631,12 +632,20 @@ export function checkPositionAndUnits(
 export function flowProblemDetails(
   scenes: readonly AppScene[],
   flow: readonly TeachingFlowEntry[],
+  /** g5.v12 (A-32): dropped check-quiz positions, empty by design — never "missing". */
+  droppedPositions?: ReadonlySet<number>,
 ): {
   misplacedSceneIds: string[];
   missing: Array<{ flowIndex: number; stage: string; afterSceneId: string | null }>;
 } {
   const ordered = orderedScenes(scenes);
-  const problems = locateFlowOrderProblems(ordered as unknown as SceneOutline[], flow);
+  const located = locateFlowOrderProblems(ordered as unknown as SceneOutline[], flow);
+  const problems = droppedPositions?.size
+    ? {
+        ...located,
+        missing: located.missing.filter((flowIndex) => !droppedPositions.has(flowIndex)),
+      }
+    : located;
   const misplacedSceneIds = problems.misplaced.map((entry) => entry.outlineId);
   const misplaced = new Set(misplacedSceneIds);
   // The slide a missing page belongs after: the last slide IN PLACE before it (a
@@ -676,7 +685,11 @@ export function exactFlowOrRefuse(
       {
         reason: result.violation.reason,
         offendingSceneIds: result.violation.offendingSceneIds,
-        ...flowProblemDetails(detailScenes, flow),
+        ...flowProblemDetails(
+          detailScenes,
+          flow,
+          droppedCheckQuizPositions(flow, outline?.outlines, droppedCheckQuizIds),
+        ),
       },
     );
   }

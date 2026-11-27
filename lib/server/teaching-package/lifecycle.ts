@@ -40,12 +40,15 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { cloneStageForSuccessor } from '@/lib/server/teaching-package/stage-clone';
 import {
+  droppedCheckQuizPositions,
+  type ExactFlowViolation,
   readDroppedCheckQuizOutlineIds,
   readFlowForVersion,
   readTeachingSkillsGovernanceForVersion,
   type TeachingSkillsGovernance,
   validateExactTeachingFlow,
 } from '@/lib/server/teaching-package/exact-flow';
+import { flowProblemDetails } from '@/lib/server/teaching-package/scene-insertion';
 import { findGameScenesOutsideFlow } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import {
   compareSuccessorMaterialScenes,
@@ -457,6 +460,30 @@ function refuseSlidesNeedingRegeneration(scenes: readonly AppScene[]): void {
   );
 }
 
+/**
+ * ED-1: a flow-mismatch refusal names what the teacher must fix — the slides out of
+ * place and the empty flow pages (with the slide each belongs after) — the same
+ * details an insertion refusal gives. `offendingSceneIds` stays: the admin reads it.
+ * A dropped check quiz's empty position (g5.v12, A-32) is never named as missing.
+ */
+function flowMismatchDetails(
+  violation: ExactFlowViolation,
+  scenes: readonly AppScene[],
+  flow: Parameters<typeof flowProblemDetails>[1],
+  outlines: Parameters<typeof droppedCheckQuizPositions>[1],
+  droppedCheckQuizIds: ReadonlySet<string>,
+): Record<string, unknown> {
+  return {
+    reason: violation.reason,
+    offendingSceneIds: violation.offendingSceneIds,
+    ...flowProblemDetails(
+      scenes,
+      flow,
+      droppedCheckQuizPositions(flow, outlines, droppedCheckQuizIds),
+    ),
+  };
+}
+
 async function prepareSubmitValidation(
   pool: ConnectableQueryable,
   versionId: string,
@@ -537,17 +564,24 @@ async function prepareSubmitValidation(
     | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
     | undefined;
   // g5.v12 (A-32): only the check quizzes the run itself dropped may leave a gap.
+  const droppedCheckQuizIds = await readDroppedCheckQuizOutlineIds(pool, version);
   const check = validateExactTeachingFlow(
     document.scenes,
     flow,
     outlineRecord?.outlines,
-    await readDroppedCheckQuizOutlineIds(pool, version),
+    droppedCheckQuizIds,
   );
   if (!check.valid) {
     throw new TeachingPackageError(
       'TEACHING_MODEL_FLOW_MISMATCH',
       `the scene sequence does not cover the exact Teaching Model Flow (${check.violation.reason})`,
-      { offendingSceneIds: check.violation.offendingSceneIds },
+      flowMismatchDetails(
+        check.violation,
+        document.scenes,
+        flow,
+        outlineRecord?.outlines,
+        droppedCheckQuizIds,
+      ),
     );
   }
   // Kafuo Release 1 defers generated games: under a policy-carrying flow
@@ -756,7 +790,13 @@ export async function submitBlockers(
       throw new TeachingPackageError(
         'TEACHING_MODEL_FLOW_MISMATCH',
         `the scene sequence does not cover the exact Teaching Model Flow (${check.violation.reason})`,
-        { offendingSceneIds: check.violation.offendingSceneIds },
+        flowMismatchDetails(
+          check.violation,
+          document.scenes,
+          flow,
+          outlineRecord?.outlines,
+          droppedCheckQuizIds,
+        ),
       );
     }
   });

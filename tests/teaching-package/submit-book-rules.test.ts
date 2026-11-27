@@ -449,6 +449,34 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
 
       const error = await refusal(submitForReview(tx(), command(versionId)));
       expect(error.code).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+      // ED-1: the refusal names the empty page and the slide it belongs after, the same
+      // details an insertion refusal gives; `offendingSceneIds` stays for the admin.
+      const details = {
+        reason: 'missing_stage',
+        offendingSceneIds: expect.arrayContaining(['c2', 'c3']),
+        misplacedSceneIds: [],
+        missing: [{ flowIndex: 2, stage: 'outcome_check_understanding', afterSceneId: 'c2' }],
+      };
+      expect(error.details).toMatchObject(details);
+      const blockers = await submitBlockers(tx(), versionId, TENANT);
+      expect(blockers.find((entry) => entry.code === 'TEACHING_MODEL_FLOW_MISMATCH')).toMatchObject(
+        { details },
+      );
+    });
+
+    it('a recorded drop is never named missing when another check page is empty', async () => {
+      const versionId = await seedBookVersion({
+        version: 'g5.v12',
+        scenes: (stageId) => withoutQ1(stageId).filter((scene) => scene.id !== 'q2'),
+        planned: droppedQ1(true),
+        droppedOutlineIds: ['q1'],
+      });
+
+      const error = await refusal(submitForReview(tx(), command(versionId)));
+      expect(error.code).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+      expect((error.details as { missing: unknown[] }).missing).toEqual([
+        { flowIndex: 4, stage: 'outcome_check_understanding', afterSceneId: 'c4' },
+      ]);
     });
 
     it('a marker the run never recorded (an outline write) is refused', async () => {
