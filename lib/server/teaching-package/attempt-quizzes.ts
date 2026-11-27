@@ -95,9 +95,12 @@ export interface AttemptQuizContext {
 /** At most this many book lines in one attempt's key points. */
 const ATTEMPT_MAX_BOOK_LINES = 16;
 
-/** A box title on its own line («✓ تحقق من فهمك», «تأكد:», «تدرب», «مسائل تدريبية»). */
+/**
+ * A box title on its own line («✓ تحقق من فهمك», «تأكد:», «تدرب», «مسائل تدريبية»), and the
+ * science check's «ماذا قرأت؟» (wave 3, QZ-3: it reached a g5.v12 attempt as a question).
+ */
 const BOX_TITLE_LINE =
-  /^(?:[✓✔]\s*)?(?:تحقّ?ق من فهمك|تأكد|تأكّد|تدرب|تدرّب|مسائل تدريبية|تمارين)\s*[::]?\s*$/u;
+  /^(?:[✓✔]\s*)?(?:تحقّ?ق من فهمك|تأكد|تأكّد|تدرب|تدرّب|مسائل تدريبية|تمارين|ماذا قرأت)\s*[::؟?]?\s*$/u;
 
 /**
  * g5.v12: the book's own lines of each cited unit (the book prints no answers), without

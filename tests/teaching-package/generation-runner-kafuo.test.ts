@@ -4411,6 +4411,27 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(snapshot.sectionCoverage).toMatchObject({ gapContentUnitIds: [] });
     });
 
+    it('QZ-3 (wave 3): the run asks a title-only try-it’s attempt from the book lines on g5.v12, from the title on g5.v11', async () => {
+      // try1 and try2 carry no key point of their own (only their title).
+      const attemptOf = (final: SceneOutline[], slideId: string) =>
+        final.find((outline) => outline.id === `${slideId}-attempt`);
+      const v12: Seen = {};
+      mockBookRun({ first: planWithGaps }, v12);
+      await startBook(bookContext('g5.v12'));
+      expect(attemptOf(v12.final!, 'try1')?.keyPoints).toEqual(['(١) السؤال الأول']);
+      expect(attemptOf(v12.final!, 'try2')?.keyPoints).toEqual(['(١) السؤال الثاني']);
+      for (const outline of v12.final!.filter((entry) => entry.id.endsWith('-attempt'))) {
+        expect(outline.keyPoints).not.toContain(outline.id.replace(/-attempt$/, ''));
+      }
+      // g5.v11 is unchanged: the attempt keeps the slide's own key points (none here), so
+      // the model asks from the title, exactly as before (the defect v12 fixes).
+      const v11: Seen = {};
+      mockBookRun({ first: planWithGaps }, v11);
+      await startBook(bookContext('g5.v11'));
+      expect(attemptOf(v11.final!, 'try1')).toBeDefined();
+      expect(attemptOf(v11.final!, 'try1')?.keyPoints).toEqual([]);
+    });
+
     it('M4 (wave 1 review): a book map whose parts cannot be laid on the blocks fails closed before any model call', async () => {
       const seen: Seen = {};
       mockBookRun({ first: planWithGaps }, seen);
