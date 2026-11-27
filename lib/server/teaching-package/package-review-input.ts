@@ -438,10 +438,17 @@ export interface UnreadableReviewFigure {
 export interface ReviewFigureSet {
   figures: ReviewFigure[];
   /**
-   * Linked figures that could not be read, are of another type, have no known size or
-   * break a request-size guard. A finding that names one cannot be closed without it.
+   * Linked figures whose file could not be read or did not match its checksum. A finding
+   * that names one cannot be closed without it, and no retry cures it (a person decides).
    */
   unreadable: UnreadableReviewFigure[];
+  /**
+   * Linked figures no call may ever send (no known size, over 2000 px, over 5 MB, not
+   * PNG/JPEG/WebP). Nothing was ever read from them, so they never hold a finding open.
+   */
+  unsendable?: UnreadableReviewFigure[];
+  /** The Stage's figures could not be listed at all (a figure a finding names is unread). */
+  loadFailed?: boolean;
 }
 
 /**
@@ -473,10 +480,11 @@ const FIGURE_NAME = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i;
  * (`readSourceVisualDataUrl`: only the reviewed Stage's media directory, checked against
  * the manifest checksum). These are the figures the generation selected and materialized
  * (`sourceVisuals`); a teacher-guide answer drawing (no unit, `guide_<n>` file) is never
- * one, and neither is a path of another Stage. FAIL-SOFT: a figure that cannot be read,
- * is not PNG/JPEG/WebP, has no known size or breaks a request-size guard is listed in
- * `unreadable` and its unit is reviewed from its text, as before. `withBytes: false` (a
- * run that may send nothing) lists the figures without reading any file.
+ * one, and neither is a path of another Stage. FAIL-SOFT: a figure whose file cannot be
+ * read is listed in `unreadable`, one no call may send (no known size, a request-size
+ * guard, another type) in `unsendable`, and its unit is reviewed from its text, as
+ * before. `withBytes: false` (a run that may send nothing) lists the figures without
+ * reading any file.
  */
 export async function loadReviewFigures(
   sourceVisuals: readonly SourceVisualManifestEntry[] | null | undefined,
@@ -486,6 +494,7 @@ export async function loadReviewFigures(
 ): Promise<ReviewFigureSet> {
   const figures: ReviewFigure[] = [];
   const unreadable: UnreadableReviewFigure[] = [];
+  const unsendable: UnreadableReviewFigure[] = [];
   const stagePrefix = options.stageId ? `/api/classroom-media/${options.stageId}/media/` : null;
   for (const entry of sourceVisuals ?? []) {
     const figureUnits = (entry.sourceContentUnitIds ?? []).map(String);
@@ -499,7 +508,7 @@ export async function loadReviewFigures(
       entry.height > 0 &&
       Math.max(entry.width, entry.height) <= REVIEW_FIGURE_MAX_SIDE_PX;
     if (!sized) {
-      unreadable.push({ name, unitIds: figureUnits });
+      unsendable.push({ name, unitIds: figureUnits });
       continue;
     }
     let mediaType: ReviewFigureMediaType = 'image/png';
@@ -509,12 +518,15 @@ export async function loadReviewFigures(
         () => undefined,
       );
       const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+      if (!parsed) {
+        unreadable.push({ name, unitIds: figureUnits });
+        continue;
+      }
       if (
-        !parsed ||
         !REVIEW_FIGURE_TYPES.has(parsed[1]!) ||
         parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS
       ) {
-        unreadable.push({ name, unitIds: figureUnits });
+        unsendable.push({ name, unitIds: figureUnits });
         continue;
       }
       mediaType = parsed[1] as ReviewFigureMediaType;
@@ -529,7 +541,7 @@ export async function loadReviewFigures(
       tokens: estimateImageTokens(entry.width, entry.height),
     });
   }
-  return { figures, unreadable };
+  return { figures, unreadable, unsendable };
 }
 
 /** Every `src_N` a finding's book quote names (the v12 rubric's «[الشكل src_N]»). */
@@ -546,14 +558,26 @@ export function judgedUnitIds(
   return new Set(judged.flatMap((slide) => slide.citedUnitIds.map(String)));
 }
 
-/** What one call could show of the figures it wanted (names only). */
+/**
+ * What one call could show of the figures it wanted (names only), sorted by whether a
+ * fresh review run could cure it (RV-4: a re-check without the evidence is no proof).
+ */
 export interface ReviewFigureEvidence {
   /** Sent with the call. */
   sent: string[];
-  /** Readable but not sent: the run's cap, a call limit, or a run that may send none. */
+  /**
+   * CURABLE: readable, not sent because this run's budget ran out or the run may send
+   * none (a resumed run). A fresh first run (Regenerate flagged) sends them.
+   */
   held: string[];
-  /** Wanted but unreadable (`ReviewFigureSet.unreadable`). */
+  /**
+   * NOT CURABLE: wanted but unreadable (a read or checksum failure, the figures could not
+   * be listed, or the provider refused them), or more than one call can ever carry (over
+   * 20 figures, 20 MB or a whole run's budget). No retry cures these: a person decides.
+   */
   unreadable: string[];
+  /** Never sendable (`ReviewFigureSet.unsendable`): nothing was read from them; no hold. */
+  unsendable: string[];
 }
 
 /**
@@ -561,7 +585,7 @@ export interface ReviewFigureEvidence {
  * fit is left out, a smaller later one may still fit), at most `REVIEW_CALL_MAX_FIGURES`
  * and `REVIEW_CALL_MAX_FIGURE_BASE64_CHARS`. A call wants the figures of its judged
  * units and every figure `alsoNames` lists (the figures the slide's findings were read
- * from). `evidence` says what it could not show: a re-check without them is no proof.
+ * from). `evidence` says what it could not show, and whether a fresh run would cure it.
  */
 export function pickReviewFigures(
   set: ReviewFigureSet,
@@ -573,6 +597,13 @@ export function pickReviewFigures(
   const wants = (figure: { name: string; unitIds: readonly string[] }) =>
     named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id));
   const wanted = set.figures.filter(wants);
+  // A call whose wanted figures no single run could carry holds some on every run: those
+  // holds are not curable (a retry would pay again and again for the same hold).
+  const fitsOneRun =
+    wanted.length <= REVIEW_CALL_MAX_FIGURES &&
+    wanted.reduce((sum, figure) => sum + figure.data.length, 0) <=
+      REVIEW_CALL_MAX_FIGURE_BASE64_CHARS &&
+    wanted.reduce((sum, figure) => sum + figure.tokens, 0) <= REVIEW_IMAGE_MAX_TOKENS_PER_RUN;
   const figures: ReviewFigure[] = [];
   let tokens = 0;
   let chars = 0;
@@ -590,15 +621,27 @@ export function pickReviewFigures(
     chars += figure.data.length;
   }
   const sent = new Set(figures.map((figure) => figure.name));
-  const held = wanted.filter((figure) => !sent.has(figure.name)).map((figure) => figure.name);
+  const notSent = wanted.filter((figure) => !sent.has(figure.name)).map((figure) => figure.name);
+  const known = new Set([
+    ...set.figures.map((figure) => figure.name),
+    ...set.unreadable.map((figure) => figure.name),
+    ...(set.unsendable ?? []).map((figure) => figure.name),
+  ]);
+  const unreadable = [
+    ...set.unreadable.filter(wants).map((figure) => figure.name),
+    ...(fitsOneRun ? [] : notSent),
+    // The figures could not be listed: every figure a finding names is unread.
+    ...(set.loadFailed ? alsoNames.filter((name) => !known.has(name)) : []),
+  ];
   return {
     figures,
     tokens,
-    held: held.length,
+    held: notSent.length,
     evidence: {
       sent: [...sent],
-      held,
-      unreadable: set.unreadable.filter(wants).map((figure) => figure.name),
+      held: fitsOneRun ? notSent : [],
+      unreadable: [...new Set(unreadable)],
+      unsendable: (set.unsendable ?? []).filter(wants).map((figure) => figure.name),
     },
   };
 }

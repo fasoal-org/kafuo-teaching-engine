@@ -806,7 +806,8 @@ export async function runPackageReview(
           `package review ${claimed.id}: the book figures could not be read; reviewed from text`,
           JSON.stringify(describeErrorSafely(error)),
         );
-        figureSet = { figures: [], unreadable: [] };
+        // Nothing is listed: a finding that names a figure stays open (`loadFailed`).
+        figureSet = { figures: [], unreadable: [], loadFailed: true };
       }
       if (figureSet.unreadable.length > 0) {
         log.warn(
@@ -829,8 +830,10 @@ export async function runPackageReview(
       figureTokensLeft -= picked.tokens;
       return picked;
     };
-    const incomplete = (evidence: ReviewFigureEvidence) =>
-      evidence.held.length > 0 || evidence.unreadable.length > 0;
+    /** How many wanted figures one call did not show (any reason). */
+    const unseen = (evidence: ReviewFigureEvidence) =>
+      evidence.held.length + evidence.unreadable.length + evidence.unsendable.length;
+    const incomplete = (evidence: ReviewFigureEvidence) => unseen(evidence) > 0;
 
     /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
     const recordFailedSpend = async (error: unknown) => {
@@ -874,8 +877,9 @@ export async function runPackageReview(
         await recordFailedSpend(error);
         // RV-1 (review 27 Nov 2026): a provider that refuses the request with its figures
         // (an image it will not take) is asked once more WITHOUT them -- a refused request
-        // is not billed -- so a figure never ends the review `unavailable`. The figures
-        // count as held back: that re-check proves nothing about them.
+        // is not billed -- so a figure never ends the review `unavailable`. The refused
+        // figures count as unread: that re-check proves nothing about them, and a retry
+        // would meet the same refusal, so nothing retries it automatically.
         if (
           picked &&
           picked.figures.length > 0 &&
@@ -886,9 +890,10 @@ export async function runPackageReview(
             `package review ${claimed.id}: the reviewer refused the request with its ${picked.figures.length} book figure(s); asked again without them`,
           );
           const evidence: ReviewFigureEvidence = {
+            // A refused figure is not curable by a retry: it joins the unread ones.
+            ...picked.evidence,
             sent: [],
-            held: [...picked.evidence.sent, ...picked.evidence.held],
-            unreadable: picked.evidence.unreadable,
+            unreadable: [...picked.evidence.unreadable, ...picked.evidence.sent],
           };
           try {
             return { ...(await send([], evidence)), figureEvidence: evidence };
@@ -988,9 +993,9 @@ export async function runPackageReview(
       const figuresCut = figureEvidence ? incomplete(figureEvidence) : false;
       if (figuresCut) {
         log.warn(
-          `package review ${claimed.id}: the first review did not see ${
-            figureEvidence!.held.length + figureEvidence!.unreadable.length
-          } book figure(s) of its units`,
+          `package review ${claimed.id}: the first review did not see ${unseen(
+            figureEvidence!,
+          )} book figure(s) of its units`,
         );
       }
       const bookTruncated = book.truncated || figuresCut;

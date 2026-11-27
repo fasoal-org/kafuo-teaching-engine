@@ -101,11 +101,14 @@ export function seedRefixFindings(
     liveDigests.size > 0 &&
     liveDigests.get(finding.targetId) !== finding.sceneDigest;
   // RV-1/RV-4 (g5.v12 only, 27 Nov 2026): a finding left open only because its re-check
-  // did not see the book figures it needed is tried again (its slide regenerated and
-  // re-checked, with this run's own figure budget), so it never waits on a person for
-  // a re-check alone. Every other `REREVIEW_UNAVAILABLE` stays as it is.
+  // could not see book figures that a fresh run sends (the run's budget, a resumed run)
+  // is tried again (its slide regenerated and re-checked, with this run's own figure
+  // budget). A hold no retry cures (an unread or refused figure) is never retried, so no
+  // press pays again for it; every other `REREVIEW_UNAVAILABLE` stays as it is.
   const figuresHeld = new Set(
-    fixes.filter((fix) => fix.code === REREVIEW_FIGURES_HELD).flatMap((fix) => fix.findingIds),
+    fixes
+      .filter((fix) => fix.code === REREVIEW_FIGURES_HELD)
+      .flatMap((fix) => fix.retryForFigures ?? []),
   );
   const retried = (finding: StoredFinding) =>
     finding.teacherReason === null ||

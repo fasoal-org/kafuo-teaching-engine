@@ -210,11 +210,9 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
       ['src_1', ['6758'], '1111'],
     ]);
     expect(set.figures[0]).toMatchObject({ mediaType: 'image/jpeg', pageNumber: 11, tokens: 255 });
-    // src_3 (missing) and src_4 (a GIF) are listed by name, not thrown.
-    expect(set.unreadable).toEqual([
-      { name: 'src_3', unitIds: ['6758'] },
-      { name: 'src_4', unitIds: ['6760'] },
-    ]);
+    // src_3 (missing: unread) and src_4 (a GIF: never sendable) are listed, not thrown.
+    expect(set.unreadable).toEqual([{ name: 'src_3', unitIds: ['6758'] }]);
+    expect(set.unsendable).toEqual([{ name: 'src_4', unitIds: ['6760'] }]);
     expect(read).toHaveBeenCalledWith(entry(1, []).servingPath, { sha256: entry(1, []).sha256 });
     expect(read).not.toHaveBeenCalledWith(entry(2, []).servingPath, expect.anything());
   });
@@ -237,7 +235,9 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
       read as never,
     );
     expect(set.figures.map((figure) => figure.name)).toEqual(['src_5']);
-    expect(set.unreadable.map((figure) => figure.name)).toEqual(['src_1', 'src_2', 'src_3']);
+    // Never sendable: no call could ever carry them, so nothing was read from them.
+    expect(set.unsendable?.map((figure) => figure.name)).toEqual(['src_1', 'src_2', 'src_3']);
+    expect(set.unreadable).toEqual([]);
     // Another Stage's file is never read nor listed; a sizeless or too-wide one is not read.
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -289,9 +289,17 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
       figures: Array.from({ length: 25 }, (_, n) => fig(`src_${n + 1}`, 'a', 10)),
       unreadable: [],
     };
-    expect(pickReviewFigures(many, new Set(['a']), 10_000)).toMatchObject({
-      held: 25 - REVIEW_CALL_MAX_FIGURES,
-    });
+    // More than one call can ever carry: those holds are not curable (no paid retry loop).
+    const overflow = pickReviewFigures(many, new Set(['a']), 10_000);
+    expect(overflow.held).toBe(25 - REVIEW_CALL_MAX_FIGURES);
+    expect(overflow.evidence.held).toEqual([]);
+    expect(overflow.evidence.unreadable).toHaveLength(25 - REVIEW_CALL_MAX_FIGURES);
+    // The figures could not be listed: a figure a finding names counts as unread.
+    expect(
+      pickReviewFigures({ figures: [], unreadable: [], loadFailed: true }, new Set(['a']), 10_000, [
+        'src_9',
+      ]).evidence,
+    ).toEqual({ sent: [], held: [], unreadable: ['src_9'], unsendable: [] });
     expect(namedFigures('[الشكل src_2] 25 °C، وفي الشكل src_12 أيضًا src_2')).toEqual([
       'src_2',
       'src_12',
@@ -504,7 +512,7 @@ describe('RV-1 + RV-4: the review job', () => {
   function job(
     version: string,
     claimed: Partial<PackageReview> = {},
-    figureSet: ReviewFigureSet = { figures: [FIG_A, FIG_B], unreadable: [] },
+    figureSet: ReviewFigureSet | Error = { figures: [FIG_A, FIG_B], unreadable: [] },
     options: {
       firstFindings?: Array<Record<string, unknown>>;
       /** The provider refuses every request that carries figures. */
@@ -593,7 +601,10 @@ describe('RV-1 + RV-4: the review job', () => {
         return found ? { rev: 1, scene: found } : null;
       },
     });
-    const loadFigures = vi.fn(async () => figureSet);
+    const loadFigures = vi.fn(async () => {
+      if (figureSet instanceof Error) throw figureSet;
+      return figureSet;
+    });
     const run = () =>
       runPackageReview('review-1', {
         pool: {} as never,
@@ -636,12 +647,44 @@ describe('RV-1 + RV-4: the review job', () => {
     expect(requests.map((request) => (request.figures ?? []).length)).toEqual([2, 0, 1, 0]);
     // The first review did not see the figures: the D-8 flag is set.
     expect(firstSave()).toMatchObject({ bookTruncated: true });
-    // The re-check did not see src_2, which the finding was read from: it stays open.
+    // The re-check did not see src_2, which the finding was read from: it stays open,
+    // and no Regenerate press retries it (the provider would refuse it again).
     expect(finished).toMatchObject({
       status: 'needs_teacher',
       findings: [{ id: 'f1', status: 'open', teacherReason: 'REREVIEW_UNAVAILABLE' }],
       fixes: [{ sceneId: 's2', outcome: 'still_wrong', code: REREVIEW_FIGURES_HELD }],
     });
+    expect(finished!.fixes[0]!.retryForFigures).toBeUndefined();
+  });
+
+  it('g5.v12: a figure no call may send (over 2000 px) holds nothing; its finding closes', async () => {
+    const { run, requests } = job(
+      'g5.v12',
+      {},
+      { figures: [FIG_A], unreadable: [], unsendable: [{ name: 'src_2', unitIds: ['6760'] }] },
+    );
+    const finished = await run();
+    expect(requests[1]!.figures).toBeUndefined();
+    expect(finished).toMatchObject({
+      status: 'fixed',
+      findings: [{ id: 'f1', status: 'fixed' }],
+    });
+  });
+
+  it('g5.v12: figures that cannot be listed at all keep a figure-read finding open, never retried', async () => {
+    const failed = new Error('the stage outline could not be read');
+    const fromFigure = job('g5.v12', {}, failed);
+    const held = await fromFigure.run();
+    expect(fromFigure.loadFigures).toHaveBeenCalledTimes(1);
+    expect(held).toMatchObject({
+      status: 'needs_teacher',
+      findings: [{ id: 'f1', status: 'open', teacherReason: 'REREVIEW_UNAVAILABLE' }],
+      fixes: [{ code: REREVIEW_FIGURES_HELD }],
+    });
+    expect(held!.fixes[0]!.retryForFigures).toBeUndefined();
+    // A finding read from the text still closes; the review is never `unavailable`.
+    const fromText = job('g5.v12', {}, failed, { firstFindings: [TEXT_HIGH_ON_S2] });
+    expect(await fromText.run()).toMatchObject({ status: 'fixed' });
   });
 
   it('g5.v12, a resumed run: no figure is read or sent, and its re-check closes no HIGH finding', async () => {
@@ -665,10 +708,18 @@ describe('RV-1 + RV-4: the review job', () => {
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.figures).toBeUndefined();
+    // A curable hold: the next Regenerate press (a fresh first run) retries it.
     expect(finished).toMatchObject({
       status: 'needs_teacher',
       findings: [{ id: 'f1', status: 'open', teacherReason: 'REREVIEW_UNAVAILABLE' }],
-      fixes: [{ sceneId: 's2', outcome: 'still_wrong', code: REREVIEW_FIGURES_HELD }],
+      fixes: [
+        {
+          sceneId: 's2',
+          outcome: 'still_wrong',
+          code: REREVIEW_FIGURES_HELD,
+          retryForFigures: ['f1'],
+        },
+      ],
     });
   });
 
@@ -694,7 +745,7 @@ describe('RV-1 + RV-4: the review job', () => {
     });
   });
 
-  it('a flagged-slide regeneration retries a finding held only for its figures, nothing else', () => {
+  it('a flagged-slide regeneration retries only a curable figure hold, nothing else', () => {
     const open = (id: string, reason: string) =>
       ({
         id,
@@ -710,17 +761,29 @@ describe('RV-1 + RV-4: the review job', () => {
         teacherReason: reason,
       }) as StoredFinding;
     const seed = seedRefixFindings(
-      [open('f1', 'REREVIEW_UNAVAILABLE'), { ...open('f2', 'REREVIEW_UNAVAILABLE'), check: 'S1' }],
+      [
+        open('f1', 'REREVIEW_UNAVAILABLE'),
+        { ...open('f2', 'REREVIEW_UNAVAILABLE'), check: 'S1' },
+        { ...open('f3', 'REREVIEW_UNAVAILABLE'), check: 'S4' },
+      ],
       reviewSlidesOf(SCENES),
       new Map(),
       [
-        { sceneId: 's2', findingIds: ['f1'], outcome: 'still_wrong', code: REREVIEW_FIGURES_HELD },
-        { sceneId: 's2', findingIds: ['f2'], outcome: 'still_wrong', code: 'REREVIEW_UNAVAILABLE' },
+        {
+          sceneId: 's2',
+          findingIds: ['f1', 'f2'],
+          outcome: 'still_wrong',
+          code: REREVIEW_FIGURES_HELD,
+          // f1's hold was curable (the run's budget); f2's was not (an unread figure).
+          retryForFigures: ['f1'],
+        },
+        { sceneId: 's2', findingIds: ['f3'], outcome: 'still_wrong', code: 'REREVIEW_UNAVAILABLE' },
       ],
     );
     expect(seed.findings.map((finding) => [finding.id, finding.teacherReason])).toEqual([
       ['f1', null],
       ['f2', 'REREVIEW_UNAVAILABLE'],
+      ['f3', 'REREVIEW_UNAVAILABLE'],
     ]);
     expect(seed.sceneIds).toEqual(['s2']);
   });

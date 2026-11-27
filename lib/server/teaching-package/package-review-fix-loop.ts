@@ -751,17 +751,29 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // RV-1/RV-4 (g5.v12): a re-check that did not see the evidence is no proof; the
       // finding stays open as a re-check that could not run (`REREVIEW_UNAVAILABLE`):
       // - any finding read from a book figure (its quote names `src_N`) the re-check did
-      //   not see (held back, or unreadable now);
-      // - a HIGH finding whose re-check held back any readable figure it wanted (the
-      //   run's cap, a call limit, a resumed run, a provider refusal of the figures).
-      // Never on another package: only a g5.v12 call reports `figureEvidence`.
+      //   not see;
+      // - a HIGH finding whose re-check held back a readable figure it wanted (curable).
+      // CURABLE holds (this run's budget ran out, a resumed run) are retried by the next
+      // Regenerate press, which is a fresh first run; NOT CURABLE ones (unread, refused,
+      // more than one call can carry) wait for a person, so no press pays for them again.
+      // A figure no call may ever send holds nothing. Never on another package: only a
+      // g5.v12 call reports `figureEvidence`.
       const evidence = figureEvidence as ReviewFigureEvidence | null;
-      const unseen = new Set(evidence ? [...evidence.held, ...evidence.unreadable] : []);
-      const evidenceHeld = (finding: StoredFinding) =>
-        evidence !== null &&
-        reviewerCheck(finding) &&
-        (namedFigures(finding.bookEvidence?.quote).some((name) => unseen.has(name)) ||
-          (finding.severity === 'high' && evidence.held.length > 0));
+      const curable = new Set(evidence?.held ?? []);
+      const final = new Set(evidence?.unreadable ?? []);
+      const holdOf = (finding: StoredFinding): 'final' | 'curable' | null => {
+        if (evidence === null || !reviewerCheck(finding)) return null;
+        const named = namedFigures(finding.bookEvidence?.quote);
+        const high = finding.severity === 'high';
+        // An unread figure the finding does not name was not seen by the first review
+        // either (the same file, the same limits): a text-read finding may close.
+        if (named.some((name) => final.has(name))) return 'final';
+        if (named.some((name) => curable.has(name)) || (high && curable.size > 0)) {
+          return 'curable';
+        }
+        return null;
+      };
+      const retryForFigures: string[] = [];
       let heldOpen = false;
       let stillWrong = false;
       for (const finding of sceneFindings) {
@@ -778,7 +790,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         ) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
-        } else if (evidenceHeld(finding)) {
+        } else if (holdOf(finding)) {
+          if (holdOf(finding) === 'curable') retryForFigures.push(finding.id);
           finding.teacherReason = 'REREVIEW_UNAVAILABLE';
           heldOpen = true;
         } else if (audioCode !== null) {
@@ -841,10 +854,11 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         sceneId: slide.id,
         findingIds: sceneFindings.map((f) => f.id),
         outcome: stillWrong || heldOpen ? 'still_wrong' : 'fixed',
-        // The held code wins: `seedRefixFindings` reads it to retry these findings.
         code: heldOpen ? REREVIEW_FIGURES_HELD : audioCode,
         regenerationId,
         ...served,
+        // Only the curable holds: `seedRefixFindings` retries exactly these.
+        ...(retryForFigures.length > 0 ? { retryForFigures } : {}),
       });
       await context.recordProgress(findings, fixes);
     }

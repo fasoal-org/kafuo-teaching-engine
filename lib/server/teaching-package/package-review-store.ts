@@ -84,6 +84,12 @@ export interface StoredFix {
   reviewModel?: string | null;
   /** RV-5: the provider of `reviewModel`. */
   reviewProvider?: 'anthropic' | 'openai' | null;
+  /**
+   * RV-1/RV-4 (g5.v12): the findings left open only because this re-check could not see
+   * figures a fresh review run would send (the run's budget, a resumed run). The next
+   * Regenerate-flagged press retries exactly these. TE row only, never on the wire.
+   */
+  retryForFigures?: string[];
 }
 
 export interface PackageReview {
