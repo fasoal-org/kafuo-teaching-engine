@@ -253,16 +253,34 @@ const V2_PICTURES_LINE =
 export const BOOK_FIGURES_HEADING =
   'BOOK FIGURES (pictures cut from the book pages of the units the slides cite; the book, like its text):';
 
+/**
+ * Page images (contract 27 Nov 2026): the title that opens a g5.v12 review's images when
+ * they include whole book pages.
+ */
+export const BOOK_PAGES_HEADING =
+  'BOOK PAGES (the whole book pages of this lesson or of the units the slides cite, and pictures cut from pages not shown whole; the book, like its text):';
+
 /** RV-1: said under the heading when a figure of the lesson could not be loaded. */
 export const BOOK_FIGURES_INCOMPLETE_NOTE =
   'NOTE: some figures of this book could not be loaded; never report a figure as missing or wrong only because it is not shown here.';
 
-/** One book figure's label, right before its picture (RV-1). */
+/**
+ * One book figure's label, right before its picture (RV-1). A whole page (contract
+ * 27 Nov 2026) names its page number and the cut pictures it holds, so a slide's src_N
+ * maps to it.
+ */
 export function bookFigureLabel(figure: {
   name: string;
   unitIds: readonly string[];
   pageNumber: number | null;
+  kind?: 'page';
+  covers?: readonly string[];
 }): string {
+  if (figure.kind === 'page') {
+    return `<<BOOK PAGE ${figure.pageNumber ?? '?'} | unit_id=${figure.unitIds.join(',')} | figures=${
+      figure.covers && figure.covers.length > 0 ? figure.covers.join(',') : '-'
+    }>>`;
+  }
   return `<<BOOK FIGURE ${figure.name} | unit_id=${figure.unitIds.join(',')} | page=${
     figure.pageNumber ?? '?'
   }>>`;
@@ -284,8 +302,9 @@ function bookFigureInstructions(): string {
   return v11.replace(
     V2_PICTURES_LINE,
     [
-      '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (src_N: when a BOOK FIGURE with the same src_N is sent, you see that picture there; otherwise you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.',
+      '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (src_N: when a BOOK FIGURE with the same src_N is sent, or a BOOK PAGE whose label lists that src_N, you see that picture there; otherwise you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.',
       `- BOOK FIGURES: between the book text and the slides, after the line «${BOOK_FIGURES_HEADING}», each picture follows its label <<BOOK FIGURE src_N | unit_id=… | page=…>>. They are the book, exactly like its text: check every value, label, given and drawing that a slide, its narration or a quiz takes from a figure against that figure (S1, S3, S6). For a finding you read from a figure, book_evidence.quote is «[الشكل src_N]» followed by what the figure shows, and book_evidence.unit_id is its unit. A figure sent here and not shown on a slide is not an error by itself. When no figure of a unit is sent, judge that unit from its text alone.`,
+      `- BOOK PAGES: instead of the figures, the whole book pages may be sent, after the line «${BOOK_PAGES_HEADING}», each after its label <<BOOK PAGE N | unit_id=… | figures=src_…>> (figures= names the cut pictures that page holds; a picture of a page not sent whole may still follow as a BOOK FIGURE). A page is the book, exactly like its text: check every value, label, given, table and drawing a slide, its narration or a quiz takes from it (S1, S3, S6). For a finding you read from a page, book_evidence.quote is «[الصفحة N]» followed by what the page shows (or «[الشكل src_N]» when it is one of the pictures the label lists), and book_evidence.unit_id is its unit. A page may hold more than the slides teach: what a page shows and no slide does is judged as for the book text, never as an error only because the page shows it.`,
     ].join('\n'),
   );
 }

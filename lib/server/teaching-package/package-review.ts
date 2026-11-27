@@ -85,6 +85,7 @@ import {
   reviewedSceneDigest,
   reviewSlidesOf,
   withGuideAnswers,
+  withReviewPages,
   type ReviewBookUnit,
   type ReviewFigure,
   type ReviewFigureEvidence,
@@ -96,8 +97,13 @@ import {
   teacherOnlyReason,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
+  readStageSourcePages,
+  sourcePageServingPath,
+} from '@/lib/server/teaching-package/source-pages';
+import {
   BOOK_FIGURES_HEADING,
   BOOK_FIGURES_INCOMPLETE_NOTE,
+  BOOK_PAGES_HEADING,
   bookFigureLabel,
   PACKAGE_REVIEW_SCHEMA,
   PACKAGE_REVIEW_SCHEMA_V2,
@@ -266,7 +272,9 @@ export async function loadLiveScenes(
 
 /**
  * RV-1: the Stage's materialized book figures linked to `unitIds` (`null`: every one),
- * g5.v12 reviews only, only from this Stage's media.
+ * g5.v12 reviews only, only from this Stage's media. Page images (contract 27 Nov 2026):
+ * the Stage's whole book pages replace the crops on them (`withReviewPages`); a Stage
+ * with none keeps the crops.
  */
 export async function loadStageFigures(
   pool: ConnectableQueryable,
@@ -275,7 +283,15 @@ export async function loadStageFigures(
 ): Promise<ReviewFigureSet> {
   const document = (await documentStore(pool).loadDocument(stageId)) as AppDocument | null;
   const outline = document?.outline as AppDocumentOutline | null | undefined;
-  return loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId });
+  const crops = await loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId });
+  const stored = await readStageSourcePages(stageId);
+  return withReviewPages(
+    crops,
+    stored?.map((page) => ({
+      ...page,
+      servingPath: sourcePageServingPath(stageId, page.fileName),
+    })) ?? null,
+  );
 }
 
 /**
@@ -322,13 +338,19 @@ function refusedRequest(error: unknown): boolean {
   );
 }
 
-/** RV-1: the figures as the reviewer call sends them, each after its label. */
+/**
+ * RV-1: the figures as the reviewer call sends them, each after its label. Page images:
+ * a call with whole pages opens with the pages' heading.
+ */
 function figureImages(figures: readonly ReviewFigure[], incomplete: boolean) {
+  const heading = figures.some((figure) => figure.kind === 'page')
+    ? BOOK_PAGES_HEADING
+    : BOOK_FIGURES_HEADING;
   return figures.map((figure, index) => ({
     label:
       index === 0
         ? [
-            BOOK_FIGURES_HEADING,
+            heading,
             ...(incomplete ? [BOOK_FIGURES_INCOMPLETE_NOTE] : []),
             bookFigureLabel(figure),
           ].join('\n')
@@ -864,6 +886,8 @@ export async function runPackageReview(
         cap,
         request.alsoFigures ?? [],
         freshRunBudget,
+        // Page images: the first review gets the lesson's pages.
+        { allPages: !request.focusIds },
       );
       figureTokensLeft -= picked.tokens;
       return picked;

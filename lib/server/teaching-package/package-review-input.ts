@@ -380,19 +380,22 @@ export async function loadReviewBookUnits(
 // ── RV-1 (g5.v12 only): the book's own figures for the units the reviewer judges ──────
 
 /**
- * The owner's cap (§2 RV-1, 27 Nov 2026): the book figures add at most about $0.30 to
- * one review run. Every figure token is priced at the highest input or cache-write rate
- * of either reviewer model (`reviewerImageTokenPriceUsd`), times the two paid attempts
- * one reviewer call may make (primary, then fallback; no same-model retry).
+ * The owner's cap: the book images (whole pages, or the crops when a lesson has none)
+ * add at most about $0.60 to one review run, worst case (page-images contract §4.3,
+ * 27 Nov 2026: a whole lesson's pages fit the first call; lesson 226's worst case was
+ * about $0.52; RV-1 had $0.30 for crops). Every image token is priced at the highest
+ * input or cache-write rate of either reviewer model (`reviewerImageTokenPriceUsd`),
+ * times the two paid attempts one reviewer call may make (primary, then fallback; no
+ * same-model retry).
  */
-export const REVIEW_IMAGE_BUDGET_USD = 0.3;
+export const REVIEW_IMAGE_BUDGET_USD = 0.6;
 export const REVIEW_IMAGE_ATTEMPTS_PER_CALL = 2;
 /**
- * A hard ceiling on the figure tokens of one review run, whatever the rate card says
+ * A hard ceiling on the image tokens of one review run, whatever the rate card says
  * (review 27 Nov: an underpriced `MODEL_RATE_CARD_OVERRIDES_JSON` entry must never
- * widen the budget). 30,000 is the budget at today's $5/M.
+ * widen the budget). 60,000 is the budget at today's $5/M: about 23 pages of 1568 px.
  */
-export const REVIEW_IMAGE_MAX_TOKENS_PER_RUN = 30_000;
+export const REVIEW_IMAGE_MAX_TOKENS_PER_RUN = 60_000;
 /** The first (whole-package) call's share, so re-reviews always keep the rest. */
 export const REVIEW_FIRST_CALL_IMAGE_SHARE = 2 / 3;
 /**
@@ -427,12 +430,23 @@ export interface ReviewFigure {
   data: string;
   /** `estimateImageTokens` of its width and height. */
   tokens: number;
+  /**
+   * Page images (contract 27 Nov 2026): a whole book page (`page_<N>`), sent instead of
+   * the crops on it. Absent on a crop.
+   */
+  kind?: 'page';
+  /** A page: the crops (`src_N`) on it, which are never sent beside it. */
+  covers?: string[];
 }
 
 /** A linked figure the reviewer could not be shown (its unit is reviewed from text). */
 export interface UnreadableReviewFigure {
   name: string;
   unitIds: string[];
+  /** The book page it is on, when known (a page image may show it instead). */
+  pageNumber?: number | null;
+  /** A whole page that could not be read (its crops are sent instead). */
+  kind?: 'page';
 }
 
 export interface ReviewFigureSet {
@@ -507,21 +521,22 @@ export async function loadReviewFigures(
       entry.width > 0 &&
       entry.height > 0 &&
       Math.max(entry.width, entry.height) <= REVIEW_FIGURE_MAX_SIDE_PX;
+    const pageNumber = entry.pageNumber ?? null;
     if (!sized) {
-      unsendable.push({ name, unitIds: figureUnits });
+      unsendable.push({ name, unitIds: figureUnits, pageNumber });
       continue;
     }
     const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(() => undefined);
     const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
     if (!parsed) {
-      unreadable.push({ name, unitIds: figureUnits });
+      unreadable.push({ name, unitIds: figureUnits, pageNumber });
       continue;
     }
     if (
       !REVIEW_FIGURE_TYPES.has(parsed[1]!) ||
       parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS
     ) {
-      unsendable.push({ name, unitIds: figureUnits });
+      unsendable.push({ name, unitIds: figureUnits, pageNumber });
       continue;
     }
     figures.push({
@@ -536,7 +551,126 @@ export async function loadReviewFigures(
   return { figures, unreadable, unsendable };
 }
 
+/** Page images (contract 27 Nov 2026): a whole page's name in the labels and the evidence. */
+export function pageFigureName(pageNumber: number): string {
+  return `page_${pageNumber}`;
+}
+
+/** One stored page, where the reviewed Stage serves it (`readStageSourcePages`). */
+export interface ReviewPageSource {
+  pageNumber: number;
+  servingPath: string;
+  sha256: string;
+  width: number;
+  height: number;
+  unitIds: readonly string[];
+}
+
+/**
+ * Page images (contract 27 Nov 2026, §4.3): the Stage's whole book pages REPLACE the crops
+ * on them, so nothing is sent twice; a crop whose page has no readable image stays, as
+ * the fallback. Each page names the crops it holds (`covers`), so a slide's `src_N` and a
+ * finding's «[الشكل src_N]» map to it. Pages are read through the same checksum-verified
+ * reader as the crops. A page that cannot be read is listed unread (a finding read from it
+ * cannot be confirmed); one no call may send is never sendable; their crops stay. `null`
+ * or no page: the crops' set as it is.
+ */
+export async function withReviewPages(
+  set: ReviewFigureSet,
+  pages: readonly ReviewPageSource[] | null,
+  read: typeof readSourceVisualDataUrl = readSourceVisualDataUrl,
+): Promise<ReviewFigureSet> {
+  if (!pages || pages.length === 0) return set;
+  const shown = new Map<number, ReviewFigure>();
+  const unreadable: UnreadableReviewFigure[] = [];
+  const unsendable: UnreadableReviewFigure[] = [];
+  for (const page of [...pages].sort((a, b) => a.pageNumber - b.pageNumber)) {
+    const name = pageFigureName(page.pageNumber);
+    const listed = {
+      name,
+      unitIds: [...page.unitIds],
+      pageNumber: page.pageNumber,
+      kind: 'page' as const,
+    };
+    if (Math.max(page.width, page.height) > REVIEW_FIGURE_MAX_SIDE_PX) {
+      unsendable.push(listed);
+      continue;
+    }
+    const dataUrl = await read(page.servingPath, { sha256: page.sha256 }).catch(() => undefined);
+    const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+    if (!parsed) {
+      unreadable.push(listed);
+      continue;
+    }
+    if (parsed[1] !== 'image/jpeg' || parsed[2]!.length > REVIEW_FIGURE_MAX_BASE64_CHARS) {
+      unsendable.push(listed);
+      continue;
+    }
+    shown.set(page.pageNumber, {
+      name,
+      unitIds: [...page.unitIds],
+      pageNumber: page.pageNumber,
+      mediaType: 'image/jpeg',
+      data: parsed[2]!,
+      tokens: estimateImageTokens(page.width, page.height),
+      kind: 'page',
+      covers: [],
+    });
+  }
+  /** The shown page a crop is on: it takes the crop's name and units. */
+  const coveredBy = (
+    crop: { name: string; unitIds: readonly string[] },
+    pageNumber?: number | null,
+  ) => {
+    const page = pageNumber ? shown.get(pageNumber) : undefined;
+    if (!page) return false;
+    page.covers!.push(crop.name);
+    for (const id of crop.unitIds) if (!page.unitIds.includes(id)) page.unitIds.push(id);
+    return true;
+  };
+  const crops = set.figures.filter((figure) => !coveredBy(figure, figure.pageNumber));
+  const unreadCrops = set.unreadable.filter((figure) => !coveredBy(figure, figure.pageNumber));
+  const unsendableCrops = (set.unsendable ?? []).filter(
+    (figure) => !coveredBy(figure, figure.pageNumber),
+  );
+  return {
+    figures: [...shown.values(), ...crops],
+    unreadable: [...unreadable, ...unreadCrops],
+    unsendable: [...unsendable, ...unsendableCrops],
+    ...(set.loadFailed ? { loadFailed: true } : {}),
+  };
+}
+
 const ARABIC_INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+
+function westernDigits(digits: string): string {
+  return digits
+    .split('')
+    .map((digit) => {
+      const index = ARABIC_INDIC_DIGITS.indexOf(digit);
+      return index >= 0 ? String(index) : digit;
+    })
+    .join('')
+    .replace(/^0+(?=\d)/, '');
+}
+
+/**
+ * Page images: every whole page a finding's book quote names (the v12 rubric's
+ * «[الصفحة N]»; «صفحة N» and `page N` too, Arabic-Indic digits too), as `page_<N>`.
+ */
+export function namedPages(quote: string | null | undefined): string[] {
+  const names = new Set<string>();
+  const pattern = /(?:الصفحة|صفحة|\bpage)[\s_-]*([0-9٠-٩]+)/gi;
+  for (let match = pattern.exec(quote ?? ''); match; match = pattern.exec(quote ?? '')) {
+    names.add(pageFigureName(Number(westernDigits(match[1]!))));
+  }
+  return [...names];
+}
+
+/** Every book image a finding's quote names: its crops (`src_N`) and its pages (`page_N`). */
+export function namedBookImages(quote: string | null | undefined): string[] {
+  return [...namedFigures(quote), ...namedPages(quote)];
+}
 
 /**
  * Every `src_N` a finding's book quote names (the v12 rubric's «[الشكل src_N]»), in the
@@ -546,15 +680,7 @@ export function namedFigures(quote: string | null | undefined): string[] {
   const names = new Set<string>();
   const pattern = /src[\s_-]?([0-9٠-٩]+)/gi;
   for (let match = pattern.exec(quote ?? ''); match; match = pattern.exec(quote ?? '')) {
-    const digits = match[1]!
-      .split('')
-      .map((digit) => {
-        const index = ARABIC_INDIC_DIGITS.indexOf(digit);
-        return index >= 0 ? String(index) : digit;
-      })
-      .join('')
-      .replace(/^0+(?=\d)/, '');
-    names.add(`src_${digits}`);
+    names.add(`src_${westernDigits(match[1]!)}`);
   }
   return [...names];
 }
@@ -590,6 +716,34 @@ export interface ReviewFigureEvidence {
   unsendable: string[];
 }
 
+/** A book image's own name, and the crops it covers when it is a whole page. */
+function namesOf(figure: Pick<ReviewFigure, 'name' | 'covers'>): string[] {
+  return [figure.name, ...(figure.covers ?? [])];
+}
+
+/**
+ * Whether a call wants one book image: one of its judged units' (`unitIds`), one a
+ * finding names (`alsoNames`, a page by a crop it covers too), or -- on the first review
+ * (`allPages`) -- any whole page of the lesson.
+ */
+function wantsBookImage(
+  unitIds: ReadonlySet<string>,
+  alsoNames: readonly string[],
+  allPages: boolean,
+) {
+  const named = new Set(alsoNames);
+  return (figure: {
+    name: string;
+    unitIds: readonly string[];
+    kind?: 'page';
+    covers?: readonly string[];
+  }) =>
+    (allPages && figure.kind === 'page') ||
+    named.has(figure.name) ||
+    (figure.covers ?? []).some((name) => named.has(name)) ||
+    figure.unitIds.some((id) => unitIds.has(id));
+}
+
 /**
  * Pick one call's figures within `tokenCap`, in manifest order (a figure that does not
  * fit is left out, a smaller later one may still fit), at most `REVIEW_CALL_MAX_FIGURES`
@@ -597,6 +751,11 @@ export interface ReviewFigureEvidence {
  * units and every figure `alsoNames` lists (the figures the slide's findings were read
  * from). `evidence` says what it could not show, and whether a fresh run would cure it:
  * `freshRunBudget` is what a fresh first run may send in all (`reviewImageTokenBudget`).
+ *
+ * Page images (contract 27 Nov 2026): `allPages` (the first review) wants every whole
+ * page of the lesson; a page is also wanted when a name it `covers` is. Each evidence
+ * list names a page together with the crops it covers, so a finding read from a crop on
+ * a held page is held too.
  */
 export function pickReviewFigures(
   set: ReviewFigureSet,
@@ -604,10 +763,9 @@ export function pickReviewFigures(
   tokenCap: number,
   alsoNames: readonly string[] = [],
   freshRunBudget: number = REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
+  options: { allPages?: boolean } = {},
 ): { figures: ReviewFigure[]; tokens: number; held: number; evidence: ReviewFigureEvidence } {
-  const named = new Set(alsoNames);
-  const wants = (figure: { name: string; unitIds: readonly string[] }) =>
-    named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id));
+  const wants = wantsBookImage(unitIds, alsoNames, options.allPages === true);
   const wanted = set.figures.filter(wants);
   // A call whose wanted figures no fresh run could carry holds some on every run: those
   // holds are not curable (a retry would pay again and again for the same hold).
@@ -632,10 +790,11 @@ export function pickReviewFigures(
     tokens += figure.tokens;
     chars += figure.data.length;
   }
-  const sent = new Set(figures.map((figure) => figure.name));
-  const notSent = wanted.filter((figure) => !sent.has(figure.name)).map((figure) => figure.name);
+  const sentNames = new Set(figures.map((figure) => figure.name));
+  const sent = new Set(figures.flatMap(namesOf));
+  const notSent = wanted.filter((figure) => !sentNames.has(figure.name)).flatMap(namesOf);
   const known = new Set([
-    ...set.figures.map((figure) => figure.name),
+    ...set.figures.flatMap(namesOf),
     ...set.unreadable.map((figure) => figure.name),
     ...(set.unsendable ?? []).map((figure) => figure.name),
   ]);
@@ -652,7 +811,7 @@ export function pickReviewFigures(
   return {
     figures,
     tokens,
-    held: notSent.length,
+    held: wanted.length - figures.length,
     evidence: {
       sent: [...sent],
       held: fitsOneRun && !neverSent ? notSent : [],
@@ -679,10 +838,7 @@ export function figureRoomFor(
   tokensLeft: number,
   freshRunBudget: number,
 ): boolean {
-  const named = new Set(alsoNames);
-  const wanted = set.figures.filter(
-    (figure) => named.has(figure.name) || figure.unitIds.some((id) => unitIds.has(id)),
-  );
+  const wanted = set.figures.filter(wantsBookImage(unitIds, alsoNames, false));
   const tokens = wanted.reduce((sum, figure) => sum + figure.tokens, 0);
   const chars = wanted.reduce((sum, figure) => sum + figure.data.length, 0);
   const fitsOneRun =

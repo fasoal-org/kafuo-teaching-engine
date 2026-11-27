@@ -18,6 +18,13 @@ import {
   type NormalizedSource,
   type NormalizedSourceImage,
 } from '@/lib/server/teaching-package/source-images';
+import {
+  SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_COUNT,
+  SOURCE_PAGE_MAX_LONG_EDGE_PX,
+  SOURCE_PAGES_MAX_TOTAL_BYTES,
+  type NormalizedSourcePage,
+} from '@/lib/server/teaching-package/source-pages';
 import type {
   KafuoLearningItemContext,
   KafuoNormalizedContentResource,
@@ -88,11 +95,31 @@ export interface NormalizedLessonManifest {
   pageCount: number;
   contentUnits: ManifestUnit[];
   visuals: ManifestVisual[];
+  /** Contract 27 Nov 2026 (optional, additive): whole book pages, for the g5.v12 reviewer. */
+  pages?: ManifestPage[];
+}
+
+/** Contract `page-images-export-contract-2026-11-27.md` §2. */
+interface ManifestPage {
+  /** 1-based PDF page index (the blocks' `page`), never the printed number. */
+  pageNumber: number;
+  /** Flat under `media/`, `.jpg`, unique, never a visual's path. */
+  mediaPath: string;
+  mimeType: 'image/jpeg';
+  sizeBytes: number;
+  checksumSha256: string;
+  width: number;
+  height: number;
 }
 
 export interface AcquiredNormalizedSource extends NormalizedSource {
   manifest: NormalizedLessonManifest;
   blockCount: number;
+  /**
+   * Contract 27 Nov 2026: the export's verified page images, in page order (`[]` when the
+   * export has none). Stored for g5.v12 only (`materializeSourcePages`); never generated from.
+   */
+  pages: NormalizedSourcePage[];
 }
 
 export interface NormalizedAcquisitionPolicy {
@@ -384,11 +411,18 @@ export async function acquireNormalizedContentResource(
   if (manifest.schemaVersion !== NORMALIZED_CONTENT_SCHEMA)
     fail('NORMALIZED_CONTENT_SCHEMA_UNSUPPORTED', 'normalized content schema is unsupported');
   validateLineage(resource, learningItem, manifest);
-  if (!Array.isArray(manifest.contentUnits) || !Array.isArray(manifest.visuals))
+  if (
+    !Array.isArray(manifest.contentUnits) ||
+    !Array.isArray(manifest.visuals) ||
+    // Page images (contract 27 Nov 2026): optional; an array when present.
+    (manifest.pages !== undefined && !Array.isArray(manifest.pages))
+  )
     fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', 'normalized content manifest shape is invalid');
+  const manifestPages = manifest.pages ?? [];
   const declaredPaths = new Set([
     'manifest.json',
     ...manifest.visuals.map((visual) => visual.mediaPath),
+    ...manifestPages.map((page) => page?.mediaPath),
   ]);
   for (const [name, entry] of Object.entries(zip.files)) {
     const permissions =
@@ -541,6 +575,92 @@ export async function acquireNormalizedContentResource(
         'normalized block references a missing visual',
       );
 
+  // Page images (contract 27 Nov 2026, §3-§4.1): verified like the visuals (fail closed),
+  // on every Teaching Model; only the g5.v12 reviewer ever reads them, and they never
+  // join the vision channel below.
+  const pageUnits = new Map<number, Set<string>>();
+  const blockPage = (block: ManifestBlock) =>
+    Number.isSafeInteger(block.page) && block.page! > 0 ? block.page! : null;
+  for (const unit of units) {
+    const blocks = unit.blocks ?? [];
+    const included = blocks
+      .filter((block) => block.disposition !== 'excluded')
+      .map(blockPage)
+      .filter((page): page is number => page !== null);
+    const unitPages =
+      included.length > 0
+        ? included
+        : blocks.map(blockPage).filter((page): page is number => page !== null);
+    for (const page of unitPages) {
+      const ids = pageUnits.get(page) ?? new Set<string>();
+      ids.add(unit.id);
+      pageUnits.set(page, ids);
+    }
+  }
+  if (manifestPages.length > SOURCE_PAGE_MAX_COUNT)
+    fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', 'normalized content carries too many page images');
+  const visualPaths = new Set(manifest.visuals.map((visual) => visual.mediaPath));
+  const pageNumbers = new Set<number>();
+  const pagePaths = new Set<string>();
+  const pages: NormalizedSourcePage[] = [];
+  let pageBytes = 0;
+  for (const page of manifestPages) {
+    const pageNumber = page?.pageNumber;
+    if (
+      !page ||
+      !Number.isSafeInteger(pageNumber) ||
+      pageNumber <= 0 ||
+      (manifest.pageCount > 0 && pageNumber > manifest.pageCount) ||
+      pageNumbers.has(pageNumber)
+    )
+      fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', 'normalized page image numbering is invalid');
+    pageNumbers.add(pageNumber);
+    const pagePath = string(page.mediaPath, 'NORMALIZED_CONTENT_ARCHIVE_INVALID');
+    if (
+      !safePath(pagePath) ||
+      pagePath.split('/').length !== 2 ||
+      !pagePath.toLowerCase().endsWith('.jpg') ||
+      pagePaths.has(pagePath) ||
+      visualPaths.has(pagePath)
+    )
+      fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', 'normalized page image path is unsafe');
+    pagePaths.add(pagePath);
+    const entry = zip.file(pagePath);
+    if (!entry) fail('NORMALIZED_CONTENT_MEDIA_INVALID', 'normalized page image is missing');
+    const data = Buffer.from(await entry.async('uint8array'));
+    expandedBytes += data.length;
+    pageBytes += data.length;
+    if (
+      data.length <= 0 ||
+      data.length > SOURCE_PAGE_MAX_BYTES ||
+      pageBytes > SOURCE_PAGES_MAX_TOTAL_BYTES ||
+      expandedBytes > maxExpanded
+    )
+      fail('NORMALIZED_CONTENT_ARCHIVE_INVALID', 'normalized archive exceeds expanded size limits');
+    const facts = imageFacts(data);
+    const digest = createHash('sha256').update(data).digest('hex');
+    if (
+      !facts ||
+      facts.mimeType !== 'image/jpeg' ||
+      page.mimeType !== 'image/jpeg' ||
+      data.length !== page.sizeBytes ||
+      digest !== String(page.checksumSha256).toLowerCase() ||
+      facts.width !== page.width ||
+      facts.height !== page.height ||
+      Math.max(facts.width, facts.height) > SOURCE_PAGE_MAX_LONG_EDGE_PX
+    )
+      fail('NORMALIZED_CONTENT_MEDIA_INVALID', 'normalized page image integrity is invalid');
+    pages.push({
+      pageNumber,
+      data,
+      sha256: digest,
+      width: facts.width,
+      height: facts.height,
+      unitIds: [...(pageUnits.get(pageNumber) ?? [])],
+    });
+  }
+  pages.sort((a, b) => a.pageNumber - b.pageNumber);
+
   const visionImages = toVisionPdfImages(normalizedImages);
   return {
     manifest,
@@ -550,6 +670,7 @@ export async function acquireNormalizedContentResource(
     normalizedImages,
     visionImages,
     visionMapping: Object.fromEntries(visionImages.map((image) => [image.id, image.src])),
+    pages,
     measuredBytes: bytes.length,
     measuredSha256,
   };

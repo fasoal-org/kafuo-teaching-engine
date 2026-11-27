@@ -555,3 +555,180 @@ describe('normalized content acquisition', () => {
     ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
   });
 });
+
+describe('page images (contract page-images-export-contract-2026-11-27.md)', () => {
+  /** A minimal baseline JPEG: SOI, one SOF0 with its size, EOI (`salt` varies the bytes). */
+  const jpeg = (width: number, height: number, salt = 0) =>
+    Buffer.from([
+      0xff,
+      0xd8,
+      0xff,
+      0xc0,
+      0x00,
+      0x11,
+      0x08,
+      height >> 8,
+      height & 255,
+      width >> 8,
+      width & 255,
+      0x03,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      salt,
+      0xff,
+      0xd9,
+    ]);
+  const PAGE_1 = jpeg(1108, 1568, 1);
+  const PAGE_2 = jpeg(1108, 1568, 2);
+  const pageEntry = (pageNumber: number, data: Buffer, extra: Record<string, unknown> = {}) => ({
+    pageNumber,
+    mediaPath: `media/page-${String(pageNumber).padStart(4, '0')}.jpg`,
+    mimeType: 'image/jpeg' as const,
+    sizeBytes: data.length,
+    checksumSha256: createHash('sha256').update(data).digest('hex'),
+    width: 1108,
+    height: 1568,
+    ...extra,
+  });
+  /** Unit cu-1 is on page 1; cu-2 is on page 2, with an excluded block back on page 1. */
+  const withTwoUnits = (pages: unknown[] | undefined) =>
+    manifest({
+      contentUnits: [
+        manifest().contentUnits[0]!,
+        {
+          id: 'cu-2',
+          orderIndex: 1,
+          role: 'EXPLANATION',
+          title: 'Unit 2',
+          normalizedText: 'second text',
+          blocks: [
+            {
+              id: 'block-2',
+              orderIndex: 0,
+              blockType: 'text',
+              text: 'second text',
+              page: 2,
+              disposition: 'included',
+            },
+            {
+              id: 'block-3',
+              orderIndex: 1,
+              blockType: 'text',
+              text: 'page furniture',
+              page: 1,
+              disposition: 'excluded',
+            },
+          ],
+        },
+      ],
+      ...(pages ? { pages: pages as never } : {}),
+    });
+  const withPages = (value: NormalizedLessonManifest, files: Array<[string, Buffer]>) =>
+    archive(value, (zip) => {
+      for (const [name, data] of files) zip.file(name, data);
+    });
+  const acquire = (bytes: Buffer) =>
+    acquireNormalizedContentResource(
+      resource(bytes),
+      { type: 'lesson', id: 'li-1' },
+      { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never },
+    );
+  const twoPages = [pageEntry(1, PAGE_1), pageEntry(2, PAGE_2)];
+  const twoFiles: Array<[string, Buffer]> = [
+    ['media/page-0001.jpg', PAGE_1],
+    ['media/page-0002.jpg', PAGE_2],
+  ];
+
+  it('an export with pages: each page verified, in page order, with the units on it', async () => {
+    const source = await acquire(await withPages(withTwoUnits([...twoPages].reverse()), twoFiles));
+    expect(
+      source.pages.map((page) => [page.pageNumber, page.unitIds, page.width, page.height]),
+    ).toEqual([
+      // An excluded block does not put its unit on a page.
+      [1, ['cu-1'], 1108, 1568],
+      [2, ['cu-2'], 1108, 1568],
+    ]);
+    expect(source.pages[0]!.sha256).toBe(createHash('sha256').update(PAGE_1).digest('hex'));
+    expect(source.pages[0]!.data.equals(PAGE_1)).toBe(true);
+    // Pages never join generation: the vision channel holds the one visual, as before.
+    expect(source.visionImages).toHaveLength(1);
+    expect(source.normalizedImages).toHaveLength(1);
+  });
+
+  it('an export without pages works as before (the reviewer keeps the crops)', async () => {
+    const source = await acquire(await archive(withTwoUnits(undefined)));
+    expect(source.pages).toEqual([]);
+    expect(source.visionImages).toHaveLength(1);
+  });
+
+  it('a page that does not match its manifest fails the archive, like a visual', async () => {
+    const cases: Array<[unknown[], Array<[string, Buffer]>, string]> = [
+      // checksum, size, type, width
+      [[pageEntry(1, PAGE_1, { checksumSha256: 'f'.repeat(64) })], twoFiles.slice(0, 1), 'MEDIA'],
+      [[pageEntry(1, PAGE_1, { sizeBytes: 3 })], twoFiles.slice(0, 1), 'MEDIA'],
+      [[pageEntry(1, PAGE_1, { mimeType: 'image/png' })], twoFiles.slice(0, 1), 'MEDIA'],
+      [[pageEntry(1, PAGE_1, { width: 1000 })], twoFiles.slice(0, 1), 'MEDIA'],
+      // over 1568 px on the long side
+      [
+        [{ ...pageEntry(1, jpeg(1600, 1200)), width: 1600, height: 1200 }],
+        [['media/page-0001.jpg', jpeg(1600, 1200)]],
+        'MEDIA',
+      ],
+      // a declared page missing from the ZIP
+      [[pageEntry(1, PAGE_1)], [], 'MEDIA'],
+      // numbering: repeated, past the page count, not a positive integer
+      [[pageEntry(1, PAGE_1), pageEntry(1, PAGE_2)], twoFiles, 'ARCHIVE'],
+      [[pageEntry(3, PAGE_1)], [['media/page-0003.jpg', PAGE_1]], 'ARCHIVE'],
+      [[pageEntry(0, PAGE_1)], [['media/page-0000.jpg', PAGE_1]], 'ARCHIVE'],
+      // paths: a visual's own path, a sub-folder, not a .jpg
+      [[pageEntry(1, PNG, { mediaPath })], [], 'ARCHIVE'],
+      [
+        [pageEntry(1, PAGE_1, { mediaPath: 'media/pages/1.jpg' })],
+        [['media/pages/1.jpg', PAGE_1]],
+        'ARCHIVE',
+      ],
+      [
+        [pageEntry(1, PAGE_1, { mediaPath: 'media/page-0001.png' })],
+        [['media/page-0001.png', PAGE_1]],
+        'ARCHIVE',
+      ],
+    ];
+    for (const [pages, files, code] of cases) {
+      await expect(acquire(await withPages(withTwoUnits(pages), files))).rejects.toMatchObject({
+        code: `NORMALIZED_CONTENT_${code}_INVALID`,
+      });
+    }
+    // `pages` that is not an array, and a page file no entry declares.
+    await expect(
+      acquire(await archive(withTwoUnits({} as never as unknown[]))),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
+    await expect(
+      acquire(await withPages(withTwoUnits(undefined), twoFiles.slice(0, 1))),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
+  });
+
+  it('more than 40 pages, or a page over 1.5 MiB, breaks the contract limits', async () => {
+    const many = Array.from({ length: 41 }, (_, n) => pageEntry(n + 1, jpeg(1108, 1568, n)));
+    const manyFiles = many.map(
+      (page, n) => [page.mediaPath, jpeg(1108, 1568, n)] as [string, Buffer],
+    );
+    await expect(
+      acquire(await withPages({ ...withTwoUnits(many), pageCount: 60 }, manyFiles)),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
+    const huge = Buffer.concat([
+      PAGE_1.subarray(0, 22),
+      Buffer.alloc(1_572_865),
+      PAGE_1.subarray(22),
+    ]);
+    await expect(
+      acquire(await withPages(withTwoUnits([pageEntry(1, huge)]), [['media/page-0001.jpg', huge]])),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });
+  });
+});

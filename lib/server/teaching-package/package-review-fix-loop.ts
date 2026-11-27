@@ -37,7 +37,7 @@ import { createLogger } from '@/lib/logger';
 import { readVersionById } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
-  namedFigures,
+  namedBookImages,
   reviewedSceneDigest,
   sceneToReviewSlide,
   type ReviewFigureEvidence,
@@ -415,9 +415,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         await context.recordProgress(findings, fixes);
         continue;
       }
-      // RV-4: a re-check also wants the figures this slide's findings were read from.
+      // RV-4: a re-check also wants the figures this slide's findings were read from (page
+      // images, 27 Nov 2026: and the whole pages they were read from).
       const alsoFigures = [
-        ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
+        ...new Set(
+          sceneFindings.flatMap((finding) => namedBookImages(finding.bookEvidence?.quote)),
+        ),
       ];
       // RV-1/RV-4 (g5.v12, review 27 Nov 2026): when this run can no longer show the
       // re-check the slide's readable figures (its budget is spent, or a resumed run),
@@ -426,7 +429,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       const needsFigures = sceneFindings.some(
         (finding) =>
           !SERVER_CHECKS.has(finding.check) &&
-          (finding.severity === 'high' || namedFigures(finding.bookEvidence?.quote).length > 0),
+          (finding.severity === 'high' || namedBookImages(finding.bookEvidence?.quote).length > 0),
       );
       if (
         context.figureRoom &&
@@ -843,7 +846,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       const final = new Set(evidence?.unreadable ?? []);
       const holdOf = (finding: StoredFinding): 'final' | 'curable' | null => {
         if (evidence === null || !reviewerCheck(finding)) return null;
-        const named = namedFigures(finding.bookEvidence?.quote);
+        // Page images: a page in the evidence lists the crops it covers too.
+        const named = namedBookImages(finding.bookEvidence?.quote);
         const high = finding.severity === 'high';
         // An unread figure the finding does not name was not seen by the first review
         // either (the same file, the same limits): a text-read finding may close.

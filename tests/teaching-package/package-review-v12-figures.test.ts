@@ -88,6 +88,7 @@ import {
 import {
   BOOK_FIGURES_HEADING,
   BOOK_FIGURES_INCOMPLETE_NOTE,
+  BOOK_PAGES_HEADING,
   PACKAGE_REVIEW_SYSTEM,
   PACKAGE_REVIEW_SYSTEM_V2,
   PACKAGE_REVIEW_SYSTEM_V11,
@@ -154,7 +155,9 @@ describe('RV-1: the figure token estimate and the cap', () => {
   it('prices a figure token at the highest reviewer input or cache-write rate ($5/M today)', () => {
     expect(reviewerImageTokenPriceUsd()).toBeCloseTo(5 / 1_000_000, 12);
     const budget = reviewImageTokenBudget();
-    expect(budget).toBe(30_000);
+    // Page images (contract 27 Nov 2026): $0.60 worst case per review run, 60,000 tokens.
+    expect(REVIEW_IMAGE_BUDGET_USD).toBe(0.6);
+    expect(budget).toBe(60_000);
     // The worst case: every figure token paid on both attempts at the highest rate.
     expect(
       budget * reviewerImageTokenPriceUsd() * REVIEW_IMAGE_ATTEMPTS_PER_CALL,
@@ -212,8 +215,8 @@ describe('RV-1: the figures come from the existing crop reader, fail-soft', () =
     ]);
     expect(set.figures[0]).toMatchObject({ mediaType: 'image/jpeg', pageNumber: 11, tokens: 255 });
     // src_3 (missing: unread) and src_4 (a GIF: never sendable) are listed, not thrown.
-    expect(set.unreadable).toEqual([{ name: 'src_3', unitIds: ['6758'] }]);
-    expect(set.unsendable).toEqual([{ name: 'src_4', unitIds: ['6760'] }]);
+    expect(set.unreadable).toEqual([{ name: 'src_3', unitIds: ['6758'], pageNumber: 13 }]);
+    expect(set.unsendable).toEqual([{ name: 'src_4', unitIds: ['6760'], pageNumber: 14 }]);
     expect(read).toHaveBeenCalledWith(entry(1, []).servingPath, { sha256: entry(1, []).sha256 });
     expect(read).not.toHaveBeenCalledWith(entry(2, []).servingPath, expect.anything());
   });
@@ -767,9 +770,9 @@ describe('RV-1 + RV-4: the review job', () => {
   });
 
   it('g5.v12: a slide whose re-check this run can no longer show its figures is not paid for', async () => {
-    // 16,000 tokens each: the first call (its 20,000 share) sends src_1 only, leaving
-    // 14,000 -- too few for either slide's re-check.
-    const big = (figure: ReviewFigure) => ({ ...figure, tokens: 16_000 });
+    // 32,000 tokens each: the first call (its 40,000 share of 60,000) sends src_1 only,
+    // leaving 28,000 -- too few for either slide's re-check.
+    const big = (figure: ReviewFigure) => ({ ...figure, tokens: 32_000 });
     const onS1 = {
       ...TEXT_HIGH_ON_S2,
       targetId: 's1',
@@ -1013,6 +1016,103 @@ describe('RV-1 + RV-4: the review job', () => {
     expect(firstSave()).toMatchObject({
       findings: [expect.objectContaining({ id: 'f1', teacherReason: 'NOT_ATTEMPTED' })],
     });
+  });
+
+  /** Page images (contract 27 Nov 2026): whole pages, each naming the crops it holds. */
+  const pageFig = (n: number, units: string[], covers: string[], tokens = 2_317): ReviewFigure => ({
+    name: `page_${n}`,
+    unitIds: units,
+    pageNumber: n,
+    mediaType: 'image/jpeg',
+    data: `PAGE${n}`,
+    tokens,
+    kind: 'page',
+    covers,
+  });
+  const PAGES: ReviewFigureSet = {
+    figures: [
+      pageFig(12, ['6758'], ['src_1']),
+      pageFig(13, ['6760'], ['src_2']),
+      // A page no slide cites (its unit is not taught): the first review sees it all the same.
+      pageFig(14, [], []),
+    ],
+    unreadable: [],
+  };
+
+  it('page images, g5.v12: the first review gets the lesson’s pages; the re-check its slide’s', async () => {
+    const { run, requests } = job('g5.v12', {}, PAGES);
+    const finished = await run();
+    expect(requests.map((request) => (request.figures ?? []).map((figure) => figure.name))).toEqual(
+      [['page_12', 'page_13', 'page_14'], ['page_13']],
+    );
+    // The finding was read from «[الشكل src_2]»: page 13 holds it, so the re-check saw it.
+    expect(finished).toMatchObject({ status: 'fixed', findings: [{ id: 'f1', status: 'fixed' }] });
+    expect(firstSave()).toMatchObject({ bookTruncated: false });
+  });
+
+  it('page images: the pages open with their own heading, each labelled with its crops', async () => {
+    mocks.readAttemptById.mockResolvedValue({
+      teachingModel: { key: 'g5', version: 'g5.v12' },
+      inputSnapshot: {},
+    });
+    mocks.readContentUnitsForAttempt.mockResolvedValue([]);
+    mocks.runReviewerCall.mockReset().mockResolvedValue({
+      parsed: { summary: 's', findings: [] },
+      provider: 'anthropic',
+      modelString: 'anthropic:claude-opus-5-5',
+      attemptIds: [],
+      usage: null,
+      switched: null,
+    });
+    await callPackageReviewer({
+      review: CLAIMED,
+      units: [{ id: '6758', title: null, role: null, text: 'x' }],
+      slides: [],
+      pool: {} as never,
+      figures: [PAGES.figures[0]!, { ...FIG_B, pageNumber: 20 }],
+    });
+    const sent = mocks.runReviewerCall.mock.calls.at(-1)![0] as {
+      images: Array<{ label: string }>;
+    };
+    expect(sent.images.map((image) => image.label)).toEqual([
+      `${BOOK_PAGES_HEADING}\n<<BOOK PAGE 12 | unit_id=6758 | figures=src_1>>`,
+      // A crop whose page is not shown whole follows as a BOOK FIGURE.
+      '<<BOOK FIGURE src_2 | unit_id=6760 | page=20>>',
+    ]);
+  });
+
+  it('page images: the hard ceiling -- never more than 60,000 image tokens in one run, 40,000 in its first call', async () => {
+    // 30 pages of 1568 px: more than any run may send.
+    const many: ReviewFigureSet = {
+      figures: Array.from({ length: 30 }, (_, n) =>
+        pageFig(n + 1, [['6758', '6760', '6799'][n % 3]!], []),
+      ),
+      unreadable: [],
+    };
+    const { run, requests } = job('g5.v12', {}, many, { firstFindings: [TEXT_HIGH_ON_S2] });
+    await run();
+    const tokensOf = (request: ReviewCallRequest) =>
+      (request.figures ?? []).reduce((sum, figure) => sum + figure.tokens, 0);
+    expect(tokensOf(requests[0]!)).toBeLessThanOrEqual(40_000);
+    expect(requests[0]!.figures).toHaveLength(17);
+    expect(requests.reduce((sum, request) => sum + tokensOf(request), 0)).toBeLessThanOrEqual(
+      REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
+    );
+    // Worst case: every image token paid on both attempts, at today's highest rate.
+    expect(
+      REVIEW_IMAGE_MAX_TOKENS_PER_RUN *
+        reviewerImageTokenPriceUsd() *
+        REVIEW_IMAGE_ATTEMPTS_PER_CALL,
+    ).toBeLessThanOrEqual(0.6 + 1e-12);
+    // The first review did not see every page: the D-8 flag says so.
+    expect(firstSave()).toMatchObject({ bookTruncated: true });
+  });
+
+  it('page images, g5.v11: nothing is read or sent even when the Stage has pages', async () => {
+    const { run, requests, loadFigures } = job('g5.v11', {}, PAGES);
+    await run();
+    expect(loadFigures).not.toHaveBeenCalled();
+    expect(requests.every((request) => !('figures' in request))).toBe(true);
   });
 
   it('g5.v11: no figure is read or sent, and the review runs exactly as before', async () => {
