@@ -4411,6 +4411,61 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(snapshot.sectionCoverage).toMatchObject({ gapContentUnitIds: [] });
     });
 
+    it('M4 (wave 1 review): a book map whose parts cannot be laid on the blocks fails closed before any model call', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: planWithGaps }, seen);
+      const refused = {
+        ...bookContext('g5.v12'),
+        // o2 lost its unit list: no part of it can be placed or order-gated.
+        learningObjectives: [OBJECTIVES[0]!, { objectiveRef: 'o2', snapshot: { statement: 's2' } }],
+      };
+      const attemptId = await startBook(refused as ReturnType<typeof bookContext>);
+      const after = await readAttemptByIdFor(attemptId);
+      expect(after.status).toBe('failed');
+      expect(after.errorCode).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+      expect(mocks.generateClassroom).not.toHaveBeenCalled();
+
+      // g5.v11: the same request runs as before (no parts there at all).
+      mocks.generateClassroom.mockClear();
+      mockBookRun({ first: planWithGaps }, seen);
+      const v11 = await startBook({
+        ...refused,
+        teachingModel: { key: 'g5', version: 'g5.v11' },
+      } as ReturnType<typeof bookContext>);
+      expect((await readAttemptByIdFor(v11)).status).toBe('succeeded');
+    });
+
+    it('M2 (wave 1 review): a try-it merging the checks of two blocks is split by the repair, never re-asked', async () => {
+      // Lesson 227 slide 17: one try-it sets 6767 (part 2) and 6772 (part 3). Here u2
+      // (block 1) and u5 (block 2), inside block 1: an order break only the merge made.
+      const withMergedTry = () => [
+        slide('cover', 0, ['u1'], { slideType: 'cover' }),
+        slide('c1', 1, ['u1'], { contentKind: 'definition' }),
+        slide('c2', 1, ['u3']),
+        slide('tm', 1, ['u2', 'u5'], { contentRole: 'check_understanding' }),
+        quiz('q1', 2, ['u2']),
+        slide('c3', 3, ['u4'], { contentKind: 'definition' }),
+        quiz('q2', 4, ['u5']),
+      ];
+      const seen: Seen = {};
+      mockBookRun({ first: withMergedTry, second: planWithGaps }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      expect(seen.reaskHook).toBe(true);
+      expect(seen.reask).toEqual([]);
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+      expect((await snapshotOf(attemptId)).plannerReask).toEqual({ asked: false, violations: [] });
+      // The split put u5's own try-it in the block that owns its part.
+      const tryU5 = seen.final!.find(
+        (outline) =>
+          outline.contentRole === 'check_understanding' &&
+          (outline.sourceContentUnitIds ?? []).join() === 'u5',
+      );
+      expect(tryU5?.teachingStage?.flowIndex).toBe(3);
+      expect(
+        seen.final!.some((outline) => (outline.sourceContentUnitIds ?? []).join() === 'u2,u5'),
+      ).toBe(false);
+    });
+
     it('fails closed: a second plan that still breaks the order pauses with the finding, and is not asked a third time', async () => {
       const seen: Seen = {};
       mockBookRun({ first: withMixedSlide, second: withMixedSlide }, seen);
@@ -4421,6 +4476,11 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(checkpoint.diagnostics.map((issue) => issue.code)).toContain(
         'SLIDE_OUT_OF_BOOK_ORDER',
       );
+      // L1 (wave 1 review): the re-ask is on the attempt although the run paused.
+      expect((await snapshotOf(attemptId)).plannerReask).toEqual({
+        asked: true,
+        violations: ['SLIDE_OUT_OF_BOOK_ORDER'],
+      });
     });
 
     it('g5.v11 is unchanged: no parts list, no placement, no re-ask, and a gap stays sticky as before', async () => {

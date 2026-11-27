@@ -122,6 +122,7 @@ import {
   personPlacedOutlines,
   placeCandidate,
   placeWithGuard,
+  bookPartMapRefusal,
   SLIDE_OUT_OF_BOOK_ORDER,
   type BookPartPlacementResult,
   type PlacedCandidate,
@@ -129,6 +130,7 @@ import {
 } from '@/lib/server/teaching-package/book-part-placement';
 import {
   repairBookCoverageGaps,
+  restructuredByBookParts,
   unplaceableBookGaps,
   type BookCoverageRepairContext,
 } from '@/lib/server/teaching-package/book-coverage-repair';
@@ -521,6 +523,23 @@ async function runKafuoAttempt(
       ),
     };
   }
+  // g5.v12 (wave 1 review, M4): a book map whose parts cannot be laid on the objective
+  // blocks fails the attempt closed, before any model call — without it no gate of the
+  // book's order, no parts list and no placement could run, and the run would ship the
+  // planner's order silently. A book with no part content is not refused.
+  const partsRefusal = isBookPartPlacementModel(kafuo.teachingModel)
+    ? bookPartMapRefusal(kafuo.bookStructure, kafuo.learningObjectives, kafuo.teachingFlow)
+    : null;
+  if (partsRefusal) {
+    log.warn(`Teaching package attempt ${attemptId} refused: g5.v12 book parts: ${partsRefusal}`);
+    await failGenerationAttempt(
+      pool,
+      attemptId,
+      `g5.v12: the lesson's book parts cannot be laid on the Teaching Model Flow's objective blocks (${partsRefusal})`,
+      { code: 'TEACHING_MODEL_FLOW_MISMATCH', retryable: false },
+    );
+    return;
+  }
   if (resume) {
     if (source.measuredSha256 !== resume.sourceRefs.measuredSha256) {
       await failGenerationAttempt(
@@ -660,10 +679,35 @@ async function runKafuoAttempt(
   );
   // g5.v12 (W1.6): every listed part unit and every essential section is required at
   // planning too (F10: 6752, F11: 6763, 6765 and 6770), so each gets a slide before any
-  // Scene is paid for, or is named in what blocks the plan.
-  const taughtUnitIds = bookPartMap
-    ? [...new Set([...listedPartUnitIds(bookPartMap), ...(essentialUnitIds ?? [])])]
+  // Scene is paid for, or is named in what blocks the plan. Only a listed unit with
+  // retainable text: a figure-only or textless unit has no [[CONTENT_UNIT]] the planner
+  // reads and no row a repair or "Generate slide" can plan from, so requiring it would
+  // refuse a valid package for good (wave 1 review, H1). Such a unit is named on the
+  // attempt instead (`listedUnitsWithoutText`), never dropped silently (EN-8).
+  const unitsWithText = normalizedSource
+    ? new Set(
+        retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+          (unit) => String(unit.unitId),
+        ),
+      )
     : null;
+  const listedUnitIds = bookPartMap ? listedPartUnitIds(bookPartMap) : [];
+  const listedUnitsWithoutText = unitsWithText
+    ? listedUnitIds.filter((id) => !unitsWithText.has(id))
+    : [];
+  const taughtUnitIds = bookPartMap
+    ? [
+        ...new Set([
+          ...listedUnitIds.filter((id) => !listedUnitsWithoutText.includes(id)),
+          ...(essentialUnitIds ?? []),
+        ]),
+      ]
+    : null;
+  if (listedUnitsWithoutText.length > 0) {
+    log.warn(
+      `Teaching package attempt ${attemptId}: ${listedUnitsWithoutText.length} listed unit(s) of the lesson's parts have no text a slide could teach, so none is required: ${listedUnitsWithoutText.join(', ')}`,
+    );
+  }
   const coverageBook = teacherParityBook(
     taughtUnitIds
       ? requireTaughtUnits(
@@ -762,6 +806,8 @@ async function runKafuoAttempt(
     contentUnitIds,
     essentialContentUnitIds: essentialUnitIds,
     coverageGapUnitIds: [...coverageGaps],
+    // g5.v12 only: the exact set the run required taught, for a correction's re-check.
+    ...(taughtUnitIds ? { taughtContentUnitIds: taughtUnitIds } : {}),
     ...(bookFacts ? { bookUnitFacts: bookFacts } : {}),
     contentUnits: normalizedSource
       ? normalizedSource.manifest.contentUnits.map((unit) => ({
@@ -931,7 +977,9 @@ async function runKafuoAttempt(
   };
   // g5.v12: the parts in book order, from the typed book — the same map the gates and
   // the placement read — right after the book rules and before the exercises block.
-  const lessonParts = bookPartMap ? bookPartsRequirement(bookPartMap, kafuo.teachingFlow) : '';
+  const lessonParts = bookPartMap
+    ? bookPartsRequirement(bookPartMap, kafuo.teachingFlow, unitsWithText)
+    : '';
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${lessonParts}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
@@ -1229,8 +1277,19 @@ async function runKafuoAttempt(
         flow: kafuo.teachingFlow,
         diagnose: diagnoseOpen,
       });
-      const placed = placeCandidate(ruled.outlines, placing, kafuo.teachingFlow, diagnoseOpen);
-      const left = placed.placement ? placed.blocking : ruled.blocking;
+      // The book repair's own restructures too (a merged check split, a slide of several
+      // ideas taken out, a title-only transition dropped), so an order break that only a
+      // merged slide made never costs a second planner call (wave 1 review, M2).
+      const restructured =
+        coverageBook && normalizedSource
+          ? restructuredByBookParts(ruled.outlines, coverageRepairContext())
+          : ruled.outlines;
+      const placed = placeCandidate(restructured, placing, kafuo.teachingFlow, diagnoseOpen);
+      const left = placed.placement
+        ? placed.blocking
+        : restructured === ruled.outlines
+          ? ruled.blocking
+          : diagnoseOpen(restructured).blocking;
       const unplaceable = coverageBook
         ? new Set(
             unplaceableBookGaps(placed.outlines, coverageBook, kafuo.teachingFlow).map(
@@ -1247,6 +1306,11 @@ async function runKafuoAttempt(
       if (violations.length === 0) return null;
       reaskUsed = true;
       reaskViolations = violations.map((issue) => issue.code);
+      // Recorded at the decision, so a run that then pauses keeps it (wave 1 review, L1).
+      await patchSnapshot(pool, attemptId, (snapshot) => ({
+        ...snapshot,
+        plannerReask: { asked: true, violations: reaskViolations },
+      }));
       log.warn(
         `Teaching package attempt ${attemptId} run ${run}: the plan breaks ${violations.length} book rule(s) no deterministic fix repairs (${[...new Set(violations.map((issue) => issue.code))].join(', ')}); the planner is asked once more with them`,
       );
@@ -1945,15 +2009,25 @@ async function runKafuoAttempt(
       }
       // g5.v12 (EN-4, EN-5, EN-8): what the plan asked of the run, for the reviewer.
       if (isBookPartPlacementModel(kafuo.teachingModel)) {
+        // A resumed run never re-asks, nor (in the scenes phase) re-reads the warnings:
+        // what the run that planned recorded stands (wave 1 review, L1).
         await patchSnapshot(pool, attemptId, (snapshot) => ({
           ...snapshot,
-          plannerReask: { asked: reaskUsed, violations: reaskViolations },
-          planWarnings: planWarnings.map(({ code, outlineId, message }) => ({
-            code,
-            ...(outlineId ? { outlineId } : {}),
-            message,
-          })),
+          plannerReask:
+            resume && !reaskUsed && snapshot.plannerReask
+              ? snapshot.plannerReask
+              : { asked: reaskUsed, violations: reaskViolations },
+          planWarnings:
+            resumeScenes && snapshot.planWarnings
+              ? snapshot.planWarnings
+              : planWarnings.map(({ code, outlineId, message }) => ({
+                  code,
+                  ...(outlineId ? { outlineId } : {}),
+                  message,
+                })),
           ...(untaughtListedUnits.length > 0 ? { untaughtListedUnits } : {}),
+          // Listed, but with no text a slide could teach (H1): named, not required.
+          ...(listedUnitsWithoutText.length > 0 ? { listedUnitsWithoutText } : {}),
         }));
       }
       // The Submit coverage gate's authority: which sections are essential and

@@ -1816,6 +1816,8 @@ export async function generateClassroom(
     // capped copy of every answer that needed a repair or was refused.
     const checkAnswers = Boolean(correction);
     let badAnswerRerollUsed = false;
+    // The empty-plan re-plan below is one extra outline call too (g5.v12 EN-4 bound).
+    let emptyPlanReplanned = false;
     let lastOutlineAnswer = '';
     const recordingOutlineCall: AICallFn = async (systemPrompt, userPrompt, images) => {
       lastOutlineAnswer = await outlineAiCall(systemPrompt, userPrompt, images);
@@ -1953,6 +1955,7 @@ export async function generateClassroom(
       EMPTY_PLAN_ERROR.test(outlinesResult.error ?? '')
     ) {
       log.warn('The outline call returned no slides; re-planning once');
+      emptyPlanReplanned = true;
       await options.onProgress?.({
         step: 'generating_outlines',
         progress: 15,
@@ -1975,7 +1978,15 @@ export async function generateClassroom(
     // that need no model), before the first plan costs an image re-plan or a review.
     // `MAX_GENERATION_RUNS` is not touched: this is the same run. A second answer that
     // still violates goes through every gate below and fails closed, as the first would.
-    if (correction?.reaskPlan && outlinesResult?.success && outlinesResult.data) {
+    // Never on top of the bad-answer re-roll or the empty-plan re-plan: the run has had
+    // its one extra outline call then (wave 1 review, M3).
+    if (
+      correction?.reaskPlan &&
+      !badAnswerRerollUsed &&
+      !emptyPlanReplanned &&
+      outlinesResult?.success &&
+      outlinesResult.data
+    ) {
       let violations: OutlineDiagnostic[] | null = null;
       try {
         violations = await correction.reaskPlan(outlinesResult.data.outlines);
@@ -1998,16 +2009,12 @@ export async function generateClassroom(
         outlinesResult = await callOutlines(recordingOutlineCall, checkAnswers);
         assertRouteAvailable();
         await noteOutlineAnswer(outlinesResult);
-        if (outlinesResult.badAnswer) {
-          // The same handling as a bad answer after the re-roll: read this answer
-          // through the unchecked path, with no further model call.
-          const lastAnswer = lastOutlineAnswer;
-          outlinesResult = await callOutlines(async () => lastAnswer, false);
-        }
-        // A second answer that yields no plan at all gives the first one back: it goes
-        // through every gate below and fails closed there if it still violates (review
-        // 27 Nov 2026, LOW) — the re-ask never turns a pausing plan into a failed run.
-        if (!outlinesResult?.success || !outlinesResult.data) {
+        // A second answer that is broken, or yields no plan at all, gives the first one
+        // back: it goes through every gate below and fails closed there if it still
+        // violates (review 27 Nov 2026, LOW; wave 1 review M3: a broken second answer is
+        // never read unchecked over a good first one) — the re-ask never turns a pausing
+        // plan into a failed run.
+        if (outlinesResult.badAnswer || !outlinesResult?.success || !outlinesResult.data) {
           log.warn(
             'The planner’s second answer gave no usable plan; the first plan stands and goes through every gate',
           );

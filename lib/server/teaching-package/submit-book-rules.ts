@@ -14,7 +14,9 @@
  * code reaches either):
  * - a section without its teaching slide, a check without its try-it or its solution, a
  *   solution before its try-it, or two checks on one slide is `ESSENTIAL_SECTION_UNCOVERED`
- *   with `details.unitIds`, which the Agent API turns into a "generate slide" fix;
+ *   with `details.unitIds`, which the Agent API turns into a "generate slide" fix (so it
+ *   names only the units a new slide fixes: never a solution before its try-it), and the
+ *   additive `details.findings` (`sceneId?`, `unitId?`, `code`, `message`) for each;
  * - a teaching slide out of the book's order is `TEACHING_MODEL_FLOW_MISMATCH` with
  *   `details.offendingSceneIds` and `reason: "book_order"`, which the editor highlights.
  *
@@ -33,11 +35,13 @@ import {
   isBookPartPlacementModel,
   isGuideAnswerModel,
   mergedCheckSlides,
+  SUBMIT_RECHECKED_GAP_KINDS,
   withTypedPracticeUnits,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
   bookPartMapFor,
   findBookOrderDiagnostics,
+  listedPartUnitIds,
 } from '@/lib/server/teaching-package/book-part-placement';
 import { correctionCoverageBook } from '@/lib/server/teaching-package/outline-correction';
 import {
@@ -51,14 +55,6 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 import type { AppScene, Scene } from '@/lib/types/stage';
 
-/** The coverage gaps Submit re-checks: those the pinned book alone can decide. */
-const SUBMIT_GAP_KINDS: ReadonlySet<string> = new Set([
-  'missing_teaching',
-  'missing_try_it',
-  'missing_solution',
-  'solution_before_try_it',
-]);
-
 /** One book finding on the live Stage: the Scene it is about (none for a missing slide). */
 export interface SubmitBookFinding {
   sceneId: string | null;
@@ -66,6 +62,12 @@ export interface SubmitBookFinding {
   unitId: string | null;
   code: string;
   message: string;
+  /**
+   * A new slide cannot fix it (a solution before its try-it: move or delete that slide),
+   * so its unit is not one of the refusal's `unitIds`, which the Agent API turns into a
+   * "generate slide" fix (wave 1 review, L7).
+   */
+  notBySlide?: true;
 }
 
 export interface SubmitBookCheck {
@@ -134,8 +136,23 @@ export async function checkSubmitBookRules(
     retained.units.length > 0
       ? bookPartMapFor(version.teachingModel, book, snapshot.learningObjectives, flow)
       : null;
+  // The run's rule (wave 1 review, H1): a listed unit is required taught only when it has
+  // retainable text — a retained row, the same rule and the same source the run read.
+  const retainedIds = new Set(retained.units.map((unit) => String(unit.unitId)));
+  const taughtContentUnitIds = parts
+    ? [
+        ...new Set([
+          ...listedPartUnitIds(parts).filter((id) => retainedIds.has(id)),
+          ...(coverage?.essentialContentUnitIds ?? []).map(String),
+        ]),
+      ]
+    : undefined;
   const coverageBook = correctionCoverageBook(
-    { essentialContentUnitIds: coverage?.essentialContentUnitIds, bookUnitFacts: undefined },
+    {
+      essentialContentUnitIds: coverage?.essentialContentUnitIds,
+      bookUnitFacts: undefined,
+      ...(taughtContentUnitIds ? { taughtContentUnitIds } : {}),
+    },
     book,
     version.teachingModel,
     undefined,
@@ -143,22 +160,26 @@ export async function checkSubmitBookRules(
   );
   if (!coverageBook) return null;
   const projected = projectScenes(scenes, outline);
-  const sceneIdOf = new Map(projected.map(({ scene, outline: entry }) => [entry.id, scene.id]));
+  // By play position, never by outline id: two Scenes may share one plan entry (wave 1
+  // review, L6).
+  const sceneAt = (index: number | undefined): string | null =>
+    index === undefined ? null : (projected[index]?.scene.id ?? null);
   const asPlanned = projected.map(({ outline: entry }) => entry);
   const gaps = findBookCoverageGaps(asPlanned, coverageBook)
     // The gaps that need no unit facts: a section without its slide, a check without its
     // try-it or its solution, a solution before its try-it. The recall and the exercises
     // blocks are judged against facts the attempt pinned only on a checkpoint (which items
     // survived the verse strip), so they are not re-judged here (review 27 Nov 2026, LOW).
-    .filter((gap) => SUBMIT_GAP_KINDS.has(gap.kind))
+    .filter((gap) => SUBMIT_RECHECKED_GAP_KINDS.has(gap.kind))
     .map((gap) => ({
       sceneId: null,
       unitId: gap.unit.contentUnitId,
       code: 'BOOK_COVERAGE_INCOMPLETE',
       message: gap.message,
+      ...(gap.kind === 'solution_before_try_it' ? { notBySlide: true as const } : {}),
     }));
   const merged = mergedCheckSlides(asPlanned, coverageBook).map((group) => ({
-    sceneId: sceneIdOf.get(group.outline.id) ?? null,
+    sceneId: sceneAt(group.index),
     unitId: null,
     code: 'CHECKS_MERGED',
     message: `slide ${group.index + 1} «${group.outline.title ?? ''}» sets or solves the checks ${group.units
@@ -167,7 +188,7 @@ export async function checkSubmitBookRules(
   }));
   const order = parts
     ? findBookOrderDiagnostics(asPlanned, parts, flow).map((diagnostic) => ({
-        sceneId: (diagnostic.outlineId && sceneIdOf.get(diagnostic.outlineId)) || null,
+        sceneId: sceneAt(diagnostic.outlineIndex),
         unitId: null,
         code: diagnostic.code,
         message: diagnostic.message,
@@ -184,6 +205,7 @@ export function uncoveredSectionsRefusal(
   const unitIds = [
     ...new Set(
       check.uncovered
+        .filter((finding) => finding.notBySlide !== true)
         .map((finding) => finding.unitId)
         .filter((unitId): unitId is string => unitId !== null),
     ),

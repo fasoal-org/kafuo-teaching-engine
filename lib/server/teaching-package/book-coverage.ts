@@ -415,6 +415,18 @@ export type BookCoverageGapKind =
   // g5.v11 only (`missingExampleGaps`, never a diagnosis: planned once, else logged):
   | 'missing_example';
 
+/**
+ * g5.v12 (EN-6): the coverage gaps Submit re-checks on the live Stage — those the pinned
+ * book alone can decide. The recall and the exercises blocks need the unit facts only a
+ * checkpoint pinned, so they are not re-judged there.
+ */
+export const SUBMIT_RECHECKED_GAP_KINDS: ReadonlySet<BookCoverageGapKind> = new Set([
+  'missing_teaching',
+  'missing_try_it',
+  'missing_solution',
+  'solution_before_try_it',
+]);
+
 export interface BookCoverageGap {
   kind: BookCoverageGapKind;
   unit: KafuoBookStructureUnit;
@@ -462,8 +474,10 @@ export function findBookCoverageGaps(
   // g5.v12: an idea — a key concept, an example, or the kind-less text that continues
   // them — is taught by a teaching slide of its own. Its citation on a slide that sets or
   // solves a check is no evidence it was taught (review 27 Nov 2026: 6758 cited only on a
-  // solution slide passed "every listed unit is taught"). Every earlier model counts a
-  // citation on any teaching slide, exactly as before.
+  // solution slide passed "every listed unit is taught"). Nor is its citation on the
+  // part's orientation or the closing summary (wave 1 review, M1: Submit's essential gate
+  // never counts those, so the plan passed and Submit refused after every Scene was
+  // paid). Every earlier model counts a citation on any teaching slide, exactly as before.
   const checkIds =
     book.bookPartPlacement === true
       ? new Set(
@@ -473,7 +487,13 @@ export function findBookCoverageGaps(
   const taughtOn = (outline: SceneOutline, unit: KafuoBookStructureUnit): boolean =>
     teaches(outline) &&
     cites(outline, unit.contentUnitId) &&
-    !(checkIds !== null && isIdeaUnit(unit) && citedIds(outline).some((id) => checkIds.has(id)));
+    !(
+      checkIds !== null &&
+      isIdeaUnit(unit) &&
+      (outline.contentRole === 'orientation' ||
+        outline.contentRole === 'summary' ||
+        citedIds(outline).some((id) => checkIds.has(id)))
+    );
 
   book.units.forEach((unit, position) => {
     if (!unit.required) return;
@@ -909,7 +929,12 @@ export function ideasMergedSlides(
     }
     const ids = citedIds(outline);
     if (ids.some((id) => byRule.has(id))) return;
-    const ideas = book.units.filter((unit) => isIdeaUnit(unit) && ids.includes(unit.contentUnitId));
+    // Only an idea the plan must teach (required: listed, or the template's): taking a
+    // slide out for a unit no gate requires would drop that unit with no gap to plan it
+    // again (wave 1 review, L4).
+    const ideas = book.units.filter(
+      (unit) => unit.required && isIdeaUnit(unit) && ids.includes(unit.contentUnitId),
+    );
     if (ideas.length >= 2) merged.push({ index, outline, units: ideas });
   });
   return merged;

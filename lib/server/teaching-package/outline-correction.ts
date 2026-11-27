@@ -33,8 +33,11 @@ import {
 
 import {
   BOOK_COVERAGE_INCOMPLETE,
+  CHECKS_MERGED,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
+  isBookPartPlacementModel,
+  SUBMIT_RECHECKED_GAP_KINDS,
   isGuideAnswerModel,
   learnerFirstVisualsOf,
   requireEssentialUntypedUnits,
@@ -310,7 +313,7 @@ export function diagnoseCandidateOutlines(
  */
 export function correctionCoverageBook(
   sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'> &
-    Partial<Pick<GenerationCheckpointSourceRefs, 'contentUnits'>>,
+    Partial<Pick<GenerationCheckpointSourceRefs, 'contentUnits' | 'taughtContentUnitIds'>>,
   bookStructure: KafuoBookStructure | undefined,
   teachingModel: { key: string; version: string } | undefined,
   /** g5.v11: the attempt's pinned guide items, so the re-check selects the run's set. */
@@ -322,11 +325,16 @@ export function correctionCoverageBook(
     ? withTypedPracticeUnits(bookStructure, sourceRefs.contentUnits ?? [])
     : bookStructure;
   const essential = sourceRefs.essentialContentUnitIds;
+  // The run's own set when it pinned one (wave 1 review, H1: a listed unit without text
+  // is not required); else every listed unit, as the checkpoint was planned.
   const required = parts
-    ? requireTaughtUnits(requireEssentialUntypedUnits(book, essential), [
-        ...listedPartUnitIds(parts),
-        ...(essential ?? []).map(String),
-      ])
+    ? requireTaughtUnits(
+        requireEssentialUntypedUnits(book, essential),
+        sourceRefs.taughtContentUnitIds ?? [
+          ...listedPartUnitIds(parts),
+          ...(essential ?? []).map(String),
+        ],
+      )
     : requireEssentialUntypedUnits(book, essential);
   return teacherParityBook(required, teachingModel, sourceRefs.bookUnitFacts, teacherGuide);
 }
@@ -480,7 +488,28 @@ const NOT_IGNORABLE_CODES: ReadonlySet<string> = new Set([
   // g5.v12: the book's order is the rule the slides follow; Submit re-checks it too.
   SLIDE_OUT_OF_BOOK_ORDER,
   CHECK_BEFORE_ITS_PART,
+  // g5.v12 only (no other model emits it): Submit refuses merged checks again, and an
+  // ignore would also switch the split off (wave 1 review, M5).
+  CHECKS_MERGED,
 ]);
+
+/**
+ * g5.v12 (wave 1 review, M5): a book gap Submit refuses again — a section without its
+ * slide, a check without its try-it or its solution, a solution before its try-it — is
+ * fixed (insert, move or remove), never ignored: an ignore would only defer it to a
+ * Submit refusal after every Scene was paid. Read from the plan the diagnosis saw.
+ * `false` on every other model, where an ignore stays as it was.
+ */
+function reCheckedAtSubmit(
+  diagnostic: OutlineDiagnostic,
+  plan: { outlines: readonly SceneOutline[]; bookStructure?: CoverageBookStructure },
+): boolean {
+  if (diagnostic.code !== BOOK_COVERAGE_INCOMPLETE) return false;
+  if (plan.bookStructure?.bookPartPlacement !== true) return false;
+  return findBookCoverageGaps(plan.outlines, plan.bookStructure).some(
+    (gap) => SUBMIT_RECHECKED_GAP_KINDS.has(gap.kind) && gap.message === diagnostic.message,
+  );
+}
 
 /**
  * Whether the resumed run resolves an open issue by itself, so it never holds a
@@ -512,6 +541,19 @@ export function isIgnorableIssue(diagnostic: OutlineDiagnostic): boolean {
     diagnostic.field !== SCENE_REGENERATION_FIELD &&
     diagnostic.code !== VISUAL_TEACHING_NOTE_MISSING
   );
+}
+
+/**
+ * {@link isIgnorableIssue}, read with the paused plan it was found on: on g5.v12 a book
+ * gap Submit refuses again is not ignorable either (wave 1 review, M5). The ignore op and
+ * the admin read model both ask this, so the page never offers an ignore the server
+ * refuses. The same answer as `isIgnorableIssue` on every other model.
+ */
+export function isIgnorableIssueOnPlan(
+  diagnostic: OutlineDiagnostic,
+  plan: { outlines: readonly SceneOutline[]; bookStructure?: CoverageBookStructure },
+): boolean {
+  return isIgnorableIssue(diagnostic) && !reCheckedAtSubmit(diagnostic, plan);
 }
 
 /** The issue keys a person has ignored on this checkpoint, from its edit log. */
@@ -1152,6 +1194,20 @@ export function buildCorrectionView(
   // P3: `reviewed` unless the checkpoint is awaiting in its outline phase, so the admin
   // page never sends `review_plan` to a scenes-phase, resumed or abandoned checkpoint.
   const reviewStatus = checkpointPlanReviewStatus(checkpoint);
+  // The run's own coverage book: read for the outline phase's book slides, as before, and
+  // on g5.v12 for which findings may be ignored. Never read otherwise.
+  const runCoverageBook =
+    checkpoint.phase === 'outline' || isBookPartPlacementModel(attempt.teachingModel)
+      ? diagnosisContextFromCheckpoint(
+          checkpoint,
+          flow,
+          attempt.teachingSkillsContract !== null,
+          attempt.inputSnapshot.bookStructure,
+          attempt.teachingModel,
+          attempt.inputSnapshot.teacherGuide,
+          attempt.inputSnapshot.learningObjectives,
+        ).bookStructure
+      : undefined;
   return {
     attemptId: attempt.id,
     attemptStatus: attempt.status,
@@ -1199,7 +1255,12 @@ export function buildCorrectionView(
     blockingIssues: checkpoint.diagnostics.map((diagnostic) => ({
       ...diagnostic,
       key: diagnosticKey(diagnostic),
-      ignorable: isIgnorableIssue(diagnostic),
+      // The ignore op's own rule (g5.v12: a gap Submit refuses again is not ignorable),
+      // so the page never offers an ignore the server refuses.
+      ignorable: isIgnorableIssueOnPlan(diagnostic, {
+        outlines: checkpoint.outlines,
+        ...(runCoverageBook ? { bookStructure: runCoverageBook } : {}),
+      }),
     })),
     ignoredIssues: ignoredIssueList(checkpoint.editLog),
     insertableBookSlides:
@@ -1208,15 +1269,7 @@ export function buildCorrectionView(
             checkpoint.outlines,
             // The run's own coverage book (g5.v12: with the lesson's parts), so a slide
             // a person may add answers exactly the gap the diagnosis reports.
-            diagnosisContextFromCheckpoint(
-              checkpoint,
-              flow,
-              attempt.teachingSkillsContract !== null,
-              attempt.inputSnapshot.bookStructure,
-              attempt.teachingModel,
-              attempt.inputSnapshot.teacherGuide,
-              attempt.inputSnapshot.learningObjectives,
-            ).bookStructure,
+            runCoverageBook,
             flow,
           ).map((gap) => {
             const anchor = checkpoint.outlines[gap.anchorIndex!]!;

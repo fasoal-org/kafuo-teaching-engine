@@ -20,6 +20,7 @@ import {
   diagnosisContextFromCheckpoint,
   diagnoseCandidateOutlines,
   isIgnorableIssue,
+  isIgnorableIssueOnPlan,
   type OutlineDiagnosisContext,
 } from '@/lib/server/teaching-package/outline-correction';
 import {
@@ -455,6 +456,36 @@ describe('review 27 Nov 2026: an idea is taught by a teaching slide of its own',
     ).toBe(false);
   });
 
+  it('M1 (wave 1 review): an idea cited only on the orientation or the closing summary is untaught on g5.v12', () => {
+    for (const contentRole of ['orientation', 'summary'] as const) {
+      const plan = [
+        ...withoutSlide7(),
+        slide(`close-${contentRole}`, 5, ['6758'], { slideType: 'content', contentRole }),
+      ].map((outline) =>
+        outline.id === 's11'
+          ? { ...outline, sourceContentUnitIds: cited(outline).filter((id) => id !== '6758') }
+          : outline,
+      );
+      expect(
+        findBookCoverageGaps(plan, BOOK_V12).find((gap) => gap.unit.contentUnitId === '6758')?.kind,
+      ).toBe('missing_teaching');
+    }
+    // The key concept 6756 (required on both models), taught only by the closing summary:
+    // a gap on g5.v12; on g5.v11 the citation counts, exactly as before.
+    const summaryOnly = [
+      ...withoutSlide7(),
+      slide('close', 5, ['6756'], { slideType: 'content', contentRole: 'summary' }),
+    ];
+    expect(
+      findBookCoverageGaps(summaryOnly, BOOK_V12).some(
+        (gap) => gap.unit.contentUnitId === '6756' && gap.kind === 'missing_teaching',
+      ),
+    ).toBe(true);
+    expect(
+      findBookCoverageGaps(summaryOnly, BOOK_V11).some((gap) => gap.unit.contentUnitId === '6756'),
+    ).toBe(false);
+  });
+
   it('a plan that teaches every listed unit names none', () => {
     const plan = [
       slide('c', 1, ['6756']),
@@ -496,6 +527,20 @@ describe('the book-part detectors (g5.v12 only)', () => {
         BOOK_V12,
       ),
     ).toEqual([]);
+  });
+
+  it('L4 (wave 1 review): a kind-less unit no objective owns (never required) does not make a slide "several ideas"', () => {
+    // Taking the slide out would drop 'x-free' with no gap to plan it again.
+    const book: CoverageBookStructure = {
+      ...BOOK_V12,
+      units: [
+        ...BOOK_V12.units,
+        { contentUnitId: 'x-free', kind: null, element: null, required: false, partIndex: 1 },
+      ],
+    };
+    expect(ideasMergedSlides([slide('c', 1, ['6756', 'x-free'])], book)).toEqual([]);
+    // Two required ideas still are.
+    expect(ideasMergedSlides([slide('c', 1, ['6756', '6758'])], book)).toHaveLength(1);
   });
 
   it('V12-2: slides 2, 6 and 14 are title-only; the «تمارين» transition is not one of them', () => {
@@ -654,7 +699,8 @@ describe('EN-2: the order gate', () => {
         message: 'm',
       }),
     ).toBe(false);
-    // A merged check can be: the engine splits it itself.
+    // Nor a merged check (wave 1 review, M5): Submit refuses it again, and an ignore
+    // would switch the engine's own split off. (A g5.v12-only code.)
     expect(
       isIgnorableIssue({
         code: CHECKS_MERGED,
@@ -662,7 +708,28 @@ describe('EN-2: the order gate', () => {
         field: 'sourceContentUnitIds',
         message: 'm',
       }),
+    ).toBe(false);
+  });
+
+  it('M5 (wave 1 review): on g5.v12 a book gap Submit refuses again cannot be ignored; g5.v11 as before', () => {
+    // The key concept 6754 (required on both models) has no slide.
+    const plan = [slide('c', 1, ['6756'])];
+    const gapIssue = (book: CoverageBookStructure) => {
+      const issue = findBookCoverageDiagnostics(plan, book).find(
+        (diagnostic) =>
+          diagnostic.code === BOOK_COVERAGE_INCOMPLETE && diagnostic.message.includes('6754'),
+      );
+      expect(issue).toBeDefined();
+      return issue!;
+    };
+    expect(
+      isIgnorableIssueOnPlan(gapIssue(BOOK_V12), { outlines: plan, bookStructure: BOOK_V12 }),
+    ).toBe(false);
+    expect(
+      isIgnorableIssueOnPlan(gapIssue(BOOK_V11), { outlines: plan, bookStructure: BOOK_V11 }),
     ).toBe(true);
+    // The plan-free rule is unchanged.
+    expect(isIgnorableIssue(gapIssue(BOOK_V12))).toBe(true);
   });
 
   it('MG-3: a try-it merged from two parts is placed after the LAST check, never before that part is taught', () => {
@@ -1039,6 +1106,28 @@ describe('the diagnosis of an edit, a resume and a paused plan’s review (the c
     expect(codes(diagnoseCandidateOutlines(plan227(), context).blocking)).toContain(
       SLIDE_OUT_OF_BOOK_ORDER,
     );
+  });
+
+  it('H1 (wave 1 review): a checkpoint that pinned the run’s taught set re-checks exactly that set', () => {
+    // The run left 6770 out (no text): the correction does not require it either.
+    const taught = listedPartUnitIds(MAP).filter((id) => id !== '6770');
+    const context = diagnosisContextFromCheckpoint(
+      {
+        ...checkpoint,
+        sourceRefs: { ...checkpoint.sourceRefs, taughtContentUnitIds: [...taught, ...ESSENTIAL] },
+      },
+      FLOW,
+      false,
+      BOOK,
+      V12,
+      undefined,
+      OBJECTIVES,
+    );
+    const required = (context.bookStructure?.units ?? [])
+      .filter((unit) => unit.required)
+      .map((unit) => unit.contentUnitId);
+    expect(required).not.toContain('6770');
+    expect(required).toEqual(expect.arrayContaining(taught));
   });
 
   it('a plan paused in the scenes phase carries no parts: it cannot be reordered, so the order gate is not run on it', () => {

@@ -56,7 +56,7 @@ import {
   diagnosisContextFromCheckpoint,
   diagnosticKey,
   ignoredIssueKeys,
-  isIgnorableIssue,
+  isIgnorableIssueOnPlan,
   isResolvedByResume,
   withoutIgnoredIssues,
   type CorrectionCandidate,
@@ -393,7 +393,15 @@ export async function editGenerationCorrection(
           `operations[${index}] ignores an issue that is not open; reload the correction`,
         );
       }
-      if (!isIgnorableIssue(issue)) {
+      // g5.v12: with the paused plan, so a book gap Submit refuses again is not ignored.
+      if (
+        !isIgnorableIssueOnPlan(issue, {
+          outlines: checkpoint.outlines,
+          ...(diagnosisContext.bookStructure
+            ? { bookStructure: diagnosisContext.bookStructure }
+            : {}),
+        })
+      ) {
         throw new TeachingPackageError(
           'INVALID_REQUEST',
           `operations[${index}]: a ${issue.code} issue cannot be ignored; fix it with remove, move or the teaching stage`,

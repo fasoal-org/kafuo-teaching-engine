@@ -177,6 +177,21 @@ describe('bookPartsRequirement', () => {
       '- Part 5 → teachingStage { "key": "outcome_visual_explanations", "flowIndex": 5 } (objective [o3]): units p5-kc',
     ]);
   });
+
+  it('H1 (wave 1 review): lists only the units the planner can read, and no part left empty', () => {
+    const withText = new Set(['p1-kc', 'p3-kc', 'p3-check', 'p4-kc', 'p5-kc']);
+    const lines = bookPartsRequirement(map(), FLOW, withText)
+      .split('\n')
+      .filter((line) => line.startsWith('- Part '));
+    expect(lines.map((line) => line.replace(/ → .*: /, ': '))).toEqual([
+      '- Part 1: units p1-kc',
+      '- Part 3: units p3-kc, p3-check',
+      '- Part 4: units p4-kc',
+      '- Part 5: units p5-kc',
+    ]);
+    // Without the set, every listed unit, as before.
+    expect(bookPartsRequirement(map(), FLOW, null)).toBe(bookPartsRequirement(map(), FLOW));
+  });
 });
 
 describe('placeOutlinesByBookPart', () => {

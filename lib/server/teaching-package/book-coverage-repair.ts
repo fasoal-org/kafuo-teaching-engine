@@ -781,6 +781,31 @@ export function unmergeIdeas(
 }
 
 /**
+ * g5.v12 (EN-4, wave 1 review M2): the plan the book repair's own restructures would
+ * leave — each merged check split, each slide of several ideas taken out, each
+ * title-only transition dropped — with no model call. Only to decide whether the
+ * planner must be asked again: a violation these fix is the repair's, not the
+ * planner's. The repair itself still applies each one under its own roll-back rule.
+ * The same list (re-numbered) when there is nothing to restructure, or off g5.v12.
+ */
+export function restructuredByBookParts(
+  outlines: readonly SceneOutline[],
+  context: BookCoverageRepairContext,
+): SceneOutline[] {
+  const book = context.book;
+  if (book.bookPartPlacement !== true) return [...outlines];
+  let next: SceneOutline[] = [...outlines];
+  if (mergedCheckSlides(next, book).length > 0) {
+    next = splitMergedChecks(next, book, context).outlines;
+  }
+  if (ideasMergedSlides(next, book).length > 0) next = unmergeIdeas(next, book).outlines;
+  if (titleOnlyTransitions(next, book).length > 0) {
+    next = dropTitleOnlyTransitions(next, book).outlines;
+  }
+  return next.map((outline, at) => ({ ...outline, order: at + 1 }));
+}
+
+/**
  * g5.v12 (decision D-2), deterministic: the transition slides that hold only a title and
  * one line are taken out; the first teaching slide of the part names it. Never every
  * slide of a plan. Returns the new list and how many it dropped.

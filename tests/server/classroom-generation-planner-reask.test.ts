@@ -272,6 +272,62 @@ describe('generateClassroom: one bounded re-ask of the planner (g5.v12, EN-4)', 
     expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual(['first plan']);
   });
 
+  // Wave 1 review (M3): the run gets ONE extra outline call in all, never two.
+  const BAD = {
+    success: false,
+    error: 'OUTLINE_ANSWER_MALFORMED: entry #1 is a nested answer object',
+    answer: {
+      parse: { extraction: 'exact', repair: 'none', reasoningPrefixStripped: false, exact: true },
+      malformed: ['entry #1 is a nested answer object'],
+    },
+    badAnswer: { code: 'OUTLINE_ANSWER_MALFORMED', reasons: ['nested answer object'] },
+  };
+  const modelCalls = () =>
+    (mocks.callLLM.mock.calls as unknown[][]).filter(
+      (call) =>
+        (call[0] as { messages?: Array<{ content?: string }> } | undefined)?.messages?.[1]
+          ?.content === 'user',
+    ).length;
+
+  it('M3: after the bad-answer re-roll the planner is not asked a third time', async () => {
+    outlineAnswers(BAD, answer('re-rolled plan'), answer('third plan'));
+    const reaskPlan = vi.fn(() => [ORDER_VIOLATION]);
+
+    const result = await generateWith({ reaskPlan });
+
+    expect(reaskPlan).not.toHaveBeenCalled();
+    expect(modelCalls()).toBe(2);
+    expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual([
+      're-rolled plan',
+    ]);
+  });
+
+  it('M3: after the empty-plan re-plan the planner is not asked a third time', async () => {
+    outlineAnswers(
+      { success: false, error: 'OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned' },
+      answer('re-planned'),
+      answer('third plan'),
+    );
+    const reaskPlan = vi.fn(() => [ORDER_VIOLATION]);
+
+    const result = await generateWith({ reaskPlan });
+
+    expect(reaskPlan).not.toHaveBeenCalled();
+    expect(modelCalls()).toBe(2);
+    expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual(['re-planned']);
+  });
+
+  it('M3: a broken second answer is never read over the first: the first plan stands', async () => {
+    outlineAnswers(answer('first plan'), BAD, answer('unchecked read'));
+
+    const result = await generateWith({ reaskPlan: () => [ORDER_VIOLATION] });
+
+    expect(modelCalls()).toBe(2);
+    // No unchecked re-read of the broken answer either.
+    expect(outlineCalls()).toHaveLength(2);
+    expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual(['first plan']);
+  });
+
   it('nothing to re-ask: the first answer stands, with one outline call', async () => {
     outlineAnswers(answer('first plan'), answer('second plan'));
 

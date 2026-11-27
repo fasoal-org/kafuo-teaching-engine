@@ -257,6 +257,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
     scenes: (stageId: string) => AppScene[];
     gapContentUnitIds?: string[];
     book?: KafuoBookStructure;
+    objectives?: typeof OBJECTIVES;
   }): Promise<string> {
     const stageId = unique('stage-book');
     const versionId = unique('tpv');
@@ -293,7 +294,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
       inputSnapshot: {
         learningItem: item,
         teachingModel,
-        learningObjectives: OBJECTIVES,
+        learningObjectives: options.objectives ?? OBJECTIVES,
         contentUnitRefs: [],
         sourceRefs: [],
         generationContext: {},
@@ -363,6 +364,23 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
     expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
   });
 
+  it('H1 (wave 1 review): a listed part unit with no text (no retained row) is never required at Submit', async () => {
+    // u7: a figure-only kind-less unit of part 2 that o2 owns. No slide can teach it (no
+    // text for a repair or "Generate slide"), so requiring it would refuse for good.
+    const versionId = await seedBookVersion({
+      version: 'g5.v12',
+      scenes: inBookOrder,
+      book: { ...BOOK, units: [...BOOK.units, unit('u7', null, 2)] },
+      objectives: [
+        OBJECTIVES[0]!,
+        { ...OBJECTIVES[1]!, contentUnitIds: [...OBJECTIVES[1]!.contentUnitIds, 'u7'] },
+      ],
+    });
+
+    expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
+    expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+  });
+
   it('submits an untouched g5.v12 package from the readiness reader alone: no blocker', async () => {
     const versionId = await seedBookVersion({ version: 'g5.v12', scenes: inBookOrder });
 
@@ -390,6 +408,31 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
       code: 'TEACHING_MODEL_FLOW_MISMATCH',
       details: { reason: 'book_order', offendingSceneIds: ['try2', 'sol2'] },
     });
+  });
+
+  it('L7 (wave 1 review): a solution before its try-it is refused, but never offered as a "generate slide" unit', async () => {
+    // A copy of u2's solution slide, dragged above its try-it (the later one stays).
+    const earlySolution = (stageId: string) => {
+      const scenes = inBookOrder(stageId);
+      const early = { ...scenes[3]!, id: 'sol1-early', outlineId: 'sol1-early' } as AppScene;
+      scenes.splice(2, 0, early);
+      return scenes;
+    };
+    const versionId = await seedBookVersion({ version: 'g5.v12', scenes: earlySolution });
+
+    const blockers = await submitBlockers(tx(), versionId, TENANT);
+    const uncovered = blockers.find((blocker) => blocker.code === 'ESSENTIAL_SECTION_UNCOVERED');
+    const details = uncovered?.details as {
+      unitIds: string[];
+      findings: Array<{ unitId?: string; message: string }>;
+    };
+    expect(details.findings).toEqual([
+      expect.objectContaining({
+        unitId: 'u2',
+        message: expect.stringContaining('before its try-it'),
+      }),
+    ]);
+    expect(details.unitIds).toEqual([]);
   });
 
   it('refuses a check whose solution slide was deleted, by the check it belongs to', async () => {

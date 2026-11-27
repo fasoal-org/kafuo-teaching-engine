@@ -127,15 +127,47 @@ export function buildBookPartMap(
   objectives: readonly LearningObjectiveRef[],
   flow: readonly TeachingFlowEntry[],
 ): BookPartMap | null {
-  if (!book || objectives.length === 0) return null;
+  return bookParts(book, objectives, flow).map;
+}
+
+/**
+ * g5.v12 (wave 1 review, M4): why a book map's parts cannot be laid on the lesson's
+ * objective blocks — an objective without its unit list, blocks that do not match the
+ * objectives one for one, a part split between two objectives — or `null` when they can,
+ * and when there is nothing to lay (no book map, or a book with no part content). The
+ * run fails closed on a refusal, before any model call: without the map no gate of the
+ * book's order could run.
+ */
+export function bookPartMapRefusal(
+  book: KafuoBookStructure | undefined,
+  objectives: readonly LearningObjectiveRef[],
+  flow: readonly TeachingFlowEntry[],
+): string | null {
+  return bookParts(book, objectives, flow).refused;
+}
+
+function bookParts(
+  book: KafuoBookStructure | undefined,
+  objectives: readonly LearningObjectiveRef[],
+  flow: readonly TeachingFlowEntry[],
+): { map: BookPartMap | null; refused: string | null } {
+  const refuse = (refused: string) => ({ map: null, refused });
+  if (!book) return { map: null, refused: null };
+  if (objectives.length === 0) return refuse('the request carries no learning objectives');
   const blocks = flow.flatMap((entry, index) =>
     entry.stage === OBJECTIVE_EXPLANATION_STAGE ? [index] : [],
   );
-  if (blocks.length !== objectives.length) return null;
+  if (blocks.length !== objectives.length) {
+    return refuse(
+      `the flow has ${blocks.length} objective block(s) for ${objectives.length} objective(s)`,
+    );
+  }
 
   const ownerOf = new Map<string, number>();
   for (const [index, objective] of objectives.entries()) {
-    if (!objective.contentUnitIds) return null;
+    if (!objective.contentUnitIds) {
+      return refuse(`objective ${objective.objectiveRef} carries no contentUnitIds`);
+    }
     for (const id of objective.contentUnitIds) {
       if (!ownerOf.has(String(id))) ownerOf.set(String(id), index);
     }
@@ -163,14 +195,16 @@ export function buildBookPartMap(
       };
       parts.push(part);
     }
-    if (part.flowIndex !== flowIndex) return null;
+    if (part.flowIndex !== flowIndex) {
+      return refuse(`part ${partIndex} is split between two objectives`);
+    }
     part.unitIds.push(id);
   }
-  if (parts.length === 0) return null;
+  if (parts.length === 0) return { map: null, refused: null };
   const statements = new Map(
     blocks.map((flowIndex, index) => [flowIndex, objectives[index]!.snapshot.statement] as const),
   );
-  return { units, parts, blocks, statements, exerciseUnitIds };
+  return { map: { units, parts, blocks, statements, exerciseUnitIds }, refused: null };
 }
 
 /**
@@ -240,9 +274,21 @@ const BOOK_PART_RULES: readonly string[] = [
 
 /**
  * The planner text: the parts in book order, each with its units and the objective block
- * its slides must carry, then the rules above. Given to a g5.v12 planner only.
+ * its slides must carry, then the rules above. Given to a g5.v12 planner only. With
+ * `withText`, only the units the planner can read are listed (wave 1 review, H1): a
+ * figure-only or textless unit is never asked for, and a part with none is not listed.
  */
-export function bookPartsRequirement(map: BookPartMap, flow: readonly TeachingFlowEntry[]): string {
+export function bookPartsRequirement(
+  map: BookPartMap,
+  flow: readonly TeachingFlowEntry[],
+  withText?: ReadonlySet<string> | null,
+): string {
+  const listed = map.parts
+    .map((part) => ({
+      part,
+      unitIds: withText ? part.unitIds.filter((id) => withText.has(id)) : part.unitIds,
+    }))
+    .filter(({ unitIds }) => unitIds.length > 0);
   return [
     '',
     'LESSON PARTS IN BOOK ORDER (authoritative). The lesson follows the book part by part,',
@@ -251,9 +297,9 @@ export function bookPartsRequirement(map: BookPartMap, flow: readonly TeachingFl
     "order below, and never teach a part's units in another block. Within a part, follow",
     "the book's own order of its units. Exercises, the closing slide and the opening slides",
     'keep their own rules.',
-    ...map.parts.map(
-      (part) =>
-        `- Part ${part.partIndex} → teachingStage { "key": "${flow[part.flowIndex]!.stage}", "flowIndex": ${part.flowIndex} } (objective [${part.objectiveRef}]): units ${part.unitIds.join(', ')}`,
+    ...listed.map(
+      ({ part, unitIds }) =>
+        `- Part ${part.partIndex} → teachingStage { "key": "${flow[part.flowIndex]!.stage}", "flowIndex": ${part.flowIndex} } (objective [${part.objectiveRef}]): units ${unitIds.join(', ')}`,
     ),
     ...BOOK_PART_RULES,
   ].join('\n');

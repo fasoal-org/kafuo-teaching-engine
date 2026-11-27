@@ -722,6 +722,13 @@ export interface GenerationCheckpointSourceRefs {
    */
   coverageGapUnitIds?: string[];
   /**
+   * g5.v12 only (W1.6, wave 1 review H1): the units the run required taught — every
+   * listed part unit with retainable text, and every essential section — so a correction
+   * re-checks exactly the run's set. Absent on every other model and on checkpoints
+   * paused before it existed (then every listed unit is required, as before).
+   */
+  taughtContentUnitIds?: string[];
+  /**
    * g5.v8 only: per check / exercise unit, its labelled items and detectable
    * hidden-step types (no text), so a correction re-check reads the same facts
    * as the run. Absent on every earlier version.
