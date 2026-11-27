@@ -201,12 +201,16 @@ function setup(options: {
  * W2's regeneration fake: the first fix writes «مصحح», the retry (key `-w`) writes
  * «مصحح ثان»; every call is logged with its key and instruction.
  */
+/** The last slide each fake regeneration made (the fake narration audio voices it). */
+const LAST_REGENERATED = new Map<string, AppScene>();
+
 function regenerateByKey(order: string[], scenes: AppScene[]) {
   return vi.fn(async (_grant, sceneId: string, request: { idempotencyKey: string }) => {
     const retry = request.idempotencyKey.endsWith('-w');
     order.push(`regenerate:${sceneId}${retry ? ':retry' : ''}`);
     const base = scenes.find((scene) => scene.id === sceneId)!;
     const next = slide(sceneId, base.order, retry ? 'مصحح ثان' : 'مصحح');
+    LAST_REGENERATED.set(sceneId, next);
     return {
       status: 200,
       body: {
@@ -420,6 +424,49 @@ describe('package review fix loop (D-1)', () => {
       outcome: 'fixed',
       code: 'NARRATION_AUDIO_UNAVAILABLE',
     });
+  });
+
+  it('review LOW: a person’s edit made during the narration audio is never judged or stamped as the fix', async () => {
+    const { run, callReviewer } = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S4')],
+      // The voiced slide the store re-reads holds more than audio: someone edited it.
+      regenerateAudio: vi.fn(async (_grant, sceneId: string) => ({
+        sceneId,
+        scene: slide(sceneId, 1, 'عدّله المعلم'),
+        rev: 3,
+        generated: 1,
+        missing: 0,
+      })),
+    });
+    const result = await run();
+    expect(callReviewer).not.toHaveBeenCalled();
+    expect(result.findings[0]).toMatchObject({ status: 'open', teacherReason: 'VERSION_CHANGED' });
+    expect(result.findings[0]!.sceneDigest).toBeUndefined();
+    expect(result.fixes[0]).toMatchObject({
+      outcome: 'stopped',
+      code: 'VERSION_CHANGED',
+      regenerationId: 'tpsr-s1',
+    });
+    // Its audio only differs: the voiced slide is the fix, judged and stamped as before.
+    const voiced = setup({
+      scenes,
+      findings: [finding('f1', 's1', 'S4')],
+      regenerateAudio: vi.fn(async (_grant, sceneId: string) => {
+        const made = slide(sceneId, 1, 'مصحح');
+        return {
+          sceneId,
+          scene: {
+            ...made,
+            actions: (made.actions ?? []).map((action) => ({ ...action, audioId: 'tts-9' })),
+          },
+          rev: 3,
+          generated: 1,
+          missing: 0,
+        };
+      }),
+    });
+    expect((await voiced.run()).findings[0]).toMatchObject({ status: 'fixed' });
   });
 
   it('D-5: partial narration audio also keeps the finding open', async () => {
@@ -1153,10 +1200,17 @@ describe('package review fix loop (D-1)', () => {
 describe('g5.v10 quality plan W2: a fix never leaves a slide worse', () => {
   const scenes = [slide('s1', 1, 'أ'), slide('s2', 2, 'ب'), slide('s3', 3, 'ج')];
   const lowS6 = (): StoredFinding => ({ ...finding('f1', 's2', 'S6'), severity: 'low' });
+  // The voiced slide is the regenerated one with its audio references (review LOW: any
+  // other difference would be a person's edit made during the audio).
   const audioOf = (order: string[]) =>
     vi.fn(async (_grant, sceneId: string) => {
       order.push(`audio:${sceneId}`);
-      return { sceneId, scene: slide(sceneId, 2, 'مع الصوت'), rev: 3, generated: 1, missing: 0 };
+      const made = LAST_REGENERATED.get(sceneId)!;
+      const voiced = {
+        ...made,
+        actions: (made.actions ?? []).map((action) => ({ ...action, audioId: 'tts-1' })),
+      } as AppScene;
+      return { sceneId, scene: voiced, rev: 3, generated: 1, missing: 0 };
     });
 
   it('worse, then fixed on the one retry: restored first, the retry carries «لا تفعل», audio only for the kept slide', async () => {

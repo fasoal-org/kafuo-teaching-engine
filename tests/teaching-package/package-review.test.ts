@@ -377,14 +377,16 @@ describe('findings and status', () => {
     expect(seed.sceneIds).toEqual(['s1']);
   });
 
-  it('flagged-slide regeneration: a slide a person edited since the review is left as they made it', () => {
+  it('flagged-slide regeneration: a slide a person edited since the review is re-checked as they made it, never regenerated', () => {
     const seed = seedRefixFindings(
       [stored({ id: 'still', teacherReason: 'STILL_WRONG', sceneDigest: 'as-reviewed' })],
       slides,
       new Map([['s1', 'edited-by-teacher']]),
     );
-    expect(seed.findings.map((f) => f.teacherReason)).toEqual(['VERSION_CHANGED']);
-    expect(seed.sceneIds).toEqual([]);
+    // Review H-2: re-checked once (so the teacher's own fix can close it), never left
+    // VERSION_CHANGED for good.
+    expect(seed.findings.map((f) => [f.teacherReason, f.recheckOnly])).toEqual([[null, true]]);
+    expect(seed.sceneIds).toEqual(['s1']);
     // Unchanged slide, or a review finished before digests existed: tried again.
     const unchanged = seedRefixFindings(
       [stored({ id: 'still', teacherReason: 'STILL_WRONG', sceneDigest: 'same' })],

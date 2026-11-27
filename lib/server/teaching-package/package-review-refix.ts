@@ -47,7 +47,9 @@ import {
   insertQueuedReview,
   isPressedFirstReview,
   newPackageReviewId,
+  REASKED_REVIEW_ID_PREFIX,
   REFIX_REVIEW_ID_PREFIX,
+  wasReasked,
   readPackageReview,
   readStageReviewForUpdate,
   requeueReviewForRefix,
@@ -98,8 +100,8 @@ const RETRIED_REASONS: ReadonlySet<string> = new Set([
  *   is what makes the loop regenerate that slide again — unless it is
  *   teacher-only (S5, bank quiz, a check no regeneration may fix), or a person
  *   edited its slide since the review saw it (`liveDigests` differ from the
- *   finding's `sceneDigest`): then it is `VERSION_CHANGED` and the slide is left
- *   as the person made it;
+ *   finding's `sceneDigest`): then it is re-checked only (`recheckOnly`), as the
+ *   person made it, never regenerated (review H-2);
  * - of several open findings of one check on one slide (an earlier run adds
  *   the re-reported check again), only the newest is kept, so a press never
  *   piles up copies of one problem;
@@ -142,34 +144,36 @@ export function seedRefixFindings(
     }
     return fix?.code === 'REREVIEW_UNAVAILABLE' ? 'recheck' : 'audio';
   };
-  // Review 27 Nov 2026: a held finding whose slide a person edited since is re-checked
-  // as the person made it (a re-check never regenerates), once per edit: the re-check
-  // records the slide it saw. A `person` hold is no dead end once its slide is edited.
-  const recheckEdit = (finding: StoredFinding) => {
+  // Review of 97cc78c3..4f6f8ddb (H-2): a slide a person edited since the review saw it is
+  // re-checked once as the person made it (a re-check never regenerates), with EVERY open
+  // finding of it a press acts on -- retried, `VERSION_CHANGED` from an earlier press, or
+  // held (an audio or a `person` hold too) -- in that one re-check, so a teacher's own fix
+  // can close them. The re-check records the slide it saw, so it runs once per edit.
+  const acted = (finding: StoredFinding, editedSlide: boolean) => {
     const held = heldFor(finding);
-    return (held === 'recheck' || held === 'person') && edited(finding);
+    return (
+      finding.teacherReason === null ||
+      RETRIED_REASONS.has(finding.teacherReason) ||
+      held === 'recheck' ||
+      held === 'audio' ||
+      (held === 'person' && editedSlide)
+    );
   };
-  const retried = (finding: StoredFinding) =>
-    finding.teacherReason === null ||
-    RETRIED_REASONS.has(finding.teacherReason) ||
-    heldFor(finding) === 'recheck' ||
-    heldFor(finding) === 'audio' ||
-    recheckEdit(finding);
   const reasoned = findings.map((finding): StoredFinding => {
     // A marker is worked out again on every press, never carried forward; `heldFor`
     // stays only on a finding that is left as it is.
     const { recheckOnly: _stale, heldFor: _held, ...base } = finding;
     if (base.status !== 'open') return base;
-    if (!retried(finding)) return finding.heldFor ? { ...base, heldFor: finding.heldFor } : base;
+    const editedSlide = edited(base);
+    if (!acted(finding, editedSlide)) {
+      return finding.heldFor ? { ...base, heldFor: finding.heldFor } : base;
+    }
     const teacherOnly = teacherOnlyReason({ ...base, teacherReason: null }, slides);
-    const teacherReason =
-      teacherOnly ?? (edited(base) && !recheckEdit(finding) ? 'VERSION_CHANGED' : null);
+    if (teacherOnly) return { ...base, teacherReason: teacherOnly };
     return {
       ...base,
-      teacherReason,
-      ...(teacherReason === null && (heldFor(finding) === 'recheck' || recheckEdit(finding))
-        ? { recheckOnly: true as const }
-        : {}),
+      teacherReason: null,
+      ...(editedSlide || heldFor(finding) === 'recheck' ? { recheckOnly: true as const } : {}),
     };
   });
   // Newest first: the last of one slide's check is the one kept.
@@ -222,6 +226,19 @@ export function refixReviewId(tenantId: string, versionId: string, idempotencyKe
     .digest('base64url')
     .slice(0, 16);
   return `${REFIX_REVIEW_ID_PREFIX}${digest}`;
+}
+
+/**
+ * M-1: the id a press gives a review it re-asks after it ended `unavailable` (dead end
+ * (c)) -- deterministic like `refixReviewId`, and marked, so its own exhaustion is known
+ * as the second one.
+ */
+export function reaskReviewId(tenantId: string, versionId: string, idempotencyKey: string) {
+  const digest = createHash('sha256')
+    .update(`${tenantId}\u0000${versionId}\u0000${idempotencyKey}\u0000reask`)
+    .digest('base64url')
+    .slice(0, 16);
+  return `${REASKED_REVIEW_ID_PREFIX}${digest}`;
 }
 
 export interface QueueRefixInput {
@@ -343,6 +360,7 @@ export async function queueFlaggedSlideRefix(
   const now = deps.now ?? Date.now;
   const loadScenes = deps.loadScenes ?? loadLiveScenes;
   const newReviewId = refixReviewId(input.tenantId, input.versionId, input.idempotencyKey);
+  const reaskId = reaskReviewId(input.tenantId, input.versionId, input.idempotencyKey);
 
   return nodePostgresTransaction(pool)(async (tx: Queryable): Promise<QueuedRefix> => {
     const version = await readVersionForUpdate(tx, input.versionId, { tenantId: input.tenantId });
@@ -354,7 +372,7 @@ export async function queueFlaggedSlideRefix(
       versionId: version.id,
       stageId: version.currentStageId,
     });
-    if (review && review.id === newReviewId) {
+    if (review && (review.id === newReviewId || review.id === reaskId)) {
       return {
         review,
         previousReviewId: null,
@@ -418,9 +436,10 @@ export async function queueFlaggedSlideRefix(
       // re-asked -- it would end the same way on every press. Review 27 Nov 2026: nor is a
       // review that used up its runs after a press already re-asked it (each run may pay
       // for a first call; a second exhaustion is no outage a further press cures).
-      const exhaustedAgain =
-        review.errorCode === 'REVIEW_ATTEMPTS_EXHAUSTED' &&
-        review.id.startsWith(REFIX_REVIEW_ID_PREFIX);
+      // M-1: "re-asked" is the re-ask's own id (`reaskReviewId`), never any press's id --
+      // a Stage review a press or a submit queued (dead end (a)) that exhausts on its
+      // first try is re-asked once, like any other.
+      const exhaustedAgain = review.errorCode === 'REVIEW_ATTEMPTS_EXHAUSTED' && wasReasked(review);
       if (
         review.status === 'unavailable' &&
         !PERMANENTLY_UNAVAILABLE.has(review.errorCode ?? '') &&
@@ -428,7 +447,7 @@ export async function queueFlaggedSlideRefix(
       ) {
         const requeued = await requeueReviewForRefix(tx, {
           reviewId: review.id,
-          newReviewId,
+          newReviewId: reaskId,
           findings: [],
           now: now(),
         });

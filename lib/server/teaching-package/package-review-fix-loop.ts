@@ -55,6 +55,7 @@ import type {
   TeacherReason,
 } from '@/lib/server/teaching-package/package-review-store';
 import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
+import { withoutNarrationAudio } from '@/lib/server/teaching-package/narration-audio-alignment';
 import { regenerateSceneNarrationAudio } from '@/lib/server/teaching-package/scene-narration-audio';
 import {
   regenerateSlideScene,
@@ -258,6 +259,13 @@ function neighbourhood(slides: readonly ReviewSlide[], changed: ReviewSlide): Re
   return ordered.slice(Math.max(0, index - 1), index + 2);
 }
 
+/** Review LOW: the same slide but for its narration audio references. */
+function sameMaterialWithoutAudio(a: AppScene, b: AppScene): boolean {
+  return (
+    reviewedSceneDigest(withoutNarrationAudio(a)) === reviewedSceneDigest(withoutNarrationAudio(b))
+  );
+}
+
 /** What the reviewer saw, compared with what the database holds now. */
 function sceneChanged(live: AppScene, reviewed: AppScene | undefined): boolean {
   if (!reviewed) return true;
@@ -346,7 +354,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // Dead end (b), 27 Nov 2026: every finding of this slide waits only for the re-check
       // its regenerated slide never got (`seedRefixFindings`): re-check the live slide, and
       // pay for no regeneration and no narration audio. The marker is used once.
-      const recheckOnly =
+      let recheckOnly =
         sceneFindings.length > 0 && sceneFindings.every((finding) => finding.recheckOnly === true);
       for (const finding of sceneFindings) {
         delete finding.recheckOnly;
@@ -414,6 +422,19 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         });
         await context.recordProgress(findings, fixes);
         continue;
+      }
+      // Review of 97cc78c3..4f6f8ddb (M-2): the slide is not what its findings record the
+      // review saw -- a person edited it before this run read it (a resume, or between a
+      // press and the sweep). It is re-checked as it is, never regenerated over the edit.
+      if (
+        !recheckOnly &&
+        sceneFindings.some(
+          (finding) =>
+            finding.sceneDigest !== undefined &&
+            finding.sceneDigest !== reviewedSceneDigest(live.scene),
+        )
+      ) {
+        recheckOnly = true;
       }
       // RV-4: a re-check also wants the figures this slide's findings were read from (page
       // images, 27 Nov 2026: and the whole pages they were read from).
@@ -716,6 +737,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       // The new slide's narration audio (a regeneration never runs TTS). A re-check-only
       // slide keeps the audio it has.
+      let editedDuringAudio = false;
       if (audioCode === null && !recheckOnly) {
         try {
           const audio = await regenerateAudio(grant, slide.id, {
@@ -724,7 +746,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             // LOW-1: an evicted run's TTS stops with its signal and writes no audio.
             ...(context.signal ? { signal: context.signal } : {}),
           });
-          regenerated = audio.scene;
+          // Review of 97cc78c3..4f6f8ddb (LOW): the voiced slide is the store's re-read; only
+          // its audio may differ from the slide the fix made. Anything else is a person's
+          // edit made meanwhile: never judged or recorded as the fix (below).
+          if (sameMaterialWithoutAudio(audio.scene, regenerated)) {
+            regenerated = audio.scene;
+          } else {
+            editedDuringAudio = true;
+          }
           if (audio.missing > 0) audioCode = 'NARRATION_AUDIO_PARTIAL';
         } catch (error) {
           audioCode = error instanceof TeachingPackageError ? error.code : 'NARRATION_AUDIO_FAILED';
@@ -732,6 +761,20 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             `review ${review.id}: narration audio for ${slide.id} not regenerated (${audioCode})`,
           );
         }
+      }
+      if (editedDuringAudio) {
+        // The slide is a person's now: it waits for them (the next press re-checks it as
+        // they made it), and nothing this fix saw is stamped on its findings.
+        markStopped('VERSION_CHANGED');
+        fixes.push({
+          sceneId: slide.id,
+          findingIds: sceneFindings.map((f) => f.id),
+          outcome: 'stopped',
+          code: 'VERSION_CHANGED',
+          regenerationId,
+        });
+        await context.recordProgress(findings, fixes);
+        continue;
       }
       scenesById.set(slide.id, regenerated);
 

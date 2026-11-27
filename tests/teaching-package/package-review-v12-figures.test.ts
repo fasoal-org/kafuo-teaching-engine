@@ -98,7 +98,10 @@ import type {
   PackageReview,
   StoredFinding,
 } from '@/lib/server/teaching-package/package-review-store';
-import { seedRefixFindings } from '@/lib/server/teaching-package/package-review-refix';
+import {
+  refixReviewId,
+  seedRefixFindings,
+} from '@/lib/server/teaching-package/package-review-refix';
 import { TeachingModelUnavailableError } from '@/lib/server/teaching-model/execute';
 import type { SourceVisualManifestEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
@@ -971,15 +974,15 @@ describe('RV-1 + RV-4: the review job', () => {
       ['r1', null, true],
       ['n1', null, undefined],
     ]);
-    // A person edited s2: both holds are re-checked as the person made it (never
-    // regenerated); the finding that would regenerate is left as VERSION_CHANGED.
+    // A person edited s2: every finding of it is re-checked as the person made it, in one
+    // re-check, never regenerated (review H-2: the one that would regenerate too).
     const edited = seedRefixFindings(findings, slides, new Map([['s2', 'edited']]));
     expect(
       edited.findings.map((finding) => [finding.id, finding.teacherReason, finding.recheckOnly]),
     ).toEqual([
       ['p1', null, true],
       ['r1', null, true],
-      ['n1', 'VERSION_CHANGED', undefined],
+      ['n1', null, true],
     ]);
     // A row from before `heldFor` whose audio failed with any code: regenerated.
     const legacy = seedRefixFindings([open('a1', { sceneDigest: undefined })], slides, new Map(), [
@@ -1018,7 +1021,10 @@ describe('RV-1 + RV-4: the review job', () => {
   });
 
   it('dead end (c): a first answer a press re-asked only reviews; a resume regenerates nothing either', async () => {
-    const { run, regenerated } = job('g5.v11', { id: 'tpr-rf-abc', reviewedAt: null });
+    const { run, regenerated } = job('g5.v11', {
+      id: refixReviewId('tenant-1', 'version-1', 'a-key'),
+      reviewedAt: null,
+    });
     const finished = await run();
     expect(finished?.status).toBe('needs_teacher');
     expect(regenerated).toEqual([]);

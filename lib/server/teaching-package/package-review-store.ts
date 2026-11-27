@@ -169,6 +169,18 @@ export function reviewSourceAttemptId(attemptId: string): string {
 
 /** The id prefix of a review a Regenerate-flagged press queued (`refixReviewId`). */
 export const REFIX_REVIEW_ID_PREFIX = 'tpr-rf-';
+/**
+ * Review of 97cc78c3..4f6f8ddb (M-1): the id prefix of a review a press re-asked after it
+ * ended `unavailable` (dead end (c), `reaskReviewId`), so a second exhaustion is known
+ * as one -- and only that one.
+ */
+export const REASKED_REVIEW_ID_PREFIX = 'tpr-rf-ra-';
+/**
+ * A press's id exactly: the prefix and a 16-character digest. A generation's own review
+ * id (`newPackageReviewId`: `tpr-` and 16 random characters) is shorter, so it can never
+ * be taken for one, whatever its random characters (review NIT).
+ */
+const PRESSED_REVIEW_ID = /^tpr-rf-(?:ra-)?[A-Za-z0-9_-]{16}$/;
 
 /**
  * Review 27 Nov 2026: a review whose FIRST answer a press or a submit asked for -- a
@@ -179,9 +191,14 @@ export const REFIX_REVIEW_ID_PREFIX = 'tpr-rf-';
  */
 export function isPressedFirstReview(review: Pick<PackageReview, 'id' | 'attemptId'>): boolean {
   return (
-    review.id.startsWith(REFIX_REVIEW_ID_PREFIX) ||
+    PRESSED_REVIEW_ID.test(review.id) ||
     reviewSourceAttemptId(review.attemptId) !== review.attemptId
   );
+}
+
+/** M-1: whether a press already re-asked this review once (dead end (c)). */
+export function wasReasked(review: Pick<PackageReview, 'id'>): boolean {
+  return review.id.startsWith(REASKED_REVIEW_ID_PREFIX) && PRESSED_REVIEW_ID.test(review.id);
 }
 
 function num(value: unknown): number | null {

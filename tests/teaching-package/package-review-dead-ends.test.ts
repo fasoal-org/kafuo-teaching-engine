@@ -52,11 +52,14 @@ import {
 import {
   queueFlaggedSlideRefix,
   queueSuccessorStageReview,
+  reaskReviewId,
   refixReviewId,
   seedRefixFindings,
 } from '@/lib/server/teaching-package/package-review-refix';
 import {
   isPressedFirstReview,
+  newPackageReviewId,
+  wasReasked,
   packageReviewWire,
   reviewSourceAttemptId,
   stageReviewAttemptId,
@@ -67,6 +70,9 @@ import type { AppScene } from '@/lib/types/stage';
 
 const KEY = 'learning_item_tp_command:1:regeneration:stamp:1:abc';
 const NEW_ID = refixReviewId('t-1', 'tpv-2', KEY);
+const REASK_ID = reaskReviewId('t-1', 'tpv-2', KEY);
+/** A review an earlier press queued (another key). */
+const EARLIER_PRESS = refixReviewId('t-1', 'tpv-2', 'earlier-key');
 
 function slide(id: string, order: number, text: string): AppScene {
   return {
@@ -260,13 +266,16 @@ describe('dead end (c): a review unavailable before its first answer is asked ag
       { currentAttemptId: 'tpa-1' },
       { ...REVIEW, status: 'unavailable', reviewedAt: null, errorCode: 'REVIEWER_UNAVAILABLE' },
     );
+    // M-1: the re-ask has its own marked id, so its own exhaustion is known as the second.
     expect(mocks.requeueReviewForRefix).toHaveBeenCalledWith(expect.anything(), {
       reviewId: 'tpr-old',
-      newReviewId: NEW_ID,
+      newReviewId: REASK_ID,
       findings: [],
       now: 9,
     });
     expect(queued).toMatchObject({ previousReviewId: 'tpr-old', sceneIds: [], replayed: false });
+    expect(wasReasked(queued.review)).toBe(true);
+    expect(isPressedFirstReview(queued.review)).toBe(true);
   });
 
   it('a cause another run cannot cure is not re-asked (no book, no version)', async () => {
@@ -473,7 +482,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(result.fixes[0]).toMatchObject({ outcome: 'fixed', code: null });
   });
 
-  it('a re-check of a person’s edit never stamps a finding it did not judge (press, loop, press)', async () => {
+  it('a teacher who fixes a flagged slide by hand: one re-check of their edit closes it (press, loop, press)', async () => {
     const live = new Map([['s2', reviewedSceneDigest(SCENES[1]!)]]);
     const slides = reviewSlidesOf(SCENES);
     const stored = [
@@ -483,27 +492,65 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
         sceneDigest: 'before-edit',
       }),
       finding('n1', { check: 'S4', teacherReason: 'STILL_WRONG', sceneDigest: 'before-edit' }),
+      finding('a1', {
+        check: 'S3',
+        teacherReason: 'REREVIEW_UNAVAILABLE',
+        heldFor: 'audio',
+        sceneDigest: 'before-edit',
+      }),
+      finding('v1', { check: 'S6', teacherReason: 'VERSION_CHANGED', sceneDigest: 'before-edit' }),
+      // A refusal no press acts on: never judged, so never stamped.
+      finding('r1', {
+        check: 'S7',
+        teacherReason: 'REGENERATION_REFUSED',
+        sceneDigest: 'before-edit',
+      }),
     ];
-    // The person edited s2: p1 is re-checked as they made it, n1 is left alone.
+    // Review H-2: every open finding of the edited slide a press acts on -- a hold for a
+    // person or for audio, a still-wrong one, one left VERSION_CHANGED -- joins ONE
+    // re-check of the slide as the teacher made it; nothing is regenerated.
     const first = seedRefixFindings(stored, slides, live);
     expect(first.findings.map((f) => [f.id, f.teacherReason, f.recheckOnly])).toEqual([
       ['p1', null, true],
-      ['n1', 'VERSION_CHANGED', undefined],
+      ['n1', null, true],
+      ['a1', null, true],
+      ['v1', null, true],
+      ['r1', 'REGENERATION_REFUSED', undefined],
     ]);
-    const { run, regenerate } = loop(() => []);
+    expect(first.sceneIds).toEqual(['s2']);
+    const { run, regenerate, regenerateAudio, callReviewer } = loop(() => []);
     const result = await run(first.findings);
     expect(regenerate).not.toHaveBeenCalled();
+    expect(regenerateAudio).not.toHaveBeenCalled();
+    expect(callReviewer).toHaveBeenCalledTimes(1);
+    // The teacher's fix closed them; each records the slide it was judged on.
     expect(result.findings.map((f) => [f.id, f.status, f.sceneDigest])).toEqual([
       ['p1', 'fixed', live.get('s2')],
-      ['n1', 'open', 'before-edit'],
+      ['n1', 'fixed', live.get('s2')],
+      ['a1', 'fixed', live.get('s2')],
+      ['v1', 'fixed', live.get('s2')],
+      ['r1', 'open', 'before-edit'],
     ]);
-    // The next press still sees the edit under n1: never regenerated over it.
+    // The next press acts on nothing: no re-check is paid twice for one edit.
     const second = seedRefixFindings(result.findings, slides, live);
-    expect(second.findings.find((f) => f.id === 'n1')).toMatchObject({
-      teacherReason: 'VERSION_CHANGED',
-      sceneDigest: 'before-edit',
-    });
     expect(second.sceneIds).toEqual([]);
+  });
+
+  it('M-2: a slide edited before the run read it is re-checked, never regenerated over', async () => {
+    // A resume, or an edit between a press and the sweep: the run's own read of the slide
+    // is the edit, but the finding records the slide the review saw.
+    const { run, regenerate } = loop(() => []);
+    const result = await run([finding('f1', { sceneDigest: 'as-the-review-saw-it' })]);
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(result.findings[0]).toMatchObject({
+      status: 'fixed',
+      sceneDigest: reviewedSceneDigest(SCENES[1]!),
+    });
+    // The slide as the review saw it: regenerated as before.
+    const same = loop(() => []);
+    same.regenerate.mockRejectedValue(new Error('refused'));
+    await same.run([finding('f1', { sceneDigest: reviewedSceneDigest(SCENES[1]!) })]);
+    expect(same.regenerate).toHaveBeenCalledTimes(1);
   });
 
   it('a re-checked slide records itself as the re-check saw it (review 27 Nov 2026, HIGH)', async () => {
@@ -516,7 +563,7 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
 describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () => {
   it('a second press while a pressed first review is on its way is "in progress" (Kafuo adopts it)', async () => {
     await expect(
-      refix({}, { ...REVIEW, id: 'tpr-rf-earlier', status: 'queued', reviewedAt: null }),
+      refix({}, { ...REVIEW, id: EARLIER_PRESS, status: 'queued', reviewedAt: null }),
     ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_IN_PROGRESS' });
     // A Stage review the submit queued (a plain id, the Stage key).
     await expect(
@@ -544,16 +591,32 @@ describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () =
     };
     await refix({ currentAttemptId: 'tpa-1' }, exhausted);
     expect(mocks.requeueReviewForRefix).toHaveBeenCalledTimes(1);
+    // M-1: a Stage review a press queued (dead end (a)) that exhausts on its FIRST try is
+    // re-asked once too; so is one the submit queued (a plain id).
+    await refix({}, { ...exhausted, id: EARLIER_PRESS, attemptId: 'tpa-1#stage:stage-2' });
+    expect(mocks.requeueReviewForRefix).toHaveBeenCalledTimes(1);
+    await refix({}, { ...exhausted, id: 'tpr-submit', attemptId: 'tpa-1#stage:stage-2' });
+    expect(mocks.requeueReviewForRefix).toHaveBeenCalledTimes(1);
+    // Only the re-ask's own exhaustion is the second one.
     await expect(
-      refix({ currentAttemptId: 'tpa-1' }, { ...exhausted, id: 'tpr-rf-earlier' }),
+      refix(
+        { currentAttemptId: 'tpa-1' },
+        { ...exhausted, id: reaskReviewId('t-1', 'tpv-2', 'earlier-key') },
+      ),
     ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_NOT_READY' });
     expect(mocks.requeueReviewForRefix).not.toHaveBeenCalled();
   });
 
   it('only a press or a submit asks for a review-only first answer', () => {
-    expect(isPressedFirstReview({ id: 'tpr-rf-abc', attemptId: 'tpa-1' })).toBe(true);
+    expect(isPressedFirstReview({ id: NEW_ID, attemptId: 'tpa-1' })).toBe(true);
+    expect(isPressedFirstReview({ id: REASK_ID, attemptId: 'tpa-1' })).toBe(true);
     expect(isPressedFirstReview({ id: 'tpr-x', attemptId: 'tpa-1#stage:stage-2' })).toBe(true);
     expect(isPressedFirstReview({ id: 'tpr-x', attemptId: 'tpa-1' })).toBe(false);
+    // Review NIT: a generation's own random id can never pass for a press's, whatever its
+    // random characters (it is shorter).
+    expect(isPressedFirstReview({ id: 'tpr-rf-AAAAAAAAAAAAA', attemptId: 'tpa-1' })).toBe(false);
+    expect(newPackageReviewId()).toMatch(/^tpr-[A-Za-z0-9_-]{16}$/);
+    expect(wasReasked({ id: NEW_ID })).toBe(false);
   });
 
   it('the end of a run keeps each digest as the review saw it, never the Stage as it is then', () => {
