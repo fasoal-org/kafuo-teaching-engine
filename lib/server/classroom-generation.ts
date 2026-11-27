@@ -3027,6 +3027,9 @@ export async function generateClassroom(
 
     // Up to SCENE_CONTENT_CONCURRENCY Scenes' content in flight at once, results awaited
     // in order by the loop. Once a route failure is recorded no new Scene starts.
+    // g5.v12 (A-32): the check quizzes known to be dropped (kept from an earlier pass, or
+    // settled by the prefetch), so a narration's page context never counts one.
+    const knownCheckQuizDrops = new Set(keptCheckQuizDrops);
     const sceneContents = lazyBoundedMap(
       outlines,
       sceneContentConcurrency(),
@@ -3034,7 +3037,10 @@ export async function generateClassroom(
         const ready = prepared[index];
         // g5.v11: an outline already dropped is never paid for.
         if (droppedGuideOutlines.has(outline.id)) return null;
-        return ready ? produceSceneContent(index, ready.safeOutline) : null;
+        if (!ready) return null;
+        const produced = await produceSceneContent(index, ready.safeOutline);
+        if (!produced.content && produced.checkQuizDropped) knownCheckQuizDrops.add(outline.id);
+        return produced;
       },
       // Once the run is stopping for ANY reason (the loop threw, a Scene's content
       // rejected, the route failed), no further Scene starts: the serial loop never
@@ -3227,10 +3233,15 @@ export async function generateClassroom(
         // Non-governed callers keep today's contract exactly: first result wins.
         // Page position + the previous page's speech, so first/last-page cues,
         // same-session continuity and topic signposting exist on the server path.
+        // g5.v12 (A-32): a dropped check quiz is no page the learner sees.
+        const pages =
+          knownCheckQuizDrops.size > 0
+            ? outlines.filter((planned) => !knownCheckQuizDrops.has(planned.id))
+            : outlines;
         const sceneCtx = {
-          pageIndex: index + 1,
-          totalPages: outlines.length,
-          allTitles: outlines.map((planned) => planned.title),
+          pageIndex: (pages === outlines ? index : pages.indexOf(outlines[index]!)) + 1,
+          totalPages: pages.length,
+          allTitles: pages.map((planned) => planned.title),
           previousSpeeches,
         };
         let actionsFellBack = false;

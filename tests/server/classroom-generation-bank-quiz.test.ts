@@ -324,6 +324,38 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
     expect(droppedPlan(result)).toMatchObject({ reason: 'unverified_answer_key' });
   });
 
+  it('A-32: a later slide’s narration never counts the dropped quiz as a page', async () => {
+    const closing = {
+      ...outlines[0]!,
+      id: 'w6o3',
+      title: 'Closing',
+      order: 3,
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 1 },
+    };
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'English.', outlines: [...outlines, closing] },
+    });
+    keyed(['B', 'B']);
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+
+    expect(droppedPlan(result)).toMatchObject({ reason: 'unverified_answer_key' });
+    const narration = (
+      mocks.callLLM.mock.calls as unknown as Array<
+        [{ messages: Array<{ role: string; content: string }> }]
+      >
+    )
+      .map(([request]) => request.messages)
+      .filter((messages) => /Action Generator/.test(messages[0]?.content ?? ''))
+      .map((messages) => messages.find((m) => m.role === 'user')?.content ?? '')
+      .find((user) => user.includes('Closing ← current'));
+    expect(narration).toBeDefined();
+    expect(narration).toContain('2. Closing ← current');
+    expect(narration).toContain('Position: This is the LAST page.');
+    expect(narration).not.toContain('Check');
+  });
+
   // Fresh review finding 5: a `scenes` resume of a run that dropped the quiz.
   const resumeDropped = async (regenerateOutlineIds: string[]) => {
     keyed(['B', 'B']);
