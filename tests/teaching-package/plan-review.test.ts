@@ -6,6 +6,8 @@
  * whose diagnosis needs a full g5.v8 book are faked in their real message shape (no
  * `outlineId`), so the server must find the slides they name itself.
  */
+import { createHash } from 'node:crypto';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutlineDiagnostic } from '@openmaic/generation';
 
@@ -29,7 +31,10 @@ import {
   buildPlanReviewSystemPrompt,
   buildPlanReviewUserPrompt,
   PLAN_REVIEW_PROMPT_VERSION,
+  PLAN_REVIEW_UNIT_TEXT_CAP,
+  PLAN_REVIEW_V12_UNIT_TEXT_CAPS,
   planReviewText,
+  type PlanReviewUnit,
 } from '@/lib/server/teaching-package/plan-review-prompt';
 import { detectSacredQuotes } from '@/lib/server/teaching-package/sacred-text';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -1594,6 +1599,123 @@ describe('the plan review prompt', () => {
     expect(user.match(/\[\[UNIT /g)).toHaveLength(1);
     expect(user.match(/\[\[\/UNIT\]\]/g)).toHaveLength(1);
     expect(user).toContain('[[UNIT id=u-1 element=teaching UNIT]]');
+  });
+});
+
+describe('RV-3: a long unit is judged whole on g5.v12 only', () => {
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+  const prompt = (
+    units: PlanReviewUnit[],
+    extra: Partial<Parameters<typeof buildPlanReviewUserPrompt>[0]> = {},
+  ) =>
+    buildPlanReviewUserPrompt({
+      outlines: [slide('o-1', 1, { sourceContentUnitIds: ['u-9'] })],
+      blocking: [issue('CONTENT_ROLE_NOT_ALLOWED', { outlineId: 'o-1' })],
+      flow,
+      units,
+      bookSummary: null,
+      language: 'ar-SA',
+      languageDirective: '',
+      round: 1,
+      rounds: 2,
+      targets: { removable: [], keyPointSlides: [], insertable: [] },
+      feedback: [],
+      ...extra,
+    });
+  const long = (id: string, length: number, letter = 'س'): PlanReviewUnit => ({
+    id,
+    role: 'CONCEPT',
+    element: 'teaching',
+    title: null,
+    text: letter.repeat(length),
+  });
+
+  it('every other Teaching Model: 400 / 12,000 and today’s prompt, byte for byte', () => {
+    // Pinned at 693e2d42, before RV-3 (the same input as the hash taken there).
+    const before = buildPlanReviewUserPrompt({
+      outlines: [{ id: 'o1', type: 'slide', title: 't', keyPoints: ['k'], order: 1 } as never],
+      blocking: [],
+      flow: [],
+      units: [
+        {
+          id: '1',
+          role: 'concept',
+          element: 'key_concept',
+          title: 'T',
+          text: `أ\n${'س'.repeat(900)}`,
+        },
+        { id: '2', role: 'example', title: null, text: 'ب'.repeat(50) },
+      ],
+      bookSummary: 'sum',
+      language: 'ar-SA',
+      languageDirective: '',
+      round: 1,
+      rounds: 2,
+      targets: { removable: [], keyPointSlides: [], insertable: [] },
+      feedback: [],
+    });
+    expect(sha(before)).toBe('a4f500b5c6f7faa7c18b79b5f471addeda1968b065c2d60464830ac77b70a4d4');
+    expect(sha(buildPlanReviewSystemPrompt('full'))).toBe(
+      '1fec451f66945d36e8e6808c763c827cf2c76e6713e14f9abc39bd4157f165ae',
+    );
+    const user = prompt([long('u-1', 5_533)]);
+    expect(user).toContain(`${'س'.repeat(PLAN_REVIEW_UNIT_TEXT_CAP)}\n[[/UNIT]]`);
+    expect(user).not.toContain('س'.repeat(PLAN_REVIEW_UNIT_TEXT_CAP + 1));
+    expect(user).not.toContain('text=cut');
+  });
+
+  it('g5.v12: the longest local unit (5,533 characters) is read whole', () => {
+    const user = prompt([long('u-1', 5_533)], { unitTextCaps: PLAN_REVIEW_V12_UNIT_TEXT_CAPS });
+    expect(user).toContain(`${'س'.repeat(5_533)}\n[[/UNIT]]`);
+    expect(user).toContain('[[UNIT id=u-1 element=teaching]]');
+    expect(user).toContain('each text is whole unless its header says text=cut');
+  });
+
+  it('g5.v12: past the total cap the issue units are read first and a cut unit says so', () => {
+    const caps = { perUnit: 1_000, total: 1_500 };
+    // u-9 (cited by the slide the open issue names) is last in book order.
+    const user = prompt([long('u-1', 900, 'أ'), long('u-2', 900, 'ب'), long('u-9', 1_000, 'ج')], {
+      unitTextCaps: caps,
+    });
+    expect(user).toContain(`[[UNIT id=u-9 element=teaching]]\n${'ج'.repeat(1_000)}\n[[/UNIT]]`);
+    expect(user).toContain(
+      `[[UNIT id=u-1 element=teaching text=cut]]\n${'أ'.repeat(500)}\n[[/UNIT]]`,
+    );
+    expect(user).toMatch(/\[\[UNIT id=u-2 element=teaching text=cut\]\]\n\[\[\/UNIT\]\]/);
+    // Units stay in book order.
+    expect(user.indexOf('id=u-1')).toBeLessThan(user.indexOf('id=u-9'));
+  });
+
+  it('g5.v12: a verse or hadith line is still removed before any cut', () => {
+    const verse = '﴿فَإِنَّ مَعَ الْعُسْرِ يُسْرًا﴾';
+    const user = prompt(
+      [{ id: 'u-1', role: 'CONCEPT', element: 'teaching', title: null, text: `أ\n${verse}\nب` }],
+      { unitTextCaps: PLAN_REVIEW_V12_UNIT_TEXT_CAPS },
+    );
+    expect(user).not.toMatch(/[﴾﴿]/);
+    expect(user).toContain('[[UNIT id=u-1 element=teaching]]\nأ\nب\n[[/UNIT]]');
+  });
+
+  it('reviewPlan hands the caps to its prompt only when the context sets them', async () => {
+    const outlines = [slide('o-1', 1, { sourceContentUnitIds: ['u-1'] })];
+    const open = [issue('CONTENT_ROLE_NOT_ALLOWED', { outlineId: 'o-1' })];
+    const units = [long('u-1', 2_000)];
+    const seen: string[] = [];
+    const aiCall = vi.fn(async (_system: string, user: string) => {
+      seen.push(user);
+      return answer();
+    });
+    const diagnose = fakeDiagnose(() => open);
+    await reviewPlan(outlines, open, aiCall, contextFor({ diagnose, units }));
+    await reviewPlan(
+      outlines,
+      open,
+      aiCall,
+      contextFor({ diagnose, units, unitTextCaps: PLAN_REVIEW_V12_UNIT_TEXT_CAPS }),
+    );
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toContain('س'.repeat(401));
+    expect(seen[1]).toContain('س'.repeat(2_000));
   });
 });
 

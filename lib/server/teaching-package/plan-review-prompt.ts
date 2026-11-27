@@ -39,6 +39,27 @@ export const PLAN_REVIEW_UNITS_TEXT_CAP = 12_000;
 /** The most characters of the book summary. */
 export const PLAN_REVIEW_BOOK_SUMMARY_CAP = 4_000;
 
+/** RV-3: how much unit text one plan review round reads. */
+export interface PlanReviewUnitTextCaps {
+  /** The most characters of one unit's text. */
+  perUnit: number;
+  /** The most characters of all unit texts together. */
+  total: number;
+}
+
+/**
+ * RV-3 (27 Nov 2026), g5.v12 only: a long unit is read whole. 6,000 characters holds
+ * the longest unit of every local lesson (5,533, lesson 226 physics); 30,000 in all
+ * holds the longest lesson (22,620, lesson 196) — about 11,500 o200k tokens at most
+ * (2.6 characters per token, measured on lesson 214).
+ * The units the open issues concern are given their text first, and a unit that is
+ * still cut says so in its header. Every other Teaching Model keeps 400 / 12,000.
+ */
+export const PLAN_REVIEW_V12_UNIT_TEXT_CAPS: PlanReviewUnitTextCaps = Object.freeze({
+  perUnit: 6_000,
+  total: 30_000,
+});
+
 /** One approved Content Unit as the reviewer reads it. */
 export interface PlanReviewUnit {
   id: string;
@@ -72,6 +93,11 @@ export interface PlanReviewPromptInput {
   targets: PlanReviewTargets;
   /** What the server did with the previous round (op names, slide ids and codes only). */
   feedback: readonly string[];
+  /**
+   * RV-3: absent → today's 400 / 12,000 and today's prompt, byte for byte. Set (g5.v12,
+   * `PLAN_REVIEW_V12_UNIT_TEXT_CAPS`) → long units read whole, issue units first.
+   */
+  unitTextCaps?: PlanReviewUnitTextCaps;
 }
 
 const VERSE_BRACKET = /[﴾﴿]/;
@@ -163,6 +189,62 @@ function unitBlocks(units: readonly PlanReviewUnit[]): string[] {
   return lines;
 }
 
+/**
+ * RV-3: the units the open issues concern — every unit an issue's slide cites. They are
+ * given their text first when the total cap would cut the lesson.
+ */
+export function issueUnitIds(
+  outlines: readonly SceneOutline[],
+  blocking: readonly OutlineDiagnostic[],
+): Set<string> {
+  const byId = new Map(outlines.map((outline) => [outline.id, outline]));
+  const ids = new Set<string>();
+  for (const issue of blocking) {
+    const outline = issue.outlineId
+      ? byId.get(issue.outlineId)
+      : issue.outlineIndex !== undefined
+        ? outlines[issue.outlineIndex]
+        : undefined;
+    for (const id of outline?.sourceContentUnitIds ?? []) ids.add(String(id));
+  }
+  return ids;
+}
+
+/**
+ * RV-3 (g5.v12): each unit's text up to `caps.perUnit`; the issue units take their
+ * share of `caps.total` first, then the others in book order share what is left. The
+ * units are still listed in book order, and one whose text was cut (or left out) says
+ * `text=cut` in its header, so the reviewer never judges it as whole.
+ */
+function cappedUnitBlocks(
+  units: readonly PlanReviewUnit[],
+  caps: PlanReviewUnitTextCaps,
+  priority: ReadonlySet<string>,
+): string[] {
+  let budget = caps.total;
+  const texts = new Map<PlanReviewUnit, { text: string; cut: boolean }>();
+  const allot = (unit: PlanReviewUnit) => {
+    const whole = planReviewText(unit.text, Number.MAX_SAFE_INTEGER);
+    const text = budget > 0 ? whole.slice(0, Math.min(caps.perUnit, budget)) : '';
+    budget -= text.length;
+    texts.set(unit, { text, cut: text.length < whole.length });
+  };
+  for (const unit of units) if (priority.has(String(unit.id))) allot(unit);
+  for (const unit of units) if (!priority.has(String(unit.id))) allot(unit);
+  const lines: string[] = [];
+  for (const unit of units) {
+    const { text, cut } = texts.get(unit)!;
+    const kind = unit.element ? `element=${unit.element}` : `role=${unit.role}`;
+    lines.push(
+      `[[UNIT id=${headerText(String(unit.id))} ${headerText(kind)}${cut ? ' text=cut' : ''}]]`,
+    );
+    if (unit.title) lines.push(`TITLE: ${planReviewText(unit.title, 200)}`);
+    if (text) lines.push(text);
+    lines.push('[[/UNIT]]');
+  }
+  return lines;
+}
+
 function lessonText(value: unknown): unknown {
   if (typeof value === 'string') return untrustedText(value);
   if (Array.isArray(value)) return value.map(lessonText);
@@ -242,10 +324,15 @@ export function buildPlanReviewUserPrompt(input: PlanReviewPromptInput): string 
     ? planReviewText(input.bookSummary, PLAN_REVIEW_BOOK_SUMMARY_CAP)
     : '';
   if (summary) lines.push('BOOK STRUCTURE:', '<<<BOOK', summary, 'BOOK>>>', '');
+  const caps = input.unitTextCaps;
   lines.push(
-    'APPROVED CONTENT UNITS (cite only these ids; texts are short extracts):',
+    caps
+      ? 'APPROVED CONTENT UNITS (cite only these ids; each text is whole unless its header says text=cut):'
+      : 'APPROVED CONTENT UNITS (cite only these ids; texts are short extracts):',
     '<<<UNITS',
-    ...unitBlocks(input.units),
+    ...(caps
+      ? cappedUnitBlocks(input.units, caps, issueUnitIds(input.outlines, input.blocking))
+      : unitBlocks(input.units)),
     'UNITS>>>',
     '',
     'PLAN (one slide per line, in order; "index" is 0-based):',

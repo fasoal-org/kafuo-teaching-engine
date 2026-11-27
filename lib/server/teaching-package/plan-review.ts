@@ -66,6 +66,7 @@ import {
   readPlanReviewOps,
   type PlanReviewTargets,
   type PlanReviewUnit,
+  type PlanReviewUnitTextCaps,
 } from '@/lib/server/teaching-package/plan-review-prompt';
 import {
   detectSacredQuotes,
@@ -80,6 +81,8 @@ import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 export type { PlanReviewUnit } from '@/lib/server/teaching-package/plan-review-prompt';
 /** The prompt version, for the runner to record beside the fixes. */
 export { PLAN_REVIEW_PROMPT_VERSION } from '@/lib/server/teaching-package/plan-review-prompt';
+/** RV-3: the g5.v12 unit-text caps, for the runner's plan review context. */
+export { PLAN_REVIEW_V12_UNIT_TEXT_CAPS } from '@/lib/server/teaching-package/plan-review-prompt';
 
 const log = createLogger('PlanReview');
 
@@ -169,6 +172,13 @@ export interface PlanReviewContext {
    * `WORKING_STEP_MISSING` is not a reason for a model call (no other op writes a step).
    */
   allowKeyPoints?: boolean;
+  /**
+   * RV-3 (27 Nov 2026): how much unit text the reviewer reads. Absent → 400 per unit,
+   * 12,000 in all, exactly as before. The g5.v12 run passes
+   * `PLAN_REVIEW_V12_UNIT_TEXT_CAPS` (`isBookPartPlacementModel`), so a long unit is
+   * judged whole; every other Teaching Model leaves it absent.
+   */
+  unitTextCaps?: PlanReviewUnitTextCaps;
 }
 
 export interface PlanReviewResult {
@@ -999,6 +1009,7 @@ export async function reviewPlan(
       rounds: PLAN_REVIEW_ROUNDS,
       targets: reviewTargets(current, open, context),
       feedback,
+      ...(context.unitTextCaps ? { unitTextCaps: context.unitTextCaps } : {}),
     });
     let answer: string;
     try {
