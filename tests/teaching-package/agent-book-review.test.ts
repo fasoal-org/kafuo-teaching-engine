@@ -27,6 +27,7 @@ import {
   groupScenes,
   missingFigureCandidates,
   bookOrderFindings,
+  bookOrderUnits,
   normalizeForMatch,
   parseAgentReviewAnswer,
   quoteFound,
@@ -337,6 +338,20 @@ describe('code checks', () => {
     expect(missingFigureCandidates(view.scenes).map((e) => e.sceneId)).toEqual(['s2']);
     expect(bookOrderFindings(view.scenes, evidence.units)).toEqual([
       { sceneId: 's4', unitId: 'u0', afterUnitId: 'u1' },
+    ]);
+  });
+
+  it('m-D (g5.v12): a «لماذا؟» moved right after its first idea, in the request order, raises no P_BOOK_ORDER', () => {
+    // u0 is printed first («لماذا؟»); the v12 request sends it right after u1, its first
+    // idea, and the slides follow that order.
+    expect(bookOrderFindings(view.scenes, bookOrderUnits(evidence.units, ['u1', 'u0']))).toEqual(
+      [],
+    );
+    // Without the request order (every other model): the printed order, as before.
+    expect(bookOrderUnits(evidence.units, null)).toEqual(evidence.units);
+    // A unit outside the request map is not judged.
+    expect(bookOrderUnits(evidence.units, ['u1']).map((unit) => unit.contentUnitId)).toEqual([
+      'u1',
     ]);
   });
 });

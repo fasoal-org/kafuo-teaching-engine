@@ -269,6 +269,26 @@ export function missingFigureCandidates(
     .filter((entry) => entry.references.length > 0);
 }
 
+/**
+ * g5.v12 (m-D): the order P_BOOK_ORDER judges by. A v12 request moves a few units on
+ * purpose (the «لماذا؟» opener and the science real-life hooks go right after their
+ * first idea), and the slides follow that order, so a v12 review reads the positions of
+ * the reviewed version's own stored request `bookStructure.units` — the order the
+ * placement sorts by — never the printed one. Units outside that map are not judged.
+ * Every other model (`requestUnitIds` absent): the printed order, exactly as before.
+ */
+export function bookOrderUnits(
+  units: readonly EvidenceUnit[],
+  requestUnitIds: readonly string[] | null | undefined,
+): EvidenceUnit[] {
+  if (!requestUnitIds) return [...units];
+  const position = new Map(requestUnitIds.map((id, index) => [String(id), index] as const));
+  return units.flatMap((unit) => {
+    const at = position.get(String(unit.contentUnitId));
+    return at === undefined ? [] : [{ ...unit, order: at }];
+  });
+}
+
 /** P_BOOK_ORDER (code only, DECISION): a teaching slide citing an earlier book unit after a later one. */
 export function bookOrderFindings(
   scenes: readonly AgentScene[],

@@ -22,7 +22,8 @@ import {
 } from '@openmaic/storage/server/reference';
 
 import { createLogger } from '@/lib/logger';
-import { readVersionById } from '@/lib/persistence/teaching-package';
+import { readRetainedVersionContext, readVersionById } from '@/lib/persistence/teaching-package';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import { sumAttemptSpend } from '@/lib/persistence/teaching-model-attempts';
 import { parseConstant } from '@/lib/server/teaching-package/agent-review-arithmetic';
 import { runReviewerCall } from '@/lib/server/teaching-model/reviewer-call';
@@ -36,6 +37,7 @@ import {
   AGENT_BOOK_REVIEW_SCHEMA,
   AGENT_BOOK_REVIEW_SYSTEM,
   bookOrderAgentFindings,
+  bookOrderUnits,
   buildFinding,
   dedupeFindings,
   duplicateCandidates,
@@ -335,7 +337,29 @@ async function runClaimedAgentReview(
   const stablePrompt = renderAgentBookBlock(evidence);
   const call = deps.callReviewer ?? runReviewerCall;
 
-  const findings: AgentFinding[] = bookOrderAgentFindings(scopeId, scenes, ordered, evidence.units);
+  // g5.v12 (m-D): the order the reviewed version's own request sent (and its slides
+  // follow), never the printed one; every other model: as before.
+  let requestUnitIds: string[] | null = null;
+  if (isBookPartPlacementModel(version.teachingModel)) {
+    try {
+      const retained = await readRetainedVersionContext(queryable, version.id, {
+        tenantId: version.tenantId,
+      });
+      const units = retained?.inputSnapshot.bookStructure?.units;
+      requestUnitIds = units ? units.map((unit) => String(unit.contentUnitId)) : null;
+    } catch (error) {
+      log.warn(
+        `agent review ${id}: the request book map is unavailable; P_BOOK_ORDER reads the printed order`,
+        JSON.stringify(describeErrorSafely(error)),
+      );
+    }
+  }
+  const findings: AgentFinding[] = bookOrderAgentFindings(
+    scopeId,
+    scenes,
+    ordered,
+    bookOrderUnits(evidence.units, requestUnitIds),
+  );
   const groups: AgentReviewGroup[] = [];
   let provider: AgentReview['provider'] = null;
   let model: string | null = null;
