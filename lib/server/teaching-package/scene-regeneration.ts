@@ -730,6 +730,7 @@ export async function regenerateSlideScene(
         pool,
         scene: row.previousScene,
         outlineRecord: stageDocument.outline as AppDocumentOutline | undefined,
+        scenes: stageDocument.scenes,
         units: versionUnits,
         addition: request.imageAddition,
         languageDirective: registerPolicy?.directive ?? stage.languageDirective ?? '',

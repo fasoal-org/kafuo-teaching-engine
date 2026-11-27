@@ -17,7 +17,7 @@ import type { AICallFn, PdfImage, SceneOutline } from '@openmaic/generation';
 
 import type { AppDocumentOutline } from '@/lib/document-store/persistence-types';
 import type { ContentUnitRow } from '@/lib/persistence/teaching-package';
-import { outlineFromScene } from '@/lib/server/agent-runtime/generation-tools';
+import { outlineFromScene, ownPlanSnapshot } from '@/lib/server/agent-runtime/generation-tools';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import { citedContentUnitIds } from '@/lib/server/teaching-package/content-unit-coverage';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
@@ -193,6 +193,11 @@ export interface ReplanSlideWithImageInput {
   pool: ConnectableQueryable;
   scene: AppScene;
   outlineRecord: AppDocumentOutline | null | undefined;
+  /**
+   * ED-8: the Stage's Scenes, so a page a teacher added (no outline id) on a Stage whose
+   * Scenes carry outline ids never borrows the plan at its order ({@link ownPlanSnapshot}).
+   */
+  scenes: ReadonlyArray<{ id: string; outlineId?: string }>;
   units: readonly ContentUnitRow[];
   addition: SlideImageAddition;
   languageDirective: string;
@@ -228,7 +233,10 @@ export async function replanSlideWithImage(
       .map(({ image }) => image),
   ].slice(0, MAX_REPLAN_IMAGES);
 
-  const seeded = outlineFromScene(input.scene as Scene, input.outlineRecord ?? undefined);
+  const seeded = outlineFromScene(
+    input.scene as Scene,
+    ownPlanSnapshot(input.scene, input.outlineRecord ?? undefined, input.scenes),
+  );
   const outline: SceneOutline = {
     ...seeded,
     suggestedImageIds: [
