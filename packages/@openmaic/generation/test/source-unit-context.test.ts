@@ -209,6 +209,21 @@ describe('scene prompts', () => {
     expect(store.user).not.toContain('### Approved textbook source this slide teaches');
   });
 
+  it('QZ-6 (review L1): a check unit that also prints a worked answer gives the try-it its question only', async () => {
+    const merged: SourceUnitText[] = [
+      { id: '14', title: 'Check', text: `${CHECK}\nالحل:\nP = 900 / 3 = 300 Pa` },
+    ];
+    const store: { user?: string } = {};
+    await generateSceneContent(
+      teaching({ contentRole: 'check_understanding', sourceContentUnitIds: ['14'] }),
+      capture(store, CONTENT_RESPONSE),
+      { sourceUnits: merged, bookGroundedQuestions: { checkUnitIds: ['14'] } },
+    );
+    expect(store.user).toContain(CHECK);
+    expect(store.user).not.toContain('300 Pa');
+    expect(store.user).not.toContain('الحل');
+  });
+
   it('QZ-6: a solution slide keeps its source as before; a teaching slide is unchanged by the option', async () => {
     const solution: { user?: string } = {};
     await generateSceneContent(

@@ -12,11 +12,14 @@
  * - The quiz is written from them: one question per reference, each tagged with its
  *   reference (`R1`…), a single-answer question whose correct option states the approved
  *   answer (`referenceDirective`).
- * - A code comparator checks every key (`compareGuideAnswer`, the one comparator the
- *   guide answers use): the tagged reference must exist, the question must have exactly
- *   one correct option, and that option must state the approved answer — a number within
- *   its tolerance and unit, the same truth value, the same text, or for a book choice the
- *   same option letter. A number that reads two ways is not verified.
+ * - A code comparator checks every key: the tagged reference must exist, the question must
+ *   have exactly one correct option, that option must state the approved answer and no
+ *   other option may — a number within its tolerance and unit and with no negation
+ *   (`compareGuideAnswer`), the same truth value on a stem that states the book's own
+ *   statement with the same negations, or the same words after normalization (never mere
+ *   containment). A number that reads two ways, a book CHOICE (its letter names the
+ *   book's own options, which code cannot tie to generated ones), duplicate option values
+ *   and an echoed item tag are never verified.
  * - On a mismatch the quiz is generated ONCE more with the approved answers named
  *   (`keyCorrection`); what is still unverified is DROPPED, never shipped.
  * - No reference at all (today: the Backend sends the guide for g5.v11 only), or no
@@ -27,7 +30,10 @@
  * The reference tag never reaches a learner or the bank: it is stripped from every
  * verified question. No answer is ever logged: references are named by tag and item.
  */
-import { compareGuideAnswer } from '@/lib/server/teaching-package/guide-answer-compare';
+import {
+  compareGuideAnswer,
+  normalizeGuideText,
+} from '@/lib/server/teaching-package/guide-answer-compare';
 import {
   formatGuideAnswer,
   guideItemQuestionText,
@@ -36,6 +42,7 @@ import {
 } from '@/lib/server/teaching-package/guide-answers';
 import { isAttemptOutline } from '@/lib/server/teaching-package/attempt-quizzes';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { KafuoTeacherGuideAnswer } from '@/lib/types/teaching-package';
 import type { QuizQuestion } from '@/lib/types/stage';
 
 /** The scene issue of a check quiz left with no verified key (Submit refuses it). */
@@ -77,13 +84,18 @@ export function checkQuizReferences(
 ): CheckQuizReference[] {
   if (!guide) return [];
   const cited = new Set((outline.sourceContentUnitIds ?? []).map(String));
-  return guide.keyed
-    .filter((item) => cited.has(String(item.contentUnitId)))
-    .map((item, index) => {
-      const text = unitTexts?.get(String(item.contentUnitId));
-      const question = text ? guideItemQuestionText(text, item).trim() : '';
-      return { tag: `R${index + 1}`, item, question: question || null };
-    });
+  return (
+    guide.keyed
+      .filter((item) => cited.has(String(item.contentUnitId)))
+      // A book choice names the book's own options by letter, which code cannot tie to a
+      // generated question's options: never a reference (review H1).
+      .filter((item) => item.answer.type !== 'choice')
+      .map((item, index) => {
+        const text = unitTexts?.get(String(item.contentUnitId));
+        const question = text ? guideItemQuestionText(text, item).trim() : '';
+        return { tag: `R${index + 1}`, item, question: question || null };
+      })
+  );
 }
 
 function describeReference(reference: CheckQuizReference): string {
@@ -96,7 +108,7 @@ export function referenceDirective(references: readonly CheckQuizReference[]): s
   return [
     'ANSWER KEYS ARE CHECKED BY CODE. Write the questions ONLY from the book items below, at most one question per item:',
     ...references.map(describeReference),
-    `Every question: "type": "single", exactly one correct option, and a "${REFERENCE_FIELD}" field naming its item ("R1", …). Its correct option must state that item's approved answer exactly (the same number and unit, the same truth value, the same words; for a choice answer keep the book's options in the book's order, so the correct option's value is the approved letter). A question that names no item, names an unknown item, or keys anything but the approved answer is removed.`,
+    `Every question: "type": "single", exactly one correct option, and a "${REFERENCE_FIELD}" field naming its item ("R1", …). Its correct option must state that item's approved answer exactly (the same number and unit, the same truth value, the same words), and no other option may state it. A true/false question states the book's own statement word for word, never negated. Never write an item tag (R1, …) in a question, an option or an explanation. A question that names no item, names an unknown item, or keys anything but the approved answer is removed.`,
   ].join('\n');
 }
 
@@ -124,12 +136,37 @@ export function verifyCheckQuizKeys(
     if (!reference) return fail(tag ? 'names an unknown book item' : 'names no book item');
     if (used.has(reference.tag)) return fail('a second question on the same book item');
     if (question.type !== 'single') return fail(`a ${question.type} question cannot be checked`);
+    const approved = reference.item.answer;
+    // A book choice names the book's OWN options by letter: code cannot tie the model's
+    // option texts to them, so a right letter on wrong content would pass (review H1).
+    if (approved.type === 'choice') return fail('a book choice answer cannot be checked');
     const answer = question.answer ?? [];
     if (answer.length !== 1) return fail('not exactly one correct option');
-    const option = (question.options ?? []).find((entry) => entry.value === answer[0]);
+    const options = question.options ?? [];
+    if (new Set(options.map((entry) => entry.value)).size !== options.length) {
+      return fail('two options share one value');
+    }
+    const option = options.find((entry) => entry.value === answer[0]);
     if (!option) return fail('its key names no option');
-    const written = reference.item.answer.type === 'choice' ? option.value : option.label;
-    const comparison = compareGuideAnswer(reference.item.answer, written);
+    // Nothing internal may reach a learner or the bank (review L5).
+    const shown = [
+      question.question,
+      question.analysis ?? '',
+      ...options.map((entry) => entry.label),
+    ];
+    if (shown.some((text) => INTERNAL_TAG.test(text ?? ''))) {
+      return fail('it shows an internal item tag');
+    }
+    // A true/false key is only as good as its stem: the stem must state the book's own
+    // statement, with no added or dropped negation (review H1).
+    if (approved.type === 'bool') {
+      const stem = normalizeGuideText(question.question ?? '');
+      const book = normalizeGuideText(reference.question ?? '');
+      if (!book || !stem.includes(book) || negations(stem) !== negations(book)) {
+        return fail('its statement is not the book’s own');
+      }
+    }
+    const comparison = statesApproved(approved, option.label);
     if (!comparison.match) {
       return fail(
         comparison.undecided
@@ -137,11 +174,50 @@ export function verifyCheckQuizKeys(
           : 'its key is not the approved answer',
       );
     }
+    // Exactly one option states the approved answer (review M1).
+    if (options.some((entry) => entry !== option && statesApproved(approved, entry.label).match)) {
+      return fail('another option also states the approved answer');
+    }
     used.add(reference.tag);
     const { [REFERENCE_FIELD]: _tag, ...rest } = question as unknown as Record<string, unknown>;
     verified.push(rest as unknown as QuizQuestion);
   });
   return { verified, failed };
+}
+
+/** «R1», «book item 3أ»: the directive's internal tags, never for a learner. */
+const INTERNAL_TAG = /\bR\d+\b|book item/i;
+
+/** A negation word: a key or a statement that carries one says the opposite. */
+const NEGATION = /(?:^|\s)(?:لا|ليس|ليست|لم|لن|غير|not|no|never)(?=\s|$)/gu;
+
+function negations(text: string): number {
+  return (text.match(NEGATION) ?? []).length;
+}
+
+/**
+ * Whether an option label states the approved answer AS A KEY: the shared comparator for
+ * numbers (tolerance and unit) and truth values; for text, the same words after
+ * normalization — never mere containment, and never with a negation the answer does not
+ * carry («ليس الكلوروفيل» is not «الكلوروفيل»: review M1).
+ */
+function statesApproved(
+  approved: KafuoTeacherGuideAnswer,
+  label: string,
+): { match: boolean; undecided?: true } {
+  if (approved.type === 'text') {
+    const expected = normalizeGuideText(
+      `${approved.value}${approved.unit ? ` ${approved.unit}` : ''}`,
+    );
+    const bare = normalizeGuideText(approved.value);
+    const written = normalizeGuideText(label);
+    return { match: written === expected || written === bare };
+  }
+  // A number key carries no negation («ليس 12»); a truth key IS one («لا», «خطأ»).
+  if (approved.type === 'number' && negations(normalizeGuideText(label)) > 0) {
+    return { match: false };
+  }
+  return compareGuideAnswer(approved, label);
 }
 
 /** The correction of the ONE regeneration: what failed, and each reference's approved answer. */

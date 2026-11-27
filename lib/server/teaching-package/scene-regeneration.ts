@@ -778,7 +778,17 @@ export async function regenerateSlideScene(
         type: previous.type,
         teachingStage: previous.teachingStage,
       })
-        ? checkQuizReferences(previous, guideAnswers?.resolved, guideAnswers?.unitTexts)
+        ? checkQuizReferences(
+            // A package Scene may be stored without its citations; its plan entry has them.
+            {
+              sourceContentUnitIds: citedContentUnitIds(
+                previous,
+                stageDocument.outline as Parameters<typeof citedContentUnitIds>[1],
+              ),
+            },
+            guideAnswers?.resolved,
+            guideAnswers?.unitTexts,
+          )
         : null;
     const generated = await (deps.regenerate ?? regenerateOneScene)({
       scene: row.previousScene,

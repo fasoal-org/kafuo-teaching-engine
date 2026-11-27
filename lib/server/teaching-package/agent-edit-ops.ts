@@ -62,9 +62,11 @@ import { projectQuiz } from '@/lib/server/teaching-package/agent-read/scenes';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
 import { isBankQuizScene } from '@/lib/server/teaching-package/bank-quiz-scene';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
 } from '@/lib/server/teaching-package/book-coverage';
+import { isBankedCheckQuiz } from '@/lib/server/teaching-package/check-quiz-keys';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import {
   guideAnswerContextOf,
@@ -665,6 +667,28 @@ async function quizItemEditOp(
     digest: agentOpDigest({ op: 'quiz-item-edit', sceneId, itemId, edit }),
     build: async (live, document) => {
       const question = quizItemOf(live, itemId);
+      // g5.v12 (QZ-2, decision Q-AK; Wave 3 review M2): a check quiz the question bank
+      // imports keeps only keys code verified against the approved answers. An AI edit
+      // of its stem, options or key is never re-verified here, so it is refused; the
+      // explanation stays editable. Every other quiz and model: unchanged.
+      if (
+        isBookPartPlacementModel(context.version.teachingModel) &&
+        isBankedCheckQuiz({
+          id: live.outlineId ?? live.id,
+          type: live.type,
+          teachingStage: live.teachingStage,
+        }) &&
+        (edit.stem !== undefined ||
+          edit.options !== undefined ||
+          edit.correctOptionIds !== undefined ||
+          edit.correctValues !== undefined)
+      ) {
+        throw new TeachingPackageError(
+          'INVALID_REQUEST',
+          'this check quiz enters the question bank with answer keys verified by code; its question, options and key are not edited here (regenerate the quiz instead)',
+          { field: 'sceneId', rule: 'check_quiz_keys_verified_by_code' },
+        );
+      }
       const edited = editQuizItem(question, edit);
       assertNoSacredItem(edited.question);
       const next = learnerFirstNormalized(context, withQuestion(live, edited.question), document);

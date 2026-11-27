@@ -7,7 +7,7 @@ Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {
 
 {{sourceContextText}}
 
-Write every question, every option and every answer key from this text only: the correct option must be stated in it or follow directly from it, with its numbers, values and units exactly as printed. Never test anything this text does not contain, and never invent a value, an example or a fact.{{/if}}
+Write every question and every option from this text only, with its numbers, values and units exactly as printed. The correct option is the approved answer when one is given for the item below; otherwise it must be stated in this text or follow directly from it. Never test anything this text does not contain, and never invent a value, an example or a fact.{{/if}}
 
 ## Language Directive
 {{languageDirective}}

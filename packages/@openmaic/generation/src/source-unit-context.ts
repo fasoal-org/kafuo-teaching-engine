@@ -100,6 +100,21 @@ export function buildQuestionSourceContext(
   return NONE;
 }
 
+/** A line that opens a worked answer: «الحل», «الإجابة», «الجواب», "Solution", "Answer". */
+const SOLUTION_CUE =
+  /^\s*(?:[-•*]\s*)?(?:(?:ال)?(?:حل|إجابة|اجابة|جواب)(?=[\s:：.]|$)|(?:solution|answer)\b)/iu;
+
+/**
+ * A check unit's text up to its first worked-answer line: a unit still merged with the
+ * text after its box (MG-5), or a book printing an answer beside its check, never hands
+ * a try-it slide the answer (Wave 3 review L1).
+ */
+function withoutWorkedAnswer(text: string): string {
+  const lines = text.split('\n');
+  const cut = lines.findIndex((line) => SOLUTION_CUE.test(line));
+  return (cut < 0 ? lines : lines.slice(0, cut)).join('\n');
+}
+
 /** The cited units' text in citation order (only `only` when given), within the bound. */
 function renderCitedUnits(
   citedIds: readonly string[] | undefined,
@@ -110,6 +125,9 @@ function renderCitedUnits(
   const cited = [...new Set((citedIds ?? []).map(String))]
     .filter((id) => only === null || only.has(id))
     .map((id) => byId.get(id))
+    .map((unit) =>
+      unit && only !== null ? { ...unit, text: withoutWorkedAnswer(unit.text) } : unit,
+    )
     .filter((unit): unit is SourceUnitText => !!unit && unit.text.trim() !== '');
   if (cited.length === 0) return NONE;
 

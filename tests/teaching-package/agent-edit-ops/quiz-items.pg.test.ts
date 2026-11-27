@@ -99,6 +99,61 @@ describe('agent-ops quiz items', () => {
     vi.unstubAllEnvs();
   });
 
+  it('g5.v12 (QZ-2, review M2): a banked check quiz’s question, options and key are not AI-edited; its explanation is', async () => {
+    const check = {
+      ...quizScene('quiz-1', 1),
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 0 },
+    } as AppScene;
+    harness = await setupHarness({
+      scenes: [check],
+      teachingModel: { key: 'g5', version: 'g5.v12' },
+    });
+    for (const edit of [
+      { correctOptionIds: ['B'] },
+      { options: [{ id: 'C', text: '6' }] },
+      { stem: 'ما ناتج اثنين زائد اثنين؟' },
+    ]) {
+      const refused = await harness.post('quiz-item-edit', {
+        expectedRevision: await harness.revision(),
+        sceneId: 'quiz-1',
+        itemId: 'q1',
+        ...edit,
+      });
+      expect(refused.status).toBe(400);
+      expect(await body(refused)).toMatchObject({
+        error: expect.objectContaining({
+          code: 'INVALID_REQUEST',
+          details: expect.objectContaining({ rule: 'check_quiz_keys_verified_by_code' }),
+        }),
+      });
+    }
+    const explained = await harness.post('quiz-item-edit', {
+      expectedRevision: await harness.revision(),
+      sceneId: 'quiz-1',
+      itemId: 'q1',
+      explanation: 'اثنان واثنان أربعة',
+    });
+    expect(explained.status).toBe(200);
+  });
+
+  it('g5.v11 keeps editing a check quiz’s key as before', async () => {
+    const check = {
+      ...quizScene('quiz-1', 1),
+      teachingStage: { key: 'outcome_check_understanding', flowIndex: 0 },
+    } as AppScene;
+    harness = await setupHarness({
+      scenes: [check],
+      teachingModel: { key: 'g5', version: 'g5.v11' },
+    });
+    const response = await harness.post('quiz-item-edit', {
+      expectedRevision: await harness.revision(),
+      sceneId: 'quiz-1',
+      itemId: 'q1',
+      correctOptionIds: ['B'],
+    });
+    expect(response.status).toBe(200);
+  });
+
   it('edits the stem, an option, the key and the explanation of one item', async () => {
     harness = await setupHarness({ scenes: [quizScene('quiz-1', 1)] });
     const response = await harness.post('quiz-item-edit', {

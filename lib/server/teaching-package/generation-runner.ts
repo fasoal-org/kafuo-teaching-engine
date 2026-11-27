@@ -2065,18 +2065,27 @@ async function runKafuoAttempt(
         const citedOf = new Map(
           result.outlines.map((outline) => [outline.id, outline.sourceContentUnitIds ?? []]),
         );
-        const numberFindings = slideNumberFindings(
-          result.scenes.map((scene) => ({
-            id: scene.id,
-            outlineId: scene.outlineId ?? null,
-            title: scene.title,
-            type: scene.type,
-            content: scene.content,
-            sourceContentUnitIds:
-              scene.sourceContentUnitIds ?? citedOf.get(scene.outlineId ?? '') ?? [],
-          })),
-          checkQuizUnitTexts(),
-        );
+        // A record never fails a run (Wave 3 review L4): on any error it is left empty.
+        let numberFindings: ReturnType<typeof slideNumberFindings> = [];
+        try {
+          numberFindings = slideNumberFindings(
+            result.scenes.map((scene) => ({
+              id: scene.id,
+              outlineId: scene.outlineId ?? null,
+              title: scene.title,
+              type: scene.type,
+              content: scene.content,
+              sourceContentUnitIds:
+                scene.sourceContentUnitIds ?? citedOf.get(scene.outlineId ?? '') ?? [],
+            })),
+            checkQuizUnitTexts(),
+          );
+        } catch (error) {
+          log.warn(
+            `Teaching package attempt ${attemptId}: the slide number check could not run; nothing recorded`,
+            error,
+          );
+        }
         if (numberFindings.length > 0) {
           log.warn(
             `Teaching package attempt ${attemptId}: ${numberFindings.length} slide(s) show a number their cited book text does not print (recorded for the reviewer)`,

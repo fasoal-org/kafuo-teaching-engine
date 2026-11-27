@@ -56,11 +56,12 @@ const question = (
   labels: string[],
   answer: string[],
   type: QuizQuestion['type'] = 'single',
+  stem = 'السؤال',
 ): QuizQuestion =>
   ({
     id: `q-${reference ?? 'none'}-${labels.join('')}`,
     type,
-    question: 'السؤال',
+    question: stem,
     options: labels.map((label, index) => ({ label, value: String.fromCharCode(65 + index) })),
     answer,
     ...(reference ? { reference } : {}),
@@ -96,13 +97,20 @@ describe('which quizzes are gated', () => {
 });
 
 describe('verifyCheckQuizKeys', () => {
-  const references = checkQuizReferences(checkQuiz(['u2', 'u5', 'u9']), GUIDE);
+  const STATEMENT = 'كتلة الجسم ثابتة عند نقله من مكان إلى آخر';
+  const references = checkQuizReferences(
+    checkQuiz(['u2', 'u5', 'u9']),
+    GUIDE,
+    new Map([['u5', `(١) ${STATEMENT}`]]),
+  );
+  const statement = (labels: string[], key: string, stem = `صح أم خطأ: ${STATEMENT}`) =>
+    question('R2', labels, [key], 'single', stem);
 
   it('keeps a question whose key states the approved answer, without its tag', () => {
     const result = verifyCheckQuizKeys(
       [
         question('R1', ['150 Pa', '300 Pa'], ['B']),
-        question('R2', ['صحيحة', 'خاطئة'], ['A']),
+        statement(['صحيحة', 'خاطئة'], 'A'),
         question('R3', ['الحجم', 'الكتلة'], ['B']),
       ],
       references,
@@ -118,7 +126,7 @@ describe('verifyCheckQuizKeys', () => {
         question('R1', ['150 Pa', '300 Pa'], ['A']), // keys 150: the wrong number
         question(undefined, ['x', 'y'], ['A']),
         question('R9', ['x', 'y'], ['A']),
-        question('R2', ['صحيحة', 'خاطئة'], ['B']), // keys «false»
+        statement(['صحيحة', 'خاطئة'], 'B'), // keys «false»
       ],
       references,
     );
@@ -135,7 +143,8 @@ describe('verifyCheckQuizKeys', () => {
     const result = verifyCheckQuizKeys(
       [
         question('R1', ['300 Pa', '300 Pa'], ['A', 'B']),
-        question('R2', ['صحيحة', 'خاطئة'], ['A'], 'multiple'),
+        question('R1', ['300 Pa', '300'], ['A']),
+        question('R2', ['صحيحة', 'خاطئة'], ['A'], 'multiple', `صح أم خطأ: ${STATEMENT}`),
         question('R3', ['الحجم', 'الكتلة'], ['B']),
         question('R3', ['الكتلة', 'الحجم'], ['A']),
       ],
@@ -144,9 +153,50 @@ describe('verifyCheckQuizKeys', () => {
     expect(result.verified).toHaveLength(1);
     expect(result.failed.map((entry) => entry.reason)).toEqual([
       'not exactly one correct option',
+      'another option also states the approved answer',
       'a multiple question cannot be checked',
       'a second question on the same book item',
     ]);
+  });
+
+  it('Wave 3 review H1/M1/L5: a right-looking key on wrong content is never verified', () => {
+    const result = verifyCheckQuizKeys(
+      [
+        // A negated statement keyed «true»: the key is wrong for the stem as written.
+        statement(['صحيحة', 'خاطئة'], 'A', `صح أم خطأ: كتلة الجسم ليست ثابتة عند نقله`),
+        // A statement that is not the book's own.
+        statement(['صحيحة', 'خاطئة'], 'A', 'صح أم خطأ: الوزن ثابت في كل مكان'),
+        // «ليس الكتلة» contains «الكتلة» but says the opposite.
+        question('R3', ['الحجم', 'ليس الكتلة'], ['B']),
+        // A number key with a negation.
+        question('R1', ['150 Pa', 'ليس 300 Pa'], ['B']),
+        // The internal tag echoed to a learner.
+        { ...question('R1', ['150 Pa', '300 Pa'], ['B']), question: 'R1: احسب الضغط' },
+        // Two options sharing one value.
+        {
+          ...question('R1', ['150 Pa', '300 Pa'], ['B']),
+          options: [
+            { label: '150 Pa', value: 'B' },
+            { label: '300 Pa', value: 'B' },
+          ],
+        } as unknown as QuizQuestion,
+      ],
+      references,
+    );
+    expect(result.verified).toEqual([]);
+    expect(result.failed.map((entry) => entry.reason)).toEqual([
+      'its statement is not the book’s own',
+      'its statement is not the book’s own',
+      'its key is not the approved answer',
+      'its key is not the approved answer',
+      'it shows an internal item tag',
+      'two options share one value',
+    ]);
+  });
+
+  it('a book choice answer is never a reference: its letter names the book’s own options', () => {
+    const guide = { keyed: [item('u3', '2', { type: 'choice', value: 'ب' })] };
+    expect(checkQuizReferences(checkQuiz(['u3']), guide)).toEqual([]);
   });
 
   it('the directive and the correction name each item and its approved answer, never an id', () => {
