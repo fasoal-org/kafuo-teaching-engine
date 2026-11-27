@@ -32,10 +32,15 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  checkQuizReferences,
+  isBankedCheckQuiz,
+} from '@/lib/server/teaching-package/check-quiz-keys';
 import {
   bookPartBlocksFor,
   type BookPartBlocks,
@@ -762,10 +767,24 @@ export async function regenerateSlideScene(
             language: stage.language,
           })
         : null;
+    // g5.v12 (QZ-2, Q-AK): a check quiz the question bank imports is regenerated from its
+    // references and checked by code, as in the run; none → refused, nothing written.
+    const previous = row.previousScene;
+    const checkQuizKeyReferences =
+      isBookPartPlacementModel(version.teachingModel) &&
+      request.mode !== 'narration' &&
+      isBankedCheckQuiz({
+        id: previous.outlineId ?? previous.id,
+        type: previous.type,
+        teachingStage: previous.teachingStage,
+      })
+        ? checkQuizReferences(previous, guideAnswers?.resolved, guideAnswers?.unitTexts)
+        : null;
     const generated = await (deps.regenerate ?? regenerateOneScene)({
       scene: row.previousScene,
       ...(sacredExerciseUnitIds ? { sacredExerciseUnitIds } : {}),
       ...(guideAnswers ? { guideAnswers } : {}),
+      ...(checkQuizKeyReferences ? { checkQuizReferences: checkQuizKeyReferences } : {}),
       scenes,
       stage,
       ...(stageDocument.outline

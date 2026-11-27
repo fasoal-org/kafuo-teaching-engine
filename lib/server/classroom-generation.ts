@@ -90,6 +90,13 @@ import {
   guideLeakIssue,
   type GuideAnswerGuard,
 } from '@/lib/server/teaching-package/guide-answer-guard';
+import {
+  keyCorrection,
+  referenceDirective,
+  unverifiedCheckQuizIssue,
+  verifyCheckQuizKeys,
+  type CheckQuizReference,
+} from '@/lib/server/teaching-package/check-quiz-keys';
 import { withoutHiddenAnswerKey } from '@/lib/server/teaching-package/guide-answers';
 import { withGuideWrittenQuestions } from '@/lib/server/teaching-package/guide-written-attempts';
 import { retitledExerciseSolution } from '@/lib/server/teaching-package/exercise-slide-title';
@@ -648,6 +655,14 @@ export interface GenerateClassroomInput {
    * from the Teaching Model; absent → every prompt is byte-identical.
    */
   bookGroundedQuestions?: { checkUnitIds: readonly string[] };
+  /**
+   * g5.v12 only (critical items 27 Nov 2026, QZ-2, decision Q-AK): the reference answers
+   * of each check quiz the question bank imports (`check-quiz-keys.ts`). `referencesOf`
+   * returns `null` for a scene it does not gate and `[]` for a check quiz with no
+   * reference — that quiz is then never generated and keeps a placeholder marked
+   * `CHECK_QUIZ_KEY_UNVERIFIED`. Absent → every quiz is generated exactly as before.
+   */
+  checkQuizKeys?: { referencesOf: (outline: SceneOutline) => CheckQuizReference[] | null };
   /**
    * g5.v8 (teacher-parity plan I-2): worked-example canvases write every
    * hidden step from the plan as a visible line. Set by the caller from the
@@ -2691,7 +2706,30 @@ export async function generateClassroom(
         // as the classified fallback, preserving single-call → loop routing.
         // W6: a bank check quiz needs no content model and no narration model.
         const bankQuiz = Boolean(input.bankCheckQuizzes) && isBankCheckQuizOutline(safeOutline);
-        const contentCall = bankQuiz ? null : await resolveSceneContentCall(safeOutline.type);
+        // g5.v12 (QZ-2, Q-AK): a check quiz the question bank imports is written from its
+        // references and its keys are checked by code; none → no model call at all.
+        const keyReferences =
+          !bankQuiz && input.checkQuizKeys ? input.checkQuizKeys.referencesOf(safeOutline) : null;
+        const keyDirective = keyReferences?.length ? referenceDirective(keyReferences) : undefined;
+        // One question per reference, single-answer, so every key can be checked.
+        const keyedOutline: SceneOutline =
+          keyReferences?.length && safeOutline.type === 'quiz'
+            ? {
+                ...safeOutline,
+                quizConfig: {
+                  ...(safeOutline.quizConfig ?? { difficulty: 'medium' }),
+                  questionCount: Math.min(
+                    safeOutline.quizConfig?.questionCount ?? keyReferences.length,
+                    keyReferences.length,
+                  ),
+                  questionTypes: ['single'],
+                } as NonNullable<SceneOutline['quizConfig']>,
+              }
+            : safeOutline;
+        const contentCall =
+          bankQuiz || keyReferences?.length === 0
+            ? null
+            : await resolveSceneContentCall(safeOutline.type);
         // The outline's assigned source visuals (slide scenes only): a visual
         // need the model fills by referencing the image id, resolved onto the
         // serving path after generation. A guide answer drawing (g5.v11) is assigned
@@ -2714,10 +2752,13 @@ export async function generateClassroom(
         // `fromOutline` (g5.v11 only, D-19): the settled outline of the last generation.
         const generateContent = async (
           correctiveNote?: string,
-          quizDirective?: string,
-          fromOutline: SceneOutline = safeOutline,
+          requestedQuizDirective?: string,
+          fromOutline: SceneOutline = keyedOutline,
         ) => {
           if (!contentCall) return null;
+          // g5.v12 (QZ-2): a keyed check quiz carries its references on every call.
+          const quizDirective =
+            [keyDirective, requestedQuizDirective].filter(Boolean).join('\n\n') || undefined;
           const outlineAssignedImages = assignedImagesOf(fromOutline);
           try {
             return await withGenerationRetry(
@@ -2819,6 +2860,54 @@ export async function generateClassroom(
           contentFailure = undefined;
           content = await generateContent(INVALID_SCENE_OUTPUT_CORRECTION);
           assertRouteAvailable();
+        }
+        // g5.v12 (QZ-2, Q-AK): every key of a check quiz is checked against its approved
+        // answer. One regeneration names the answers; what is still unverified is dropped.
+        // No reference, or no question left: no content — the governed placeholder below,
+        // marked so that Submit and approval refuse it. Never an unverified key.
+        if (keyReferences) {
+          const unverified = (reason: string) => {
+            sceneIssues.push(unverifiedCheckQuizIssue(reason));
+            contentFailure = { code: 'unverified-answer-key', detail: reason };
+            log.warn(
+              `Scene ${index + 1}/${outlines.length} check quiz has no verified answer key (${reason}): ${safeOutline.title}`,
+            );
+            return null;
+          };
+          if (keyReferences.length === 0) {
+            content = unverified('no approved answer for the book items it tests');
+          } else if (content && 'questions' in content) {
+            let checked = verifyCheckQuizKeys(content.questions, keyReferences);
+            if (checked.failed.length > 0 && routeFailure === null) {
+              log.warn(
+                `Scene ${index + 1}/${outlines.length} check quiz: ${checked.failed.length} key(s) not verified; regenerating once: ${safeOutline.title}`,
+              );
+              const again = await generateContent(
+                undefined,
+                keyCorrection(checked.failed, keyReferences),
+              );
+              assertRouteAvailable();
+              if (again && 'questions' in again) {
+                const second = verifyCheckQuizKeys(again.questions, keyReferences);
+                if (second.verified.length >= checked.verified.length) {
+                  checked = second;
+                  content = again;
+                }
+              }
+            }
+            if (checked.verified.length === 0) {
+              content = unverified('no question kept a key that matches its approved answer');
+            } else {
+              if (checked.failed.length > 0) {
+                log.warn(
+                  `Scene ${index + 1}/${outlines.length} check quiz: ${checked.failed.length} unverified question(s) dropped (${checked.failed
+                    .map((entry) => entry.reason)
+                    .join('; ')}): ${safeOutline.title}`,
+                );
+              }
+              content = { ...content, questions: checked.verified };
+            }
+          }
         }
         // g5.v11 (teacher-guide plan §8.3–8.5): the approved answers are checked by
         // code. A finding regenerates THIS scene once, with a correction naming only the

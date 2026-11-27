@@ -6,6 +6,7 @@ import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persiste
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import { guideWrittenQuestionId } from '@/lib/server/teaching-package/guide-written-attempts';
+import type { CheckQuizReference } from '@/lib/server/teaching-package/check-quiz-keys';
 import { regenerateOneScene } from '@/lib/server/teaching-package/regenerate-one-scene';
 import { liftSlideImages } from '@/lib/server/teaching-package/scene-regeneration-images';
 import type { AppScene } from '@/lib/types/stage';
@@ -176,6 +177,7 @@ async function run(
     teachingModel?: { key: string; version: string };
     sacredExerciseUnitIds?: string[];
     others?: AppScene[];
+    checkQuizReferences?: CheckQuizReference[];
   } = {},
 ) {
   const pre = options.pre ?? preImage();
@@ -186,6 +188,7 @@ async function run(
     stage,
     outlineSnapshot: options.outline ?? snapshot(),
     instruction: INSTRUCTION,
+    ...(options.checkQuizReferences ? { checkQuizReferences: options.checkQuizReferences } : {}),
     ...(options.teachingModel ? { teachingModel: options.teachingModel } : {}),
     ...(options.sacredExerciseUnitIds
       ? { sacredExerciseUnitIds: options.sacredExerciseUnitIds }
@@ -521,6 +524,63 @@ describe('regenerateOneScene — quiz', () => {
     const { result, prompts } = await run(QUESTIONS, { pre: bank, outline: quizOutline() });
     expect(result).toMatchObject({ ok: false, code: 'BANK_QUIZ_NOT_REGENERABLE' });
     expect(prompts).toEqual([]);
+  });
+
+  // g5.v12 (QZ-2, Q-AK): a banked check quiz is regenerated from its references only.
+  const REFERENCE: CheckQuizReference = {
+    tag: 'R1',
+    item: {
+      contentUnitId: 'u2',
+      label: '1',
+      element: 'try_it',
+      number: 1,
+      letter: null,
+      display: '1',
+      answer: { type: 'number', value: 8 },
+    },
+    question: 'ما الحد التالي؟ 2، 4، 6، ...',
+  };
+  const tagged = (key: string) =>
+    JSON.stringify([{ ...JSON.parse(QUESTIONS)[0], reference: 'R1', answer: [key] }]);
+
+  it('QZ-2: no reference refuses the regeneration before any model call; nothing is written', async () => {
+    const { result, prompts } = await run(tagged('B'), {
+      pre: quizPre(),
+      outline: quizOutline(),
+      checkQuizReferences: [],
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SCENE_CONTENT_GENERATION_FAILED',
+      details: { failure: 'CHECK_QUIZ_KEY_UNVERIFIED' },
+    });
+    expect(prompts).toEqual([]);
+  });
+
+  it('QZ-2: a verified key is written without its tag; a wrong one twice writes nothing', async () => {
+    const { result, prompts } = await run(tagged('B'), {
+      pre: quizPre(),
+      outline: quizOutline(),
+      checkQuizReferences: [REFERENCE],
+    });
+    expect(result.ok).toBe(true);
+    const contentPrompts = prompts.filter((prompt) => prompt.stage === 'scene-content:quiz');
+    expect(contentPrompts).toHaveLength(1);
+    expect(contentPrompts[0]!.user).toContain('ANSWER KEYS ARE CHECKED BY CODE');
+    if (result.ok && result.scene.content.type === 'quiz') {
+      expect(result.scene.content.questions[0]).not.toHaveProperty('reference');
+    }
+    // «9» is not the approved 8: one corrected regeneration, then nothing is written.
+    const wrong = await run(tagged('C'), {
+      pre: quizPre(),
+      outline: quizOutline(),
+      checkQuizReferences: [REFERENCE],
+    });
+    expect(wrong.result).toMatchObject({
+      ok: false,
+      details: { failure: 'CHECK_QUIZ_KEY_UNVERIFIED' },
+    });
+    expect(wrong.prompts.filter((prompt) => prompt.stage === 'scene-content:quiz')).toHaveLength(2);
   });
 });
 

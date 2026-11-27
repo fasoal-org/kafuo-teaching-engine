@@ -4419,13 +4419,16 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
     it('QZ-1/QZ-6 (wave 3): a g5.v12 run writes its quizzes and try-its from the book; g5.v11 does not', async () => {
       const v12: Seen = {};
       mockBookRun({ first: planWithGaps }, v12);
-      await startBook(bookContext('g5.v12'));
+      const v12Attempt = await startBook(bookContext('g5.v12'));
       // The book's check units: the only text a try-it slide is given.
       expect(v12.bookGroundedQuestions).toEqual({ checkUnitIds: ['u2', 'u5'] });
+      // QZ-4: the number check's record is on the attempt (none here), never a gate.
+      expect((await snapshotOf(v12Attempt)).slideNumberFindings).toEqual([]);
       const v11: Seen = {};
       mockBookRun({ first: planWithGaps }, v11);
-      await startBook(bookContext('g5.v11'));
+      const v11Attempt = await startBook(bookContext('g5.v11'));
       expect(v11.bookGroundedQuestions).toBeUndefined();
+      expect(await snapshotOf(v11Attempt)).not.toHaveProperty('slideNumberFindings');
     });
 
     it('QZ-3 (wave 3): the run asks a title-only try-it’s attempt from the book lines on g5.v12, from the title on g5.v11', async () => {

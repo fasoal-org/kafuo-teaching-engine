@@ -108,6 +108,13 @@ import {
   type SacredQuote,
   type SacredQuotePin,
 } from '@/lib/server/teaching-package/sacred-text';
+import {
+  CHECK_QUIZ_KEY_UNVERIFIED,
+  keyCorrection,
+  referenceDirective,
+  verifyCheckQuizKeys,
+  type CheckQuizReference,
+} from '@/lib/server/teaching-package/check-quiz-keys';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 import type { AppScene, QuizQuestion, Scene } from '@/lib/types/stage';
@@ -159,6 +166,13 @@ export interface RegenerateOneSceneInput {
    * attempt's narration never reads its hidden key. Absent → unchanged.
    */
   guideAnswers?: GuideAnswerContext;
+  /**
+   * g5.v12 only (QZ-2, decision Q-AK): a check quiz the question bank imports is
+   * regenerated from these references and every key is checked by code, as in the run;
+   * an empty list refuses the regeneration (nothing is written: no key could be
+   * verified). Absent → unchanged (every other scene and every other model).
+   */
+  checkQuizReferences?: readonly CheckQuizReference[];
   aiCallFor: (stage: string) => AICallFn;
   /** Re-raise a route failure the generators swallowed (routed runs). */
   assertRouteAvailable?: () => void;
@@ -967,7 +981,30 @@ async function regenerateQuizScene(
   };
   // g5.v11: an attempt's hidden key rebuilt for its current plan (re-review finding 2).
   const guided = guideGuardOf(input, seeded);
-  const outline = guided?.outline ?? seeded;
+  // g5.v12 (QZ-2, Q-AK): a banked check quiz is keyed from its references, checked by
+  // code; with none, nothing is generated and nothing is written (fail closed).
+  const keyReferences = input.checkQuizReferences;
+  if (keyReferences && keyReferences.length === 0) {
+    return failure(
+      input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+      'the check quiz has no approved answer for the book items it tests, so no answer key can be verified; nothing was written',
+      { failure: CHECK_QUIZ_KEY_UNVERIFIED },
+    );
+  }
+  const guidedOutline = guided?.outline ?? seeded;
+  const outline: SceneOutline = keyReferences
+    ? {
+        ...guidedOutline,
+        quizConfig: {
+          ...(guidedOutline.quizConfig ?? { difficulty: 'medium' }),
+          questionCount: Math.min(
+            guidedOutline.quizConfig?.questionCount ?? keyReferences.length,
+            keyReferences.length,
+          ),
+          questionTypes: ['single'],
+        } as NonNullable<SceneOutline['quizConfig']>,
+      }
+    : guidedOutline;
 
   const stage = input.stage;
   const agents = stage.generatedAgentConfigs;
@@ -977,7 +1014,9 @@ async function regenerateQuizScene(
   const ownQuestions = pre.content.questions.filter(
     (question) => !isGuideWrittenQuestionId(question.id),
   );
-  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(ownQuestions)}`;
+  const editDirective = `${input.instruction}\n\nThe quiz's current questions, to be rewritten according to the requirements above for the same learning objective:\n${JSON.stringify(ownQuestions)}${
+    keyReferences ? `\n\n${referenceDirective(keyReferences)}` : ''
+  }`;
   let contentFailure: { code: string; detail?: string } | undefined;
   let content: Awaited<ReturnType<typeof generateSceneContent>>;
   // g5.v11 (review finding 2): an attempt's regenerated key is checked like the run's.
@@ -1011,6 +1050,30 @@ async function regenerateQuizScene(
       );
       content = checked.content;
       settledOutline = checked.outline;
+    }
+    // g5.v12 (QZ-2): every key checked; one regeneration naming the approved answers;
+    // what is still unverified is dropped, and a quiz left with none is not written.
+    if (keyReferences && content && 'questions' in content) {
+      let checked = verifyCheckQuizKeys(content.questions, keyReferences);
+      if (checked.failed.length > 0) {
+        const again = await generateQuiz(outline, keyCorrection(checked.failed, keyReferences));
+        assertRoute();
+        if (again && 'questions' in again) {
+          const second = verifyCheckQuizKeys(again.questions, keyReferences);
+          if (second.verified.length >= checked.verified.length) {
+            checked = second;
+            content = again;
+          }
+        }
+      }
+      if (checked.verified.length === 0) {
+        return failure(
+          input.governed ? 'GOVERNED_SCENE_GENERATION_FAILED' : 'SCENE_CONTENT_GENERATION_FAILED',
+          'no regenerated question kept an answer key that matches its approved answer; nothing was written',
+          { failure: CHECK_QUIZ_KEY_UNVERIFIED },
+        );
+      }
+      content = { ...content, questions: checked.verified };
     }
     // Owner (17 Nov 2026): the written questions after the model's (none of its own kept).
     if (guided && content && 'questions' in content) {

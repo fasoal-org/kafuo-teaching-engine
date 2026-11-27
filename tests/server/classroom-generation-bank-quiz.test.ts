@@ -212,6 +212,134 @@ describe('generateClassroom — W6 bank check quiz', () => {
   });
 });
 
+describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
+  // The approved answer of the one book item the check quiz cites: the text «One».
+  const REFERENCE = {
+    tag: 'R1',
+    item: {
+      contentUnitId: 'u2',
+      label: '1',
+      element: 'try_it' as const,
+      number: 1,
+      letter: null,
+      display: '1',
+      answer: { type: 'text' as const, value: 'One' },
+    },
+    question: 'Which one?',
+  };
+  const keyed = (keys: string[]) => {
+    const systems: string[] = [];
+    const users: string[] = [];
+    let quizCalls = 0;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        systems.push(system);
+        if (/Action Generator/.test(system)) return { text: ACTIONS };
+        if (/^# Quiz Content Generator/m.test(system)) {
+          users.push(request.messages.find((m) => m.role === 'user')?.content ?? '');
+          const key = keys[Math.min(quizCalls, keys.length - 1)]!;
+          quizCalls += 1;
+          return {
+            text: JSON.stringify([
+              {
+                id: 'q1',
+                type: 'single',
+                question: 'Pick one',
+                reference: 'R1',
+                options: [
+                  { value: 'A', label: 'One' },
+                  { value: 'B', label: 'Two' },
+                ],
+                answer: [key],
+              },
+            ]),
+          };
+        }
+        return { text: SLIDE_CONTENT };
+      },
+    );
+    return { quizCalls: () => quizCalls, users };
+  };
+  const gated = (references: unknown[]) => ({
+    referencesOf: (outline: { type: string }) => (outline.type === 'quiz' ? references : null),
+  });
+
+  it('no reference: the check quiz is never generated and is kept marked, so Submit refuses it', async () => {
+    const routed = keyed(['A']);
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([]) });
+
+    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
+    expect(routed.quizCalls()).toBe(0);
+    expect((quiz.generationIssues ?? []).map((issue) => issue.code)).toContain(
+      'CHECK_QUIZ_KEY_UNVERIFIED',
+    );
+    // A placeholder: no key at all reaches the Stage (or the bank).
+    expect(
+      ((quiz.content as { questions?: Array<{ answer?: unknown }> }).questions ?? []).every(
+        (question) => question.answer === undefined || (question.answer as unknown[]).length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it('a verified key is kept, its tag stripped, in one call that names the approved answer', async () => {
+    const routed = keyed(['A']);
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+
+    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
+    expect(routed.quizCalls()).toBe(1);
+    expect(routed.users[0]).toContain('ANSWER KEYS ARE CHECKED BY CODE');
+    expect(routed.users[0]).toContain('Approved answer: One');
+    const questions = (quiz.content as unknown as { questions: Array<Record<string, unknown>> })
+      .questions;
+    expect(questions).toHaveLength(1);
+    expect(questions[0]!.answer).toEqual(['A']);
+    expect(questions[0]).not.toHaveProperty('reference');
+    expect(quiz.generationIssues ?? []).toEqual([]);
+  });
+
+  it('a wrong key (the fixture) is regenerated once with the correction; a right second key is kept', async () => {
+    const routed = keyed(['B', 'A']);
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+
+    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
+    expect(routed.quizCalls()).toBe(2);
+    expect(routed.users[1]).toContain('could not be verified');
+    expect((quiz.content as { questions: unknown[] }).questions).toHaveLength(1);
+    expect(quiz.generationIssues ?? []).toEqual([]);
+  });
+
+  it('a key still wrong after the one regeneration is dropped, never saved: the quiz is marked', async () => {
+    const routed = keyed(['B', 'B']);
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+
+    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
+    expect(routed.quizCalls()).toBe(2);
+    const stored = (quiz.content as { questions?: Array<{ answer?: unknown }> }).questions ?? [];
+    expect(stored.some((question) => JSON.stringify(question.answer) === '["B"]')).toBe(false);
+    expect((quiz.generationIssues ?? []).map((issue) => issue.code)).toContain(
+      'CHECK_QUIZ_KEY_UNVERIFIED',
+    );
+  });
+
+  it('without checkQuizKeys (every model before g5.v12) the quiz is generated exactly as before', async () => {
+    const routed = keyed(['B']);
+
+    const result = await run(baseInput);
+
+    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
+    expect(routed.quizCalls()).toBe(1);
+    expect(routed.users[0]).not.toContain('ANSWER KEYS ARE CHECKED BY CODE');
+    expect(
+      (quiz.content as { questions: Array<{ answer: unknown }> }).questions[0]!.answer,
+    ).toEqual(['B']);
+  });
+});
+
 describe('bank placeholder narration', () => {
   it('is Arabic for ar lessons, English otherwise', () => {
     expect((bankQuizActions('ar')[0] as { text: string }).text).toMatch(/[؀-ۿ]/);

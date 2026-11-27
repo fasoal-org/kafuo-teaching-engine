@@ -153,6 +153,11 @@ import {
 } from '@/lib/server/teaching-package/learner-first-source';
 import { insertAttemptQuizzes } from '@/lib/server/teaching-package/attempt-quizzes';
 import {
+  checkQuizReferences,
+  isBankedCheckQuiz,
+} from '@/lib/server/teaching-package/check-quiz-keys';
+import { slideNumberFindings } from '@/lib/server/teaching-package/slide-number-check';
+import {
   guideOutlinePlans,
   injectGuideAnswers,
   isGuideFigureImageId,
@@ -980,6 +985,18 @@ async function runKafuoAttempt(
   const lessonParts = bookPartMap
     ? bookPartsRequirement(bookPartMap, kafuo.teachingFlow, unitsWithText)
     : '';
+  // g5.v12 (QZ-2): the retained units' prompt text, read once, for a reference's book question.
+  let checkQuizTexts: Map<string, string> | null = null;
+  const checkQuizUnitTexts = (): Map<string, string> => {
+    checkQuizTexts ??= new Map(
+      normalizedSource
+        ? retainableContentUnits({ contentUnits: normalizedSource.manifest.contentUnits }).map(
+            (unit) => [String(unit.unitId), promptUnitText(unit)] as const,
+          )
+        : [],
+    );
+    return checkQuizTexts;
+  };
   const execution: GenerationExecutionInput = {
     requirement: kafuo.normalizedContentResource
       ? `${kafuo.requirement}${lessonParts}${exerciseBlock}\n\nFor every outline, return a non-empty machine-readable sourceContentUnitIds array copied exactly from the [[CONTENT_UNIT]] identifiers in the authoritative normalized source.${withheldVisualsNote}`
@@ -1054,6 +1071,21 @@ async function runKafuoAttempt(
             checkUnitIds: kafuo.bookStructure.units
               .filter((unit) => unit.element === 'try_it')
               .map((unit) => String(unit.contentUnitId)),
+          },
+        }
+      : {}),
+    // g5.v12 only (QZ-2, decision Q-AK): each check quiz the question bank imports is keyed
+    // from the approved answers of the book items it cites and checked by code; with none
+    // (the Backend sends the guide for g5.v11 only today) it is not generated and is
+    // marked, so it can neither be submitted nor reach the bank. Absent for every other
+    // version.
+    ...(isBookPartPlacementModel(kafuo.teachingModel)
+      ? {
+          checkQuizKeys: {
+            referencesOf: (outline: SceneOutline) =>
+              isBankedCheckQuiz(outline)
+                ? checkQuizReferences(outline, guideAnswers, checkQuizUnitTexts())
+                : null,
           },
         }
       : {}),
@@ -2028,6 +2060,28 @@ async function runKafuoAttempt(
       }
       // g5.v12 (EN-4, EN-5, EN-8): what the plan asked of the run, for the reviewer.
       if (isBookPartPlacementModel(kafuo.teachingModel)) {
+        // QZ-4: the slides showing a number their cited book text does not print — a
+        // record for the reviewer, never a gate (its false-positive rate is unmeasured).
+        const citedOf = new Map(
+          result.outlines.map((outline) => [outline.id, outline.sourceContentUnitIds ?? []]),
+        );
+        const numberFindings = slideNumberFindings(
+          result.scenes.map((scene) => ({
+            id: scene.id,
+            outlineId: scene.outlineId ?? null,
+            title: scene.title,
+            type: scene.type,
+            content: scene.content,
+            sourceContentUnitIds:
+              scene.sourceContentUnitIds ?? citedOf.get(scene.outlineId ?? '') ?? [],
+          })),
+          checkQuizUnitTexts(),
+        );
+        if (numberFindings.length > 0) {
+          log.warn(
+            `Teaching package attempt ${attemptId}: ${numberFindings.length} slide(s) show a number their cited book text does not print (recorded for the reviewer)`,
+          );
+        }
         // A resumed run never re-asks, nor (in the scenes phase) re-reads the warnings:
         // what the run that planned recorded stands (wave 1 review, L1).
         await patchSnapshot(pool, attemptId, (snapshot) => ({
@@ -2047,6 +2101,7 @@ async function runKafuoAttempt(
           ...(untaughtListedUnits.length > 0 ? { untaughtListedUnits } : {}),
           // Listed, but with no text a slide could teach (H1): named, not required.
           ...(listedUnitsWithoutText.length > 0 ? { listedUnitsWithoutText } : {}),
+          slideNumberFindings: numberFindings,
         }));
       }
       // The Submit coverage gate's authority: which sections are essential and
