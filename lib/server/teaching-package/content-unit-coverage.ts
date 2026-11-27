@@ -251,6 +251,34 @@ export interface PositionOption extends InsertionAnchors {
   allowedStages: TeachingStageRef[];
 }
 
+/** g5.v12: which objective block owns a lesson part (`bookPartBlocksFor`). */
+export interface PartBlockOwner {
+  ownerBlockOf: (unitId: string) => number | undefined;
+}
+
+/**
+ * g5.v12 (book-section plan W5, critical item V12-3): of the stages a position allows,
+ * only the one of the objective block that owns the parts the new slide covers. At a
+ * block boundary a position allows both neighbouring blocks, and a slide generated there
+ * took the neighbour block's label, so a part left its place in the book. `allowed` as it
+ * is on every other model, and when the parts have no single owner.
+ */
+export function stagesOwnedByPart(
+  allowed: readonly TeachingStageRef[],
+  unitIds: readonly string[],
+  blocks: PartBlockOwner | null | undefined,
+): TeachingStageRef[] {
+  if (!blocks) return [...allowed];
+  const owners = new Set(
+    unitIds
+      .map((unitId) => blocks.ownerBlockOf(unitId))
+      .filter((owner): owner is number => owner !== undefined),
+  );
+  if (owners.size !== 1) return [...allowed];
+  const [owner] = [...owners];
+  return allowed.filter((stage) => stage.flowIndex === owner);
+}
+
 /** Every gap of the Stage, from before the first Scene to after the last. */
 export function insertionPositionOptions(
   scenes: readonly AppScene[],

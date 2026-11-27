@@ -41,10 +41,6 @@ import {
   isLearnerFirstModel,
   isTeacherParityModel,
 } from '@/lib/server/teaching-package/book-coverage';
-import {
-  bookPartsRequirement,
-  buildBookPartMap,
-} from '@/lib/server/teaching-package/book-part-placement';
 import { buildDeterministicKafuoRequirement } from '@/lib/server/teaching-package/kafuo-requirement';
 import { computeSkillPolicyDigest } from '@/lib/server/teaching-package/skill-policy';
 import { assertSubjectTeachingSkillPolicy } from '@/lib/server/teaching-package/subject-teaching-skills';
@@ -1674,22 +1670,17 @@ export function buildKafuoStartRequest(
 ): { start: StartGenerationAttemptRequestAlias; kafuo: KafuoGenerationContext } {
   // g5.v7 adds the book-structured planning rules; empty for every earlier version.
   // g5.v8 (an explicit Teaching Model check) adds the teacher-parity rules instead.
+  // g5.v12 (book section order plan, owner 25 Nov 2026) adds its own planner text: one
+  // idea per slide, one check per slide. The LESSON PARTS list is appended by the runner,
+  // from the typed book, so the planner and the engine read one and the same map
+  // (critical items 27 Nov 2026, EN-3).
   const book = bookStructureRequirement(request.bookStructure, {
     teacherParity: isTeacherParityModel(request.teachingModel),
     // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
     learnerFirst: isLearnerFirstModel(request.teachingModel),
+    bookPartPlacement: isBookPartPlacementModel(request.teachingModel),
   });
-  // g5.v12 (book section order plan, owner 25 Nov 2026): the lesson's parts in book
-  // order, each with the objective block it belongs to. Absent on every other version.
-  const partMap = isBookPartPlacementModel(request.teachingModel)
-    ? buildBookPartMap(
-        request.bookStructure,
-        request.learningObjectives,
-        request.teachingModel.flow,
-      )
-    : null;
-  const parts = partMap ? bookPartsRequirement(partMap, request.teachingModel.flow) : '';
-  const requirement = `${buildKafuoRequirement(request)}${book}${parts}`;
+  const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);
   const ttsRoute = stageTtsRouteOf(request);
   // g5.v11 only: every other Teaching Model ignores a sent guide block (D-9 B, D-20:

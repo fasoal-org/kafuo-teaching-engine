@@ -71,6 +71,23 @@ export const SOLUTION_SLIDES_DUPLICATED = 'SOLUTION_SLIDES_DUPLICATED';
 export const EXAMPLE_TAUGHT_TWICE = 'EXAMPLE_TAUGHT_TWICE';
 /** g5.v8: the recall slide comes after the first teaching slide of part 1. */
 export const RECALL_NOT_FIRST = 'RECALL_NOT_FIRST';
+/**
+ * g5.v12 (planner review W1.2): a try-it or solution slide cites two or more checks —
+ * of one part, or of two (lesson 227 slide 17: a physical and a chemical check).
+ */
+export const CHECKS_MERGED = 'CHECKS_MERGED';
+/**
+ * g5.v12 (planner review F9, "one idea per slide"): a teaching slide cites two or more
+ * ideas — key concepts, examples, or the kind-less text that continues them (lesson 227
+ * slide 7: three concepts on one slide).
+ */
+export const IDEAS_MERGED = 'IDEAS_MERGED';
+/**
+ * g5.v12 (decision D-2): a transition slide that holds only a title and one line. The
+ * first teaching slide of a part names it; the «تمارين» transition of the exercises
+ * block is the flow's own and is never reported.
+ */
+export const TITLE_ONLY_SLIDE = 'TITLE_ONLY_SLIDE';
 
 /** The Teaching Model whose requests get the teacher-parity gates. */
 export const TEACHER_PARITY_TEACHING_MODEL = { key: 'g5', version: 'g5.v8' } as const;
@@ -218,6 +235,12 @@ export interface CoverageBookStructure extends KafuoBookStructure {
    * ({@link missingExampleGaps}).
    */
   examplesKept?: true;
+  /**
+   * g5.v12 only (critical items, 27 Nov 2026; planner review W1): the book-part rules.
+   * Every check is gated, paired or not; every listed part unit is taught; one check and
+   * one idea per slide; no title-only transition slide.
+   */
+  bookPartPlacement?: true;
 }
 
 /** The units whose text the g5.v8 gates read: checks and exercises. */
@@ -355,6 +378,7 @@ export function teacherParityBook(
       ? { exerciseGuide: resolveTeacherGuide(teacherGuide, book, unitFacts).exerciseStatuses }
       : {}),
     ...(isGuideAnswerModel(teachingModel) ? { examplesKept: true as const } : {}),
+    ...(isBookPartPlacementModel(teachingModel) ? { bookPartPlacement: true as const } : {}),
   };
 }
 
@@ -460,8 +484,14 @@ export function findBookCoverageGaps(
     });
   });
 
-  for (const unit of book.units) {
-    if (unit.element !== 'try_it' || unit.pairedExampleUnitId === undefined) continue;
+  for (const [position, unit] of book.units.entries()) {
+    const example = unit.pairedExampleUnitId;
+    // g5.v12 (W1.1): every check is gated. Before, a check the book prints after a
+    // concept («ماذا قرأت؟»), which pairs with no example, was never asked for: its
+    // try-it slide, its solution and their order went unchecked.
+    if (unit.element !== 'try_it' || (example === undefined && book.bookPartPlacement !== true)) {
+      continue;
+    }
     const tryIt = outlines.findIndex(
       (outline) =>
         teaches(outline) &&
@@ -469,15 +499,17 @@ export function findBookCoverageGaps(
         cites(outline, unit.contentUnitId),
     );
     if (tryIt < 0) {
-      const example = unit.pairedExampleUnitId;
       gaps.push({
         kind: 'missing_try_it',
         unit,
-        message: `${describe(unit)} (the check after example ${example}) has no try-it slide`,
-        anchorIndex: lastIndexWhere(
-          outlines,
-          (outline) => teaches(outline) && cites(outline, example),
-        ),
+        message:
+          example !== undefined
+            ? `${describe(unit)} (the check after example ${example}) has no try-it slide`
+            : `${describe(unit)} has no try-it slide`,
+        anchorIndex:
+          example !== undefined
+            ? lastIndexWhere(outlines, (outline) => teaches(outline) && cites(outline, example))
+            : unpairedTryItAnchor(outlines, book, unit, position),
       });
       continue;
     }
@@ -520,6 +552,47 @@ export function findBookCoverageGaps(
   }
   if (book.teacherParity) gaps.push(...teacherParityGaps(outlines, book));
   return gaps;
+}
+
+/**
+ * g5.v12 (W1.1): where the try-it slide of a check that pairs with no example belongs —
+ * right after the last teaching slide citing an earlier unit of its part, else after the
+ * last one citing its part's key concept (else its first unit). `undefined` when no slide
+ * of the plan places it; the repair may still place it before the part's first slide.
+ */
+function unpairedTryItAnchor(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+  unit: KafuoBookStructureUnit,
+  position: number,
+): number | undefined {
+  if (unit.partIndex === undefined) return undefined;
+  const part = book.units.filter((other) => other.partIndex === unit.partIndex);
+  const earlier = new Set(
+    book.units
+      .slice(0, position)
+      .filter((other) => other.partIndex === unit.partIndex)
+      .map((other) => other.contentUnitId),
+  );
+  const afterEarlier =
+    earlier.size > 0
+      ? lastIndexWhere(
+          outlines,
+          (outline) =>
+            teaches(outline) &&
+            (outline.sourceContentUnitIds ?? []).some((id) => earlier.has(String(id))),
+        )
+      : undefined;
+  if (afterEarlier !== undefined) return afterEarlier;
+  const concept =
+    part.find((other) => other.element === 'key_concept') ??
+    book.units.find((other) => other.partIndex === unit.partIndex);
+  return concept
+    ? lastIndexWhere(
+        outlines,
+        (outline) => teaches(outline) && cites(outline, concept.contentUnitId),
+      )
+    : undefined;
 }
 
 /**
@@ -742,6 +815,164 @@ export function duplicateSolutionSlides(
     if (indexes.length > 1) groups.push({ unitId: unit.contentUnitId, indexes });
   }
   return groups;
+}
+
+/** One slide that merges what the book prints apart: the slide and the units it merges, in book order. */
+export interface MergedSlide {
+  index: number;
+  outline: SceneOutline;
+  units: KafuoBookStructureUnit[];
+}
+
+const citedIds = (outline: SceneOutline): string[] =>
+  (outline.sourceContentUnitIds ?? []).map(String);
+
+/**
+ * g5.v12 (W1.2): every try-it or solution slide citing two or more checks, with its
+ * checks in book order. A slide that solves exercises is the exercises block's and is
+ * never a merged check.
+ */
+export function mergedCheckSlides(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): MergedSlide[] {
+  const isCheck = (unit: KafuoBookStructureUnit) => unit.element === 'try_it';
+  const exercises = new Set(
+    book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+  );
+  const merged: MergedSlide[] = [];
+  outlines.forEach((outline, index) => {
+    if (!teaches(outline)) return;
+    const ids = citedIds(outline);
+    if (ids.some((id) => exercises.has(id))) return;
+    if (outline.contentRole !== 'check_understanding' && outline.contentRole !== 'worked_example') {
+      return;
+    }
+    const checks = book.units.filter((unit) => isCheck(unit) && ids.includes(unit.contentUnitId));
+    if (checks.length >= 2) merged.push({ index, outline, units: checks });
+  });
+  return merged;
+}
+
+/**
+ * A unit that is an idea of its own: a key concept, an example, or the kind-less text
+ * that continues a part's explanation (D-4). A side note is not: it stays on the slide
+ * of the element it explains.
+ */
+export function isIdeaUnit(unit: Pick<KafuoBookStructureUnit, 'element' | 'partIndex'>): boolean {
+  return (
+    unit.element === 'key_concept' ||
+    unit.element === 'worked_example' ||
+    (unit.element === null && unit.partIndex !== undefined)
+  );
+}
+
+/**
+ * g5.v12 ("one idea per slide"): every teaching slide citing two or more ideas. A slide
+ * that sets or solves a check, or solves exercises, follows the checks' rules instead
+ * ({@link mergedCheckSlides}); the closing slide and an orientation cite several units
+ * by design.
+ */
+export function ideasMergedSlides(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): MergedSlide[] {
+  const byRule = new Set(
+    book.units
+      .filter((unit) => unit.element === 'try_it' || unit.element === 'exercise')
+      .map((unit) => unit.contentUnitId),
+  );
+  const merged: MergedSlide[] = [];
+  outlines.forEach((outline, index) => {
+    if (
+      !teaches(outline) ||
+      outline.contentRole === 'summary' ||
+      outline.contentRole === 'orientation'
+    ) {
+      return;
+    }
+    const ids = citedIds(outline);
+    if (ids.some((id) => byRule.has(id))) return;
+    const ideas = book.units.filter((unit) => isIdeaUnit(unit) && ids.includes(unit.contentUnitId));
+    if (ideas.length >= 2) merged.push({ index, outline, units: ideas });
+  });
+  return merged;
+}
+
+/** A line beyond the title: one short paragraph at most. */
+const TITLE_ONLY_MAX_CHARS = 160;
+
+/**
+ * g5.v12 (decision D-2): the transition slides that hold a title and one line at most.
+ * The «تمارين» transition that opens the exercises block is the flow's own, a title by
+ * design, and is never one of them.
+ */
+export function titleOnlyTransitions(
+  outlines: readonly SceneOutline[],
+  book: KafuoBookStructure,
+): number[] {
+  const exercises = new Set(
+    book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+  );
+  return outlines.flatMap((outline, index) => {
+    if (outline.type !== 'slide' || outline.slideType !== 'transition') return [];
+    if (citedIds(outlines[index + 1] ?? ({} as SceneOutline)).some((id) => exercises.has(id))) {
+      return [];
+    }
+    const lines = [...(outline.keyPoints ?? []), outline.description ?? '']
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+    const tooLittle = lines.length < 2 && lines.join(' ').length <= TITLE_ONLY_MAX_CHARS;
+    return tooLittle ? [index] : [];
+  });
+}
+
+/**
+ * g5.v12 findings of the book-part rules: merged checks (W1.2), several ideas on one
+ * slide, and a title-only transition slide. All admin-correctable. The book's own order
+ * is checked by `findBookOrderDiagnostics` (`book-part-placement.ts`), which needs the
+ * lesson's parts.
+ */
+function bookPartPlacementDiagnostics(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): OutlineDiagnostic[] {
+  const diagnostics: OutlineDiagnostic[] = [];
+  const label = (index: number) => `outline #${index + 1} «${outlines[index]!.title ?? ''}»`;
+  const ids = (units: readonly KafuoBookStructureUnit[]) =>
+    units.map((unit) => unit.contentUnitId).join(', ');
+  for (const group of mergedCheckSlides(outlines, book)) {
+    diagnostics.push({
+      code: CHECKS_MERGED,
+      disposition: 'admin_correctable',
+      outlineIndex: group.index,
+      ...(group.outline.id ? { outlineId: group.outline.id } : {}),
+      field: 'sourceContentUnitIds',
+      message: `${label(group.index)} sets or solves the checks ${ids(group.units)} on one slide; plan ONE try-it slide and ONE solution slide per check, each citing only its own check`,
+    });
+  }
+  for (const group of ideasMergedSlides(outlines, book)) {
+    diagnostics.push({
+      code: IDEAS_MERGED,
+      disposition: 'admin_correctable',
+      outlineIndex: group.index,
+      ...(group.outline.id ? { outlineId: group.outline.id } : {}),
+      field: 'sourceContentUnitIds',
+      message: `${label(group.index)} teaches the units ${ids(group.units)} on one slide; teach ONE of them per slide, in book order`,
+    });
+  }
+  for (const index of titleOnlyTransitions(outlines, book)) {
+    const outline = outlines[index]!;
+    diagnostics.push({
+      code: TITLE_ONLY_SLIDE,
+      disposition: 'admin_correctable',
+      outlineIndex: index,
+      ...(outline.id ? { outlineId: outline.id } : {}),
+      field: 'keyPoints',
+      message: `${label(index)} is a transition slide holding only a title and one line; plan no such slide — the part's first teaching slide names the part`,
+    });
+  }
+  return diagnostics;
 }
 
 /** g5.v8: the recall slide (I-1, D-1 A) and the exercises block (I-3, D-3 C). */
@@ -1167,6 +1398,28 @@ export function requireEssentialUntypedUnits<T extends KafuoBookStructure>(
   };
 }
 
+/**
+ * g5.v12 (W1.6, critical items 27 Nov 2026): every unit the plan must teach is `required`
+ * on the coverage book, so the plan is gated, repaired and reviewed for it as if the
+ * Lesson Template required it — each unit listed in the lesson's parts (F11: 6763, 6765
+ * and 6770 got no slide and no report) and each essential section Submit refuses an
+ * untaught package for (F10: 6752, which only the cover cited). Only a unit the map
+ * already carries is marked; the SAME book when nothing changes.
+ */
+export function requireTaughtUnits<T extends KafuoBookStructure>(
+  book: T | undefined,
+  unitIds: readonly string[] | null | undefined,
+): T | undefined {
+  if (!book || !unitIds?.length) return book;
+  const taught = new Set(unitIds.map(String));
+  return {
+    ...book,
+    units: book.units.map((unit) =>
+      !unit.required && taught.has(unit.contentUnitId) ? { ...unit, required: true } : unit,
+    ),
+  };
+}
+
 export function findBookCoverageDiagnostics(
   outlines: readonly SceneOutline[],
   book: CoverageBookStructure | undefined,
@@ -1177,7 +1430,12 @@ export function findBookCoverageDiagnostics(
     field: 'sourceContentUnitIds',
     message: gap.message,
   }));
-  return book?.teacherParity ? [...gaps, ...teacherParityDiagnostics(outlines, book)] : gaps;
+  if (!book?.teacherParity) return gaps;
+  return [
+    ...gaps,
+    ...teacherParityDiagnostics(outlines, book),
+    ...(book.bookPartPlacement === true ? bookPartPlacementDiagnostics(outlines, book) : []),
+  ];
 }
 
 /**
@@ -1218,16 +1476,26 @@ function exerciseMarker(unit: KafuoBookStructureUnit): string {
 /**
  * The planner guidance a book-structured request adds to the requirement.
  * `teacherParity` (the request's Teaching Model is g5.v8) selects the v8 text;
- * otherwise the g5.v7 text is returned byte for byte.
+ * otherwise the g5.v7 text is returned byte for byte. `bookPartPlacement` (g5.v12)
+ * gives the learner-first text its one-idea-per-slide rule in place of v10's.
  */
 export function bookStructureRequirement(
   book: KafuoBookStructure | undefined,
-  options: { teacherParity?: boolean; learnerFirst?: boolean } = {},
+  options: {
+    teacherParity?: boolean;
+    learnerFirst?: boolean;
+    bookPartPlacement?: boolean;
+  } = {},
 ): string {
   if (!book) return '';
   const rules = book.rules.map((rule) => `${rule.kind}=${rule.element}`).join(', ');
   if (options.teacherParity) {
-    return teacherParityRequirement(book, rules, options.learnerFirst === true);
+    return teacherParityRequirement(
+      book,
+      rules,
+      options.learnerFirst === true,
+      options.bookPartPlacement === true,
+    );
   }
   return [
     '',
@@ -1275,17 +1543,31 @@ export function learnerFirstPlannerCatalogue(): string {
     : catalogue;
 }
 
+/** The g5.v10 planner text's definition rule, before its one-idea sentence. */
+const DEFINITION_BOX_RULE =
+  "- DEFINITIONS: the first slide that uses a term this lesson teaches shows a definition box with the term and the book's own definition sentence, verbatim (cite that concept unit).";
+/** g5.v10 and g5.v11: a key-concept box and its first example share a slide. */
+const SAME_IDEA_RULE =
+  ' Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.';
+/**
+ * g5.v12 ("one idea per slide" wins, critical items 27 Nov 2026): v11's key-concept rule
+ * already explains one idea per slide, so v10's shared slide is not asked for here.
+ */
+const ONE_IDEA_RULE =
+  ' ONE IDEA PER SLIDE: a teaching slide teaches one unit of its part. Never two key concepts on one slide, and never a key-concept box together with an example (each book example has a slide of its own); a side note stays on the slide of the element it explains.';
+
 /**
  * g5.v10 (learner-first plan W3, owner decisions D-1, D-2, D-4, D-5, D-8 of 15 Nov
  * 2026): the lines the planner gets on top of — or instead of — g5.v8's.
+ * `oneIdea` (g5.v12) swaps v10's shared key-concept slide for one idea per slide.
  */
-function learnerFirstLines(book: KafuoBookStructure): string[] {
+function learnerFirstLines(book: KafuoBookStructure, oneIdea = false): string[] {
   const reading = book.units.some((unit) =>
     /MATH_READING|VOCABULARY_LINK/.test(String(unit.kind ?? '')),
   );
   return [
-    'LEARNER-FIRST (g5.v10), for a weak student:',
-    "- DEFINITIONS: the first slide that uses a term this lesson teaches shows a definition box with the term and the book's own definition sentence, verbatim (cite that concept unit). Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.",
+    `LEARNER-FIRST (${oneIdea ? 'g5.v12' : 'g5.v10'}), for a weak student:`,
+    DEFINITION_BOX_RULE + (oneIdea ? ONE_IDEA_RULE : SAME_IDEA_RULE),
     ...(reading
       ? [
           '- Teach each kind=MATH_READING («قراءة الرياضيات») and kind=VOCABULARY_LINK («ربط المفردات») unit where the book prints it, on the slide that first uses its notation or term (cite it there).',
@@ -1306,9 +1588,10 @@ function teacherParityRequirement(
   book: KafuoBookStructure,
   rules: string,
   learnerFirst = false,
+  bookPartPlacement = false,
 ): string {
   const policy = book.exercisePolicy;
-  if (learnerFirst) return learnerFirstRequirement(book, rules);
+  if (learnerFirst) return learnerFirstRequirement(book, rules, bookPartPlacement);
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v8). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -1358,12 +1641,18 @@ function teacherParityRequirement(
  * per check, visible working, the engine's exercises block), with no recall slide (the
  * opening boxes are excluded, as on g5.v9), every item stated verbatim and explained,
  * the learner's attempt added by the engine, and the learner-first rules.
+ * `bookPartPlacement` (g5.v12) adds the book-part rules the v12 gates hold the plan to:
+ * one check per slide (W2.2) and one idea per slide in place of v10's shared slide.
  */
-function learnerFirstRequirement(book: KafuoBookStructure, rules: string): string {
+function learnerFirstRequirement(
+  book: KafuoBookStructure,
+  rules: string,
+  bookPartPlacement = false,
+): string {
   const policy = book.exercisePolicy;
   return [
     '',
-    'BOOK-STRUCTURED LESSON (g5.v10). Each [[CONTENT_UNIT]] marker shows the kind the book',
+    `BOOK-STRUCTURED LESSON (${bookPartPlacement ? 'g5.v12' : 'g5.v10'}). Each [[CONTENT_UNIT]] marker shows the kind the book`,
     `printed it as and its lesson part. The lesson template maps kinds to elements: ${rules}.`,
     'Plan in the book order: every required unit gets its own instructional slide that cites it.',
     'CHECKS: every try_it unit gets ONE try-it slide (contentRole check_understanding) that states',
@@ -1372,6 +1661,12 @@ function learnerFirstRequirement(book: KafuoBookStructure, rules: string): strin
     "worked_example) PER CHECK that cites the check's unit and solves and explains EVERY item, in",
     "the book order, each to a final answer from the given data. Never split a check's solution",
     'across slides: each check has exactly one solution slide.',
+    ...(bookPartPlacement
+      ? [
+          'ONE CHECK PER SLIDE: a try-it slide and its solution slide each cite ONE check unit.',
+          'Never two checks on one slide, and never checks of two lesson parts.',
+        ]
+      : []),
     "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
     'the example, not the check that follows it.',
     ...checkListLine(book),
@@ -1401,7 +1696,7 @@ function learnerFirstRequirement(book: KafuoBookStructure, rules: string): strin
             'paired with the same example.',
           ]
         : []),
-    ...learnerFirstLines(book),
+    ...learnerFirstLines(book, bookPartPlacement),
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }
@@ -1522,4 +1817,79 @@ export function plannerVisibleRequiredUnitIds(
         seen.has(String(unit.contentUnitId)),
     )
     .map((unit) => String(unit.contentUnitId));
+}
+
+/** g5.v12 (EN-5): a rule the engine asks the planner for and reports, but never blocks on. */
+export interface PlanWarning {
+  code: string;
+  outlineId?: string;
+  message: string;
+}
+
+/** g5.v12 warning: the first slide using a key concept carries no definition box. */
+export const DEFINITION_NOT_FIRST = 'DEFINITION_NOT_FIRST';
+/** g5.v12 warning: the exercise slides are not in the engine's order (easiest first). */
+export const EXERCISES_NOT_EASIEST_FIRST = 'EXERCISES_NOT_EASIEST_FIRST';
+/** g5.v12 warning: the plan has no closing summary slide. */
+export const NO_CLOSING_SUMMARY = 'NO_CLOSING_SUMMARY';
+
+/**
+ * g5.v12 (EN-5, critical items 27 Nov 2026): the three rules the owner chose to warn on
+ * rather than gate — a definition box on first use, the exercises easiest first, and a
+ * closing summary. Read from the plan's title, roles and citations only (never its
+ * Scenes), so each is a report for the reviewer, not a proof. Empty on every other
+ * Teaching Model.
+ */
+export function bookPartPlacementWarnings(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure | undefined,
+): PlanWarning[] {
+  if (book?.bookPartPlacement !== true) return [];
+  const warnings: PlanWarning[] = [];
+  for (const unit of book.units) {
+    if (unit.element !== 'key_concept') continue;
+    const index = outlines.findIndex(
+      (outline) => teaches(outline) && cites(outline, unit.contentUnitId),
+    );
+    const first = outlines[index];
+    if (!first || first.contentRole !== 'explanation' || first.contentKind === 'definition') {
+      continue;
+    }
+    warnings.push({
+      code: DEFINITION_NOT_FIRST,
+      ...(first.id ? { outlineId: first.id } : {}),
+      message: `outline #${index + 1} «${first.title ?? ''}» first uses ${describe(unit)} with no definition box (contentKind definition)`,
+    });
+  }
+  const selection = selectExercises(book, book.unitFacts);
+  if (selection) {
+    const exerciseIds = new Set(
+      book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
+    );
+    const sameSet = (a: readonly string[], b: readonly string[]) => {
+      const left = [...a].map(String).sort();
+      const right = [...b].map(String).sort();
+      return left.length === right.length && left.every((id, at) => id === right[at]);
+    };
+    const planned = outlines
+      .filter((outline) => teaches(outline) && citedIds(outline).some((id) => exerciseIds.has(id)))
+      .map((outline) => citedIds(outline).filter((id) => exerciseIds.has(id)));
+    if (
+      planned.length === selection.slides.length &&
+      planned.some((ids, at) => !sameSet(ids, selection.slides[at]!))
+    ) {
+      warnings.push({
+        code: EXERCISES_NOT_EASIEST_FIRST,
+        message:
+          'the exercise slides are not in the order the EXERCISES BLOCK lists (easiest first)',
+      });
+    }
+  }
+  if (!outlines.some((outline) => outline.contentRole === 'summary')) {
+    warnings.push({
+      code: NO_CLOSING_SUMMARY,
+      message: 'the plan has no closing summary slide',
+    });
+  }
+  return warnings;
 }

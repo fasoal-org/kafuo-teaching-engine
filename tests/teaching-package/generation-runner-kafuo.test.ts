@@ -8,9 +8,12 @@ import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
+import type { OutlineDiagnostic } from '@openmaic/generation';
 
 import type { AppScene } from '@/lib/types/stage';
+import type { SceneOutline } from '@/lib/types/generation';
 import type {
+  KafuoBookStructure,
   KafuoContentResource,
   TeachingFlowEntry,
   TeachingSkillPolicy,
@@ -3966,5 +3969,482 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(refused.status).toBe(409);
       expect(await refused.json()).toMatchObject({ error: { code: 'PACKAGE_REVIEW_IN_PROGRESS' } });
     });
+  });
+
+  describe('g5.v12: the book-part rules in the run (critical items, 27 Nov 2026)', () => {
+    /** Two objectives: each its slides (slides and the engine's attempt quizzes), then its quiz. */
+    const BOOK_FLOW: TeachingFlowEntry[] = [
+      {
+        stage: 'lesson_opener',
+        instructions: 'Open.',
+        scenePolicy: { sceneTypes: ['slide'], cardinality: 'exactly_one' },
+      },
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: 'Teach o1.',
+        scenePolicy: { sceneTypes: ['slide', 'quiz'], cardinality: 'one_or_more' },
+      },
+      {
+        stage: 'outcome_check_understanding',
+        instructions: 'Check o1.',
+        scenePolicy: { sceneTypes: ['quiz'], cardinality: 'exactly_one' },
+      },
+      {
+        stage: 'outcome_visual_explanations',
+        instructions: 'Teach o2.',
+        scenePolicy: { sceneTypes: ['slide', 'quiz'], cardinality: 'one_or_more' },
+      },
+      {
+        stage: 'outcome_check_understanding',
+        instructions: 'Check o2.',
+        scenePolicy: { sceneTypes: ['quiz'], cardinality: 'exactly_one' },
+      },
+    ];
+    const bookUnit = (
+      contentUnitId: string,
+      element: string | null,
+      partIndex: number,
+    ): KafuoBookStructure['units'][number] => ({
+      contentUnitId,
+      kind: element === null ? null : element === 'try_it' ? 'UNDERSTANDING_CHECK' : 'KEY_CONCEPT',
+      element,
+      required: element === 'key_concept' || element === 'try_it',
+      partIndex,
+    });
+    /** u3 and u6 are kind-less; u8 is an untyped practice unit the runner types as an exercise. */
+    const BOOK: KafuoBookStructure = {
+      templateVersionId: '4',
+      rules: [{ kind: 'GUIDED_PRACTICE', element: 'exercise', required: false }],
+      units: [
+        bookUnit('u1', 'key_concept', 1),
+        bookUnit('u2', 'try_it', 1),
+        bookUnit('u3', null, 1),
+        bookUnit('u4', 'key_concept', 2),
+        bookUnit('u5', 'try_it', 2),
+        bookUnit('u6', null, 2),
+        bookUnit('u8', null, 2),
+      ],
+    };
+    const UNITS = [
+      {
+        id: 'u1',
+        orderIndex: 1,
+        role: 'CONCEPT_EXPLANATION',
+        title: 'u1',
+        normalizedText: 'نص الوحدة الأولى',
+        blocks: [],
+      },
+      {
+        id: 'u2',
+        orderIndex: 2,
+        role: 'UNDERSTANDING_CHECK',
+        title: 'ماذا قرأت؟',
+        normalizedText: 'ماذا قرأت؟\n(١) السؤال الأول',
+        blocks: [],
+      },
+      {
+        id: 'u3',
+        orderIndex: 3,
+        role: 'CONCEPT_EXPLANATION',
+        title: 'u3',
+        normalizedText: 'نص الوحدة الثالثة',
+        blocks: [],
+      },
+      {
+        id: 'u4',
+        orderIndex: 4,
+        role: 'CONCEPT_EXPLANATION',
+        title: 'u4',
+        normalizedText: 'نص الوحدة الرابعة',
+        blocks: [],
+      },
+      {
+        id: 'u5',
+        orderIndex: 5,
+        role: 'UNDERSTANDING_CHECK',
+        title: 'ماذا قرأت؟',
+        normalizedText: 'ماذا قرأت؟\n(١) السؤال الثاني',
+        blocks: [],
+      },
+      {
+        id: 'u6',
+        orderIndex: 6,
+        role: 'CONCEPT_EXPLANATION',
+        title: 'u6',
+        normalizedText: 'نص الوحدة السادسة',
+        blocks: [],
+      },
+      {
+        id: 'u8',
+        orderIndex: 8,
+        role: 'PRACTICE_SET',
+        subtype: 'GUIDED_PRACTICE',
+        title: 'تأكد',
+        normalizedText: 'تأكد\n(١) سؤال',
+        blocks: [],
+      },
+    ];
+    const OBJECTIVES = [
+      { objectiveRef: 'o1', snapshot: { statement: 's1' }, contentUnitIds: ['u1', 'u2', 'u3'] },
+      {
+        objectiveRef: 'o2',
+        snapshot: { statement: 's2' },
+        contentUnitIds: ['u4', 'u5', 'u6', 'u8'],
+      },
+    ];
+
+    const at = (flowIndex: number) => ({ key: BOOK_FLOW[flowIndex]!.stage, flowIndex });
+    const slide = (
+      id: string,
+      flowIndex: number,
+      units: string[],
+      extra: Partial<SceneOutline> = {},
+    ) =>
+      ({
+        id,
+        type: 'slide',
+        title: id,
+        description: '',
+        keyPoints: [],
+        order: 0,
+        slideType: 'content',
+        contentRole: 'explanation',
+        teachingStage: at(flowIndex),
+        sourceContentUnitIds: units,
+        ...extra,
+      }) as SceneOutline;
+    const quiz = (id: string, flowIndex: number, units: string[]) =>
+      ({
+        id,
+        type: 'quiz',
+        title: id,
+        description: '',
+        keyPoints: [],
+        order: 0,
+        teachingStage: at(flowIndex),
+        sourceContentUnitIds: units,
+      }) as SceneOutline;
+
+    /** A plan with a gap the book repair can close: u6 (essential) has no slide, neither check a solution. */
+    const planWithGaps = () => [
+      slide('cover', 0, ['u1'], { slideType: 'cover' }),
+      slide('c1', 1, ['u1'], { contentKind: 'definition' }),
+      slide('c2', 1, ['u3']),
+      slide('try1', 1, ['u2'], { contentRole: 'check_understanding' }),
+      // (Every outline is grounded: the cover and each objective's quiz cite a unit too.)
+      quiz('q1', 2, ['u2']),
+      slide('c3', 3, ['u4'], { contentKind: 'definition' }),
+      slide('try2', 3, ['u5'], { contentRole: 'check_understanding' }),
+      quiz('q2', 4, ['u5']),
+    ];
+    /** A slide teaching units of two objective blocks, inside the first block: no deterministic fix repairs it. */
+    const withMixedSlide = () => [
+      ...planWithGaps().slice(0, 3),
+      slide('x', 1, ['u2', 'u4']),
+      ...planWithGaps().slice(3),
+    ];
+
+    interface Seen {
+      requirement?: string;
+      /** Whether the run was given the re-ask hook at all (g5.v12 with a parts map only). */
+      reaskHook?: boolean;
+      /** The violation codes the hook returned for the first answer. */
+      reask?: string[];
+      final?: SceneOutline[];
+    }
+
+    /**
+     * The runner's hooks, driven in the real pipeline's order (`generateClassroom` is the
+     * mock): the re-ask is decided on the first answer before anything else; then the
+     * rule fixes with the placement, the book repair (its planner doubles for the model
+     * and answers the role its instruction names), the pause check, the final planning
+     * step, the cleanup.
+     */
+    function mockBookRun(
+      plans: { first: () => SceneOutline[]; second?: () => SceneOutline[] },
+      seen: Seen,
+    ) {
+      mocks.generateClassroom.mockImplementation(async (execution, options) => {
+        const correction = options.correction!;
+        seen.requirement = execution.requirement;
+        // A slide plan the planner accepts: a content slide with a title, a description
+        // and 3–6 key points, the asked role, and the kind an explanation needs.
+        const aiCall = async (_system: string, user: string) => {
+          const role = /contentRole (\w+)/.exec(user)?.[1] ?? 'explanation';
+          return JSON.stringify({
+            slideType: 'content',
+            title: 'شريحة من الكتاب',
+            description: 'شرح من الكتاب',
+            keyPoints: ['النقطة الأولى', 'النقطة الثانية', 'النقطة الثالثة'],
+            contentRole: role,
+            ...(role === 'explanation' ? { contentKind: 'concept' } : {}),
+          });
+        };
+        const run = async (planned: SceneOutline[]) => {
+          let outlines = planned;
+          let blocking = (await correction.collectOutlineIssues?.(outlines)) ?? [];
+          const fixed = blocking.length
+            ? await correction.autoFixOutlines?.(outlines, blocking)
+            : null;
+          if (fixed) {
+            outlines = fixed.outlines;
+            blocking = fixed.blocking;
+          }
+          if (blocking.length && correction.repairOutlines) {
+            const repaired = await correction.repairOutlines(outlines, blocking, aiCall);
+            if (repaired) {
+              outlines = repaired.outlines;
+              blocking = repaired.blocking;
+            }
+          }
+          return { outlines, blocking };
+        };
+        const first = plans.first();
+        seen.reaskHook = typeof correction.reaskPlan === 'function';
+        const violations: OutlineDiagnostic[] = (await correction.reaskPlan?.(first)) ?? [];
+        seen.reask = violations.map((issue) => issue.code);
+        const { outlines, blocking } = violations.length
+          ? await run(plans.second!())
+          : await run(first);
+        if (blocking.length > 0) {
+          const { GenerationCorrectionRequiredError } =
+            await import('@/lib/server/teaching-package/outline-correction');
+          throw new GenerationCorrectionRequiredError({
+            phase: 'outline',
+            outlines,
+            courseTitle: null,
+            languageDirective: '',
+            diagnostics: blocking,
+            repairs: [],
+          });
+        }
+        const refined: SceneOutline[] | null = await correction.refineOutlines?.(outlines, aiCall);
+        const final: SceneOutline[] =
+          correction.finalizeOutlines?.(refined ?? outlines) ?? refined ?? outlines;
+        seen.final = final;
+        mocks.sceneGenerationReached();
+        const reserved = await options.persistence.reserve((id: string) => ({
+          id,
+          name: 'Generated',
+          createdAt: 1,
+          updatedAt: 1,
+        }));
+        const scenes = final.map((outline, index) => {
+          const base = makeSlideScene(
+            `scene-b-${index}`,
+            reserved.id,
+            index + 1,
+            outline.title ?? '',
+          );
+          const scene =
+            outline.type === 'quiz'
+              ? { ...base, type: 'quiz', content: { type: 'quiz', questions: [] } }
+              : base;
+          return {
+            ...scene,
+            outlineId: outline.id,
+            teachingStage: outline.teachingStage,
+            sourceContentUnitIds: outline.sourceContentUnitIds ?? [],
+          } as unknown as AppScene;
+        });
+        await options.persistence.persist(
+          {
+            id: reserved.id,
+            stage: reserved.stage,
+            scenes: scenes as never,
+            outlines: final as never,
+          },
+          options.baseUrl,
+        );
+        return {
+          id: reserved.id,
+          url: '',
+          stage: reserved.stage,
+          scenes: scenes as never,
+          outlines: final as never,
+          scenesCount: scenes.length,
+          createdAt: new Date().toISOString(),
+        };
+      });
+    }
+
+    function bookContext(version: string) {
+      return {
+        ...normalizedKafuoContext(),
+        teachingFlow: BOOK_FLOW,
+        teachingModel: { key: 'g5', version },
+        learningObjectives: OBJECTIVES,
+        bookStructure: BOOK,
+      };
+    }
+
+    async function startBook(context: ReturnType<typeof bookContext>) {
+      mocks.acquireNormalizedContentResource.mockResolvedValue({
+        text: UNITS.map((unit) => `[[CONTENT_UNIT id=${unit.id}]] ${unit.normalizedText}`).join(
+          '\n',
+        ),
+        images: [],
+        normalizedImages: [],
+        visionImages: [],
+        visionMapping: {},
+        measuredBytes: 100,
+        measuredSha256: 'b'.repeat(64),
+        manifest: { contentRevisionId: 'rev-1', contentUnits: UNITS },
+        blockCount: 1,
+      });
+      const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
+      const runner = await freshModules();
+      const started = await startGenerationAttempt(txPool(), {
+        tenantId: context.aggregate.tenantId,
+        learningItem: context.aggregate.learningItem,
+        teachingModel: context.teachingModel,
+        generation: { requirement: 'req', teachingFlow: context.teachingFlow },
+        actorRef: 'actor-1',
+        requestId: `kafuo-run-${randomUUID()}`,
+        requestDigest: 'a'.repeat(64),
+        teachingFlow: context.teachingFlow,
+        bookStructure: context.bookStructure,
+        contentResource: { id: 'cs-1', mimeType: 'application/pdf' },
+      });
+      await runner.runGenerationAttempt(started.attempt.id, started.execution, context);
+      return started.attempt.id;
+    }
+
+    /** The attempt's raw snapshot: the runner's own keys, before any reader shapes them. */
+    async function snapshotOf(attemptId: string): Promise<Record<string, unknown>> {
+      const result = await pool.query<{ input_snapshot: Record<string, unknown> }>(
+        `SELECT input_snapshot FROM teaching_package_generation_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      return result.rows[0]!.input_snapshot;
+    }
+
+    it('EN-3: the planner gets the parts list from the TYPED book, with the rules it is held to', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: planWithGaps }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      const requirement = seen.requirement!;
+      // Kind-less units are listed in their book place…
+      expect(requirement).toContain('units u1, u2, u3');
+      expect(requirement).toContain('units u4, u5, u6');
+      // …the untyped practice unit the runner typed as an exercise is not.
+      expect(requirement).not.toMatch(/units [^\n]*\bu8\b/);
+      expect(requirement).toContain('ONE CHECK PER SLIDE');
+      expect(requirement).toContain('never checks of two parts');
+      expect(requirement).toContain('NO TITLE-ONLY SLIDE');
+      // The list comes right after the request's own requirement and before the engine's
+      // grounding note, where the request parser appended it before.
+      expect(requirement.startsWith('req\nLESSON PARTS IN BOOK ORDER')).toBe(true);
+      expect(requirement.indexOf('LESSON PARTS IN BOOK ORDER')).toBeLessThan(
+        requirement.indexOf('For every outline, return a non-empty'),
+      );
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+    });
+
+    it('EN-2 / EN-7: the plan is placed inside the repair stage, and a gap the repair taught is no gap at Submit', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: planWithGaps }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+      const snapshot = await snapshotOf(attemptId);
+      // u6 was a gap on the first plan; the repair gave it a slide, so Submit's authority lists none.
+      expect(snapshot.sectionCoverage).toEqual({
+        essentialContentUnitIds: ['u1', 'u3', 'u4', 'u6'],
+        gapContentUnitIds: [],
+      });
+      expect(snapshot.bookPartPlacement).toMatchObject({
+        placed: true,
+        restaged: expect.any(Number),
+      });
+      // Nothing asked the planner again, and nothing is left to warn about but the missing summary.
+      expect(snapshot.plannerReask).toEqual({ asked: false, violations: [] });
+      expect(
+        (snapshot.planWarnings as Array<{ code: string }>).map((warning) => warning.code),
+      ).toEqual(['NO_CLOSING_SUMMARY']);
+      // The final plan follows the book: u1, the check u2 and its solution, u3, then the
+      // quiz; u4, the check u5 and its solution, u6, then the quiz.
+      const position = (id: string) => seen.final!.findIndex((outline) => outline.id === id);
+      const firstInsertedAfter = (anchor: string, unitId: string) =>
+        seen.final!.findIndex(
+          (outline, index) =>
+            index > position(anchor) &&
+            (outline.sourceContentUnitIds ?? []).includes(unitId) &&
+            outline.id !== anchor,
+        );
+      const solU2 = firstInsertedAfter('try1', 'u2');
+      const solU5 = firstInsertedAfter('try2', 'u5');
+      const u6 = seen.final!.find((outline) =>
+        (outline.sourceContentUnitIds ?? []).includes('u6'),
+      )!;
+      expect(position('cover')).toBeLessThan(position('c1'));
+      expect(position('c1')).toBeLessThan(position('try1'));
+      expect(solU2).toBeGreaterThan(position('try1'));
+      expect(solU2).toBeLessThan(position('c2'));
+      expect(position('c2')).toBeLessThan(position('q1'));
+      expect(position('q1')).toBeLessThan(position('c3'));
+      expect(position('c3')).toBeLessThan(position('try2'));
+      expect(solU5).toBeGreaterThan(position('try2'));
+      expect(solU5).toBeLessThan(position(u6.id));
+      expect(position(u6.id)).toBeLessThan(position('q2'));
+      // Nothing was moved after the plan was placed: the two blocks are the planner's own.
+      expect(seen.final!.find((outline) => outline.id === 'c3')!.teachingStage!.flowIndex).toBe(3);
+      // Still one full generation run: the re-ask is the planner's, inside the same run.
+      expect((await readAttemptByIdFor(attemptId)).generationRuns).toBe(1);
+    });
+
+    it('EN-4: a violation no deterministic fix repairs asks the planner once more, and it is recorded', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: withMixedSlide, second: planWithGaps }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+      expect(seen.reaskHook).toBe(true);
+      expect(seen.reask).toEqual(['SLIDE_OUT_OF_BOOK_ORDER']);
+      const snapshot = await snapshotOf(attemptId);
+      expect(snapshot.plannerReask).toEqual({
+        asked: true,
+        violations: ['SLIDE_OUT_OF_BOOK_ORDER'],
+      });
+      // The second plan is the one the package was built from.
+      expect(seen.final!.some((outline) => outline.id === 'x')).toBe(false);
+      expect(snapshot.sectionCoverage).toMatchObject({ gapContentUnitIds: [] });
+    });
+
+    it('fails closed: a second plan that still breaks the order pauses with the finding, and is not asked a third time', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: withMixedSlide, second: withMixedSlide }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('awaiting_admin_correction');
+      const checkpoint = await checkpointOf(qp(), attemptId);
+      expect(checkpoint.phase).toBe('outline');
+      expect(checkpoint.diagnostics.map((issue) => issue.code)).toContain(
+        'SLIDE_OUT_OF_BOOK_ORDER',
+      );
+    });
+
+    it('g5.v11 is unchanged: no parts list, no placement, no re-ask, and a gap stays sticky as before', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: planWithGaps, second: planWithGaps }, seen);
+      const attemptId = await startBook(bookContext('g5.v11'));
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+      const requirement = seen.requirement!;
+      expect(requirement.startsWith('req\n\n')).toBe(true);
+      expect(requirement).not.toContain('LESSON PARTS IN BOOK ORDER');
+      expect(seen.reaskHook).toBe(false);
+      expect(seen.reask).toEqual([]);
+      const snapshot = await snapshotOf(attemptId);
+      expect(snapshot).not.toHaveProperty('bookPartPlacement');
+      expect(snapshot).not.toHaveProperty('plannerReask');
+      expect(snapshot).not.toHaveProperty('planWarnings');
+      // The same repaired gap stays recorded on v11 (F10), exactly as before.
+      expect(snapshot.sectionCoverage).toMatchObject({ gapContentUnitIds: ['u6'] });
+      expect(
+        seen.final!.some((outline) => (outline.sourceContentUnitIds ?? []).includes('u6')),
+      ).toBe(true);
+    });
+
+    async function readAttemptByIdFor(attemptId: string) {
+      const { readAttemptById } = await import('@/lib/persistence/teaching-package');
+      return (await readAttemptById(qp(), attemptId))!;
+    }
   });
 });

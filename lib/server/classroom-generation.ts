@@ -1069,6 +1069,17 @@ export interface GenerationCorrectionOptions {
     aiCall: AICallFn,
   ) => Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null>;
   /**
+   * g5.v12 (critical items 27 Nov 2026, EN-4): decides whether the planner is asked
+   * again. Called once, with the first answer's outlines, before that plan costs an
+   * image re-plan or a review. Returns the violations no deterministic fix repairs —
+   * each is shown to the planner on the same routed outline call, once per run — or
+   * `null` / nothing to keep the first answer. Never called on a resumed run (it makes
+   * no outline call). A hook that throws changes nothing: the first answer stands.
+   */
+  reaskPlan?: (
+    outlines: SceneOutline[],
+  ) => Promise<OutlineDiagnostic[] | null> | OutlineDiagnostic[] | null;
+  /**
    * Lesson 2-5 (17 Nov 2026, g5.v11): once the plan passed the gates (nothing blocks),
    * one more planning step that never pauses: a book example with no slide of its own
    * before its check is planned once; the refined plan, or `null` to keep it as it is.
@@ -1956,6 +1967,41 @@ export async function generateClassroom(
         // through the unchecked path, with no further model call.
         const lastAnswer = lastOutlineAnswer;
         outlinesResult = await callOutlines(async () => lastAnswer, false);
+      }
+    }
+
+    // g5.v12 (EN-4, critical items 27 Nov 2026): ONE bounded re-ask of the planner with
+    // the violations no deterministic fix repairs (the caller decides, from the fixes
+    // that need no model), before the first plan costs an image re-plan or a review.
+    // `MAX_GENERATION_RUNS` is not touched: this is the same run. A second answer that
+    // still violates goes through every gate below and fails closed, as the first would.
+    if (correction?.reaskPlan && outlinesResult?.success && outlinesResult.data) {
+      let violations: OutlineDiagnostic[] | null = null;
+      try {
+        violations = await correction.reaskPlan(outlinesResult.data.outlines);
+      } catch (error) {
+        log.warn('Could not decide whether to ask the planner again:', error);
+      }
+      if (violations && violations.length > 0) {
+        correctiveContext = formatBlockingOutlineDiagnostics(violations, OUTLINE_CORRECTION_PREFIX);
+        log.warn(
+          `Outline answer breaks ${violations.length} rule(s) no deterministic fix repairs; asking the planner once more`,
+        );
+        await options.onProgress?.({
+          step: 'generating_outlines',
+          progress: 15,
+          message: 'Generating scene outlines again: the first plan broke the lesson’s book rules',
+          scenesGenerated: 0,
+        });
+        outlinesResult = await callOutlines(recordingOutlineCall, checkAnswers);
+        assertRouteAvailable();
+        await noteOutlineAnswer(outlinesResult);
+        if (outlinesResult.badAnswer) {
+          // The same handling as a bad answer after the re-roll: read this answer
+          // through the unchecked path, with no further model call.
+          const lastAnswer = lastOutlineAnswer;
+          outlinesResult = await callOutlines(async () => lastAnswer, false);
+        }
       }
     }
 

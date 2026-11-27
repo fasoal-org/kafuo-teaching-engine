@@ -18,6 +18,7 @@ import { scenePolicyFor, type AICallFn, type OutlineDiagnostic } from '@openmaic
 import { createLogger } from '@/lib/logger';
 import {
   BOOK_COVERAGE_INCOMPLETE,
+  CHECKS_MERGED,
   EXERCISE_CAP_EXCEEDED,
   EXERCISE_SELECTED_MISSING,
   EXERCISE_TOO_FEW,
@@ -26,7 +27,10 @@ import {
   EXERCISES_MISPLACED,
   duplicateSolutionSlides,
   findBookCoverageGaps,
+  IDEAS_MERGED,
+  ideasMergedSlides,
   isSacredExerciseElement,
+  mergedCheckSlides,
   missingExampleGaps,
   RECALL_NOT_FIRST,
   recallPlacement,
@@ -34,10 +38,16 @@ import {
   EXAMPLE_TAUGHT_TWICE,
   examplesTaughtTwice,
   teaches,
+  titleOnlyTransitions,
+  TITLE_ONLY_SLIDE,
   WORKING_STEP_MISSING,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  CHECK_BEFORE_ITS_PART,
+  SLIDE_OUT_OF_BOOK_ORDER,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import { checkItemLabels } from '@/lib/server/teaching-package/hidden-step-types';
 import {
@@ -219,17 +229,35 @@ function repairableGaps(
   ) {
     return null;
   }
-  // A check with no try-it is also reported as untaught; its one try-it slide
-  // answers both, so it is planned once.
-  const tryItMissing = new Set<string>();
+  const { planned: gaps } = classifyBookGaps(outlines, book, flow);
+  if (gaps.length === 0 || gaps.some((gap) => gap.anchorIndex === undefined)) return null;
+  return gaps;
+}
+
+/**
+ * The plan's book gaps, and which of them the repair's rounds plan (`planned`) and which
+ * stay open for the plan review, a planner re-ask or a person (`left`).
+ *
+ * A check with no try-it is also reported as untaught; its one try-it slide answers
+ * both, so the teaching gap is planned once.
+ *
+ * g5.v8 (lessons 314/315/318): a gap the plan cannot place (no anchor) is left to a
+ * person instead of blocking every other repair, and a check solved before its try-it is
+ * a person's to move, so none of its gaps is planned around it.
+ */
+function classifyBookGaps(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+  flow: readonly TeachingFlowEntry[],
+): { planned: PlacedGap[]; left: PlacedGap[] } {
+  const parity = book.teacherParity === true;
   const found = findBookCoverageGaps(outlines, book).map((gap) =>
     parity ? placeAnchorlessTeaching(gap, outlines, book, flow) : gap,
   );
+  const tryItMissing = new Set<string>();
   for (const gap of found) {
     if (gap.kind === 'missing_try_it') tryItMissing.add(gap.unit.contentUnitId);
   }
-  // g5.v8: a check solved before its try-it is a person's to move, so none of
-  // its gaps are planned around it.
   const solvedEarly = new Set(
     parity
       ? found
@@ -237,18 +265,29 @@ function repairableGaps(
           .map((gap) => gap.unit.contentUnitId)
       : [],
   );
-  const gaps = found.filter(
-    (gap) =>
-      !(gap.kind === 'missing_teaching' && tryItMissing.has(gap.unit.contentUnitId)) &&
-      // g5.v8: a new kind the plan cannot place (no anchor) is left to a person
-      // instead of blocking every other repair.
-      !(parity && gap.anchorIndex === undefined && TEACHER_PARITY_KINDS.has(gap.kind)) &&
-      // g5.v8 (lessons 314/315/318): any gap the plan cannot place stays open
-      // for a person, but never stops the checks the plan can place.
-      !(parity && (gap.anchorIndex === undefined || solvedEarly.has(gap.unit.contentUnitId))),
+  const candidates = found.filter(
+    (gap) => !(gap.kind === 'missing_teaching' && tryItMissing.has(gap.unit.contentUnitId)),
   );
-  if (gaps.length === 0 || gaps.some((gap) => gap.anchorIndex === undefined)) return null;
-  return gaps;
+  const placeable = (gap: PlacedGap) =>
+    gap.anchorIndex !== undefined && !solvedEarly.has(gap.unit.contentUnitId);
+  return {
+    planned: parity ? candidates.filter(placeable) : candidates,
+    left: parity ? candidates.filter((gap) => !placeable(gap)) : [],
+  };
+}
+
+/**
+ * g5.v12 (EN-4, critical items 27 Nov 2026): the book gaps the repair's rounds will NOT
+ * plan — a gap no slide of the plan places, or one of a check solved before its try-it.
+ * Read without a model call, so the runner can tell a violation a deterministic fix
+ * repairs from one only the planner (asked again) or a person can repair.
+ */
+export function unplaceableBookGaps(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+  flow: readonly TeachingFlowEntry[],
+): BookCoverageGap[] {
+  return classifyBookGaps(outlines, book, flow).left;
 }
 
 /** Intro-style book kinds: their slide orients the part when its position allows it. */
@@ -576,7 +615,201 @@ export function moveRecallFirst(
   return { outlines: current, moved: true };
 }
 
-const TEACHER_PARITY_KINDS: ReadonlySet<string> = new Set(['missing_recall', 'missing_exercises']);
+/** The g5.v12 rules a deterministic restructure answers (each is its own finding's fix). */
+const BOOK_PART_RESTRUCTURES: ReadonlySet<string> = new Set([
+  CHECKS_MERGED,
+  IDEAS_MERGED,
+  TITLE_ONLY_SLIDE,
+]);
+
+/**
+ * The codes a g5.v12 restructure may bring out without rolling back: a split asks for the
+ * solution slides it makes missing, and the slides it adds or removes sit where the
+ * book-part placement (run right after the repair) puts them.
+ */
+const BOOK_PART_EXPECTED: ReadonlySet<string> = new Set([
+  BOOK_COVERAGE_INCOMPLETE,
+  SLIDE_OUT_OF_BOOK_ORDER,
+  CHECK_BEFORE_ITS_PART,
+  ...BOOK_PART_RESTRUCTURES,
+]);
+
+/**
+ * An id no outline of the plan holds yet.
+ */
+function freshId(outlines: readonly SceneOutline[], base: string): string {
+  const taken = new Set(outlines.map((outline) => outline.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
+  return id;
+}
+
+/**
+ * The try-it slide of ONE check, built as the book prints the check: its own lines, in
+ * order, without an answer (the fallback slide of a missing try-it). The first slide of a
+ * split keeps the merged slide's id, stage and Skills.
+ */
+function tryItOfCheck(
+  merged: SceneOutline,
+  check: BookCoverageGap['unit'],
+  first: boolean,
+  outlines: readonly SceneOutline[],
+  context: BookCoverageRepairContext,
+): SceneOutline {
+  const unitId = check.contentUnitId;
+  const source = context.units.find((unit) => unit.id === unitId);
+  const lines = (source?.text ?? '')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !/^\[\[/.test(line));
+  const title = tryItTitle(source?.title?.trim() || merged.title || unitId, context.language);
+  const description = instructionFor({
+    kind: 'missing_try_it',
+    unit: check,
+    message: '',
+  });
+  const keyPoints =
+    lines.length > 0 ? spreadOverPoints(lines, TRY_IT_MAX_POINTS) : [...(merged.keyPoints ?? [])];
+  if (keyPoints.length === 0) keyPoints.push(title);
+  // The merged slide's own image stays only when it belongs to this check and already
+  // has its teaching note; a position that requires a visual gets a native diagram.
+  const planned = new Set((merged.imagePlans ?? []).map((plan) => plan.imageId));
+  const own = new Set(
+    context.visuals
+      .filter((visual) => (visual.sourceContentUnitIds ?? []).some((id) => String(id) === unitId))
+      .map((visual) => visual.id),
+  );
+  const kept = first
+    ? (merged.suggestedImageIds ?? []).filter((id) => own.has(id) && planned.has(id))
+    : [];
+  const stage = merged.teachingStage;
+  const entry = stage ? context.flow[stage.flowIndex] : undefined;
+  const visualRequired =
+    stage !== undefined && entry !== undefined && entry.stage === stage.key
+      ? scenePolicyFor(entry)?.visual !== undefined
+      : false;
+  const { suggestedImageIds: _ids, imagePlans: _plans, visualPlan: _plan, ...rest } = merged;
+  const note = teachingNoteFrom({ title, keyPoints, description });
+  return {
+    ...rest,
+    id: first ? merged.id : freshId(outlines, `${merged.id}-check-${unitId}`),
+    type: 'slide',
+    slideType: 'content',
+    contentRole: 'check_understanding',
+    title,
+    keyPoints,
+    description,
+    sourceContentUnitIds: [unitId],
+    ...(kept.length > 0
+      ? {
+          suggestedImageIds: kept,
+          imagePlans: (merged.imagePlans ?? []).filter((plan) => kept.includes(plan.imageId)),
+          visualPlan: { mode: 'image' },
+        }
+      : visualRequired
+        ? { visualPlan: { mode: 'native', diagram: note } }
+        : {}),
+  } as SceneOutline;
+}
+
+/**
+ * g5.v12 (W1.2), deterministic, no model call: a try-it that sets several checks becomes
+ * one try-it per check, in book order, each setting its own check's lines as the book
+ * prints them. A solution that solves several checks is taken out: each check then gets
+ * its own solution slide from the insert planner (`missing_solution`, never before its
+ * try-it). A solution slide that also teaches a book example is that example's slide: it
+ * stays and only stops citing the checks. Lesson 227: slides 9 and 17, three and two
+ * checks each. Returns the new list and what it did.
+ */
+export function splitMergedChecks(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+  context: BookCoverageRepairContext,
+): { outlines: SceneOutline[]; split: number; removed: number; recited: number } {
+  const merged = new Map(
+    mergedCheckSlides(outlines, book).map((group) => [group.index, group] as const),
+  );
+  const examples = new Set(
+    book.units
+      .filter((unit) => unit.element === 'worked_example')
+      .map((unit) => unit.contentUnitId),
+  );
+  const result: SceneOutline[] = [];
+  let split = 0;
+  let removed = 0;
+  let recited = 0;
+  outlines.forEach((outline, index) => {
+    const group = merged.get(index);
+    if (!group) {
+      result.push(outline);
+      return;
+    }
+    const checkIds = new Set(group.units.map((unit) => unit.contentUnitId));
+    if (outline.contentRole !== 'check_understanding') {
+      const ids = (outline.sourceContentUnitIds ?? []).map(String);
+      if (ids.some((id) => examples.has(id))) {
+        result.push({
+          ...outline,
+          sourceContentUnitIds: ids.filter((id) => !checkIds.has(id)),
+        } as SceneOutline);
+        recited += 1;
+      } else {
+        removed += 1;
+      }
+      return;
+    }
+    group.units.forEach((check, at) => {
+      if (at > 0) split += 1;
+      result.push(tryItOfCheck(outline, check, at === 0, outlines, context));
+    });
+  });
+  return {
+    outlines: result.map((outline, at) => ({ ...outline, order: at + 1 })),
+    split,
+    removed,
+    recited,
+  };
+}
+
+/**
+ * g5.v12 ("one idea per slide"), deterministic: a slide teaching several ideas is taken
+ * out, and the repair's rounds then plan one slide per idea from its own unit text
+ * (lesson 227 slide 7: three concepts on one slide). Returns the new list and how many
+ * slides it removed.
+ */
+export function unmergeIdeas(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): { outlines: SceneOutline[]; removed: number } {
+  const drop = new Set(ideasMergedSlides(outlines, book).map((group) => group.index));
+  return {
+    outlines: outlines
+      .filter((_outline, index) => !drop.has(index))
+      .map((outline, at) => ({ ...outline, order: at + 1 })),
+    removed: drop.size,
+  };
+}
+
+/**
+ * g5.v12 (decision D-2), deterministic: the transition slides that hold only a title and
+ * one line are taken out; the first teaching slide of the part names it. Never every
+ * slide of a plan. Returns the new list and how many it dropped.
+ */
+export function dropTitleOnlyTransitions(
+  outlines: readonly SceneOutline[],
+  book: CoverageBookStructure,
+): { outlines: SceneOutline[]; dropped: number } {
+  const drop = new Set(titleOnlyTransitions(outlines, book));
+  if (drop.size === 0 || drop.size === outlines.length) {
+    return { outlines: [...outlines], dropped: 0 };
+  }
+  return {
+    outlines: outlines
+      .filter((_outline, index) => !drop.has(index))
+      .map((outline, at) => ({ ...outline, order: at + 1 })),
+    dropped: drop.size,
+  };
+}
 
 export async function repairBookCoverageGaps(
   candidate: readonly SceneOutline[],
@@ -601,6 +834,23 @@ export async function repairBookCoverageGaps(
       .filter((unit) => unit.element === 'exercise')
       .map((unit) => String(unit.contentUnitId)),
   );
+  // M-3 (4 Nov 2026 rule): on a g5.v8 run an exercise or «تأكد» check unit
+  // reaches the planner and the fallback slide without its verse and hadith items.
+  const sacredExercise = new Set(
+    context.book.teacherParity === true
+      ? context.book.units.filter(isSacredExerciseElement).map((unit) => String(unit.contentUnitId))
+      : [],
+  );
+  const unitsById = new Map(
+    context.units.map((unit) => [
+      unit.id,
+      sacredExercise.has(String(unit.id)) ? { ...unit, text: withoutSacredItems(unit.text) } : unit,
+    ]),
+  );
+  // g5.v12 (critical items 27 Nov 2026): the book-part restructures, each the fix of
+  // its own finding and each without a model call.
+  const bookParts = context.book.bookPartPlacement === true;
+  const partOpen = (code: string) => open.some((issue) => issue.code === code);
   // g5.v8: one solution slide per check and recall first are fixed without a
   // model call, before any slide is planned, then the candidate is re-diagnosed.
   if (
@@ -612,24 +862,52 @@ export async function repairBookCoverageGaps(
         issue.code === RECALL_NOT_FIRST ||
         issue.code === EXAMPLE_TAUGHT_TWICE ||
         // g5.v10: an oversized exercises block is regrouped without a model call.
-        (context.book.learnerFirst === true && issue.code === EXERCISE_CAP_EXCEEDED),
+        (context.book.learnerFirst === true && issue.code === EXERCISE_CAP_EXCEEDED) ||
+        // g5.v12: merged checks, several ideas on one slide, a title-only transition.
+        (bookParts && BOOK_PART_RESTRUCTURES.has(issue.code)),
     )
   ) {
     // E-3: a step is kept only when it adds no new finding code outside the
     // g5.v8 set; otherwise the plan stays as it was and the step counts 0.
     const before = new Set(blocking.map((issue) => issue.code));
+    const expected = bookParts ? BOOK_PART_EXPECTED : TEACHER_PARITY_FINDINGS;
     const accept = (next: readonly SceneOutline[]) => {
       const diagnosed = context.diagnose(
         next.map((outline, index) => ({ ...outline, order: index + 1 })),
       );
       const added = diagnosed.blocking.some(
-        (issue) => !before.has(issue.code) && !TEACHER_PARITY_FINDINGS.has(issue.code),
+        (issue) => !before.has(issue.code) && !expected.has(issue.code),
       );
       if (added) return false;
       outlines = diagnosed.outlines;
       open = diagnosed.blocking;
       return true;
     };
+    // g5.v12: each check on its own try-it slide, each idea on its own slide, and no
+    // title-only transition. The slides a split adds are planned in the rounds below.
+    const split =
+      bookParts && partOpen(CHECKS_MERGED)
+        ? splitMergedChecks(outlines, context.book, { ...context, units: [...unitsById.values()] })
+        : null;
+    const splitKept =
+      split !== null && split.split + split.removed + split.recited > 0 && accept(split.outlines);
+    const unmerged =
+      bookParts && partOpen(IDEAS_MERGED) ? unmergeIdeas(outlines, context.book) : null;
+    const unmergeKept = unmerged !== null && unmerged.removed > 0 && accept(unmerged.outlines);
+    const dropped =
+      bookParts && partOpen(TITLE_ONLY_SLIDE)
+        ? dropTitleOnlyTransitions(outlines, context.book)
+        : null;
+    const dropKept = dropped !== null && dropped.dropped > 0 && accept(dropped.outlines);
+    if (split !== null || unmerged !== null || dropped !== null) {
+      log.info(
+        `book coverage repair (g5.v12): ${
+          splitKept
+            ? `${split.split} check(s) split onto their own try-it slide, ${split.removed} merged solution(s) taken out, ${split.recited} example slide(s) kept apart`
+            : 'checks not split'
+        }; ${unmergeKept ? `${unmerged.removed} slide(s) teaching several ideas taken out to be planned one per idea` : 'ideas not unmerged'}; ${dropKept ? `${dropped.dropped} title-only transition slide(s) dropped` : 'no title-only slide dropped'}`,
+      );
+    }
     // 21 Nov 2026: the repeats of an example taught twice go first — the merges below
     // then see the plan without them.
     const deduped = dropExamplesTaughtTwice(outlines, context.book);
@@ -656,6 +934,9 @@ export async function repairBookCoverageGaps(
       );
     }
     restructured =
+      (splitKept ? split.split + split.removed + split.recited : 0) +
+      (unmergeKept ? unmerged.removed : 0) +
+      (dropKept ? dropped.dropped : 0) +
       (dedupKept ? deduped.dropped : 0) +
       (mergeKept ? merged.merged + merged.recited : 0) +
       (moveKept ? 1 : 0) +
@@ -666,19 +947,6 @@ export async function repairBookCoverageGaps(
       );
     }
   }
-  // M-3 (4 Nov 2026 rule): on a g5.v8 run an exercise or «تأكد» check unit
-  // reaches the planner and the fallback slide without its verse and hadith items.
-  const sacredExercise = new Set(
-    context.book.teacherParity === true
-      ? context.book.units.filter(isSacredExerciseElement).map((unit) => String(unit.contentUnitId))
-      : [],
-  );
-  const unitsById = new Map(
-    context.units.map((unit) => [
-      unit.id,
-      sacredExercise.has(String(unit.id)) ? { ...unit, text: withoutSacredItems(unit.text) } : unit,
-    ]),
-  );
 
   const rounds = options.examples === true ? 1 : BOOK_COVERAGE_REPAIR_ROUNDS;
   for (let round = 1; round <= rounds; round += 1) {

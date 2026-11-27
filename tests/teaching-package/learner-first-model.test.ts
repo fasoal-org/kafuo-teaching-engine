@@ -66,6 +66,10 @@ const BOOK: KafuoBookStructure = {
   exercisePolicy: { maxExercises: 6, maxExerciseSlides: 3, minExercises: 4, minExerciseSlides: 1 },
 };
 
+/** v10's one-idea sentence: the part of the DEFINITIONS line that g5.v12 replaces. */
+const SAME_IDEA =
+  ' Never two consecutive slides that teach the same idea: a key-concept box and its own first example share one slide unless the box is long.';
+
 describe('g5.v10 learner-first switch', () => {
   it('names exactly g5/g5.v10', () => {
     expect(LEARNER_FIRST_TEACHING_MODEL).toEqual({ key: 'g5', version: 'g5.v10' });
@@ -180,7 +184,34 @@ describe('g5.v12 registration', () => {
     expect(isGuideAnswerModel(model)).toBe(true);
     expect(isTeacherParityModel(model)).toBe(true);
     const v11 = teacherParityBook(BOOK, { key: 'g5', version: 'g5.v11' });
-    expect(teacherParityBook(BOOK, model)).toEqual(v11);
+    // Critical items (27 Nov 2026): the book-part rules are marked on the v12 book alone.
+    expect(teacherParityBook(BOOK, model)).toEqual({ ...v11, bookPartPlacement: true });
+    expect(v11).not.toHaveProperty('bookPartPlacement');
+  });
+
+  it('gives the g5.v12 planner one idea per slide and one check per slide, v10 and v11 text unchanged (MG-4, MG-1)', () => {
+    const v10 = bookStructureRequirement(BOOK, { teacherParity: true, learnerFirst: true });
+    const v12 = bookStructureRequirement(BOOK, {
+      teacherParity: true,
+      learnerFirst: true,
+      bookPartPlacement: true,
+    });
+    // v10's line, gone on v12 only.
+    expect(v10).toContain('a key-concept box and its own first example share one slide');
+    expect(v12).not.toContain('share one slide');
+    expect(v12).toContain('ONE IDEA PER SLIDE: a teaching slide teaches one unit of its part');
+    expect(v12).toContain('ONE CHECK PER SLIDE');
+    expect(v12).toContain('never checks of two lesson parts');
+    expect(v12).toContain('BOOK-STRUCTURED LESSON (g5.v12)');
+    expect(v12).not.toContain('BOOK-STRUCTURED LESSON (g5.v10)');
+    // Everything else is v10's text.
+    const strip = (text: string) =>
+      text
+        .replace('(g5.v12)', '(g5.v10)')
+        .replace('LEARNER-FIRST (g5.v12)', 'LEARNER-FIRST (g5.v10)')
+        .replace(/ ONE IDEA PER SLIDE:[^\n]*/, SAME_IDEA)
+        .replace(/ONE CHECK PER SLIDE:[^\n]*\n[^\n]*\n/, '');
+    expect(strip(v12)).toBe(v10);
   });
 
   it('has its own switch, on for g5.v12 only', () => {

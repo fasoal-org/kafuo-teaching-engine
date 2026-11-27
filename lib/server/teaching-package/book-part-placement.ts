@@ -24,10 +24,29 @@
  * The objectives stay as the labels of the blocks, so each objective's graded checks
  * still come after its last part (owner decision A, 25 Nov 2026). Nothing here logs
  * lesson text.
+ *
+ * Critical items before regeneration (27 Nov 2026, planner review W1.3–W1.5 and
+ * book-section plan W3), all g5.v12 only:
+ *
+ * 4. Every unit with a `partIndex` is part content, a kind-less one too (D-4, W1.5):
+ *    {@link isPartUnit}. Before, an allowlist dropped the units the template could not
+ *    name, so their text was left unordered and could be taught out of place or dropped.
+ * 5. A slide citing checks is placed by its LAST check, a try-it too (W1.3): a try-it
+ *    merged from two parts is never asked before the second part is taught.
+ * 6. {@link findBookOrderDiagnostics}: the order gate (W1.4 / W3). A teaching slide that
+ *    sits outside the block owning its part, or after a slide the book prints later, is
+ *    `admin_correctable`; a check asked before the units the book prints before it in its
+ *    own part is reported as such. It runs in the one outline diagnosis, so the placement
+ *    runs first and what it cannot fix fails closed.
  */
+import type { OutlineDiagnostic } from '@openmaic/generation';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
+  GenerationCheckpointLogEntry,
+  GenerationInputSnapshot,
   KafuoBookStructure,
+  KafuoBookStructureUnit,
   LearningObjectiveRef,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
@@ -37,17 +56,24 @@ export const OBJECTIVE_EXPLANATION_STAGE = 'outcome_visual_explanations';
 /** The per-objective check quiz position, right after the objective's explanation block. */
 export const OBJECTIVE_CHECK_STAGE = 'outcome_check_understanding';
 
-/**
- * The book elements a part teaches. Recall, exercises, objective sources, ignored units
- * and untyped units (no template element; the runner may retype a practice unit as an
- * exercise) are placed by their own rules, never by part.
- */
-const TEACHING_ELEMENTS: ReadonlySet<string> = new Set([
-  'key_concept',
-  'worked_example',
-  'try_it',
-  'supporting',
+/** The elements the engine places by their own rule, never by part. */
+const PLACED_BY_RULE: ReadonlySet<string> = new Set([
+  'prior_knowledge',
+  'exercise',
+  'objective_source',
+  'ignore',
 ]);
+
+/**
+ * Whether a unit is part content: it lies in a lesson part and the engine does not place
+ * it by its own rule. Recall, exercises, objective sources and ignored units are not. A
+ * kind-less unit is (D-4, W1.5): the text the book prints after a check continues the
+ * part's explanation, and dropping it left it unordered. An untyped practice unit is
+ * typed as an exercise before the map is built (the typed book), so it stays out.
+ */
+export function isPartUnit(unit: Pick<KafuoBookStructureUnit, 'partIndex' | 'element'>): boolean {
+  return unit.partIndex !== undefined && !PLACED_BY_RULE.has(String(unit.element));
+}
 
 const STRUCTURAL_SLIDE_TYPES: ReadonlySet<string> = new Set(['cover', 'contents', 'transition']);
 
@@ -55,6 +81,7 @@ const STRUCTURAL_SLIDE_TYPES: ReadonlySet<string> = new Set(['cover', 'contents'
 const MAX_QUIZ_KEY_POINTS = 8;
 
 interface PlacedUnit {
+  id: string;
   /** Book order: the unit's index in `bookStructure.units`. */
   position: number;
   partIndex: number;
@@ -88,7 +115,8 @@ export interface BookPartMap {
  * The parts of the lesson and the block each belongs to, or `null` when the request
  * cannot carry them: no book map, an objective without its unit list, a flow whose
  * objective blocks do not match the objectives one for one, or a part split between two
- * objectives (the backend never sends one).
+ * objectives (the backend never sends one). Every part unit is in it (D-4, W1.5), a
+ * kind-less one too, when an objective owns it.
  */
 export function buildBookPartMap(
   book: KafuoBookStructure | undefined,
@@ -114,16 +142,17 @@ export function buildBookPartMap(
   const exerciseUnitIds = new Set<string>();
   for (const [position, unit] of book.units.entries()) {
     const id = String(unit.contentUnitId);
+    const partIndex = unit.partIndex;
     if (unit.element === 'exercise') exerciseUnitIds.add(id);
-    if (unit.partIndex === undefined || !TEACHING_ELEMENTS.has(String(unit.element))) continue;
+    if (partIndex === undefined || !isPartUnit(unit)) continue;
     const owner = ownerOf.get(id);
     if (owner === undefined) continue;
     const flowIndex = blocks[owner]!;
-    units.set(id, { position, partIndex: unit.partIndex, flowIndex, element: unit.element });
-    let part = parts.find((entry) => entry.partIndex === unit.partIndex);
+    units.set(id, { id, position, partIndex, flowIndex, element: unit.element });
+    let part = parts.find((entry) => entry.partIndex === partIndex);
     if (!part) {
       part = {
-        partIndex: unit.partIndex,
+        partIndex,
         flowIndex,
         objectiveRef: objectives[owner]!.objectiveRef,
         unitIds: [],
@@ -141,8 +170,53 @@ export function buildBookPartMap(
 }
 
 /**
+ * The parts map of a g5.v12 request, or `null` on every other Teaching Model (and on
+ * the cases {@link buildBookPartMap} refuses). The one place the identity check is made
+ * for a diagnosis, an edit or a resume.
+ */
+export function bookPartMapFor(
+  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
+  book: KafuoBookStructure | undefined,
+  objectives: readonly LearningObjectiveRef[] | undefined,
+  flow: readonly TeachingFlowEntry[],
+): BookPartMap | null {
+  return isBookPartPlacementModel(teachingModel)
+    ? buildBookPartMap(book, objectives ?? [], flow)
+    : null;
+}
+
+/**
+ * Every unit the parts list names, in book order (D-4): the units the plan must teach on
+ * a slide of their own part, a kind-less one too.
+ */
+export function listedPartUnitIds(map: BookPartMap): string[] {
+  return map.parts.flatMap((part) => part.unitIds);
+}
+
+/**
+ * The v12 rules the planner is held to (27 Nov 2026). Each one is a gate the engine
+ * checks on the plan, or fixes itself, before any slide is generated.
+ */
+const BOOK_PART_RULES: readonly string[] = [
+  'g5.v12 RULES (the engine checks each one before any slide is generated):',
+  '- EVERY LISTED UNIT IS TAUGHT: each unit listed above gets its own teaching slide, in',
+  '  its part and in book order. A unit the template names no kind for continues the',
+  '  explanation before it: teach it too, on its own slide, where the book prints it.',
+  '- ONE IDEA PER SLIDE: a teaching slide teaches ONE listed unit. Never two key concepts',
+  '  on one slide, and never a key-concept box together with an example. A side note (a',
+  '  supporting unit) stays on the slide of the element it explains.',
+  '- ONE CHECK PER SLIDE: a try-it slide (contentRole check_understanding) sets the items',
+  '  of ONE check unit, and its solution slide (contentRole worked_example) solves that',
+  '  one check. Never merge two checks on one slide, and never checks of two parts.',
+  '- NO CHECK BEFORE ITS PART: a check is asked only after every slide that teaches a',
+  '  unit the book prints before that check in its part.',
+  '- NO TITLE-ONLY SLIDE: plan no transition slide that holds only a title and one line.',
+  '  The first teaching slide of each part names the part in its title.',
+];
+
+/**
  * The planner text: the parts in book order, each with its units and the objective block
- * its slides must carry. Appended to the requirement of a g5.v12 request only.
+ * its slides must carry, then the rules above. Given to a g5.v12 planner only.
  */
 export function bookPartsRequirement(map: BookPartMap, flow: readonly TeachingFlowEntry[]): string {
   return [
@@ -157,6 +231,7 @@ export function bookPartsRequirement(map: BookPartMap, flow: readonly TeachingFl
       (part) =>
         `- Part ${part.partIndex} → teachingStage { "key": "${flow[part.flowIndex]!.stage}", "flowIndex": ${part.flowIndex} } (objective [${part.objectiveRef}]): units ${part.unitIds.join(', ')}`,
     ),
+    ...BOOK_PART_RULES,
   ].join('\n');
 }
 
@@ -173,16 +248,26 @@ interface Placement {
   sub: number;
 }
 
+/** A teaching slide's place in book order, read from the units it cites. */
+export interface SlidePlacement {
+  /** The unit that places the slide: its last check, else its earliest unit. */
+  anchor: PlacedUnit;
+  /** The checks it cites, in book order. */
+  checks: PlacedUnit[];
+  /** Every cited unit the map places. */
+  cited: PlacedUnit[];
+  /** Its units belong to two objective blocks. */
+  mixed: boolean;
+}
+
 /**
- * A teaching slide's place: by the check it sets when it cites one, else its earliest
- * unit. A try-it slide takes its first check, any other slide citing checks (a solution)
- * its last, so a solution never comes before the try-it of a check it solves — even when
- * it also cites the example before it.
+ * A teaching slide's place: by the checks it sets when it cites one, else its earliest
+ * unit. A slide citing checks takes its LAST check, a try-it too (W1.3: it took its
+ * first, so a try-it merged from two parts was asked before the second part was
+ * taught). So no slide that cites a check ever comes before the try-it of that check,
+ * even when it also cites the example before it.
  */
-function teachingPlacement(
-  outline: SceneOutline,
-  map: BookPartMap,
-): { flowIndex: number; key: number; mixed: boolean } | null {
+function placementOf(outline: SceneOutline, map: BookPartMap): SlidePlacement | null {
   if (outline.type !== 'slide' || STRUCTURAL_SLIDE_TYPES.has(String(outline.slideType ?? ''))) {
     return null;
   }
@@ -192,15 +277,26 @@ function teachingPlacement(
   if (cited.length === 0) return null;
   const checks = cited.filter((unit) => unit.element === 'try_it');
   const pool = checks.length > 0 ? checks : cited;
-  const last = checks.length > 0 && outline.contentRole !== 'check_understanding';
+  const last = checks.length > 0;
   const anchor = pool.reduce((chosen, unit) =>
     (last ? unit.position > chosen.position : unit.position < chosen.position) ? unit : chosen,
   );
   return {
-    flowIndex: anchor.flowIndex,
-    key: anchor.position,
+    anchor,
+    checks,
+    cited,
     mixed: new Set(cited.map((unit) => unit.flowIndex)).size > 1,
   };
+}
+
+function teachingPlacement(
+  outline: SceneOutline,
+  map: BookPartMap,
+): { flowIndex: number; key: number; mixed: boolean } | null {
+  const place = placementOf(outline, map);
+  return place
+    ? { flowIndex: place.anchor.flowIndex, key: place.anchor.position, mixed: place.mixed }
+    : null;
 }
 
 /** The exercises block and the closing slide: kept at the end of their own block. */
@@ -218,6 +314,132 @@ function isBlockTail(
   if (solvesExercises(outline)) return true;
   // The «تمارين» transition opens the exercises block.
   return outline.slideType === 'transition' && solvesExercises(next);
+}
+
+/**
+ * g5.v12 (W1.4, book-section plan W3): a teaching slide outside the book's order — it
+ * sits in another objective's block than the one owning its part, it comes after a slide
+ * the book prints later, or its units belong to two blocks.
+ */
+export const SLIDE_OUT_OF_BOOK_ORDER = 'SLIDE_OUT_OF_BOOK_ORDER';
+/**
+ * g5.v12 (W1.3): a check asked before the slides that teach the units the book prints
+ * before it in the check's own part.
+ */
+export const CHECK_BEFORE_ITS_PART = 'CHECK_BEFORE_ITS_PART';
+
+/** `unit 6772 (part 5)`: an id and its part, never a title or text. */
+const unitLabel = (unit: PlacedUnit) => `unit ${unit.id} (part ${unit.partIndex})`;
+
+/**
+ * The order gate of a g5.v12 plan: every teaching slide inside the block that owns its
+ * part, and in book order inside it (a try-it before the solution of its check). At one
+ * key the try-it (rank 0) comes first and any other slide (rank 1) after it, exactly as
+ * {@link placeOutlinesByBookPart} sorts. The closing slide, the exercises block and a
+ * slide citing no unit of the map are placed by rule and never reported.
+ *
+ * A slide the placement could not put right is reported once: a try-it that precedes a
+ * slide teaching an earlier unit of its own part as {@link CHECK_BEFORE_ITS_PART} (the
+ * check is what came too early), any other late slide as {@link SLIDE_OUT_OF_BOOK_ORDER},
+ * with the block it belongs to. A slide cannot be in two findings.
+ */
+export function findBookOrderDiagnostics(
+  outlines: readonly SceneOutline[],
+  map: BookPartMap,
+  flow: readonly TeachingFlowEntry[],
+): OutlineDiagnostic[] {
+  const diagnostics: OutlineDiagnostic[] = [];
+  const reported = new Set<number>();
+  const label = (outline: SceneOutline, index: number) =>
+    `outline #${index + 1} «${outline.title ?? ''}»`;
+  const report = (
+    index: number,
+    code: string,
+    field: string,
+    message: string,
+    extra: Pick<OutlineDiagnostic, 'flowIndex' | 'stage' | 'allowedValues'> = {},
+  ): void => {
+    if (reported.has(index)) return;
+    reported.add(index);
+    const outline = outlines[index]!;
+    diagnostics.push({
+      code,
+      disposition: 'admin_correctable',
+      outlineIndex: index,
+      ...(outline.id ? { outlineId: outline.id } : {}),
+      field,
+      message,
+      ...extra,
+    });
+  };
+  for (const block of map.blocks) {
+    const seen: Array<{ index: number; place: SlidePlacement; tryIt: boolean }> = [];
+    outlines.forEach((outline, index) => {
+      const stage = outline.teachingStage;
+      if (!stage || stage.flowIndex !== block || flow[block]?.stage !== stage.key) return;
+      const place = placementOf(outline, map);
+      // The closing slide and the exercises block keep their own places.
+      if (!place || isBlockTail(outline, outlines[index + 1], map)) return;
+      const { anchor } = place;
+      if (place.mixed) {
+        const parts = [...new Set(place.cited.map((unit) => unit.partIndex))].sort((a, b) => a - b);
+        report(
+          index,
+          SLIDE_OUT_OF_BOOK_ORDER,
+          'sourceContentUnitIds',
+          `${label(outline, index)} teaches units of two lesson parts that belong to different objective blocks (part ${parts.join(' and part ')}): plan each part's units on slides of their own block`,
+        );
+      } else if (anchor.flowIndex !== block) {
+        report(
+          index,
+          SLIDE_OUT_OF_BOOK_ORDER,
+          'teachingStage',
+          `${label(outline, index)} teaches ${unitLabel(anchor)}, which belongs to the objective block at flow position ${anchor.flowIndex}: move it into that block`,
+          {
+            flowIndex: anchor.flowIndex,
+            stage: flow[anchor.flowIndex]?.stage,
+            allowedValues: [anchor.flowIndex],
+          },
+        );
+      } else {
+        const tryIt = outline.contentRole === 'check_understanding';
+        const key = anchor.position;
+        const rank = tryIt ? 0 : 1;
+        for (const before of seen) {
+          // Already reported as outside its block.
+          if (before.place.mixed || before.place.anchor.flowIndex !== block) continue;
+          // A solution before its try-it is the check's own finding (`solution_before_try_it`).
+          if (before.place.checks.some((check) => place.checks.includes(check))) continue;
+          const at = before.place.anchor.position;
+          if (at < key || (at === key && (before.tryIt ? 0 : 1) <= rank)) continue;
+          // A try-it that precedes a slide teaching an earlier unit of its own part is
+          // the check asked too early; anything else is a slide that came too late.
+          const early = before.tryIt
+            ? before.place.checks.find(
+                (check) => check.partIndex === anchor.partIndex && key < check.position,
+              )
+            : undefined;
+          if (early !== undefined) {
+            report(
+              before.index,
+              CHECK_BEFORE_ITS_PART,
+              'order',
+              `${label(outlines[before.index]!, before.index)} asks ${unitLabel(early)} before ${label(outline, index)}, which teaches ${unitLabel(anchor)}: the book prints that unit first. Move the check after every slide that teaches a unit printed before it in part ${early.partIndex}`,
+            );
+          } else {
+            report(
+              index,
+              SLIDE_OUT_OF_BOOK_ORDER,
+              'order',
+              `${label(outline, index)} teaches ${unitLabel(anchor)} after ${label(outlines[before.index]!, before.index)}, which teaches ${unitLabel(before.place.anchor)}: the book prints it first. Move it before that slide`,
+            );
+          }
+        }
+      }
+      seen.push({ index, place, tryIt: outline.contentRole === 'check_understanding' });
+    });
+  }
+  return diagnostics;
 }
 
 export interface BookPartPlacementResult {
@@ -499,4 +721,98 @@ export function placeWithGuard(
   const added = [...now].filter(([code, n]) => n > (was.get(code) ?? 0)).map(([code]) => code);
   if (added.length > 0) return { outlines: planned, placement: null, rolledBackFor: added };
   return { outlines: placement.outlines, placement, rolledBackFor: [] };
+}
+
+/** A placed candidate and what its re-diagnosis leaves open. */
+export interface PlacedCandidate {
+  outlines: SceneOutline[];
+  blocking: OutlineDiagnostic[];
+  /** The kept placement, or `null` when the plan stays as it is. */
+  placement: BookPartPlacementResult | null;
+  /** The codes that made the placement roll back (one more of a code counts too). */
+  rolledBackFor: string[];
+}
+
+/** g5.v12: which objective block owns a part, and which flow positions are blocks. */
+export interface BookPartBlocks {
+  ownerBlockOf: (unitId: string) => number | undefined;
+  isObjectiveBlock: (flowIndex: number) => boolean;
+}
+
+/**
+ * The book-part blocks of a g5.v12 version, from its retained attempt (the request's
+ * book map and objectives). `null` on every other version, or when the attempt cannot
+ * carry them; then a part moves and a slide is inserted as before.
+ */
+export function bookPartBlocksFor(
+  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
+  snapshot:
+    | Pick<GenerationInputSnapshot, 'bookStructure' | 'learningObjectives' | 'teachingFlow'>
+    | null
+    | undefined,
+): BookPartBlocks | null {
+  const map = bookPartMapFor(
+    teachingModel,
+    snapshot?.bookStructure,
+    snapshot?.learningObjectives,
+    snapshot?.teachingFlow ?? [],
+  );
+  if (!map) return null;
+  const blocks = new Set(map.blocks);
+  return {
+    ownerBlockOf: (unitId) => map.units.get(unitId)?.flowIndex,
+    isObjectiveBlock: (flowIndex) => blocks.has(flowIndex),
+  };
+}
+
+/**
+ * Whether a person moved or re-staged a slide of a paused plan (read from its edit log).
+ * The resumed run and the paused plan's review then never place its slides again: their
+ * correction stands (overnight decision N-7).
+ */
+export function personPlacedOutlines(
+  editLog: readonly Pick<GenerationCheckpointLogEntry, 'event' | 'operations'>[],
+): boolean {
+  return editLog.some(
+    (entry) =>
+      entry.event === 'edited' &&
+      (entry.operations ?? []).some((operation) => {
+        const { op, field } = (operation ?? {}) as { op?: unknown; field?: unknown };
+        return op === 'move' || (op === 'set' && field === 'teachingStage');
+      }),
+  );
+}
+
+/**
+ * {@link placeWithGuard} on a candidate, with the re-diagnosis the caller already uses:
+ * the placed plan comes back as that diagnosis normalised it, with its open issues, so
+ * what the placement could not put right is still open for the next step (fail closed).
+ */
+export function placeCandidate(
+  outlines: SceneOutline[],
+  map: BookPartMap,
+  flow: readonly TeachingFlowEntry[],
+  diagnose: (candidate: SceneOutline[]) => {
+    outlines: SceneOutline[];
+    blocking: OutlineDiagnostic[];
+  },
+): PlacedCandidate {
+  const guarded = placeWithGuard(outlines, map, flow, (candidate) =>
+    diagnose(candidate).blocking.map((issue) => issue.code),
+  );
+  if (!guarded.placement) {
+    return {
+      outlines,
+      blocking: diagnose(outlines).blocking,
+      placement: null,
+      rolledBackFor: guarded.rolledBackFor,
+    };
+  }
+  const diagnosed = diagnose(guarded.outlines);
+  return {
+    outlines: diagnosed.outlines,
+    blocking: diagnosed.blocking,
+    placement: guarded.placement,
+    rolledBackFor: [],
+  };
 }

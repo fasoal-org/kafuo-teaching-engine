@@ -32,12 +32,14 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
-  isBookPartPlacementModel,
   isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
-import { buildBookPartMap } from '@/lib/server/teaching-package/book-part-placement';
+import {
+  bookPartBlocksFor,
+  type BookPartBlocks,
+} from '@/lib/server/teaching-package/book-part-placement';
 import {
   VOICE_LEASE_MARGIN_MS,
   voiceRegeneratedScene,
@@ -85,7 +87,7 @@ import {
 } from '@/lib/server/teaching-package/scene-regeneration-store';
 import { sceneRegenerationSessionRef } from '@/lib/server/teaching-package/editor-grant';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { GenerationInputSnapshot, TeachingPackageStatus } from '@/lib/types/teaching-package';
+import type { TeachingPackageStatus } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 import { createLogger } from '@/lib/logger';
 
@@ -307,37 +309,9 @@ export function resolveContentUnitChange(
   return { unitIds: next, directive: contentUnitDirective(change.op, unit) };
 }
 
-/** g5.v12: which objective block owns a part, and which flow positions are blocks. */
-export interface BookPartBlocks {
-  ownerBlockOf: (unitId: string) => number | undefined;
-  isObjectiveBlock: (flowIndex: number) => boolean;
-}
-
-/**
- * The book-part blocks of a g5.v12 version, from its retained attempt (the request's
- * book map and objectives). `null` on every other version, or when the attempt cannot
- * carry them; then a part moves as before.
- */
-export function bookPartBlocksFor(
-  teachingModel: { key?: string | null; version?: string | null } | null | undefined,
-  snapshot:
-    | Pick<GenerationInputSnapshot, 'bookStructure' | 'learningObjectives' | 'teachingFlow'>
-    | null
-    | undefined,
-): BookPartBlocks | null {
-  if (!snapshot || !isBookPartPlacementModel(teachingModel)) return null;
-  const map = buildBookPartMap(
-    snapshot.bookStructure,
-    snapshot.learningObjectives ?? [],
-    snapshot.teachingFlow ?? [],
-  );
-  if (!map) return null;
-  const blocks = new Set(map.blocks);
-  return {
-    ownerBlockOf: (unitId) => map.units.get(unitId)?.flowIndex,
-    isObjectiveBlock: (flowIndex) => blocks.has(flowIndex),
-  };
-}
+// g5.v12: which objective block owns a part. Defined with the parts map
+// (`book-part-placement.ts`); re-exported here for its first readers.
+export { bookPartBlocksFor, type BookPartBlocks };
 
 /** The model-facing directive for a moved part; its text is untrusted source material. */
 function contentUnitDirective(op: ContentUnitChange['op'], unit: ContentUnitRow): string {

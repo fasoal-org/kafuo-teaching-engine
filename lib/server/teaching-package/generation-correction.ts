@@ -79,6 +79,10 @@ import {
   type StoredPlanReview,
 } from '@/lib/server/teaching-package/plan-fix-records';
 import { applyPlanAutoFixes } from '@/lib/server/teaching-package/plan-auto-fixes';
+import {
+  placeCandidate,
+  personPlacedOutlines,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { PLAN_REVIEW_PROMPT_VERSION, reviewPlan } from '@/lib/server/teaching-package/plan-review';
 import { createPlanReviewAiCall } from '@/lib/server/teaching-package/routed-plan-review-call';
 import { createLogger } from '@/lib/logger';
@@ -338,6 +342,8 @@ export async function editGenerationCorrection(
       attempt.inputSnapshot.bookStructure,
       attempt.teachingModel,
       attempt.inputSnapshot.teacherGuide,
+      // g5.v12: the lesson's parts, for the book-order gate.
+      attempt.inputSnapshot.learningObjectives,
     );
     // P3: «تراجع» puts one recorded fix's before-state back, before any other op.
     const reverted = revertedFixIds(checkpoint.editLog);
@@ -576,6 +582,8 @@ export async function runCheckpointPlanReview(
       attempt.inputSnapshot.bookStructure,
       attempt.teachingModel,
       attempt.inputSnapshot.teacherGuide,
+      // g5.v12: the lesson's parts, for the book-order gate.
+      attempt.inputSnapshot.learningObjectives,
     );
     const ignored = ignoredIssueKeys(checkpoint.editLog);
     // The machine repairs of each diagnosis, by the outlines it returned: the stored
@@ -602,6 +610,20 @@ export async function runCheckpointPlanReview(
       outlines = ruled.outlines;
       blocking = ruled.blocking;
       drafts.push(...ruled.fixes);
+    }
+    // g5.v12 (EN-2): then every teaching slide in book order, as the run itself places
+    // it, so «تراجع» repairs an order pause without a person moving slides. As in the
+    // run: never over a person who moved or re-staged a slide (their correction stands),
+    // and kept only when the re-diagnosis finds nothing the planned order did not have.
+    if (diagnosisContext.bookParts && !personPlacedOutlines(checkpoint.editLog)) {
+      const placed = placeCandidate(outlines, diagnosisContext.bookParts, flow, diagnose);
+      outlines = placed.outlines;
+      blocking = placed.blocking;
+      if (placed.rolledBackFor.length > 0) {
+        log.warn(
+          `Plan review of paused attempt ${attemptId}: book-part placement skipped (new issues: ${placed.rolledBackFor.join(', ')})`,
+        );
+      }
     }
     if (blocking.length > 0) {
       // The route is resolved by the first call: a route failure ends the AI review
@@ -840,6 +862,8 @@ export async function resumeGenerationAttempt(
         attempt.inputSnapshot.bookStructure,
         attempt.teachingModel,
         attempt.inputSnapshot.teacherGuide,
+        // g5.v12: the lesson's parts, for the book-order gate.
+        attempt.inputSnapshot.learningObjectives,
       ),
     );
     // A missing image / diagram teaching note is the TE's to write, not the

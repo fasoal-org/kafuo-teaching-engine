@@ -488,6 +488,58 @@ describe('buildKafuoStartRequest', () => {
     expect(JSON.stringify(start)).not.toContain('X-Amz-Signature');
     expect(kafuo.normalizedContentResource?.url).toContain('X-Amz-Signature');
   });
+
+  it('g5.v12 (critical items, 27 Nov 2026): its own book rules in the requirement, and no parts list here', () => {
+    const flow = [
+      { stage: 'lesson_opener', instructions: 'Open.' },
+      { stage: 'outcome_visual_explanations', instructions: 'Teach.' },
+      { stage: 'outcome_check_understanding', instructions: 'Check.' },
+    ];
+    const bookStructure = {
+      templateVersionId: '4',
+      rules: [{ kind: 'KEY_CONCEPT', element: 'key_concept', required: true }],
+      units: [
+        {
+          contentUnitId: '7001',
+          kind: 'KEY_CONCEPT',
+          element: 'key_concept',
+          required: true,
+          partIndex: 1,
+        },
+      ],
+    };
+    const learningObjectives = [
+      {
+        objectiveRef: '7001',
+        snapshot: { statement: 'Explain photosynthesis.' },
+        contentUnitIds: ['7001'],
+      },
+    ];
+    const requirementFor = (version: string) => {
+      const { request, aggregate } = parseKafuoGenerationRequest(
+        body({ teachingModel: { key: 'g5', version, flow }, learningObjectives, bookStructure }),
+      );
+      return buildKafuoStartRequest(request, aggregate).start.generation.requirement;
+    };
+    const v11 = requirementFor('g5.v11');
+    const v12 = requirementFor('g5.v12');
+    // The planner reads g5.v12's own rules: one idea per slide (in place of v10's shared
+    // key-concept slide, MG-4) and one check per slide (MG-1).
+    expect(v12).toContain('BOOK-STRUCTURED LESSON (g5.v12)');
+    expect(v12).toContain('ONE IDEA PER SLIDE');
+    expect(v12).toContain('ONE CHECK PER SLIDE');
+    expect(v12).toContain('never checks of two lesson parts');
+    expect(v12).not.toContain('share one slide');
+    // The parts list is NOT built here: the runner appends it from the typed book, so the
+    // planner and the engine read one map (EN-3).
+    expect(v12).not.toContain('LESSON PARTS IN BOOK ORDER');
+    // g5.v11 is as before, byte for byte: v10's planner text and no v12 rule.
+    expect(v11).toContain('BOOK-STRUCTURED LESSON (g5.v10)');
+    expect(v11).toContain('a key-concept box and its own first example share one slide');
+    expect(v11).not.toContain('ONE IDEA PER SLIDE');
+    expect(v11).not.toContain('ONE CHECK PER SLIDE');
+    expect(v11).not.toContain('LESSON PARTS IN BOOK ORDER');
+  });
 });
 
 describe('teachingModel.flow[].scenePolicy (g5.v5+)', () => {

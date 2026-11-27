@@ -61,6 +61,8 @@ import {
   orderedScenes,
   placeholderProjection,
   resolveInsertionPosition,
+  stagesOwnedByPart,
+  type PartBlockOwner,
 } from '@/lib/server/teaching-package/content-unit-coverage';
 import {
   agentOpDigest,
@@ -701,6 +703,8 @@ export function insertionRequestFor(
   scenes: readonly AppScene[],
   flow: Parameters<typeof allowedStagesAt>[1] | null,
   now: number,
+  /** g5.v12 (V12-3): which objective block owns each part. */
+  blocks: PartBlockOwner | null = null,
 ): SceneInsertionRequest {
   const afterSceneId =
     body.afterSceneId === undefined || body.afterSceneId === null
@@ -719,7 +723,13 @@ export function insertionRequestFor(
   let teachingStage = stageRef(body.teachingStage);
   if (!teachingStage) {
     const position = resolveInsertionPosition(scenes, { afterSceneId, beforeSceneId });
-    const allowed = position.ok && flow ? allowedStagesAt(scenes, flow, position) : [];
+    // g5.v12 (V12-3): only the block that owns the parts, so the default stage is the
+    // real run's (at a block boundary, the owner's and not the neighbour's).
+    const unitIds = Array.isArray(body.unitIds) ? body.unitIds.map(String) : [];
+    const allowed =
+      position.ok && flow
+        ? stagesOwnedByPart(allowedStagesAt(scenes, flow, position), unitIds, blocks)
+        : [];
     if (allowed.length !== 1) {
       throw new TeachingPackageError(
         'INSERTION_POSITION_NOT_ALLOWED',
@@ -777,6 +787,7 @@ async function insertionDryRun(
     insertion.flow,
     false,
     insertion.gaps,
+    insertion.blocks,
   );
   exactFlowOrRefuse(
     placeholderProjection(document.scenes, position.at, {
@@ -872,7 +883,7 @@ async function generateOp(
   const insertion = await readInsertionContext(context.pool, grant);
   const document = await loadStageDocument(context);
   const now = (context.now ?? Date.now)();
-  const request = insertionRequestFor(body, document.scenes, insertion.flow, now);
+  const request = insertionRequestFor(body, document.scenes, insertion.flow, now, insertion.blocks);
   if (context.dryRun) return insertionDryRun(context, request, document, insertion);
 
   const opId = insertionOpId(request.idempotencyKey);

@@ -38,11 +38,20 @@ import {
   isGuideAnswerModel,
   learnerFirstVisualsOf,
   requireEssentialUntypedUnits,
+  requireTaughtUnits,
   teacherParityBook,
   withTypedPracticeUnits,
   type BookCoverageGap,
   type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  bookPartMapFor,
+  CHECK_BEFORE_ITS_PART,
+  findBookOrderDiagnostics,
+  listedPartUnitIds,
+  SLIDE_OUT_OF_BOOK_ORDER,
+  type BookPartMap,
+} from '@/lib/server/teaching-package/book-part-placement';
 import {
   instructionFor,
   solutionTitle,
@@ -69,6 +78,7 @@ import type {
   GenerationCheckpointSourceRefs,
   KafuoBookStructure,
   KafuoTeacherGuide,
+  LearningObjectiveRef,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
 
@@ -137,6 +147,12 @@ export interface OutlineDiagnosisContext {
    * g5.v8 attempt's map is marked `teacherParity` (`teacherParityBook`).
    */
   bookStructure?: CoverageBookStructure;
+  /**
+   * g5.v12 only: the lesson's parts and the objective block owning each, for the
+   * book-order gate (`findBookOrderDiagnostics`). Absent on every other Teaching Model
+   * and when the request cannot carry the parts; then no slide is checked for order.
+   */
+  bookParts?: BookPartMap;
 }
 
 const positionLabel = (flow: readonly TeachingFlowEntry[], outline: SceneOutline | undefined) => {
@@ -240,6 +256,11 @@ export function appOutlineDiagnostics(
   // g5.v7: a required book element without its slide (P-6). Here, in the one
   // app-authority diagnosis, so a correction edit re-checks it like the runner.
   diagnostics.push(...findBookCoverageDiagnostics(outlines, context.bookStructure));
+  // g5.v12: a teaching slide outside the book's order (W1.4), in the same one diagnosis,
+  // so the placement runs before anything blocks on it and an edit re-checks it too.
+  if (context.bookParts) {
+    diagnostics.push(...findBookOrderDiagnostics(outlines, context.bookParts, context.flow));
+  }
   return diagnostics;
 }
 
@@ -282,6 +303,10 @@ export function diagnoseCandidateOutlines(
  * The coverage book a correction re-checks against: the pinned map, its
  * essential untyped units required, and — only for a g5.v8 attempt — the
  * teacher-parity mark with the unit facts the run pinned.
+ *
+ * `parts` (g5.v12 only) is the lesson's parts map, built from the same typed book: then
+ * every listed part unit and every essential section is required too (W1.6), exactly as
+ * the run's own coverage book required them.
  */
 export function correctionCoverageBook(
   sourceRefs: Pick<GenerationCheckpointSourceRefs, 'essentialContentUnitIds' | 'bookUnitFacts'> &
@@ -290,20 +315,27 @@ export function correctionCoverageBook(
   teachingModel: { key: string; version: string } | undefined,
   /** g5.v11: the attempt's pinned guide items, so the re-check selects the run's set. */
   teacherGuide?: KafuoTeacherGuide,
+  parts?: BookPartMap | null,
 ): CoverageBookStructure | undefined {
   // Lesson 2-5 (g5.v11): the run's typed practice units, from the pinned subtypes.
   const book = isGuideAnswerModel(teachingModel)
     ? withTypedPracticeUnits(bookStructure, sourceRefs.contentUnits ?? [])
     : bookStructure;
-  return teacherParityBook(
-    requireEssentialUntypedUnits(book, sourceRefs.essentialContentUnitIds),
-    teachingModel,
-    sourceRefs.bookUnitFacts,
-    teacherGuide,
-  );
+  const essential = sourceRefs.essentialContentUnitIds;
+  const required = parts
+    ? requireTaughtUnits(requireEssentialUntypedUnits(book, essential), [
+        ...listedPartUnitIds(parts),
+        ...(essential ?? []).map(String),
+      ])
+    : requireEssentialUntypedUnits(book, essential);
+  return teacherParityBook(required, teachingModel, sourceRefs.bookUnitFacts, teacherGuide);
 }
 
-/** The diagnosis context a checkpoint pins (metadata only — no bytes). */
+/**
+ * The diagnosis context a checkpoint pins (metadata only — no bytes). On g5.v12 it also
+ * carries the lesson's parts (`learningObjectives`, from the attempt's snapshot), so an
+ * edit and the revalidation before a resume check the book's order as the run did.
+ */
 export function diagnosisContextFromCheckpoint(
   checkpoint: Pick<GenerationCheckpoint, 'sourceRefs'>,
   flow: readonly TeachingFlowEntry[],
@@ -311,15 +343,27 @@ export function diagnosisContextFromCheckpoint(
   bookStructure?: KafuoBookStructure,
   teachingModel?: { key: string; version: string },
   teacherGuide?: KafuoTeacherGuide,
+  learningObjectives?: readonly LearningObjectiveRef[],
 ): OutlineDiagnosisContext {
+  const bookParts = bookPartMapFor(
+    teachingModel,
+    // The same typed book the coverage book reads, so both hold the same units.
+    isGuideAnswerModel(teachingModel)
+      ? withTypedPracticeUnits(bookStructure, checkpoint.sourceRefs.contentUnits ?? [])
+      : bookStructure,
+    learningObjectives,
+    flow,
+  );
   const coverageBook = correctionCoverageBook(
     checkpoint.sourceRefs,
     bookStructure,
     teachingModel,
     teacherGuide,
+    bookParts,
   );
   return {
     ...(coverageBook ? { bookStructure: coverageBook } : {}),
+    ...(bookParts ? { bookParts } : {}),
     flow,
     contentUnitIds: checkpoint.sourceRefs.contentUnitIds,
     sourceImages: checkpoint.sourceRefs.sourceImages.map((image) => ({
@@ -427,6 +471,9 @@ const NOT_IGNORABLE_CODES: ReadonlySet<string> = new Set([
   'SCENE_CONFIG_INVALID',
   'WIDGET_TYPE_PROHIBITED',
   'NO_OUTLINES',
+  // g5.v12: the book's order is the rule the slides follow; Submit re-checks it too.
+  SLIDE_OUT_OF_BOOK_ORDER,
+  CHECK_BEFORE_ITS_PART,
 ]);
 
 /**
@@ -1153,12 +1200,17 @@ export function buildCorrectionView(
       checkpoint.phase === 'outline'
         ? insertableBookGaps(
             checkpoint.outlines,
-            correctionCoverageBook(
-              checkpoint.sourceRefs,
+            // The run's own coverage book (g5.v12: with the lesson's parts), so a slide
+            // a person may add answers exactly the gap the diagnosis reports.
+            diagnosisContextFromCheckpoint(
+              checkpoint,
+              flow,
+              attempt.teachingSkillsContract !== null,
               attempt.inputSnapshot.bookStructure,
               attempt.teachingModel,
               attempt.inputSnapshot.teacherGuide,
-            ),
+              attempt.inputSnapshot.learningObjectives,
+            ).bookStructure,
             flow,
           ).map((gap) => {
             const anchor = checkpoint.outlines[gap.anchorIndex!]!;

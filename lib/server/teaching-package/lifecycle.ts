@@ -54,6 +54,11 @@ import {
   teachingModelLineageDrift,
 } from '@/lib/server/teaching-package/successor-model';
 import { findUntaughtEssentialSections } from '@/lib/server/teaching-package/content-unit-coverage';
+import {
+  bookOrderRefusal,
+  checkSubmitBookRules,
+  uncoveredSectionsRefusal,
+} from '@/lib/server/teaching-package/submit-book-rules';
 import { readInsertedSlideUnits } from '@/lib/server/teaching-package/scene-insertion-store';
 import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import { deriveSceneAlignment } from '@/lib/server/teaching-package/alignment';
@@ -552,6 +557,14 @@ async function prepareSubmitValidation(
     );
   }
   await assertEssentialSectionsCovered(pool, version.id, document.scenes, document.outline);
+  // g5.v12 (EN-6, critical items 27 Nov 2026): the book's coverage and order, re-checked
+  // on the live Stage a person edited since the plan's gates. The same two refusals the
+  // collect-all reader lists, in the same order; every other model is not checked.
+  const bookRules = await checkSubmitBookRules(pool, version, document.scenes, document.outline);
+  const uncoveredBook = uncoveredSectionsRefusal(bookRules);
+  if (uncoveredBook) throw uncoveredBook;
+  const bookOrder = bookOrderRefusal(bookRules);
+  if (bookOrder) throw bookOrder;
   if (legacySuccessor) {
     await assertLegacySuccessorCloneOnly(pool, version, document.scenes);
   }
@@ -747,6 +760,16 @@ export async function submitBlockers(
   await collect(() =>
     assertEssentialSectionsCovered(pool, version.id, document.scenes, document.outline),
   );
+  // g5.v12 (EN-6): the book's coverage and order, each finding its own blocker.
+  const bookRules = await checkSubmitBookRules(pool, version, document.scenes, document.outline);
+  await collect(async () => {
+    const refusal = uncoveredSectionsRefusal(bookRules);
+    if (refusal) throw refusal;
+  });
+  await collect(async () => {
+    const refusal = bookOrderRefusal(bookRules);
+    if (refusal) throw refusal;
+  });
   if (legacySuccessor) {
     await collect(() => assertLegacySuccessorCloneOnly(pool, version, document.scenes));
   }

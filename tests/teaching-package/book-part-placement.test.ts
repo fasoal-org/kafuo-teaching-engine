@@ -13,6 +13,7 @@ import {
   placeWithGuard,
   type BookPartMap,
 } from '@/lib/server/teaching-package/book-part-placement';
+import { withTypedPracticeUnits } from '@/lib/server/teaching-package/book-coverage';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   KafuoBookStructure,
@@ -419,23 +420,46 @@ describe('placeOutlinesByBookPart after review 1', () => {
     expect(ids(result.outlines).slice(2, 5)).toEqual(['try-1', 'try-2', 'solution']);
   });
 
-  it('MEDIUM 5: an untyped unit (no template element) is no part content', () => {
+  it('EN-3 (D-4, W1.5): a kind-less unit is part content, listed and placed by its book position', () => {
+    // Lesson 227: 6758, 6760 and 6768 have no template element, and dropped out of the map.
     const book: KafuoBookStructure = {
       ...BOOK,
+      units: [...BOOK.units.slice(0, 4), unit('p2-idea', null as never, 2), ...BOOK.units.slice(4)],
+    };
+    const objectives = OBJECTIVES.map((objective) =>
+      objective.objectiveRef === 'o2'
+        ? { ...objective, contentUnitIds: [...objective.contentUnitIds!, 'p2-idea'] }
+        : objective,
+    );
+    const built = buildBookPartMap(book, objectives, FLOW)!;
+    expect(built.units.get('p2-idea')).toMatchObject({ partIndex: 2, flowIndex: 3, element: null });
+    expect(built.parts.find((part) => part.partIndex === 2)!.unitIds).toEqual(['p2-kc', 'p2-idea']);
+    expect(bookPartsRequirement(built, FLOW)).toContain('units p2-kc, p2-idea');
+  });
+
+  it('MEDIUM 5: an untyped practice unit the runner types as an exercise is no part content', () => {
+    const raw: KafuoBookStructure = {
+      ...BOOK,
+      rules: [{ kind: 'GUIDED_PRACTICE', element: 'exercise', required: false }],
       units: [
         ...BOOK.units.slice(0, 4),
         unit('p2-practice', null as never, 2),
         ...BOOK.units.slice(4),
       ],
     };
+    // The runner retypes it BEFORE the map is built (`withTypedPracticeUnits`).
+    const typed = withTypedPracticeUnits(raw, [
+      { id: 'p2-practice', role: 'PRACTICE_SET', subtype: 'GUIDED_PRACTICE' },
+    ])!;
     const objectives = OBJECTIVES.map((objective) =>
       objective.objectiveRef === 'o2'
         ? { ...objective, contentUnitIds: [...objective.contentUnitIds!, 'p2-practice'] }
         : objective,
     );
-    const built = buildBookPartMap(book, objectives, FLOW)!;
+    const built = buildBookPartMap(typed, objectives, FLOW)!;
     expect(built.units.has('p2-practice')).toBe(false);
     expect(bookPartsRequirement(built, FLOW)).not.toContain('p2-practice');
+    expect([...built.exerciseUnitIds]).toContain('p2-practice');
   });
 
   it('LOW 6: a slide that follows another stays right behind it, even on a tied key', () => {

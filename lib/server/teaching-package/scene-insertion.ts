@@ -48,10 +48,15 @@ import {
   type ContentUnitRow,
 } from '@/lib/persistence/teaching-package';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isTeacherParityModel,
   resolveSacredExerciseUnitIds,
 } from '@/lib/server/teaching-package/book-coverage';
+import {
+  bookPartBlocksFor,
+  type BookPartBlocks,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { guideAnswerContextOf } from '@/lib/server/teaching-package/guide-answer-context';
 import { resolveSpeechRegisterPolicy } from '@/lib/server/speech/register-policy';
 import { validateSceneActionStructure } from '@/lib/server/teaching-package/action-validation';
@@ -67,9 +72,11 @@ import {
   policyOutlineProjection,
   resolveInsertionPosition,
   shiftScenesForInsertion,
+  stagesOwnedByPart,
   suggestInsertionPosition,
   type CoverageGapEvidence,
   type InsertionAnchors,
+  type PartBlockOwner,
   type UnitCoverage,
 } from '@/lib/server/teaching-package/content-unit-coverage';
 import { sceneRegenerationSessionRef } from '@/lib/server/teaching-package/editor-grant';
@@ -470,6 +477,8 @@ interface InsertionContext {
   lineageStatus: 'own_attempt' | 'predecessor_attempt' | 'unavailable';
   /** Sections the plan left untaught, and the slides generated for them. */
   gaps: CoverageGapEvidence | undefined;
+  /** g5.v12 (V12-3): which objective block owns each part; `null` on every other model. */
+  blocks: BookPartBlocks | null;
 }
 
 /** The coverage-gate evidence of a version (`undefined` → no recorded gaps). */
@@ -483,6 +492,21 @@ async function readCoverageGapEvidence(
     gapUnitIds: new Set(record.gapContentUnitIds),
     insertedSlideUnits: await readInsertedSlideUnits(pool, versionId),
   };
+}
+
+/**
+ * g5.v12 (V12-3): which objective block owns each part of a version, from its retained
+ * attempt (the attempt is read for that version only). `null` on every other model.
+ */
+async function readPartBlocks(
+  pool: ConnectableQueryable,
+  version: { id: string; tenantId: string; teachingModel: { key: string; version: string } },
+): Promise<BookPartBlocks | null> {
+  if (!isBookPartPlacementModel(version.teachingModel)) return null;
+  const retained = await readRetainedVersionContext(pool, version.id, {
+    tenantId: version.tenantId,
+  });
+  return bookPartBlocksFor(version.teachingModel, retained?.inputSnapshot);
 }
 
 /** Exported for the Kafuo Agent API E3 dry run (the same new-run checks, no writes). */
@@ -515,6 +539,7 @@ export async function readInsertionContext(
     units: units.units,
     lineageStatus: units.lineageStatus,
     gaps: await readCoverageGapEvidence(pool, version.id),
+    blocks: await readPartBlocks(pool, version),
   };
 }
 
@@ -534,6 +559,8 @@ export function checkPositionAndUnits(
   flow: readonly TeachingFlowEntry[],
   changed: boolean,
   gaps?: CoverageGapEvidence,
+  /** g5.v12 (V12-3): which objective block owns each part. */
+  blocks?: PartBlockOwner | null,
 ): { at: number; after: AppScene | null; before: AppScene | null } {
   const coverage = computeContentUnitCoverage(units, scenes, outline, gaps);
   const byId = new Map(coverage.map((unit) => [unit.id, unit]));
@@ -567,7 +594,11 @@ export function checkPositionAndUnits(
       { reason: position.reason },
     );
   }
-  const allowed = allowedStagesAt(scenes, flow, position);
+  const atPosition = allowedStagesAt(scenes, flow, position);
+  // g5.v12 (V12-3): of those, only the stage of the objective block that owns the parts
+  // the new slide covers, so a slide generated at a block boundary never takes the
+  // neighbour block's label and takes a part out of its place in the book.
+  const allowed = stagesOwnedByPart(atPosition, request.unitIds, blocks);
   const chosen = allowed.find(
     (stage) =>
       stage.key === request.teachingStage.key &&
@@ -576,9 +607,11 @@ export function checkPositionAndUnits(
   if (!chosen) {
     throw refusal(
       changed ? 'INSERTION_POSITION_CHANGED' : 'INSERTION_POSITION_NOT_ALLOWED',
-      allowed.length === 0
-        ? 'no teaching stage of this lesson allows a new slide at that position'
-        : 'that teaching stage is not allowed at the chosen position',
+      allowed.length === 0 && atPosition.length > 0
+        ? 'that lesson part belongs to another objective block of the lesson: generate its slide inside the block that owns it'
+        : allowed.length === 0
+          ? 'no teaching stage of this lesson allows a new slide at that position'
+          : 'that teaching stage is not allowed at the chosen position',
       { allowedStages: allowed },
     );
   }
@@ -884,6 +917,7 @@ export async function insertGeneratedSlide(
       flow,
       false,
       context.gaps,
+      context.blocks,
     );
     exactFlowOrRefuse(
       placeholderProjection(stageDocument.scenes, position.at, {
@@ -956,6 +990,7 @@ export async function insertGeneratedSlide(
         flow,
         true,
         context.gaps,
+        context.blocks,
       );
       return null;
     } catch (error) {
@@ -1201,6 +1236,7 @@ export async function insertGeneratedSlide(
           planned,
           units: context.units,
           gaps: context.gaps,
+          blocks: context.blocks,
           flow,
           governed: context.governed,
           newSceneId,
@@ -1366,6 +1402,8 @@ function buildFinalDocument(
     planned: SceneOutline;
     units: readonly ContentUnitRow[];
     gaps: CoverageGapEvidence | undefined;
+    /** g5.v12 (V12-3): which objective block owns each part. */
+    blocks: PartBlockOwner | null;
     flow: readonly TeachingFlowEntry[];
     governed: boolean;
     newSceneId: string;
@@ -1386,6 +1424,7 @@ function buildFinalDocument(
     input.flow,
     true,
     input.gaps,
+    input.blocks,
   );
   const placed: AppScene = {
     ...candidate,
