@@ -95,7 +95,7 @@ describe('which quizzes are gated', () => {
       [T2, 'u5'],
     ]);
     expect(references[0]!.question).toContain('احسب الضغط');
-    // No guide (today on g5.v12: the Backend sends it for g5.v11 only): no reference.
+    // No guide (a section item, or a lesson with no matched guide): no reference.
     expect(checkQuizReferences(checkQuiz(['u2']), null)).toEqual([]);
     expect(checkQuizReferences(checkQuiz(['u7']), GUIDE)).toEqual([]);
   });

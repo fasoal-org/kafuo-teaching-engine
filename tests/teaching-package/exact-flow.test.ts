@@ -164,3 +164,41 @@ describe('validateExactTeachingFlow (FRD §11.3)', () => {
     expect(validateExactTeachingFlow([scene(1)], []).valid).toBe(false);
   });
 });
+
+describe('g5.v12 (QZ-2, decision A-32): a dropped check quiz', () => {
+  const V12_FLOW: TeachingFlowEntry[] = [
+    { stage: 'lesson_opener', instructions: 'o' },
+    { stage: 'outcome_visual_explanations', instructions: 'v' },
+    { stage: 'outcome_check_understanding', instructions: 'q' },
+    { stage: 'outcome_visual_explanations', instructions: 'v' },
+    { stage: 'outcome_check_understanding', instructions: 'q' },
+  ];
+  const scenes = [
+    scene(1, { key: 'lesson_opener', flowIndex: 0 }),
+    scene(2, { key: 'outcome_visual_explanations', flowIndex: 1 }),
+    scene(3, { key: 'outcome_visual_explanations', flowIndex: 3 }),
+    scene(4, { key: 'outcome_check_understanding', flowIndex: 4 }),
+  ];
+  const marked = (flowIndex: number, key: string) => ({
+    id: `dropped-${flowIndex}`,
+    teachingStage: { key, flowIndex },
+    checkQuizDropped: { reason: 'unverified_answer_key', sceneId: `s-${flowIndex}` },
+  });
+
+  it('its marked, empty check position passes', () => {
+    expect(
+      validateExactTeachingFlow(scenes, V12_FLOW, [marked(2, 'outcome_check_understanding')]).valid,
+    ).toBe(true);
+  });
+
+  it('without the marker, or a marker on a teaching position, the gate refuses as before', () => {
+    expect(validateExactTeachingFlow(scenes, V12_FLOW).valid).toBe(false);
+    const noTeaching = scenes.filter((entry) => entry.teachingStage?.flowIndex !== 3);
+    expect(
+      validateExactTeachingFlow(noTeaching, V12_FLOW, [
+        marked(2, 'outcome_check_understanding'),
+        marked(3, 'outcome_visual_explanations'),
+      ]).valid,
+    ).toBe(false);
+  });
+});

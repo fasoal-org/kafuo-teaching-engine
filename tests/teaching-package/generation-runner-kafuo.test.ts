@@ -4163,7 +4163,12 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
      * step, the cleanup.
      */
     function mockBookRun(
-      plans: { first: () => SceneOutline[]; second?: () => SceneOutline[] },
+      plans: {
+        first: () => SceneOutline[];
+        second?: () => SceneOutline[];
+        /** A-32: the check quiz the pipeline drops (no Scene; its plan entry marked). */
+        dropCheckQuiz?: string;
+      },
       seen: Seen,
     ) {
       mocks.generateClassroom.mockImplementation(async (execution, options) => {
@@ -4224,8 +4229,20 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           });
         }
         const refined: SceneOutline[] | null = await correction.refineOutlines?.(outlines, aiCall);
-        const final: SceneOutline[] =
+        const finalized: SceneOutline[] =
           correction.finalizeOutlines?.(refined ?? outlines) ?? refined ?? outlines;
+        // A-32: the dropped check quiz keeps its plan entry, marked, with no Scene.
+        const final: SceneOutline[] = finalized.map((outline) =>
+          outline.id === plans.dropCheckQuiz
+            ? {
+                ...outline,
+                checkQuizDropped: {
+                  reason: 'unverified_answer_key' as const,
+                  sceneId: `dropped-${outline.id}`,
+                },
+              }
+            : outline,
+        );
         seen.final = final;
         mocks.sceneGenerationReached();
         const reserved = await options.persistence.reserve((id: string) => ({
@@ -4234,7 +4251,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
           createdAt: 1,
           updatedAt: 1,
         }));
-        const scenes = final.map((outline, index) => {
+        const scenes = final.flatMap((outline, index) => {
+          if (outline.checkQuizDropped) return [];
           const base = makeSlideScene(
             `scene-b-${index}`,
             reserved.id,
@@ -4245,12 +4263,14 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
             outline.type === 'quiz'
               ? { ...base, type: 'quiz', content: { type: 'quiz', questions: [] } }
               : base;
-          return {
-            ...scene,
-            outlineId: outline.id,
-            teachingStage: outline.teachingStage,
-            sourceContentUnitIds: outline.sourceContentUnitIds ?? [],
-          } as unknown as AppScene;
+          return [
+            {
+              ...scene,
+              outlineId: outline.id,
+              teachingStage: outline.teachingStage,
+              sourceContentUnitIds: outline.sourceContentUnitIds ?? [],
+            } as unknown as AppScene,
+          ];
         });
         await options.persistence.persist(
           {
@@ -4429,6 +4449,23 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const v11Attempt = await startBook(bookContext('g5.v11'));
       expect(v11.bookGroundedQuestions).toBeUndefined();
       expect(await snapshotOf(v11Attempt)).not.toHaveProperty('slideNumberFindings');
+    });
+
+    it('A-32: a dropped check quiz passes the exact-flow gate, is recorded, and its check’s try-it stays', async () => {
+      const seen: Seen = {};
+      mockBookRun({ first: planWithGaps, dropCheckQuiz: 'q1' }, seen);
+      const attemptId = await startBook(bookContext('g5.v12'));
+      expect((await readAttemptByIdFor(attemptId)).status).toBe('succeeded');
+      expect((await snapshotOf(attemptId)).droppedCheckQuizzes).toEqual([
+        { sceneId: 'dropped-q1', outlineId: 'q1', flowIndex: 2, reason: 'unverified_answer_key' },
+      ]);
+      expect(seen.final!.some((outline) => outline.id === 'try1')).toBe(true);
+      // The same Stage without the marker fails the exact-flow gate, as before.
+      const unmarked: Seen = {};
+      mocks.generateClassroom.mockReset();
+      mockBookRun({ first: () => planWithGaps().filter((o) => o.id !== 'q1') }, unmarked);
+      const refused = await startBook(bookContext('g5.v12'));
+      expect((await readAttemptByIdFor(refused)).status).not.toBe('succeeded');
     });
 
     it('QZ-3 (wave 3): the run asks a title-only try-it’s attempt from the book lines on g5.v12, from the title on g5.v11', async () => {

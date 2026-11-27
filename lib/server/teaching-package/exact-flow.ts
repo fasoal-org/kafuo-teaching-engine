@@ -67,7 +67,11 @@ function orderScenes(
 export function validateExactTeachingFlow(
   scenes: readonly AppScene[],
   flow: readonly TeachingFlowEntry[] | readonly AppTeachingFlowEntry[],
-  outlines?: ReadonlyArray<{ id: string; teachingStage?: { key: string; flowIndex: number } }>,
+  outlines?: ReadonlyArray<{
+    id: string;
+    teachingStage?: { key: string; flowIndex: number };
+    checkQuizDropped?: unknown;
+  }>,
 ): ExactFlowResult {
   if (flow.length === 0) {
     return {
@@ -179,8 +183,27 @@ export function validateExactTeachingFlow(
       collapsed.push(index);
     }
   }
+  // g5.v12 (QZ-2, decision A-32): an objective's check-quiz position may be empty when
+  // its plan keeps the quiz marked as dropped for an answer key code could not verify,
+  // and no Scene sits there. Nothing else marks an outline, so every other model and
+  // every unmarked position is checked exactly as before.
+  const present = new Set(indices);
+  const droppedAt = new Set(
+    (outlines ?? [])
+      .filter(
+        (outline) =>
+          outline.checkQuizDropped &&
+          outline.teachingStage &&
+          flow[outline.teachingStage.flowIndex]?.stage === 'outcome_check_understanding',
+      )
+      .map((outline) => outline.teachingStage!.flowIndex),
+  );
+  const required =
+    droppedAt.size === 0
+      ? expected
+      : expected.filter((index) => present.has(index) || !droppedAt.has(index));
   const matches =
-    collapsed.length === expected.length && collapsed.every((v, i) => v === expected[i]);
+    collapsed.length === required.length && collapsed.every((v, i) => v === required[i]);
   if (matches) return { valid: true };
 
   const reason: ExactFlowViolation['reason'] = collapsed.some((value, index) =>

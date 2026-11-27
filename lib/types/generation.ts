@@ -231,6 +231,13 @@ export interface SceneOutline {
   // Widget fields (required for type === 'interactive' in unified mode)
   widgetType?: WidgetType;
   widgetOutline?: WidgetOutline;
+  /**
+   * g5.v12 only (critical items 27 Nov 2026, QZ-2, decision A-32): this check quiz was
+   * dropped as a Scene because no key could be verified by code after its one
+   * regeneration. It stays in the plan, marked, so the exact-flow gate lets its position
+   * be empty and the drop stays visible. Never set on any other model.
+   */
+  checkQuizDropped?: { reason: 'unverified_answer_key'; sceneId: string };
 }
 
 // ==================== Stage 3 Output: Generated Content ====================

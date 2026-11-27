@@ -265,22 +265,24 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
     referencesOf: (outline: { type: string }) => (outline.type === 'quiz' ? references : null),
   });
 
-  it('no reference: the check quiz is never generated and is kept marked, so Submit refuses it', async () => {
+  // Decision A-32: an unverifiable check quiz is DROPPED as a Scene, its plan entry marked.
+  const droppedPlan = (result: { outlines: Array<{ id: string; checkQuizDropped?: unknown }> }) =>
+    result.outlines.find((outline) => outline.id === 'w6o2')?.checkQuizDropped;
+
+  it('A-32: no reference — the check quiz is never generated and is dropped, its plan entry marked', async () => {
     const routed = keyed(['A']);
 
     const result = await run({ ...baseInput, checkQuizKeys: gated([]) });
 
-    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
     expect(routed.quizCalls()).toBe(0);
-    expect((quiz.generationIssues ?? []).map((issue) => issue.code)).toContain(
-      'CHECK_QUIZ_KEY_UNVERIFIED',
-    );
-    // A placeholder: no key at all reaches the Stage (or the bank).
-    expect(
-      ((quiz.content as { questions?: Array<{ answer?: unknown }> }).questions ?? []).every(
-        (question) => question.answer === undefined || (question.answer as unknown[]).length === 0,
-      ),
-    ).toBe(true);
+    // No quiz Scene, so no key at all reaches the Stage (or the bank); the slide stays.
+    expect(result.scenes.some((scene) => scene.type === 'quiz')).toBe(false);
+    expect(result.scenes.some((scene) => scene.type === 'slide')).toBe(true);
+    expect(droppedPlan(result)).toEqual({
+      reason: 'unverified_answer_key',
+      sceneId: expect.any(String),
+    });
+    for (const scene of result.scenes) expect(scene.generationIssues ?? []).toEqual([]);
   });
 
   it('a verified key is kept, its tag stripped, in one call that names the approved answer', async () => {
@@ -312,18 +314,14 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
     expect(quiz.generationIssues ?? []).toEqual([]);
   });
 
-  it('a key still wrong after the one regeneration is dropped, never saved: the quiz is marked', async () => {
+  it('A-32: a key still wrong after the one regeneration drops the quiz as a Scene, never saved', async () => {
     const routed = keyed(['B', 'B']);
 
     const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
 
-    const quiz = result.scenes.find((scene) => scene.type === 'quiz')!;
     expect(routed.quizCalls()).toBe(2);
-    const stored = (quiz.content as { questions?: Array<{ answer?: unknown }> }).questions ?? [];
-    expect(stored.some((question) => JSON.stringify(question.answer) === '["B"]')).toBe(false);
-    expect((quiz.generationIssues ?? []).map((issue) => issue.code)).toContain(
-      'CHECK_QUIZ_KEY_UNVERIFIED',
-    );
+    expect(result.scenes.some((scene) => scene.type === 'quiz')).toBe(false);
+    expect(droppedPlan(result)).toMatchObject({ reason: 'unverified_answer_key' });
   });
 
   it('without checkQuizKeys (every model before g5.v12) the quiz is generated exactly as before', async () => {

@@ -34,11 +34,11 @@ import {
 import { submitBlockers, submitForReview } from '@/lib/server/teaching-package/lifecycle';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
-import type { AppStage } from '@/lib/document-store/persistence-types';
+import type { AppDocumentOutline, AppStage } from '@/lib/document-store/persistence-types';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
 import type { KafuoBookStructure, TeachingFlowEntry } from '@/lib/types/teaching-package';
-import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
+import { makeDocument, makeOutline, makeSlideScene } from '../agent-runtime/_stage-fixtures';
 
 const TENANT = 'tenant-test';
 
@@ -258,6 +258,8 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
     gapContentUnitIds?: string[];
     book?: KafuoBookStructure;
     objectives?: typeof OBJECTIVES;
+    /** The plan entries the Stage's outline record keeps (A-32: a dropped check quiz). */
+    planned?: AppDocumentOutline['outlines'];
   }): Promise<string> {
     const stageId = unique('stage-book');
     const versionId = unique('tpv');
@@ -271,7 +273,14 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
       validateStage: validateAppStage,
       mutationFence: teachingPackageStageGuardFence(),
     });
-    await store.saveDocument(makeDocument(stageId, 'Book', withOrder(options.scenes(stageId))));
+    await store.saveDocument(
+      makeDocument(
+        stageId,
+        'Book',
+        withOrder(options.scenes(stageId)),
+        options.planned ? { ...makeOutline('Book'), outlines: options.planned } : undefined,
+      ),
+    );
     await insertVersion(qp(), {
       id: versionId,
       aggregate: { tenantId: TENANT, learningItem: item },
@@ -379,6 +388,53 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
 
     expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
     expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+  });
+
+  describe('A-32: a check quiz dropped for an unverifiable key', () => {
+    // Objective 1's check quiz q1 was dropped as a Scene; its plan entry stays, marked.
+    const withoutQ1 = (stageId: string) =>
+      inBookOrder(stageId).filter((scene) => scene.id !== 'q1');
+    const droppedQ1 = (marked: boolean) =>
+      [
+        {
+          id: 'q1',
+          type: 'quiz',
+          title: 'q1',
+          description: '',
+          keyPoints: [],
+          order: 6,
+          teachingStage: at(2),
+          sourceContentUnitIds: ['u2'],
+          ...(marked
+            ? { checkQuizDropped: { reason: 'unverified_answer_key', sceneId: 'q1' } }
+            : {}),
+        },
+      ] as unknown as AppDocumentOutline['outlines'];
+
+    it('Submit passes; the check’s try-it and solution slides are still taught', async () => {
+      const versionId = await seedBookVersion({
+        version: 'g5.v12',
+        scenes: withoutQ1,
+        planned: droppedQ1(true),
+      });
+
+      expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      const ids = withoutQ1('x').map((scene) => scene.id);
+      expect(ids).toEqual(expect.arrayContaining(['try1', 'sol1']));
+      expect(ids).not.toContain('q1');
+    });
+
+    it('an unmarked missing check quiz is still refused (the marker is the only exemption)', async () => {
+      const versionId = await seedBookVersion({
+        version: 'g5.v12',
+        scenes: withoutQ1,
+        planned: droppedQ1(false),
+      });
+
+      const error = await refusal(submitForReview(tx(), command(versionId)));
+      expect(error.code).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+    });
   });
 
   it('submits an untouched g5.v12 package from the readiness reader alone: no blocker', async () => {

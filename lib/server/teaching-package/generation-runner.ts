@@ -1075,10 +1075,11 @@ async function runKafuoAttempt(
         }
       : {}),
     // g5.v12 only (QZ-2, decision Q-AK): each check quiz the question bank imports is keyed
-    // from the approved answers of the book items it cites and checked by code; with none
-    // (the Backend sends the guide for g5.v11 only today) it is not generated and is
-    // marked, so it can neither be submitted nor reach the bank. Absent for every other
-    // version.
+    // from the approved answers of the book items it cites and checked by code. A v12
+    // LESSON request carries the matched guide (`teacherGuide`; never a section item);
+    // with no reference, or no key verified after the one regeneration, the quiz is
+    // dropped as a Scene (decision A-32), so no unverified key reaches a learner or the
+    // bank. Absent for every other version.
     ...(isBookPartPlacementModel(kafuo.teachingModel)
       ? {
           checkQuizKeys: {
@@ -2065,6 +2066,23 @@ async function runKafuoAttempt(
         const citedOf = new Map(
           result.outlines.map((outline) => [outline.id, outline.sourceContentUnitIds ?? []]),
         );
+        const droppedCheckQuizzes = result.outlines.flatMap((outline) =>
+          outline.checkQuizDropped
+            ? [
+                {
+                  sceneId: outline.checkQuizDropped.sceneId,
+                  outlineId: outline.id,
+                  flowIndex: outline.teachingStage?.flowIndex ?? null,
+                  reason: outline.checkQuizDropped.reason,
+                },
+              ]
+            : [],
+        );
+        if (droppedCheckQuizzes.length > 0) {
+          log.warn(
+            `Teaching package attempt ${attemptId}: ${droppedCheckQuizzes.length} check quiz(zes) dropped for an answer key code could not verify: ${droppedCheckQuizzes.map((entry) => entry.sceneId).join(', ')}`,
+          );
+        }
         // A record never fails a run (Wave 3 review L4): on any error it is left empty.
         let numberFindings: ReturnType<typeof slideNumberFindings> = [];
         try {
@@ -2111,6 +2129,9 @@ async function runKafuoAttempt(
           // Listed, but with no text a slide could teach (H1): named, not required.
           ...(listedUnitsWithoutText.length > 0 ? { listedUnitsWithoutText } : {}),
           slideNumberFindings: numberFindings,
+          // QZ-2 (decision A-32): the check quizzes dropped for a key code could not
+          // verify — a non-blocking record, so the count is visible.
+          droppedCheckQuizzes,
         }));
       }
       // The Submit coverage gate's authority: which sections are essential and

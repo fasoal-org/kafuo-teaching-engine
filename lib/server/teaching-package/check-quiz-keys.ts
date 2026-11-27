@@ -22,10 +22,14 @@
  *   and an echoed item tag are never verified.
  * - On a mismatch the quiz is generated ONCE more with the approved answers named
  *   (`keyCorrection`); what is still unverified is DROPPED, never shipped.
- * - No reference at all (today: the Backend sends the guide for g5.v11 only), or no
- *   question left: the quiz is not generated (no paid call for keys no one can check); the
- *   run keeps a placeholder marked `CHECK_QUIZ_KEY_UNVERIFIED`, which Submit and approval
- *   refuse (`SLIDES_NEED_REGENERATION`) — fail closed.
+ * - No reference at all, or no question left (decision A-32, 27 Nov 2026): the quiz is
+ *   DROPPED as a Scene — with no reference it is never generated (no paid call for keys
+ *   no one can check). Its plan entry stays, marked `checkQuizDropped`, so the exact-flow
+ *   gate (`exact-flow.ts`) lets that position be empty, Submit and approval pass, and the
+ *   run records the drop (`droppedCheckQuizzes`, non-blocking). The check's try-it and
+ *   solution slides stay, so the printed check is still taught. No unverified key reaches
+ *   a learner or the bank. A single-scene regeneration with none is refused
+ *   (`CHECK_QUIZ_KEY_UNVERIFIED`), nothing written.
  *
  * The reference tag never reaches a learner or the bank: it is stripped from every
  * verified question. No answer is ever logged: references are named by tag and item.
@@ -47,7 +51,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { KafuoTeacherGuideAnswer } from '@/lib/types/teaching-package';
 import type { QuizQuestion } from '@/lib/types/stage';
 
-/** The scene issue of a check quiz left with no verified key (Submit refuses it). */
+/** Why a single-scene regeneration of a check quiz with no verifiable key is refused. */
 export const CHECK_QUIZ_KEY_UNVERIFIED = 'CHECK_QUIZ_KEY_UNVERIFIED';
 
 /** The flow stage whose quiz the question bank imports. */
@@ -248,12 +252,4 @@ export function keyCorrection(
     'Write the quiz again. Each question names its book item and keys exactly its approved answer:',
     ...references.map(describeReference),
   ].join('\n');
-}
-
-/** The scene issue of a check quiz left with no verified key. */
-export function unverifiedCheckQuizIssue(reason: string): { code: string; message: string } {
-  return {
-    code: CHECK_QUIZ_KEY_UNVERIFIED,
-    message: `the check quiz has no verified answer key (${reason}); it cannot be submitted or enter the question bank until it is generated from the approved answers`,
-  };
 }
