@@ -424,6 +424,7 @@
       "deleted": "Supprimée",
       "undo": "Annuler",
       "deleteOnlyOfPart": "C'est la seule page de sa partie de la leçon (par exemple le quiz qui clôt un objectif). Sans elle, la leçon n'accepte aucune nouvelle diapositive et ne peut pas être envoyée en révision : elle ne peut donc pas être supprimée. Régénérez-la plutôt.",
+      "deleteOnlyOfPartKeep": "C'est la seule page de sa partie de la leçon (par exemple le quiz qui clôt un objectif). Sans elle, la leçon n'accepte aucune nouvelle diapositive et ne peut pas être envoyée en révision : elle ne peut donc pas être supprimée.",
       "noPageAfterLastCheck": "Impossible d'ajouter une page après le dernier quiz de vérification de la leçon. Ajoutez-la avant ce quiz.",
       "reorderAcrossParts": "Cette diapositive appartient à une autre partie de la leçon, elle a donc repris sa place. Une diapositive ne peut être déplacée qu'à l'intérieur de sa propre partie.",
       "copySuffix": "(copie)",

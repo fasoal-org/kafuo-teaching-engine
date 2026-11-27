@@ -49,6 +49,7 @@ import { getVerdictStore } from '@/lib/server/visual-compliance';
 import { applyComplianceOverlay } from '@/lib/server/visual-compliance/delivery-hold';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { sacredTextEditRefusal } from '@/lib/server/teaching-package/sacred-text-edit-guard';
+import { flowPositionDeleteRefusal } from '@/lib/server/teaching-package/flow-position-guard';
 import {
   encodeSceneRevs,
   EXPECTED_SCENE_REVS_HEADER,
@@ -687,6 +688,25 @@ export async function handlePersistenceRequest(
                 },
               },
               { status: sacred.status },
+            );
+            for (const [name, value] of responseHeaders.entries()) {
+              response.headers.append(name, value);
+            }
+            return response;
+          }
+          // ED-3 (critical items, 27 Nov 2026): a write that takes the only page of a
+          // lesson flow position away is refused before the store runs.
+          const emptied = await flowPositionDeleteRefusal(request, path, queryable);
+          if (emptied) {
+            const response = Response.json(
+              {
+                error: {
+                  code: emptied.code,
+                  message: emptied.message,
+                  details: { positions: emptied.positions, scenes: emptied.scenes },
+                },
+              },
+              { status: emptied.status },
             );
             for (const [name, value] of responseHeaders.entries()) {
               response.headers.append(name, value);

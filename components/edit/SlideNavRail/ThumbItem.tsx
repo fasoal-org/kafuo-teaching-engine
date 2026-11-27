@@ -32,6 +32,11 @@ interface ThumbItemProps {
   /** Present only when this slide may be regenerated (write grant, editable package, slide). */
   readonly onRegenerate?: () => void;
   /**
+   * ED-7: present only on a blank page where an AI slide may be added — the route that
+   * fills one («+ → Generate with AI»), shown in place of Regenerate.
+   */
+  readonly onGenerateWithAi?: () => void;
+  /**
    * Present only when this slide's narration may be regenerated alone (same
    * gate): the remedy of the deleted-image warning (D-5 A).
    */
@@ -56,6 +61,7 @@ function ThumbItemComponent({
   onDuplicate,
   onDelete,
   onRegenerate,
+  onGenerateWithAi,
   onRegenerateNarration,
   onDismissNarrationWarning,
   onRegenerateAudio,
@@ -295,6 +301,14 @@ function ThumbItemComponent({
                         ? 'edit.quizRegeneration.menuItem'
                         : 'edit.slideRegeneration.menuItem',
                     )}
+                  </DropdownMenuItem>
+                )}
+                {onGenerateWithAi && (
+                  <DropdownMenuItem
+                    onSelect={onGenerateWithAi}
+                    data-testid="slide-nav-generate-with-ai"
+                  >
+                    {t('edit.slideInsertion.aiChoice')}
                   </DropdownMenuItem>
                 )}
                 {SCENE_CREATION_ENABLED && (

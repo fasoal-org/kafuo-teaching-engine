@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createBlankEditableScene,
+  emptiedFlowPositions,
   inOrderOf,
+  isBlankSlideScene,
   isOnlySceneAtItsPosition,
   keepsTeachingOrder,
   rebuildsBankCheckQuiz,
+  teachingSkillsForInsertion,
   teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
 import { duplicateSlideScene } from '@/lib/edit/slide-defaults';
@@ -169,6 +172,86 @@ describe('editor scene insertion/duplication teachingStage inheritance', () => {
     expect(restored?.[0]?.title).toBe('Regenerated');
     // A scene added or removed during the drag: nothing is put back.
     expect(inOrderOf(dropped.slice(0, 2), before)).toBeNull();
+  });
+
+  // ED-3 (critical items, 27 Nov 2026): the one rule the rail and the server share.
+  it('names the flow positions a save leaves without their page, and only those', () => {
+    const s1 = scene('s1', 1, EXPL_1);
+    const s1b = scene('s1b', 2, EXPL_1);
+    const attempt = { ...scene('try', 3, EXPL_1), type: 'quiz' } as Scene;
+    const q1 = { ...scene('q1', 4, CHECK_1), type: 'quiz' } as Scene;
+    const s2 = scene('s2', 5, EXPL_2);
+    const all = [s1, s1b, attempt, q1, s2];
+    // Removing one of two slides, or the try-it quiz beside the slides, empties nothing.
+    expect(emptiedFlowPositions(all, [s1, attempt, q1, s2])).toEqual([]);
+    expect(emptiedFlowPositions(all, [s1, s1b, q1, s2])).toEqual([]);
+    // The check quiz alone at its position, and the objective's last slides.
+    expect(emptiedFlowPositions(all, [s1, s1b, attempt, s2])).toEqual([CHECK_1.flowIndex]);
+    expect(emptiedFlowPositions(all, [attempt, q1, s2])).toEqual([EXPL_1.flowIndex]);
+    // A page re-tagged away from its position empties it too.
+    expect(
+      emptiedFlowPositions(all, [s1, s1b, attempt, { ...q1, teachingStage: EXPL_2 }, s2]),
+    ).toEqual([CHECK_1.flowIndex]);
+    // A new page that takes the position keeps it held (a replacement, not a gap).
+    const rebuilt = { ...scene('q1-new', 4, CHECK_1), type: 'quiz' } as Scene;
+    expect(emptiedFlowPositions(all, [s1, s1b, attempt, rebuilt, s2])).toEqual([]);
+    // A position the lesson had already lost is never asked about (it keeps saving).
+    expect(emptiedFlowPositions([s1, s2], [s2, s1])).toEqual([]);
+    // Non-package scenes carry no position.
+    expect(emptiedFlowPositions([scene('x', 1)], [])).toEqual([]);
+  });
+
+  // ED-6 (critical items, 27 Nov 2026): a blank page on a Skills-governed package.
+  it('a page added on a governed package carries the Skills of its position, never invented', () => {
+    const skills = {
+      primary: { skillId: 'explain', version: '1' },
+      classification: 'instructional' as const,
+    };
+    const checkSkills = {
+      primary: { skillId: 'check', version: '1' },
+      classification: 'instructional' as const,
+    };
+    const s1 = { ...scene('s1', 1, EXPL_1), teachingSkills: skills };
+    const q1 = { ...scene('q1', 2, CHECK_1), type: 'quiz', teachingSkills: checkSkills } as Scene;
+    const s2 = scene('s2', 3, EXPL_2);
+    const scenes = [s1, q1, s2];
+    const copied = teachingSkillsForInsertion(scenes, 1, EXPL_1, 'slide');
+    expect(copied).toEqual(skills);
+    // A copy, never the sibling's own object.
+    expect(copied).not.toBe(skills);
+    // No scene at the position carries Skills: the nearest of the same stage does.
+    expect(teachingSkillsForInsertion(scenes, 3, EXPL_2, 'slide')).toEqual(skills);
+    // A rebuilt check quiz takes another check quiz's Skills, never a slide's.
+    const CHECK_2 = { key: 'outcome_check_understanding', flowIndex: 4 };
+    expect(teachingSkillsForInsertion(scenes, 3, CHECK_2, 'quiz')).toEqual(checkSkills);
+    // A legacy package (no scene carries Skills) and a non-package page get none.
+    expect(teachingSkillsForInsertion([s2], 1, EXPL_2, 'slide')).toBeUndefined();
+    expect(teachingSkillsForInsertion(scenes, 1, undefined, 'slide')).toBeUndefined();
+    const created = createBlankEditableScene('slide', 'stage-1', 'New', 2, {
+      teachingStage: EXPL_1,
+      teachingSkills: copied,
+    });
+    expect(created.teachingSkills).toEqual(skills);
+    // The alignment baseline is never copied: the page still needs the reviewer's confirmation.
+    expect(created.alignmentBaseline).toBeUndefined();
+  });
+
+  // ED-7 (critical items, 27 Nov 2026).
+  it('a blank page is a slide with nothing on its canvas', () => {
+    const blank = createBlankEditableScene('slide', 'stage-1', 'New', 1);
+    expect(isBlankSlideScene(blank)).toBe(true);
+    expect(isBlankSlideScene(createBlankEditableScene('quiz', 'stage-1', 'New', 1))).toBe(false);
+    const filled = {
+      ...blank,
+      content: {
+        ...(blank.content as Extract<Scene['content'], { type: 'slide' }>),
+        canvas: {
+          ...(blank.content as Extract<Scene['content'], { type: 'slide' }>).canvas,
+          elements: [{ id: 't1', type: 'text' } as never],
+        },
+      },
+    } as Scene;
+    expect(isBlankSlideScene(filled)).toBe(false);
   });
 
   it('duplicating a slide preserves the original teachingStage', () => {

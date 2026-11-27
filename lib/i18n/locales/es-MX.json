@@ -424,6 +424,7 @@
       "deleted": "Eliminada",
       "undo": "Deshacer",
       "deleteOnlyOfPart": "Esta es la única página de su parte de la lección (por ejemplo, el cuestionario que cierra un objetivo). Sin ella, la lección no acepta diapositivas nuevas y no se puede enviar a revisión, así que no se puede eliminar. Mejor regenérala.",
+      "deleteOnlyOfPartKeep": "Esta es la única página de su parte de la lección (por ejemplo, el cuestionario que cierra un objetivo). Sin ella, la lección no acepta diapositivas nuevas y no se puede enviar a revisión, así que no se puede eliminar.",
       "noPageAfterLastCheck": "No se puede agregar una página después del último cuestionario de comprobación de la lección. Agrégala antes de ese cuestionario.",
       "reorderAcrossParts": "Esta diapositiva pertenece a otra parte de la lección, así que volvió a su lugar. Una diapositiva solo se puede mover dentro de su propia parte.",
       "copySuffix": "(copia)",

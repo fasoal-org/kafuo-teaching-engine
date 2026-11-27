@@ -160,6 +160,59 @@ describe('RegenerateSlideDialog', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  // ED-9 (critical items, 27 Nov 2026): the restore is refused once this tab's own
+  // autosave rewrote the regenerated slide, so the success toast holds the autosave.
+  it('holds the autosave while the success toast offers the restore, and only then', async () => {
+    const { toast } = await import('sonner');
+    const { isStageAutosaveHeld } = await import('@/lib/store/stage');
+    type ToastOptions = {
+      action: { onClick: (event: { preventDefault(): void }) => void };
+      onAutoClose: () => void;
+      onDismiss: () => void;
+    };
+    const success = vi.mocked(toast.success);
+    // Windows an earlier test left open are closed first.
+    for (const call of success.mock.calls) (call[1] as unknown as ToastOptions).onDismiss();
+    success.mockClear();
+    expect(isStageAutosaveHeld('stage-1')).toBe(false);
+
+    const run = vi.fn(async () => ({ kind: 'success' as const, regenerationId: 'tsr-9' }));
+    mount(run);
+    type('regenerate-instruction', VALID_INSTRUCTION);
+    type('regenerate-reason', VALID_REASON);
+    act(() => submitButton().click());
+    await flush();
+    expect(success).toHaveBeenCalledOnce();
+    const options = success.mock.calls[0]![1] as unknown as ToastOptions;
+    expect(isStageAutosaveHeld('stage-1')).toBe(true);
+    options.onAutoClose();
+    expect(isStageAutosaveHeld('stage-1')).toBe(false);
+
+    // The restore itself closes the window once it settles, refused or not.
+    success.mockClear();
+    type('regenerate-instruction', VALID_INSTRUCTION);
+    type('regenerate-reason', VALID_REASON);
+    act(() => submitButton().click());
+    await flush();
+    const second = success.mock.calls[0]![1] as unknown as ToastOptions;
+    expect(isStageAutosaveHeld('stage-1')).toBe(true);
+    const fetchStub = vi.fn(async () =>
+      Response.json(
+        { error: { code: 'SCENE_CHANGED_SINCE_REGENERATION', message: 'changed' } },
+        { status: 409 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchStub);
+    try {
+      second.action.onClick({ preventDefault() {} });
+      await flush();
+      expect(fetchStub).toHaveBeenCalledOnce();
+      expect(isStageAutosaveHeld('stage-1')).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps the values and shows the reason on a failure', async () => {
     const run = vi.fn(async (_input: RunSlideRegenerationInput) => ({
       kind: 'failed' as const,

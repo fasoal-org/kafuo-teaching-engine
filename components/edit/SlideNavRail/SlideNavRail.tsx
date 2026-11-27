@@ -17,10 +17,12 @@ import {
   createBlankEditableScene,
   insertSceneAtIndex,
   inOrderOf,
+  isBlankSlideScene,
   isOnlySceneAtItsPosition,
   keepsTeachingOrder,
   rebuildsBankCheckQuiz,
   type EditableSceneType,
+  teachingSkillsForInsertion,
   teachingStageForInsertion,
 } from '@/lib/edit/scene-defaults';
 import { SCENE_CREATION_ENABLED } from '@/lib/edit/scene-creation-enabled';
@@ -33,14 +35,18 @@ import { RegenerateSlideDialog } from '@/components/edit/RegenerateSlideDialog';
 import {
   canRegenerateScene,
   fetchRegenerationGate,
+  regenerationCanFill,
   type RegenerationGate,
 } from '@/lib/edit/scene-regeneration-client';
 import { isTeachingPackageGrantSession } from '@/lib/persistence/grant-session';
 import { runNarrationAudioRegeneration } from '@/lib/edit/narration-audio-client';
 import { NARRATION_DELETED_IMAGE_ISSUE_CODE } from '@/lib/edit/dangling-element-actions';
 import {
+  FLOW_POSITION_REFUSAL_CODE,
+  holdStageAutosave,
   isStageEditingLocked,
   onStageSaveConflict,
+  type StageAutosaveHold,
   useStageEditingLocked,
 } from '@/lib/store/stage';
 import { GenerateSlideForPartDialog } from '@/components/edit/GenerateSlideForPartDialog';
@@ -258,6 +264,16 @@ export function SlideNavRail() {
     () =>
       onStageSaveConflict((conflict) => {
         if (conflict.stageId !== stageId) return;
+        // ED-3: the server kept a page that is alone in its part of the lesson.
+        if (conflict.code === FLOW_POSITION_REFUSAL_CODE) {
+          toast.warning(
+            t('edit.nav.deleteOnlyOfPartKeep', {
+              defaultValue:
+                'This is the only page of its part of the lesson, so it cannot be deleted.',
+            }),
+          );
+          return;
+        }
         toast.warning(
           t(
             conflict.code === 'PRECONDITION_REQUIRED'
@@ -394,26 +410,44 @@ export function SlideNavRail() {
   // reason; moving a slide within its own part stays free. A lesson whose order was
   // already broken (an older drag) is never put back, so dragging can repair it.
   const dragStartScenes = useRef<Scene[] | null>(null);
+  // ED-5 (critical items, 27 Nov 2026): every drag step reorders the store, and a drag
+  // held past the 500 ms debounce autosaved an order the drop then put back. The
+  // autosave is held for the whole drag, so only the order the drop keeps is saved.
+  const dragHold = useRef<StageAutosaveHold | null>(null);
+  const releaseDragHold = useCallback(() => {
+    dragHold.current?.release();
+    dragHold.current = null;
+  }, []);
+  // Never left held: a Stage switch or an unmount mid-drag lifts it.
+  useEffect(() => releaseDragHold, [stageId, releaseDragHold]);
   const handleDragStart = useCallback(() => {
     dragStartScenes.current = useStageStore.getState().scenes;
-  }, []);
+    releaseDragHold();
+    const dragStageId = useStageStore.getState().stage?.id;
+    if (dragStageId) dragHold.current = holdStageAutosave(dragStageId);
+  }, [releaseDragHold]);
   const handleDragEnd = useCallback(() => {
-    const before = dragStartScenes.current;
-    dragStartScenes.current = null;
-    if (!before || !keepsTeachingOrder(before)) return;
-    const current = useStageStore.getState().scenes;
-    if (keepsTeachingOrder(current)) return;
-    // Only the order goes back: a slide regenerated during the drag keeps its new content.
-    const restored = inOrderOf(current, before);
-    if (!restored) return;
-    setScenes(restored);
-    toast.warning(
-      t('edit.nav.reorderAcrossParts', {
-        defaultValue:
-          'This slide belongs to another part of the lesson, so it went back to its place. A slide can only move within its own part.',
-      }),
-    );
-  }, [setScenes, t]);
+    try {
+      const before = dragStartScenes.current;
+      dragStartScenes.current = null;
+      if (!before || !keepsTeachingOrder(before)) return;
+      const current = useStageStore.getState().scenes;
+      if (keepsTeachingOrder(current)) return;
+      // Only the order goes back: a slide regenerated during the drag keeps its new content.
+      const restored = inOrderOf(current, before);
+      if (!restored) return;
+      setScenes(restored);
+      toast.warning(
+        t('edit.nav.reorderAcrossParts', {
+          defaultValue:
+            'This slide belongs to another part of the lesson, so it went back to its place. A slide can only move within its own part.',
+        }),
+      );
+    } finally {
+      // After the revert: the save the release schedules writes the order that stays.
+      releaseDragHold();
+    }
+  }, [releaseDragHold, setScenes, t]);
 
   const onReorderIds = useCallback(
     (newOrder: string[]) => {
@@ -460,8 +494,17 @@ export function SlideNavRail() {
         );
         return;
       }
+      // ED-6: on a Skills-governed package the page carries its position's Skills, so
+      // Submit does not refuse it for having none (legacy packages get none).
+      const teachingSkills = teachingSkillsForInsertion(
+        scenes,
+        insertIndex,
+        inheritedTeachingStage,
+        type,
+      );
       const blank = createBlankEditableScene(type, stage.id, title, insertIndex + 1, {
         ...(inheritedTeachingStage !== undefined && { teachingStage: inheritedTeachingStage }),
+        ...(teachingSkills && { teachingSkills }),
       });
       // A rebuilt check quiz is served from the question bank like its siblings.
       const scene: Scene = rebuildsBankCheckQuiz(scenes, inheritedTeachingStage, type)
@@ -509,11 +552,19 @@ export function SlideNavRail() {
       // check quiz, an objective's last slide) is never deleted — without it the lesson
       // refuses every new slide and Submit, and the teacher cannot put it back.
       if (isOnlySceneAtItsPosition(scenes, source)) {
+        // ED-2: "Regenerate it instead" only where Regenerate can fill the page — never a
+        // question-bank quiz (refused BANK_QUIZ_NOT_REGENERABLE), a blank page (an empty
+        // result is refused) or a page the gate offers no regeneration for.
         toast.warning(
-          t('edit.nav.deleteOnlyOfPart', {
-            defaultValue:
-              'This is the only page of its part of the lesson, so it cannot be deleted. Regenerate it instead.',
-          }),
+          regenerationCanFill(regenerationGate, source)
+            ? t('edit.nav.deleteOnlyOfPart', {
+                defaultValue:
+                  'This is the only page of its part of the lesson, so it cannot be deleted. Regenerate it instead.',
+              })
+            : t('edit.nav.deleteOnlyOfPartKeep', {
+                defaultValue:
+                  'This is the only page of its part of the lesson, so it cannot be deleted.',
+              }),
         );
         return;
       }
@@ -566,7 +617,7 @@ export function SlideNavRail() {
         onAutoClose: () => useDeletedSceneRecycle.getState().clear(),
       });
     },
-    [deleteScene, refuseWhileInserting, scenes, slideCount, totalScenes, t],
+    [deleteScene, refuseWhileInserting, regenerationGate, scenes, slideCount, totalScenes, t],
   );
 
   const canDeleteAny = totalScenes > 1;
@@ -773,8 +824,22 @@ export function SlideNavRail() {
                       onActivate={() => handleActivate(scene.id)}
                       onDuplicate={() => handleDuplicate(scene.id)}
                       onDelete={() => handleDelete(scene.id)}
+                      // ED-7: a blank page cannot be filled by Regenerate (an empty result
+                      // is refused): its menu offers «Generate with AI» at this place
+                      // instead — the "+" zone right after it — when the lesson allows one.
+                      onGenerateWithAi={
+                        isBlankSlideScene(scene) && canGenerateWithAi
+                          ? () =>
+                              openInsertion({
+                                position: {
+                                  afterSceneId: scene.id,
+                                  beforeSceneId: scenes[index + 1]?.id ?? null,
+                                },
+                              })
+                          : undefined
+                      }
                       onRegenerate={
-                        canRegenerateScene(regenerationGate, scene)
+                        canRegenerateScene(regenerationGate, scene) && !isBlankSlideScene(scene)
                           ? () => {
                               if (refuseWhileInserting()) return;
                               setRegenerating({

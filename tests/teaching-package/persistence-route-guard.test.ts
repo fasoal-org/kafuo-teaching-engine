@@ -131,6 +131,60 @@ describe('persistence route teaching package guard', () => {
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'STAGE_LOCKED' } });
   });
 
+  // ED-3 (critical items, 27 Nov 2026): the server half of the rail's delete guard.
+  it('answers 422 for a save that drops the only page of a flow position, and writes nothing', async () => {
+    const stageId = 'stage-route-flow';
+    const EXPL = { key: 'outcome_visual_explanations', flowIndex: 1 };
+    const CHECK = { key: 'outcome_check_understanding', flowIndex: 2 };
+    const slideA = { ...makeSlideScene('scene-a', stageId, 1), teachingStage: EXPL };
+    const slideB = { ...makeSlideScene('scene-b', stageId, 2), teachingStage: EXPL };
+    const check = {
+      ...makeSlideScene('scene-check', stageId, 3),
+      type: 'quiz',
+      content: { type: 'quiz', questions: [] },
+      teachingStage: CHECK,
+    } as unknown as AppScene;
+    const store = createOwnerBoundDocumentStore<AppScene, AppStage>({
+      pool,
+      ownerId: `anon:${ownerCookie}`,
+      validateScene: validateAppScene,
+      validateStage: validateAppStage,
+      mutationFence: teachingPackageStageGuardFence(),
+    });
+    await store.saveDocument(makeDocument(stageId, 'Flow guarded', [slideA, slideB, check]));
+    await seedVersion(stageId, 'draft');
+
+    const refused = await call(`/documents/${stageId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(makeDocument(stageId, 'Flow guarded', [slideA, slideB])),
+    });
+    expect(refused.status).toBe(422);
+    await expect(refused.json()).resolves.toMatchObject({
+      error: {
+        code: 'SCENE_DELETE_EMPTIES_FLOW_POSITION',
+        details: { positions: [2], scenes: [{ id: 'scene-check', flowIndex: 2 }] },
+      },
+    });
+    const deleteCheck = await call(`/documents/${stageId}/scenes/scene-check`, {
+      method: 'DELETE',
+    });
+    expect(deleteCheck.status).toBe(422);
+    expect((await store.loadDocument(stageId))?.scenes.map((scene) => scene.id)).toEqual([
+      'scene-a',
+      'scene-b',
+      'scene-check',
+    ]);
+
+    // One of the objective's two slides may go.
+    const allowed = await call(`/documents/${stageId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(makeDocument(stageId, 'Flow guarded', [slideA, check])),
+    });
+    expect([200, 204]).toContain(allowed.status);
+  });
+
   it('still serves writes for a draft stage (200/204)', async () => {
     const stageId = 'stage-route-draft';
     await seedStage(stageId);

@@ -126,13 +126,90 @@ export function isOnlySceneAtItsPosition(
 ): boolean {
   const position = scene.teachingStage?.flowIndex;
   if (position === undefined) return false;
-  const lastSlideOfObjective =
-    scene.type === 'slide' && scene.teachingStage?.key === OBJECTIVE_EXPLANATION_STAGE_KEY;
-  return !scenes.some(
-    (other) =>
-      other.id !== scene.id &&
-      other.teachingStage?.flowIndex === position &&
-      (!lastSlideOfObjective || other.type === 'slide'),
+  const rest = scenes.filter((other) => other.id !== scene.id);
+  return emptiedFlowPositions([...rest, scene], rest).includes(position);
+}
+
+/**
+ * ED-3 (critical items, 27 Nov 2026): the flow positions that `after` leaves without the
+ * page `before` had there — the one rule behind the rail's delete guard, the server's
+ * save guard and the course-edit tool's delete:
+ * - a position some scene of `before` holds and no scene of `after` holds;
+ * - an objective's slides position whose slides are all gone (a «جرّب بنفسك» quiz that
+ *   shares the position never stands in for the objective's slides).
+ * Only positions `before` held are judged, so a lesson whose order is already broken
+ * keeps saving; scenes without a position (non-package stages) are never judged.
+ */
+export function emptiedFlowPositions(
+  before: readonly Pick<Scene, 'type' | 'teachingStage'>[],
+  after: readonly Pick<Scene, 'type' | 'teachingStage'>[],
+): number[] {
+  const held = new Set<number>();
+  const slidesHeld = new Set<number>();
+  for (const scene of after) {
+    const position = scene.teachingStage?.flowIndex;
+    if (position === undefined) continue;
+    held.add(position);
+    if (scene.type === 'slide') slidesHeld.add(position);
+  }
+  const emptied = new Set<number>();
+  for (const scene of before) {
+    const stage = scene.teachingStage;
+    if (!stage) continue;
+    const objectiveSlide = scene.type === 'slide' && stage.key === OBJECTIVE_EXPLANATION_STAGE_KEY;
+    if (!held.has(stage.flowIndex) || (objectiveSlide && !slidesHeld.has(stage.flowIndex))) {
+      emptied.add(stage.flowIndex);
+    }
+  }
+  return [...emptied].sort((a, b) => a - b);
+}
+
+/**
+ * ED-6 (critical items, 27 Nov 2026): the Teaching Skills a page added at `stage` carries —
+ * a copy of a scene's at that same flow position (the policy there is the same), else of
+ * the nearest scene of the same teaching stage (a flow item's Skill policy is projected
+ * verbatim onto every position it expands to), the same scene type first. Without it a
+ * blank page on a Skills-governed package has no classification and Submit refuses it.
+ * `undefined` when no such scene carries Skills (a legacy package): nothing is invented.
+ * Only the assignment is copied — never an alignment baseline, so the page still needs
+ * the reviewer's alignment confirmation like any edited page.
+ */
+export function teachingSkillsForInsertion(
+  scenes: readonly Pick<Scene, 'type' | 'teachingStage' | 'teachingSkills'>[],
+  insertIndex: number,
+  stage: TeachingStageRef | null | undefined,
+  type: EditableSceneType,
+): Scene['teachingSkills'] {
+  if (!stage) return undefined;
+  let chosen: Scene['teachingSkills'];
+  let chosenRank = Infinity;
+  let chosenDistance = Infinity;
+  for (let index = 0; index < scenes.length; index += 1) {
+    const scene = scenes[index]!;
+    const own = scene.teachingStage;
+    if (!scene.teachingSkills || !own || own.key !== stage.key) continue;
+    // Same position before same stage; the same scene type before another one.
+    const rank = (own.flowIndex === stage.flowIndex ? 0 : 2) + (scene.type === type ? 0 : 1);
+    const distance = Math.abs(index - insertIndex);
+    if (rank < chosenRank || (rank === chosenRank && distance < chosenDistance)) {
+      chosen = scene.teachingSkills;
+      chosenRank = rank;
+      chosenDistance = distance;
+    }
+  }
+  return chosen ? structuredClone(chosen) : undefined;
+}
+
+/**
+ * ED-7 (critical items, 27 Nov 2026): a slide with nothing on its canvas — the page the
+ * rail's «+ → Slide» adds. Regenerate cannot fill it (an empty result is refused,
+ * f0f3e43f); «+ → Generate with AI» can.
+ */
+export function isBlankSlideScene(scene: Pick<Scene, 'type' | 'content'>): boolean {
+  return (
+    scene.type === 'slide' &&
+    scene.content.type === 'slide' &&
+    scene.content.canvas.elements.length === 0
   );
 }
 
@@ -201,6 +278,8 @@ export interface BlankSceneOptions {
    * or order; absent for non-package stages.
    */
   teachingStage?: TeachingStageRef;
+  /** ED-6: the Teaching Skills a governed package's new page carries ({@link teachingSkillsForInsertion}). */
+  teachingSkills?: Scene['teachingSkills'];
 }
 
 /** Build a fresh scene for one of the page types exposed by the rail chooser. */
@@ -215,7 +294,11 @@ export function createBlankEditableScene(
     type === 'slide'
       ? createBlankSlideScene(stageId, title, order)
       : createBlankQuizScene(stageId, title, order);
-  return options.teachingStage ? { ...base, teachingStage: options.teachingStage } : base;
+  return {
+    ...base,
+    ...(options.teachingStage ? { teachingStage: options.teachingStage } : {}),
+    ...(options.teachingSkills ? { teachingSkills: options.teachingSkills } : {}),
+  };
 }
 
 /**

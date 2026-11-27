@@ -127,15 +127,27 @@ function regenerationLockKey(stageId: string, sceneId: string): string {
 }
 
 /** A save outcome the server refused on its revision precondition (§11.5). */
+/**
+ * ED-3 (critical items, 27 Nov 2026): the server refused a save that took the only page
+ * of a lesson flow position away. Terminal like a 428: the server's copy (with the page)
+ * replaces the local one, and the rail says why the page came back.
+ */
+export const FLOW_POSITION_REFUSAL_CODE = 'SCENE_DELETE_EMPTIES_FLOW_POSITION';
+
+type StageSaveConflictCode =
+  | 'SCENE_REVISION_CONFLICT'
+  | 'PRECONDITION_REQUIRED'
+  | typeof FLOW_POSITION_REFUSAL_CODE;
+
 type RevisionConflictSave = {
   kind: 'revision-conflict';
-  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  code: StageSaveConflictCode;
   sceneIds: string[];
 };
 
 export interface StageSaveConflict {
   stageId: string;
-  code: 'SCENE_REVISION_CONFLICT' | 'PRECONDITION_REQUIRED';
+  code: StageSaveConflictCode;
   sceneIds: string[];
 }
 
@@ -169,6 +181,11 @@ function revisionConflictOf(error: unknown): RevisionConflictSave | null {
     }
     if (candidate.status === 428 && candidate.code === 'PRECONDITION_REQUIRED') {
       return { kind: 'revision-conflict', code: 'PRECONDITION_REQUIRED', sceneIds: [] };
+    }
+    if (candidate.status === 422 && candidate.code === FLOW_POSITION_REFUSAL_CODE) {
+      // Never retried as-is: the same write would be refused forever, and every later
+      // edit of this tab rides the same whole-document save.
+      return { kind: 'revision-conflict', code: FLOW_POSITION_REFUSAL_CODE, sceneIds: [] };
     }
     current = candidate.cause;
   }
@@ -344,11 +361,55 @@ function resetPendingChanges(stageId: string | null = null): void {
   consecutiveFlushFailures = 0;
 }
 
+/**
+ * Autosave holds (critical items ED-5 / ED-9, 27 Nov 2026): while a Stage holds one, its
+ * debounced autosave arms no timer, so an intermediate state is never saved on its own:
+ * - a rail drag (ED-5): the order mid-drag, before the drop is checked and maybe put back;
+ * - a regeneration's restore window (ED-9): this tab's own write of the regenerated
+ *   slide (the editor's text auto-height pass) would bump its revision and the
+ *   «Restore previous» would be refused.
+ * Only the debounce is held: an explicit drain (`flushStageSave`: an insertion or a
+ * regeneration starting, the tab hiding or closing) still writes, so nothing is lost.
+ * Releasing the last hold schedules whatever is pending.
+ */
+const autosaveHolds = new Map<string, number>();
+
+export interface StageAutosaveHold {
+  /** Lift the hold (idempotent) and schedule what is pending. */
+  release(): void;
+}
+
+export function holdStageAutosave(stageId: string): StageAutosaveHold {
+  autosaveHolds.set(stageId, (autosaveHolds.get(stageId) ?? 0) + 1);
+  if (pendingStageId === stageId) cancelScheduledSave();
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      const remaining = (autosaveHolds.get(stageId) ?? 1) - 1;
+      if (remaining > 0) autosaveHolds.set(stageId, remaining);
+      else autosaveHolds.delete(stageId);
+      if (pendingStageId === stageId && pendingChanges.size > 0) schedulePendingSave();
+    },
+  };
+}
+
+/** True while a drag or a restore window holds the Stage's debounced autosave. */
+export function isStageAutosaveHeld(stageId: string): boolean {
+  return autosaveHolds.has(stageId);
+}
+
 function schedulePendingSave(): void {
   // Fail closed until this viewer is known to be allowed to write the document.
   // An unresolved grant session keeps its dirt recorded but arms no timer, so a
   // read-only Preview issues no request at all during the ownership window.
   if (!mayWriteStageDocument(pendingStageId)) return;
+  // A drag or a restore window holds the debounce; its release schedules.
+  if (pendingStageId && autosaveHolds.has(pendingStageId)) {
+    cancelScheduledSave();
+    return;
+  }
   // Once a write has failed, keep the already-armed backoff timer. Streaming
   // chat mutations are already represented by the dirty descriptor; rearming
   // per delta would collapse the backoff to the base cadence or starve it.
@@ -1680,7 +1741,10 @@ async function reconcileRevisionConflict(
   conflict: RevisionConflictSave,
   dirtySnapshot: ReadonlyMap<string, PendingEntry>,
 ): Promise<Set<string>> {
-  const all = conflict.code === 'PRECONDITION_REQUIRED' || conflict.sceneIds.length === 0;
+  const all =
+    conflict.code === 'PRECONDITION_REQUIRED' ||
+    conflict.code === FLOW_POSITION_REFUSAL_CODE ||
+    conflict.sceneIds.length === 0;
   const dropped = new Set<string>();
   for (const [key, entry] of dirtySnapshot) {
     const isScene = entry.change.kind === 'scene';

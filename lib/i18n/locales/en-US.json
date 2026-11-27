@@ -424,6 +424,7 @@
       "deleted": "Deleted",
       "undo": "Undo",
       "deleteOnlyOfPart": "This is the only page of its part of the lesson (for example the quiz that closes an objective). Without it the lesson can take no new slide and cannot be sent for review, so it cannot be deleted. Regenerate it instead.",
+      "deleteOnlyOfPartKeep": "This is the only page of its part of the lesson (for example the quiz that closes an objective). Without it the lesson can take no new slide and cannot be sent for review, so it cannot be deleted.",
       "noPageAfterLastCheck": "A page cannot be added after the lesson's last check quiz. Add it before that quiz.",
       "reorderAcrossParts": "This slide belongs to another part of the lesson, so it went back to its place. A slide can only move within its own part.",
       "copySuffix": "(copy)",

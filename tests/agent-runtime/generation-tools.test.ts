@@ -500,6 +500,74 @@ describe('generation and deck tools', () => {
     ]);
   });
 
+  // ED-4 (critical items, 27 Nov 2026): the rail's delete and drag guards, for the AI tool.
+  it('edit_deck keeps the only page of a flow position and refuses a reorder across parts', async () => {
+    const EXPL_1 = { key: 'outcome_visual_explanations', flowIndex: 1 };
+    const CHECK_1 = { key: 'outcome_check_understanding', flowIndex: 2 };
+    const EXPL_2 = { key: 'outcome_visual_explanations', flowIndex: 3 };
+    const a = { ...slide('a', 1, 'A'), teachingStage: EXPL_1 };
+    const a2 = { ...slide('a2', 2, 'A2'), teachingStage: EXPL_1 };
+    const q = { ...slide('q', 3, 'Check'), type: 'quiz', teachingStage: CHECK_1 } as Scene;
+    const b = { ...slide('b', 4, 'B'), teachingStage: EXPL_2 };
+    const current = state(document([a, a2, q, b]));
+    const edit = find(buildDslCourseToolset(deps(current.store)), 'edit_deck');
+
+    const keptQuiz = await edit.execute('delete-q', {
+      stageId: 'stage-test',
+      op: 'delete',
+      sceneId: 'q',
+    } as never);
+    expect(keptQuiz).toMatchObject({
+      isError: true,
+      details: { sceneId: 'q', code: 'SCENE_DELETE_EMPTIES_FLOW_POSITION' },
+    });
+    const keptLastSlide = await edit.execute('delete-b', {
+      stageId: 'stage-test',
+      op: 'delete',
+      sceneId: 'b',
+    } as never);
+    expect(keptLastSlide).toMatchObject({ isError: true });
+
+    const across = await edit.execute('reorder-across', {
+      stageId: 'stage-test',
+      op: 'reorder',
+      orderedIds: ['a', 'q', 'a2', 'b'],
+    } as never);
+    expect(across).toMatchObject({ isError: true, details: { code: 'REORDER_ACROSS_PARTS' } });
+    expect(current.store.saveDocument).not.toHaveBeenCalled();
+
+    // Inside a part a reorder is free, and one of two slides may go.
+    await edit.execute('reorder-within', {
+      stageId: 'stage-test',
+      op: 'reorder',
+      orderedIds: ['a2', 'a', 'q', 'b'],
+    } as never);
+    const deleted = await edit.execute('delete-a', {
+      stageId: 'stage-test',
+      op: 'delete',
+      sceneId: 'a',
+    } as never);
+    expect(deleted).not.toHaveProperty('isError');
+    expect(current.get()?.scenes.map((scene) => scene.id)).toEqual(['a2', 'q', 'b']);
+  });
+
+  it('edit_deck still repairs a lesson whose order is already broken', async () => {
+    const EXPL_1 = { key: 'outcome_visual_explanations', flowIndex: 1 };
+    const CHECK_1 = { key: 'outcome_check_understanding', flowIndex: 2 };
+    const a = { ...slide('a', 1, 'A'), teachingStage: EXPL_1 };
+    const q = { ...slide('q', 2, 'Check'), type: 'quiz', teachingStage: CHECK_1 } as Scene;
+    const a2 = { ...slide('a2', 3, 'A2'), teachingStage: EXPL_1 };
+    const current = state(document([a, q, a2]));
+    const edit = find(buildDslCourseToolset(deps(current.store)), 'edit_deck');
+    const repaired = await edit.execute('repair', {
+      stageId: 'stage-test',
+      op: 'reorder',
+      orderedIds: ['a', 'a2', 'q'],
+    } as never);
+    expect(repaired).not.toHaveProperty('isError');
+    expect(current.get()?.scenes.map((scene) => scene.id)).toEqual(['a', 'a2', 'q']);
+  });
+
   it('drops action types unknown to the shared DSL', () => {
     expect(
       filterKnownActions([

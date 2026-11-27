@@ -3,6 +3,7 @@ import { Type } from 'typebox';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 
 import type { AppDocumentOutline } from '@/lib/document-store/persistence-types';
+import { isOnlySceneAtItsPosition, keepsTeachingOrder } from '@/lib/edit/scene-defaults';
 import type { Scene } from '@/lib/types/stage';
 import { matchOutlineEntries } from '../course-outline-union';
 import { putSceneBringingCurrent } from '../document-writes';
@@ -213,6 +214,15 @@ export function buildCourseAudioAndDeckTools(deps: CourseToolDeps): AgentTool<ne
       if (params.op === 'delete') {
         const scene = resolveScene(scenes, params);
         if (!scene) return result('delete needs an existing page.', {}, true);
+        // ED-4 (critical items, 27 Nov 2026): the rail's delete guard — a package page
+        // alone at its flow position stays, or the lesson refuses every new slide and Submit.
+        if (isOnlySceneAtItsPosition(scenes, scene)) {
+          return result(
+            `"${scene.title}" is the only page of its part of the lesson (flow position ${scene.teachingStage?.flowIndex}); without it the lesson refuses every new slide and Submit, so it was not deleted.`,
+            { sceneId: scene.id, code: 'SCENE_DELETE_EMPTIES_FLOW_POSITION' },
+            true,
+          );
+        }
         const next = renumberCourseOrders(
           scenes.filter((item) => item.id !== scene.id),
           outline,
@@ -236,6 +246,16 @@ export function buildCourseAudioAndDeckTools(deps: CourseToolDeps): AgentTool<ne
         return [scene];
       });
       ordered.push(...scenes.filter((scene) => byId.has(scene.id)));
+      // ED-4: the rail's drag guard — a reorder that breaks a sound teaching order (a page
+      // moved into another part of the lesson) is refused; one inside a part is free, and
+      // a lesson whose order is already broken can still be repaired.
+      if (keepsTeachingOrder(scenes) && !keepsTeachingOrder(ordered)) {
+        return result(
+          'This order moves a page into another part of the lesson, so the pages were not reordered. A page can only move within its own part.',
+          { code: 'REORDER_ACROSS_PARTS' },
+          true,
+        );
+      }
       const next = renumberCourseOrders(ordered, outline);
       await runStageMutation(signal, () =>
         deps.store.saveDocument({ ...doc, scenes: next.scenes, outline: next.outline }),

@@ -11,7 +11,11 @@ vi.mock('@/lib/utils/stage-storage', () => ({
   loadStageData: (...args: unknown[]) => loadStageData(...args),
 }));
 
-import { runSlideRegeneration } from '@/lib/edit/scene-regeneration-client';
+import {
+  regenerationCanFill,
+  runSlideRegeneration,
+  type RegenerationGate,
+} from '@/lib/edit/scene-regeneration-client';
 import { migrateScene } from '@/lib/edit/slide-schema';
 import {
   bindStageSceneRevs,
@@ -239,5 +243,43 @@ describe('runSlideRegeneration', () => {
     const outcome = await runSlideRegeneration(input, { fetchImpl: flaky });
     expect(outcome.kind).toBe('success');
     expect(keys).toEqual(['key-12345678', 'key-12345678']);
+  });
+});
+
+// ED-2 (critical items, 27 Nov 2026): "Regenerate it instead" only where it can work.
+describe('regenerationCanFill', () => {
+  const gate: RegenerationGate = {
+    capability: 'write',
+    editable: true,
+    versionStatus: 'draft',
+    supportedSceneTypes: ['slide', 'quiz'],
+    running: [],
+  };
+  const filled = (): Scene => {
+    const base = scene('s1');
+    const canvas = (base.content as Extract<Scene['content'], { type: 'slide' }>).canvas;
+    return {
+      ...base,
+      content: { type: 'slide', canvas: { ...canvas, elements: [{ id: 't1' } as never] } },
+    } as Scene;
+  };
+  const quiz = (questionSource?: 'bank'): Scene => ({
+    ...scene('q1'),
+    type: 'quiz',
+    content: { type: 'quiz', questions: [] },
+    ...(questionSource ? { questionSource } : {}),
+  });
+
+  it('a filled slide and a generated quiz can be regenerated', () => {
+    expect(regenerationCanFill(gate, filled())).toBe(true);
+    expect(regenerationCanFill(gate, quiz())).toBe(true);
+  });
+
+  it('a question-bank quiz, a blank page and a missing gate cannot', () => {
+    expect(regenerationCanFill(gate, quiz('bank'))).toBe(false);
+    expect(regenerationCanFill(gate, scene('blank'))).toBe(false);
+    expect(regenerationCanFill(null, filled())).toBe(false);
+    expect(regenerationCanFill({ ...gate, capability: 'read' }, filled())).toBe(false);
+    expect(regenerationCanFill({ ...gate, supportedSceneTypes: ['slide'] }, quiz())).toBe(false);
   });
 });

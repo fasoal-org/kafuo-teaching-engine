@@ -27,6 +27,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import {
   newRegenerationKey,
+  openRestoreWindow,
   REGENERATION_LIMITS,
   restoreSlideRegeneration,
   runSlideRegeneration,
@@ -176,6 +177,9 @@ export function RegenerateSlideDialog({
       switch (outcome.kind) {
         case 'success': {
           const regenerationId = outcome.regenerationId;
+          // ED-9: while the toast offers the restore, this tab does not write the
+          // regenerated slide back on its own (which made the restore refused).
+          const restoreWindow = openRestoreWindow(stageId);
           toast.success(tr('success'), {
             action: {
               label: tr('restoreAction'),
@@ -188,12 +192,16 @@ export function RegenerateSlideDialog({
                   toast.warning(t('edit.slideInsertion.lockedNotice'));
                   return;
                 }
-                void restoreSlideRegeneration(stageId, regenerationId).then((restored) => {
-                  if (restored.ok) toast.success(tr('restored'));
-                  else toast.error(tr('restoreFailed', { code: restored.code }));
-                });
+                void restoreSlideRegeneration(stageId, regenerationId)
+                  .then((restored) => {
+                    if (restored.ok) toast.success(tr('restored'));
+                    else toast.error(tr('restoreFailed', { code: restored.code }));
+                  })
+                  .finally(() => restoreWindow.close());
               },
             },
+            onAutoClose: () => restoreWindow.close(),
+            onDismiss: () => restoreWindow.close(),
           });
           onOpenChange(false);
           setInstruction('');

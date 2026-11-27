@@ -19,13 +19,17 @@ import {
 } from '@/lib/persistence/scene-revision-registry';
 import {
   beginSceneRegeneration,
+  FLOW_POSITION_REFUSAL_CODE,
   flushStageSave,
+  holdStageAutosave,
   isSceneDurable,
+  isStageAutosaveHeld,
   onStageSaveConflict,
   replaceSceneFromServer,
   useStageStore,
   type StageSaveConflict,
 } from '@/lib/store/stage';
+import { openRestoreWindow } from '@/lib/edit/scene-regeneration-client';
 import type { Scene, Stage } from '@/lib/types/stage';
 
 /**
@@ -154,6 +158,80 @@ describe('revision conflicts in the autosave (§11.5)', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(incrementalSave).toHaveBeenCalledOnce();
     unsubscribe();
+  });
+});
+
+describe('the server keeps the only page of a flow position (ED-3)', () => {
+  it('a 422 SCENE_DELETE_EMPTIES_FLOW_POSITION re-reads the stage, notifies once and is never retried', async () => {
+    const conflicts: StageSaveConflict[] = [];
+    const unsubscribe = onStageSaveConflict((conflict) => conflicts.push(conflict));
+    loadStageData.mockResolvedValue({
+      stage: stage(),
+      scenes: [scene('scene-1', 'one', 1), scene('scene-2', 'two', 2)],
+      currentSceneId: 'scene-1',
+      chats: [],
+      sceneRevs: { 'scene-1': 3, 'scene-2': 5 },
+    });
+    incrementalSave.mockRejectedValueOnce(
+      Object.assign(new Error('refused'), {
+        status: 422,
+        code: FLOW_POSITION_REFUSAL_CODE,
+        details: { positions: [2], scenes: [{ id: 'scene-2', flowIndex: 2 }] },
+      }),
+    );
+    useStageStore.getState().deleteScene('scene-2');
+    await flushStageSave();
+    // The page the server kept is back on screen.
+    expect(useStageStore.getState().scenes.map((entry) => entry.id)).toEqual([
+      'scene-1',
+      'scene-2',
+    ]);
+    expect(conflicts).toEqual([{ stageId: STAGE, code: FLOW_POSITION_REFUSAL_CODE, sceneIds: [] }]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(incrementalSave).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+});
+
+describe('autosave holds: a drag and a restore window (ED-5, ED-9)', () => {
+  it('a held stage saves nothing however long the hold lasts; the release saves once, the latest state', async () => {
+    const hold = holdStageAutosave(STAGE);
+    expect(isStageAutosaveHeld(STAGE)).toBe(true);
+    // A drag step after another: the broken order in between is never written.
+    useStageStore.getState().setScenes([scene('scene-2', 'two', 1), scene('scene-1', 'one', 2)]);
+    await vi.advanceTimersByTimeAsync(600);
+    useStageStore.getState().setScenes([scene('scene-1', 'one', 1), scene('scene-2', 'two', 2)]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(incrementalSave).not.toHaveBeenCalled();
+    hold.release();
+    hold.release(); // idempotent
+    expect(isStageAutosaveHeld(STAGE)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(incrementalSave).toHaveBeenCalledOnce();
+    const saved = incrementalSave.mock.calls[0]![2] as { scenes: Scene[] };
+    expect(saved.scenes.map((entry) => entry.id)).toEqual(['scene-1', 'scene-2']);
+  });
+
+  it('a hold cancels a save already armed, and an explicit drain still writes', async () => {
+    useStageStore.getState().updateScene('scene-1', { title: 'armed' });
+    const hold = holdStageAutosave(STAGE);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(incrementalSave).not.toHaveBeenCalled();
+    // An insertion or a regeneration starting drains on purpose.
+    await flushStageSave();
+    expect(incrementalSave).toHaveBeenCalledOnce();
+    hold.release();
+  });
+
+  it('the restore window closes on its own after its longest hold', async () => {
+    const restoreWindow = openRestoreWindow(STAGE, 2_000);
+    useStageStore.getState().updateScene('scene-1', { title: 'normalized' });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(incrementalSave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(isStageAutosaveHeld(STAGE)).toBe(false);
+    expect(incrementalSave).toHaveBeenCalledOnce();
+    restoreWindow.close(); // after the timer: harmless
   });
 });
 

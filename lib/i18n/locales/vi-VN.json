@@ -424,6 +424,7 @@
       "deleted": "Đã xóa",
       "undo": "Hoàn tác",
       "deleteOnlyOfPart": "Đây là trang duy nhất trong phần này của bài học (ví dụ bài kiểm tra kết thúc một mục tiêu). Thiếu trang này, bài học không nhận thêm slide mới và không thể gửi duyệt, nên không thể xóa. Hãy tạo lại trang này.",
+      "deleteOnlyOfPartKeep": "Đây là trang duy nhất trong phần này của bài học (ví dụ bài kiểm tra kết thúc một mục tiêu). Thiếu trang này, bài học không nhận thêm slide mới và không thể gửi duyệt, nên không thể xóa.",
       "noPageAfterLastCheck": "Không thể thêm trang sau bài kiểm tra cuối cùng của bài học. Hãy thêm trước bài kiểm tra đó.",
       "reorderAcrossParts": "Slide này thuộc một phần khác của bài học nên đã quay về vị trí cũ. Chỉ có thể di chuyển slide trong phần của chính nó.",
       "copySuffix": "(bản sao)",

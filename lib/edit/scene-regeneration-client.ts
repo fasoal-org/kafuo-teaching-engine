@@ -14,9 +14,11 @@
  * database holds and that is the regeneration's own result.
  */
 import type { Scene } from '@/lib/types/stage';
+import { isBlankSlideScene } from '@/lib/edit/scene-defaults';
 import {
   beginSceneRegeneration,
   flushStageSave,
+  holdStageAutosave,
   isSceneDurable,
   replaceSceneFromServer,
   resyncStageScenesFromServer,
@@ -55,6 +57,21 @@ export function canRegenerateScene(gate: RegenerationGate | null, scene: Pick<Sc
     gate.capability === 'write' &&
     gate.editable &&
     gate.supportedSceneTypes.includes(scene.type)
+  );
+}
+
+/**
+ * ED-2 (critical items, 27 Nov 2026): whether Regenerate can give this page new content,
+ * so the editor may advise it — the gate offers it, the page is not a question-bank quiz
+ * (refused `BANK_QUIZ_NOT_REGENERABLE`: its questions live in the Kafuo bank) and not a
+ * blank slide (an empty result is refused; «+ → Generate with AI» fills one).
+ */
+export function regenerationCanFill(
+  gate: RegenerationGate | null,
+  scene: Pick<Scene, 'type' | 'content' | 'questionSource'>,
+): boolean {
+  return (
+    canRegenerateScene(gate, scene) && scene.questionSource !== 'bank' && !isBlankSlideScene(scene)
   );
 }
 
@@ -302,6 +319,33 @@ export async function runSlideRegeneration(
     // 7. Release (and schedule what was held).
     handle.release();
   }
+}
+
+/** The longest a restore window holds the autosave (a toast paused under the pointer). */
+export const RESTORE_WINDOW_MAX_MS = 60_000;
+
+/**
+ * ED-9 (critical items, 27 Nov 2026): «Restore previous» is refused
+ * (`SCENE_CHANGED_SINCE_REGENERATION`) once the regenerated slide's revision moved, and
+ * this tab's own editor moved it at once — the canvas's text auto-height pass writes the
+ * slide back right after it is shown. While the success toast offers the restore, this
+ * tab's debounced autosave is held, so the restore finds the slide exactly as
+ * regenerated; closing the window (the toast closes, the restore settles, or at most
+ * {@link RESTORE_WINDOW_MAX_MS}) saves whatever was held. An edit made elsewhere still
+ * refuses the restore, as before.
+ */
+export function openRestoreWindow(
+  stageId: string,
+  maxMs: number = RESTORE_WINDOW_MAX_MS,
+): { close(): void } {
+  const hold = holdStageAutosave(stageId);
+  const timer = setTimeout(() => hold.release(), maxMs);
+  return {
+    close() {
+      clearTimeout(timer);
+      hold.release();
+    },
+  };
 }
 
 /**

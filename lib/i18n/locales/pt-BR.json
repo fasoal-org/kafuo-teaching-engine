@@ -409,6 +409,7 @@
       "deleted": "Excluído",
       "undo": "Desfazer",
       "deleteOnlyOfPart": "Esta é a única página desta parte da aula (por exemplo, o quiz que encerra um objetivo). Sem ela, a aula não aceita novos slides e não pode ser enviada para revisão, então ela não pode ser excluída. Gere-a novamente em vez disso.",
+      "deleteOnlyOfPartKeep": "Esta é a única página desta parte da aula (por exemplo, o quiz que encerra um objetivo). Sem ela, a aula não aceita novos slides e não pode ser enviada para revisão, então ela não pode ser excluída.",
       "noPageAfterLastCheck": "Não é possível adicionar uma página depois do último quiz de verificação da aula. Adicione-a antes desse quiz.",
       "reorderAcrossParts": "Este slide pertence a outra parte da aula, então voltou ao seu lugar. Um slide só pode ser movido dentro da sua própria parte.",
       "copySuffix": "(cópia)",

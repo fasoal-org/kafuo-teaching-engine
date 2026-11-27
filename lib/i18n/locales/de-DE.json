@@ -424,6 +424,7 @@
       "deleted": "Gelöscht",
       "undo": "Rückgängig",
       "deleteOnlyOfPart": "Dies ist die einzige Seite ihres Lektionsteils (zum Beispiel das Quiz, das ein Lernziel abschließt). Ohne sie nimmt die Lektion keine neue Folie an und kann nicht zur Prüfung gesendet werden, daher kann sie nicht gelöscht werden. Generiere sie stattdessen neu.",
+      "deleteOnlyOfPartKeep": "Dies ist die einzige Seite ihres Lektionsteils (zum Beispiel das Quiz, das ein Lernziel abschließt). Ohne sie nimmt die Lektion keine neue Folie an und kann nicht zur Prüfung gesendet werden, daher kann sie nicht gelöscht werden.",
       "noPageAfterLastCheck": "Nach dem letzten Prüfungsquiz der Lektion kann keine Seite hinzugefügt werden. Füge sie vor diesem Quiz ein.",
       "reorderAcrossParts": "Diese Folie gehört zu einem anderen Teil der Lektion und wurde daher an ihren Platz zurückgesetzt. Eine Folie kann nur innerhalb ihres eigenen Teils verschoben werden.",
       "copySuffix": "(Kopie)",
