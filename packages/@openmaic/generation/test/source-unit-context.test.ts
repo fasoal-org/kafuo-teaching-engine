@@ -222,6 +222,17 @@ describe('scene prompts', () => {
     expect(store.user).toContain(CHECK);
     expect(store.user).not.toContain('300 Pa');
     expect(store.user).not.toContain('الحل');
+    // The imperative «حلّ …» opens a question: it is never cut.
+    const solve: SourceUnitText[] = [
+      { id: '15', title: 'Check', text: 'تحقق من فهمك\nحل المعادلة 2س + 3 = 11' },
+    ];
+    const imperative: { user?: string } = {};
+    await generateSceneContent(
+      teaching({ contentRole: 'check_understanding', sourceContentUnitIds: ['15'] }),
+      capture(imperative, CONTENT_RESPONSE),
+      { sourceUnits: solve, bookGroundedQuestions: { checkUnitIds: ['15'] } },
+    );
+    expect(imperative.user).toContain('حل المعادلة 2س + 3 = 11');
   });
 
   it('QZ-6: a solution slide keeps its source as before; a teaching slide is unchanged by the option', async () => {

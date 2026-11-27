@@ -100,9 +100,13 @@ export function buildQuestionSourceContext(
   return NONE;
 }
 
-/** A line that opens a worked answer: «الحل», «الإجابة», «الجواب», "Solution", "Answer". */
+/**
+ * A line that opens a worked answer: «الحل», «الإجابة», «الجواب», "Solution", "Answer";
+ * a bare «حل» / «إجابة» only as a heading («حل:»), never the imperative that opens a
+ * question («حلّ المعادلة»).
+ */
 const SOLUTION_CUE =
-  /^\s*(?:[-•*]\s*)?(?:(?:ال)?(?:حل|إجابة|اجابة|جواب)(?=[\s:：.]|$)|(?:solution|answer)\b)/iu;
+  /^\s*(?:[-•*]\s*)?(?:ال(?:حل|إجابة|اجابة|جواب)(?=[\s:：.]|$)|(?:حل|إجابة|اجابة|جواب)(?=\s*[:：]|\s*$)|(?:solution|answer)\s*[:：])/iu;
 
 /**
  * A check unit's text up to its first worked-answer line: a unit still merged with the
