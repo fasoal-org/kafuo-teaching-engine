@@ -32,7 +32,9 @@
  */
 import {
   compareGuideAnswer,
+  isEquationAnswer,
   normalizeGuideText,
+  statesEquation,
 } from '@/lib/server/teaching-package/guide-answer-compare';
 import {
   formatGuideAnswer,
@@ -161,10 +163,16 @@ export function verifyCheckQuizKeys(
     // statement, with no added or dropped negation (review H1).
     if (approved.type === 'bool') {
       const stem = normalizeGuideText(question.question ?? '');
-      const book = normalizeGuideText(reference.question ?? '');
-      if (!book || !stem.includes(book) || negations(stem) !== negations(book)) {
-        return fail('its statement is not the book’s own');
-      }
+      // The item's text, or (a one-item check, read whole) its last line: the statement
+      // after the box title and the instruction (re-review N1).
+      const lines = (reference.question ?? '').split('\n').filter((line) => line.trim() !== '');
+      const statements = [reference.question ?? '', lines[lines.length - 1] ?? '']
+        .map((text) => normalizeGuideText(text))
+        .filter((text) => text !== '');
+      const stated = statements.some(
+        (book) => stem.includes(book) && negations(stem) === negations(book),
+      );
+      if (!stated) return fail('its statement is not the book’s own');
     }
     const comparison = statesApproved(approved, option.label);
     if (!comparison.match) {
@@ -214,6 +222,11 @@ function statesApproved(
     );
     const bare = normalizeGuideText(approved.value);
     const written = normalizeGuideText(label);
+    // An equation is the same equation, however it is spaced («س=5» is «س = 5»), when the
+    // label is only an equation (re-review N2).
+    if (isEquationAnswer(approved.value) && isEquationAnswer(label)) {
+      return { match: statesEquation(approved.value, label) };
+    }
     return { match: written === expected || written === bare };
   }
   // A number key carries no negation («ليس 12»); a truth key IS one («لا», «خطأ»).

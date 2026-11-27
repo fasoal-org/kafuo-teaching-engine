@@ -207,6 +207,30 @@ describe('verifyCheckQuizKeys', () => {
     ]);
   });
 
+  it('re-review N1/N2: a one-item check’s statement and a respaced equation key verify', () => {
+    const guide = {
+      keyed: [
+        item('u6', '1', { type: 'bool', value: false }),
+        item('u7', '1', { type: 'text', value: 'y = 2x + 3' }),
+      ],
+    };
+    // A one-item check read whole: box title, instruction, then the statement.
+    const refs = checkQuizReferences(
+      checkQuiz(['u6', 'u7']),
+      { keyed: guide.keyed.map((entry) => ({ ...entry, number: null })) },
+      new Map([['u6', 'ماذا قرأت؟\nحدّد صحة العبارة:\nالماء يغلي عند 50 درجة']]),
+    );
+    const result = verifyCheckQuizKeys(
+      [
+        question(T1, ['صحيحة', 'خاطئة'], ['B'], 'single', 'صح أم خطأ: الماء يغلي عند 50 درجة'),
+        question(T2, ['y=2x+3', 'y=3x+2'], ['A']),
+      ],
+      refs,
+    );
+    expect(result.failed).toEqual([]);
+    expect(result.verified).toHaveLength(2);
+  });
+
   it('a book choice answer is never a reference: its letter names the book’s own options', () => {
     const guide = { keyed: [item('u3', '2', { type: 'choice', value: 'ب' })] };
     expect(checkQuizReferences(checkQuiz(['u3']), guide)).toEqual([]);

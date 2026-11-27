@@ -106,7 +106,10 @@ export function buildQuestionSourceContext(
  * question («حلّ المعادلة»).
  */
 const SOLUTION_CUE =
-  /^\s*(?:[-•*]\s*)?(?:ال(?:حل|إجابة|اجابة|جواب)(?=[\s:：.]|$)|(?:حل|إجابة|اجابة|جواب)(?=\s*[:：]|\s*$)|(?:solution|answer)\s*[:：])/iu;
+  /^\s*(?:[-•*]\s*)?(?:ال(?:حل|إجابة|اجابة|جواب)(?=[\s:：.]|$)|(?:حل|إجابة|اجابة|جواب)(?=\s*[:：]|\s*$)|(?:solution|answer)\s*(?:[:：]|$))/iu;
+
+/** Arabic diacritics and tatweel, read through when a line is tested («الحَلّ»). */
+const ARABIC_MARKS = /[ً-ٰٟـ]/g;
 
 /**
  * A check unit's text up to its first worked-answer line: a unit still merged with the
@@ -115,7 +118,7 @@ const SOLUTION_CUE =
  */
 function withoutWorkedAnswer(text: string): string {
   const lines = text.split('\n');
-  const cut = lines.findIndex((line) => SOLUTION_CUE.test(line));
+  const cut = lines.findIndex((line) => SOLUTION_CUE.test(line.replace(ARABIC_MARKS, '')));
   return (cut < 0 ? lines : lines.slice(0, cut)).join('\n');
 }
 

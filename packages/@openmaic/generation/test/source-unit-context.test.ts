@@ -233,6 +233,20 @@ describe('scene prompts', () => {
       { sourceUnits: solve, bookGroundedQuestions: { checkUnitIds: ['15'] } },
     );
     expect(imperative.user).toContain('حل المعادلة 2س + 3 = 11');
+    // A bare "Solution" heading, and «الحَلّ» with its diacritics, still cut (re-review N3).
+    for (const heading of ['Solution', 'الحَلّ:']) {
+      const store: { user?: string } = {};
+      await generateSceneContent(
+        teaching({ contentRole: 'check_understanding', sourceContentUnitIds: ['16'] }),
+        capture(store, CONTENT_RESPONSE),
+        {
+          sourceUnits: [{ id: '16', title: 'Check', text: `${CHECK}\n${heading}\nP = 300 Pa` }],
+          bookGroundedQuestions: { checkUnitIds: ['16'] },
+        },
+      );
+      expect(store.user).toContain(CHECK);
+      expect(store.user).not.toContain('300 Pa');
+    }
   });
 
   it('QZ-6: a solution slide keeps its source as before; a teaching slide is unchanged by the option', async () => {
