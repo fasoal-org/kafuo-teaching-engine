@@ -623,11 +623,14 @@ const BOOK_PART_RESTRUCTURES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The codes a g5.v12 restructure may bring out without rolling back: a split asks for the
- * solution slides it makes missing, and the slides it adds or removes sit where the
- * book-part placement (run right after the repair) puts them.
+ * The codes a g5.v12 restructure may bring out without rolling back: every g5.v8 code,
+ * and the book-part ones — a split asks for the solution slides it makes missing, and the
+ * slides it adds or removes sit where the book-part placement (run right after the
+ * repair) puts them. The g5.v8 codes are IN the set: on v12 the v8 restructures run
+ * after the v12 ones, each under this same accept.
  */
 const BOOK_PART_EXPECTED: ReadonlySet<string> = new Set([
+  ...TEACHER_PARITY_FINDINGS,
   BOOK_COVERAGE_INCOMPLETE,
   SLIDE_OUT_OF_BOOK_ORDER,
   CHECK_BEFORE_ITS_PART,
@@ -715,47 +718,35 @@ function tryItOfCheck(
 /**
  * g5.v12 (W1.2), deterministic, no model call: a try-it that sets several checks becomes
  * one try-it per check, in book order, each setting its own check's lines as the book
- * prints them. A solution that solves several checks is taken out: each check then gets
- * its own solution slide from the insert planner (`missing_solution`, never before its
- * try-it). A solution slide that also teaches a book example is that example's slide: it
- * stays and only stops citing the checks. Lesson 227: slides 9 and 17, three and two
- * checks each. Returns the new list and what it did.
+ * prints them. A solution that solves several checks is taken out — ALWAYS, also when it
+ * cites a book example beside the checks: its text still holds every check's answer, so
+ * kept as "the example's slide" it would carry the answers to wherever the book prints
+ * that example, ahead of the try-its, where no gate could see it (review 27 Nov 2026,
+ * MEDIUM). Each check then gets its own solution slide from the insert planner
+ * (`missing_solution`, never before its try-it), and the example a slide of its own from
+ * its own text (`missing_teaching`). Lesson 227: slides 9 and 17, three and two checks
+ * each. Returns the new list and what it did.
  */
 export function splitMergedChecks(
   outlines: readonly SceneOutline[],
   book: CoverageBookStructure,
   context: BookCoverageRepairContext,
-): { outlines: SceneOutline[]; split: number; removed: number; recited: number } {
+): { outlines: SceneOutline[]; split: number; removed: number } {
   const merged = new Map(
     mergedCheckSlides(outlines, book).map((group) => [group.index, group] as const),
-  );
-  const examples = new Set(
-    book.units
-      .filter((unit) => unit.element === 'worked_example')
-      .map((unit) => unit.contentUnitId),
   );
   const result: SceneOutline[] = [];
   let split = 0;
   let removed = 0;
-  let recited = 0;
   outlines.forEach((outline, index) => {
     const group = merged.get(index);
     if (!group) {
       result.push(outline);
       return;
     }
-    const checkIds = new Set(group.units.map((unit) => unit.contentUnitId));
+    // A slide that solves several checks.
     if (outline.contentRole !== 'check_understanding') {
-      const ids = (outline.sourceContentUnitIds ?? []).map(String);
-      if (ids.some((id) => examples.has(id))) {
-        result.push({
-          ...outline,
-          sourceContentUnitIds: ids.filter((id) => !checkIds.has(id)),
-        } as SceneOutline);
-        recited += 1;
-      } else {
-        removed += 1;
-      }
+      removed += 1;
       return;
     }
     group.units.forEach((check, at) => {
@@ -767,7 +758,6 @@ export function splitMergedChecks(
     outlines: result.map((outline, at) => ({ ...outline, order: at + 1 })),
     split,
     removed,
-    recited,
   };
 }
 
@@ -869,6 +859,10 @@ export async function repairBookCoverageGaps(
   ) {
     // E-3: a step is kept only when it adds no new finding code outside the
     // g5.v8 set; otherwise the plan stays as it was and the step counts 0.
+    // g5.v12 EXTENDS that set with the book-part codes (never swaps it): the v8
+    // findings a restructure brings out stay expected there too, or the split of
+    // merged checks would roll back on the very repeat it exposes (review 27 Nov
+    // 2026, MEDIUM: `[K, E, try-merged, sol-merged]` → EXAMPLE_TAUGHT_TWICE).
     const before = new Set(blocking.map((issue) => issue.code));
     const expected = bookParts ? BOOK_PART_EXPECTED : TEACHER_PARITY_FINDINGS;
     const accept = (next: readonly SceneOutline[]) => {
@@ -889,8 +883,7 @@ export async function repairBookCoverageGaps(
       bookParts && partOpen(CHECKS_MERGED)
         ? splitMergedChecks(outlines, context.book, { ...context, units: [...unitsById.values()] })
         : null;
-    const splitKept =
-      split !== null && split.split + split.removed + split.recited > 0 && accept(split.outlines);
+    const splitKept = split !== null && split.split + split.removed > 0 && accept(split.outlines);
     const unmerged =
       bookParts && partOpen(IDEAS_MERGED) ? unmergeIdeas(outlines, context.book) : null;
     const unmergeKept = unmerged !== null && unmerged.removed > 0 && accept(unmerged.outlines);
@@ -903,7 +896,7 @@ export async function repairBookCoverageGaps(
       log.info(
         `book coverage repair (g5.v12): ${
           splitKept
-            ? `${split.split} check(s) split onto their own try-it slide, ${split.removed} merged solution(s) taken out, ${split.recited} example slide(s) kept apart`
+            ? `${split.split} check(s) split onto their own try-it slide, ${split.removed} merged solution(s) taken out`
             : 'checks not split'
         }; ${unmergeKept ? `${unmerged.removed} slide(s) teaching several ideas taken out to be planned one per idea` : 'ideas not unmerged'}; ${dropKept ? `${dropped.dropped} title-only transition slide(s) dropped` : 'no title-only slide dropped'}`,
       );
@@ -934,7 +927,7 @@ export async function repairBookCoverageGaps(
       );
     }
     restructured =
-      (splitKept ? split.split + split.removed + split.recited : 0) +
+      (splitKept ? split.split + split.removed : 0) +
       (unmergeKept ? unmerged.removed : 0) +
       (dropKept ? dropped.dropped : 0) +
       (dedupKept ? deduped.dropped : 0) +

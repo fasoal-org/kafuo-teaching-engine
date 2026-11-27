@@ -4361,6 +4361,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       expect(
         (snapshot.planWarnings as Array<{ code: string }>).map((warning) => warning.code),
       ).toEqual(['NO_CLOSING_SUMMARY']);
+      // Every listed unit is taught, so nothing is recorded as untaught (EN-8).
+      expect(snapshot).not.toHaveProperty('untaughtListedUnits');
       // The final plan follows the book: u1, the check u2 and its solution, u3, then the
       // quiz; u4, the check u5 and its solution, u6, then the quiz.
       const position = (id: string) => seen.final!.findIndex((outline) => outline.id === id);

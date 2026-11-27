@@ -459,9 +459,25 @@ export function findBookCoverageGaps(
   if (!book) return [];
   const gaps: BookCoverageGap[] = [];
 
+  // g5.v12: an idea — a key concept, an example, or the kind-less text that continues
+  // them — is taught by a teaching slide of its own. Its citation on a slide that sets or
+  // solves a check is no evidence it was taught (review 27 Nov 2026: 6758 cited only on a
+  // solution slide passed "every listed unit is taught"). Every earlier model counts a
+  // citation on any teaching slide, exactly as before.
+  const checkIds =
+    book.bookPartPlacement === true
+      ? new Set(
+          book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
+        )
+      : null;
+  const taughtOn = (outline: SceneOutline, unit: KafuoBookStructureUnit): boolean =>
+    teaches(outline) &&
+    cites(outline, unit.contentUnitId) &&
+    !(checkIds !== null && isIdeaUnit(unit) && citedIds(outline).some((id) => checkIds.has(id)));
+
   book.units.forEach((unit, position) => {
     if (!unit.required) return;
-    if (outlines.some((outline) => teaches(outline) && cites(outline, unit.contentUnitId))) return;
+    if (outlines.some((outline) => taughtOn(outline, unit))) return;
     const earlier = new Set(
       book.units
         .slice(0, position)
@@ -905,7 +921,9 @@ const TITLE_ONLY_MAX_CHARS = 160;
 /**
  * g5.v12 (decision D-2): the transition slides that hold a title and one line at most.
  * The «تمارين» transition that opens the exercises block is the flow's own, a title by
- * design, and is never one of them.
+ * design, and is never one of them. Neither is a transition that shows one of the book's
+ * own visuals: it is a picture slide, and dropping it would drop the picture (review 27
+ * Nov 2026, LOW).
  */
 export function titleOnlyTransitions(
   outlines: readonly SceneOutline[],
@@ -919,6 +937,7 @@ export function titleOnlyTransitions(
     if (citedIds(outlines[index + 1] ?? ({} as SceneOutline)).some((id) => exercises.has(id))) {
       return [];
     }
+    if ((outline.suggestedImageIds ?? []).length > 0) return [];
     const lines = [...(outline.keyPoints ?? []), outline.description ?? '']
       .map((line) => line.trim())
       .filter((line) => line !== '');
@@ -1835,10 +1854,10 @@ export const NO_CLOSING_SUMMARY = 'NO_CLOSING_SUMMARY';
 
 /**
  * g5.v12 (EN-5, critical items 27 Nov 2026): the three rules the owner chose to warn on
- * rather than gate — a definition box on first use, the exercises easiest first, and a
- * closing summary. Read from the plan's title, roles and citations only (never its
- * Scenes), so each is a report for the reviewer, not a proof. Empty on every other
- * Teaching Model.
+ * rather than gate — a definition box on first use, the exercises in the engine's
+ * easiest-first order, and a closing summary. Read from the plan's title, roles and
+ * citations only (never its Scenes), so each is a report for the reviewer, not a proof.
+ * Empty on every other Teaching Model.
  */
 export function bookPartPlacementWarnings(
   outlines: readonly SceneOutline[],
@@ -1861,27 +1880,62 @@ export function bookPartPlacementWarnings(
       message: `outline #${index + 1} «${first.title ?? ''}» first uses ${describe(unit)} with no definition box (contentKind definition)`,
     });
   }
+  // "Easiest first" is the engine's own rule, and code cannot measure difficulty:
+  // `selectExercises` picks the SET with an easiest-first bias, then orders the picks in
+  // BOOK order into slides. So the rule, as code can check it, is that the plan's
+  // exercise slides follow the engine's EXERCISES BLOCK — the same exercise items, in the
+  // engine's order. (The first version compared unit sets per slide and so never saw a
+  // reversed order: review 27 Nov 2026, MEDIUM.)
   const selection = selectExercises(book, book.unitFacts);
   if (selection) {
     const exerciseIds = new Set(
       book.units.filter((unit) => unit.element === 'exercise').map((unit) => unit.contentUnitId),
     );
-    const sameSet = (a: readonly string[], b: readonly string[]) => {
-      const left = [...a].map(String).sort();
-      const right = [...b].map(String).sort();
-      return left.length === right.length && left.every((id, at) => id === right[at]);
-    };
-    const planned = outlines
-      .filter((outline) => teaches(outline) && citedIds(outline).some((id) => exerciseIds.has(id)))
-      .map((outline) => citedIds(outline).filter((id) => exerciseIds.has(id)));
-    if (
-      planned.length === selection.slides.length &&
-      planned.some((ids, at) => !sameSet(ids, selection.slides[at]!))
-    ) {
+    const questionsOf = (unitId: string) => book.unitFacts?.[unitId]?.questionNumbers ?? [];
+    // The plan's exercise items in plan order: each exercise unit a slide cites, with the
+    // numbered questions its title or key points show for it (a slide that shows none
+    // solves the whole unit).
+    const planned: string[] = [];
+    for (const outline of outlines) {
+      if (!teaches(outline)) continue;
+      const ids = citedIds(outline).filter((id) => exerciseIds.has(id));
+      if (ids.length === 0) continue;
+      const shown = exerciseQuestionNumbers(visibleText(outline));
+      for (const id of ids) {
+        const questions = shown.filter((number) => questionsOf(id).includes(number));
+        if (questions.length > 0) {
+          for (const number of questions) planned.push(`${id}#${number}`);
+        } else {
+          planned.push(id);
+        }
+      }
+    }
+    // The engine's items: its slides in its order, each unit with the questions it gives them.
+    const engine: string[] = [];
+    selection.slides.forEach((ids, at) => {
+      for (const id of ids) {
+        const questions = selection.slideQuestions?.[at]?.[id] ?? [];
+        if (questions.length > 0) {
+          for (const number of questions) engine.push(`${id}#${number}`);
+        } else {
+          engine.push(id);
+        }
+      }
+    });
+    // A whole unit on one side is the questions the other side names for it.
+    const expand = (sequence: readonly string[], other: readonly string[]): string[] =>
+      sequence.flatMap((item) => {
+        const id = item.split('#')[0]!;
+        const named = other.filter((entry) => entry.startsWith(`${id}#`));
+        return item.includes('#') || named.length === 0 ? [item] : named;
+      });
+    const [left, right] = [expand(planned, engine), expand(engine, planned)];
+    // A different number of items is a coverage matter (the gates'), not an order one.
+    if (left.length === right.length && left.some((item, at) => item !== right[at])) {
       warnings.push({
         code: EXERCISES_NOT_EASIEST_FIRST,
         message:
-          'the exercise slides are not in the order the EXERCISES BLOCK lists (easiest first)',
+          'the exercise slides do not follow the order of the engine’s EXERCISES BLOCK (the engine’s easiest-first selection, in book order)',
       });
     }
   }

@@ -21,10 +21,21 @@ import {
   upsertSourceContext,
 } from '@/lib/persistence/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import {
+  findBookCoverageGaps,
+  requireEssentialUntypedUnits,
+  requireTaughtUnits,
+  teacherParityBook,
+} from '@/lib/server/teaching-package/book-coverage';
+import {
+  buildBookPartMap,
+  listedPartUnitIds,
+} from '@/lib/server/teaching-package/book-part-placement';
 import { submitBlockers, submitForReview } from '@/lib/server/teaching-package/lifecycle';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { teachingPackageStageGuardFence } from '@/lib/server/teaching-package/stage-guard';
 import type { AppStage } from '@/lib/document-store/persistence-types';
+import type { SceneOutline } from '@/lib/types/generation';
 import type { AppScene } from '@/lib/types/stage';
 import type { KafuoBookStructure, TeachingFlowEntry } from '@/lib/types/teaching-package';
 import { makeDocument, makeSlideScene } from '../agent-runtime/_stage-fixtures';
@@ -197,6 +208,23 @@ const inBookOrder = (stageId: string) => [
   quiz(stageId, 'q2', 4, ['u5']),
 ];
 
+/** The live slides as the plan the coverage gate reads: type, slide type, role and citations. */
+const asPlan = (scenes: readonly AppScene[]): SceneOutline[] =>
+  scenes.map((scene) => {
+    const content = scene.content as { canvas?: { type?: string }; contentRole?: string };
+    return {
+      id: scene.id,
+      type: scene.type,
+      title: scene.title,
+      description: '',
+      keyPoints: [],
+      order: scene.order,
+      sourceContentUnitIds: scene.sourceContentUnitIds,
+      ...(content.canvas?.type ? { slideType: content.canvas.type } : {}),
+      ...(content.contentRole ? { contentRole: content.contentRole } : {}),
+    } as SceneOutline;
+  });
+
 class PGlitePool {
   constructor(readonly db: PGlite) {}
 
@@ -228,6 +256,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
     version: string;
     scenes: (stageId: string) => AppScene[];
     gapContentUnitIds?: string[];
+    book?: KafuoBookStructure;
   }): Promise<string> {
     const stageId = unique('stage-book');
     const versionId = unique('tpv');
@@ -274,7 +303,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
         pdfContentSummary: null,
         requestedAt: 1,
         teachingFlow: FLOW,
-        bookStructure: BOOK,
+        bookStructure: options.book ?? BOOK,
         sectionCoverage: {
           essentialContentUnitIds: ESSENTIAL,
           gapContentUnitIds: options.gapContentUnitIds ?? [],
@@ -408,6 +437,41 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
 
     expect(error.code).toBe('ESSENTIAL_SECTION_UNCOVERED');
     expect((error.details as { unitIds: string[] }).unitIds).toEqual(['u3']);
+  });
+
+  it('does not re-judge the recall and exercises blocks, which need unit facts the attempt pinned only on a checkpoint (review)', async () => {
+    // A book with a «فيما سبق» unit: the run's own gate asks for a recall slide, and this package has none.
+    const withPrior: KafuoBookStructure = {
+      ...BOOK,
+      units: [
+        {
+          contentUnitId: 'u-prior',
+          kind: 'PRIOR_KNOWLEDGE',
+          element: 'prior_knowledge',
+          required: false,
+        },
+        ...BOOK.units,
+      ],
+    };
+    const coverage = teacherParityBook(
+      requireTaughtUnits(requireEssentialUntypedUnits(withPrior, ESSENTIAL), [
+        ...listedPartUnitIds(buildBookPartMap(withPrior, OBJECTIVES, FLOW)!),
+        ...ESSENTIAL,
+      ]),
+      { key: 'g5', version: 'g5.v12' },
+    )!;
+    expect(
+      findBookCoverageGaps(asPlan(inBookOrder('x')), coverage).map((gap) => gap.kind),
+    ).toContain('missing_recall');
+
+    const versionId = await seedBookVersion({
+      version: 'g5.v12',
+      scenes: inBookOrder,
+      book: withPrior,
+    });
+
+    expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
+    expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
   });
 
   it('g5.v11 is unchanged: the same out-of-order package, and the same deleted solution, submit as before', async () => {

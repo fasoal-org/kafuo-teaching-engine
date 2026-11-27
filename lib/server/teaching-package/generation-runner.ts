@@ -110,7 +110,6 @@ import {
   plannerVisibleRequiredUnitIds,
   requireEssentialUntypedUnits,
   requireTaughtUnits,
-  teaches,
   teacherParityBook,
   withTypedPracticeUnits,
   type PlanWarning,
@@ -125,6 +124,8 @@ import {
   placeWithGuard,
   SLIDE_OUT_OF_BOOK_ORDER,
   type BookPartPlacementResult,
+  type PlacedCandidate,
+  untaughtListedPartUnits,
 } from '@/lib/server/teaching-package/book-part-placement';
 import {
   repairBookCoverageGaps,
@@ -1187,7 +1188,18 @@ async function runKafuoAttempt(
       candidate: SceneOutline[],
     ): Promise<{ outlines: SceneOutline[]; blocking: OutlineDiagnostic[] } | null> => {
       if (!placing) return null;
-      const placed = placeCandidate(candidate, placing, kafuo.teachingFlow, diagnoseOpen);
+      // The placement never fails a run: on any error the plan stays as it is, and the
+      // order gate is then left open for the next step (fail closed).
+      let placed: PlacedCandidate;
+      try {
+        placed = placeCandidate(candidate, placing, kafuo.teachingFlow, diagnoseOpen);
+      } catch (error) {
+        log.warn(
+          `Teaching package attempt ${attemptId} run ${run}: book-part placement in repair failed; the plan stays as it is`,
+          error,
+        );
+        return null;
+      }
       notePlacement(placed.placement, placed.rolledBackFor);
       if (!placed.placement) {
         if (placed.rolledBackFor.length > 0) {
@@ -1564,20 +1576,13 @@ async function runKafuoAttempt(
                   });
                   const final = placed ?? examples ?? outlines;
                   // g5.v12 (EN-8): a listed unit of the lesson's parts with no teaching
-                  // slide is never skipped silently. The plan cannot reach a Scene while
-                  // such a unit is a blocking gap, so this is one a person accepted: it is
-                  // named in the log and kept on the attempt for the reviewer.
-                  if (placing) {
-                    untaughtListedUnits = listedPartUnitIds(placing).filter(
-                      (unitId) =>
-                        !final.some(
-                          (outline) =>
-                            teaches(outline) &&
-                            (outline.sourceContentUnitIds ?? []).some(
-                              (id) => String(id) === unitId,
-                            ),
-                        ),
-                    );
+                  // slide of its own is never skipped silently. The plan cannot reach a
+                  // Scene while such a unit is a blocking gap, so this is one a person
+                  // accepted: it is named in the log and kept on the attempt for the
+                  // reviewer. Read off the parts map, so it holds on a resumed plan a
+                  // person placed too (the placement itself stands down there).
+                  if (bookPartMap && coverageBook) {
+                    untaughtListedUnits = untaughtListedPartUnits(final, bookPartMap, coverageBook);
                     if (untaughtListedUnits.length > 0) {
                       log.warn(
                         `Teaching package attempt ${attemptId}: ${untaughtListedUnits.length} listed unit(s) of the lesson's parts have no teaching slide: ${untaughtListedUnits.join(', ')}`,

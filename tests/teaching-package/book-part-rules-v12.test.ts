@@ -26,6 +26,8 @@ import {
   BOOK_COVERAGE_INCOMPLETE,
   CHECKS_MERGED,
   DEFINITION_NOT_FIRST,
+  EXAMPLE_TAUGHT_TWICE,
+  EXERCISES_NOT_EASIEST_FIRST,
   findBookCoverageDiagnostics,
   findBookCoverageGaps,
   IDEAS_MERGED,
@@ -39,6 +41,7 @@ import {
   TITLE_ONLY_SLIDE,
   titleOnlyTransitions,
   bookPartPlacementWarnings,
+  type CoverageBookStructure,
 } from '@/lib/server/teaching-package/book-coverage';
 import {
   dropTitleOnlyTransitions,
@@ -57,11 +60,14 @@ import {
   placeCandidate,
   placeOutlinesByBookPart,
   SLIDE_OUT_OF_BOOK_ORDER,
+  untaughtListedPartUnits,
 } from '@/lib/server/teaching-package/book-part-placement';
+import { selectExercises } from '@/lib/server/teaching-package/exercise-selection';
 import type { PlanInsertedSlideInput } from '@/lib/server/teaching-package/plan-inserted-slide';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   KafuoBookStructure,
+  KafuoBookStructureUnit,
   LearningObjectiveRef,
   TeachingFlowEntry,
 } from '@/lib/types/teaching-package';
@@ -237,11 +243,18 @@ const orderOnly = (outlines: SceneOutline[]) => ({
   blocking: findBookOrderDiagnostics(outlines, MAP, FLOW),
 });
 
-function repairContext(plan: BookCoverageRepairContext['plan']): BookCoverageRepairContext {
+function repairContext(
+  plan: BookCoverageRepairContext['plan'],
+  over: {
+    coverage?: CoverageBookStructure;
+    unitsBook?: KafuoBookStructure;
+    diagnose?: BookCoverageRepairContext['diagnose'];
+  } = {},
+): BookCoverageRepairContext {
   return {
-    book: BOOK_V12,
+    book: over.coverage ?? BOOK_V12,
     flow: FLOW,
-    units: BOOK.units.map((entry, index) => ({
+    units: (over.unitsBook ?? BOOK).units.map((entry, index) => ({
       id: entry.contentUnitId,
       order: index + 1,
       role: entry.element === 'try_it' ? 'UNDERSTANDING_CHECK' : 'CONCEPT_EXPLANATION',
@@ -252,7 +265,7 @@ function repairContext(plan: BookCoverageRepairContext['plan']): BookCoverageRep
     language: 'ar-SA',
     languageDirective: '',
     visuals: [],
-    diagnose: diagnoseV12,
+    diagnose: over.diagnose ?? diagnoseV12,
     plan,
   };
 }
@@ -396,6 +409,64 @@ describe('EN-8 / EN-5 / EN-7: every listed unit is taught, or named', () => {
   });
 });
 
+describe('review 27 Nov 2026: an idea is taught by a teaching slide of its own', () => {
+  const withoutSlide7 = () =>
+    // Slide 7 taught 6756, 6758 and 6760; with it gone, a solution slide cites 6758 too.
+    plan227()
+      .filter((outline) => outline.id !== 's7')
+      .map((outline) =>
+        outline.id === 's11'
+          ? { ...outline, sourceContentUnitIds: [...cited(outline), '6758'] }
+          : outline,
+      );
+
+  it('g5.v12: a kind-less idea cited only on a check’s solution slide is untaught', () => {
+    const gaps = findBookCoverageGaps(withoutSlide7(), BOOK_V12);
+    expect(gaps.find((gap) => gap.unit.contentUnitId === '6758')?.kind).toBe('missing_teaching');
+    // …and so it is one a listed-unit report names.
+    expect(untaughtListedPartUnits(withoutSlide7(), MAP, BOOK_V12)).toContain('6758');
+  });
+
+  it('g5.v12: the same on a try-it slide', () => {
+    const plan = withoutSlide7().map((outline) =>
+      outline.id === 's9'
+        ? { ...outline, sourceContentUnitIds: [...cited(outline), '6760'] }
+        : outline,
+    );
+    expect(
+      findBookCoverageGaps(plan, BOOK_V12).find((gap) => gap.unit.contentUnitId === '6760')?.kind,
+    ).toBe('missing_teaching');
+  });
+
+  it('a side note cited on a check slide stays taught, and g5.v11 counts any citation as before', () => {
+    const plan = withoutSlide7().map((outline) =>
+      outline.id === 's9'
+        ? { ...outline, sourceContentUnitIds: [...cited(outline), '6763'] }
+        : outline,
+    );
+    // 6763 is a side note (`supporting`): it may sit on the slide of the element it explains.
+    expect(
+      findBookCoverageGaps(plan, BOOK_V12).some((gap) => gap.unit.contentUnitId === '6763'),
+    ).toBe(false);
+    expect(
+      findBookCoverageGaps(withoutSlide7(), BOOK_V11).some(
+        (gap) => gap.unit.contentUnitId === '6758',
+      ),
+    ).toBe(false);
+  });
+
+  it('a plan that teaches every listed unit names none', () => {
+    const plan = [
+      slide('c', 1, ['6756']),
+      slide('try', 1, ['6757'], { contentRole: 'check_understanding' }),
+      slide('sol', 1, ['6757'], { contentRole: 'worked_example' }),
+    ];
+    expect(untaughtListedPartUnits(plan, MAP, BOOK_V12)).toEqual(
+      listedPartUnitIds(MAP).filter((id) => !['6756', '6757'].includes(id)),
+    );
+  });
+});
+
 describe('the book-part detectors (g5.v12 only)', () => {
   it('MG-2: slides 9, 11 and 17 each merge checks; slide 17 across two parts', () => {
     expect(
@@ -448,6 +519,17 @@ describe('the book-part detectors (g5.v12 only)', () => {
       't6',
       't14',
     ]);
+  });
+
+  it('V12-2 (review): a transition that shows one of the book’s own visuals is a picture slide, never dropped', () => {
+    const plan = plan227().map((outline) =>
+      outline.id === 't6' ? { ...outline, suggestedImageIds: ['src-1'] } : outline,
+    );
+    expect(titleOnlyTransitions(plan, BOOK_V12).map((index) => plan[index]!.id)).toEqual([
+      't2',
+      't14',
+    ]);
+    expect(dropTitleOnlyTransitions(plan, BOOK_V12).dropped).toBe(2);
   });
 
   it('none of them fires on g5.v11', () => {
@@ -674,18 +756,108 @@ describe('the deterministic repairs (no model call)', () => {
     expect(cited(plan227()[3]!)).toEqual(['6757', '6759', '6761']);
   });
 
-  it("MG-2: a solution slide that also teaches a book example is that example's slide: it stays and stops citing the checks", () => {
-    const withExample: KafuoBookStructure = {
-      ...BOOK_V12,
-      units: [...BOOK_V12.units, unit('9001', 'worked_example', 3), unit('9002', 'try_it', 3)],
+  it('MG-2 (review, MEDIUM): a merged solution that also cites a book example is taken out too, so no answer precedes its try-it', async () => {
+    // The shape the reviewer ran: a key concept, an example, two checks on one try-it,
+    // and ONE solution that cites the example with both checks — its text holds both answers.
+    const small: KafuoBookStructure = {
+      templateVersionId: '4',
+      rules: [],
+      units: [
+        unit('k', 'key_concept', 1),
+        unit('ex', 'worked_example', 1),
+        unit('c1', 'try_it', 1),
+        unit('c2', 'try_it', 1),
+      ],
+    };
+    // One objective, so the flow has one objective block.
+    const flow = FLOW.slice(0, 3) as TeachingFlowEntry[];
+    const map = buildBookPartMap(
+      small,
+      [
+        {
+          objectiveRef: 'o1',
+          snapshot: { statement: 's' },
+          contentUnitIds: ['k', 'ex', 'c1', 'c2'],
+        },
+      ],
+      flow,
+    )!;
+    const coverage = teacherParityBook(requireTaughtUnits(small, listedPartUnitIds(map)), V12)!;
+    const diagnose = (outlines: SceneOutline[]) => ({
+      outlines,
+      blocking: [
+        ...findBookCoverageDiagnostics(outlines, coverage),
+        ...findBookOrderDiagnostics(outlines, map, flow),
+      ],
+    });
+    const context = {
+      ...repairContext(planning(), { coverage, unitsBook: small, diagnose }),
+      flow,
     };
     const plan = [
-      slide('ex', 5, ['9001', '6772', '9002'], { contentRole: 'worked_example' }),
-      slide('try', 5, ['9002'], { contentRole: 'check_understanding' }),
+      slide('k', 1, ['k']),
+      slide('try-m', 1, ['c1', 'c2'], { contentRole: 'check_understanding' }),
+      slide('sol-m', 1, ['ex', 'c1', 'c2'], {
+        contentRole: 'worked_example',
+        keyPoints: ['حل: ٥', 'حل: ٧'],
+      }),
+      quiz('q1', 2),
     ];
-    const result = splitMergedChecks(plan, withExample, repairContext(planning()));
-    expect(result).toMatchObject({ recited: 1, removed: 0, split: 0 });
-    expect(cited(result.outlines[0]!)).toEqual(['9001']);
+
+    const split = splitMergedChecks(plan, coverage, context);
+    expect(split).toMatchObject({ split: 1, removed: 1 });
+    expect(ids(split.outlines)).toEqual(['k', 'try-m', 'try-m-check-c2', 'q1']);
+
+    const repaired = await repairBookCoverageGaps(plan, diagnose(plan).blocking, aiCall, context);
+    // The example's own slide, and one solution per check.
+    expect(repaired.inserted).toBe(3);
+    const placed = placeCandidate(repaired.outlines, map, flow, diagnose);
+    expect(placed.blocking).toEqual([]);
+    expect(ids(placed.outlines)).toEqual([
+      'k',
+      'k-book-missing_teaching-ex-r1',
+      'try-m',
+      'try-m-book-missing_solution-c1-r1',
+      'try-m-check-c2',
+      'try-m-check-c2-book-missing_solution-c2-r1',
+      'q1',
+    ]);
+    // The planner's merged solution, with both answers, is nowhere in the package.
+    expect(JSON.stringify(placed.outlines.map((outline) => outline.keyPoints))).not.toContain(
+      'حل:',
+    );
+  });
+
+  it('MG-2 (review, MEDIUM): a g5.v8 finding the split brings out does not roll the split back', async () => {
+    const plan = plan227();
+    const context = repairContext(planning());
+    // As in `[K, E, try-merged, sol-merged]`: the diagnosis reports an example taught
+    // twice on any plan that holds a split try-it.
+    context.diagnose = (outlines) => {
+      const diagnosed = diagnoseV12(outlines);
+      const splitTryIt = outlines.some((outline) => outline.id.endsWith('-check-6759'));
+      return {
+        outlines: diagnosed.outlines,
+        blocking: [
+          ...diagnosed.blocking,
+          ...(splitTryIt
+            ? [
+                {
+                  code: EXAMPLE_TAUGHT_TWICE,
+                  disposition: 'admin_correctable' as const,
+                  field: 'sourceContentUnitIds',
+                  message: 'an example is taught twice',
+                },
+              ]
+            : []),
+        ],
+      };
+    };
+
+    const result = await repairBookCoverageGaps(plan, diagnoseV12(plan).blocking, aiCall, context);
+
+    expect(result.outlines.some((outline) => outline.id.endsWith('-check-6759'))).toBe(true);
+    expect(result.restructured).toBeGreaterThan(0);
   });
 
   it('MG-4: slide 7 is taken out to be planned one slide per idea', () => {
@@ -869,6 +1041,24 @@ describe('the diagnosis of an edit, a resume and a paused plan’s review (the c
     );
   });
 
+  it('a plan paused in the scenes phase carries no parts: it cannot be reordered, so the order gate is not run on it', () => {
+    const context = diagnosisContextFromCheckpoint(
+      { ...checkpoint, phase: 'scenes' },
+      FLOW,
+      false,
+      BOOK,
+      V12,
+      undefined,
+      OBJECTIVES,
+    );
+    expect(context).not.toHaveProperty('bookParts');
+    // The coverage book is the run's own, all the same.
+    expect(context.bookStructure).toEqual(BOOK_V12);
+    expect(codes(diagnoseCandidateOutlines(plan227(), context).blocking)).not.toContain(
+      SLIDE_OUT_OF_BOOK_ORDER,
+    );
+  });
+
   it('g5.v11: no parts, and the coverage book exactly as before', () => {
     const context = diagnosisContextFromCheckpoint(
       checkpoint,
@@ -884,5 +1074,74 @@ describe('the diagnosis of an edit, a resume and a paused plan’s review (the c
     expect(codes(diagnoseCandidateOutlines(plan227(), context).blocking)).not.toContain(
       SLIDE_OUT_OF_BOOK_ORDER,
     );
+  });
+});
+
+describe('EN-5 (review, MEDIUM): the exercise slides follow the engine’s EXERCISES BLOCK order', () => {
+  const exercise = (contentUnitId: string): KafuoBookStructureUnit => ({
+    contentUnitId,
+    kind: 'PRACTICE',
+    element: 'exercise',
+    required: false,
+    partIndex: 1,
+  });
+  const withExercises = (units: KafuoBookStructureUnit[], unitFacts = {}) =>
+    teacherParityBook(
+      {
+        ...BOOK_V12,
+        exercisePolicy: {
+          maxExercises: 6,
+          maxExerciseSlides: 3,
+          minExercises: 1,
+          minExerciseSlides: 1,
+        },
+        units: [...BOOK_V12.units, ...units],
+        ...(Object.keys(unitFacts).length > 0 ? { unitFacts } : {}),
+      },
+      V12,
+    )!;
+  // The engine's selection puts both units on ONE slide, in book order.
+  const twoUnits = withExercises([exercise('exA'), exercise('exB')]);
+  // …and a unit of two numbered questions on one slide, question 1 then question 2.
+  const questions = withExercises([exercise('exQ')], {
+    exQ: { itemLabels: [], hiddenSteps: [], questionNumbers: [1, 2] },
+  });
+  const solve = (id: string, units: string[], keyPoints: string[] = []) =>
+    slide(id, 5, units, { contentRole: 'worked_example', keyPoints });
+  const orderWarnings = (coverage: CoverageBookStructure, outlines: SceneOutline[]) =>
+    bookPartPlacementWarnings(outlines, coverage)
+      .map((warning) => warning.code)
+      .filter((code) => code === EXERCISES_NOT_EASIEST_FIRST);
+
+  it('the engine’s selection, as the fixture assumes', () => {
+    expect(selectExercises(twoUnits)!.slides).toEqual([['exA', 'exB']]);
+    expect(selectExercises(questions, questions.unitFacts)!.slideQuestions).toEqual([
+      { exQ: [1, 2] },
+    ]);
+  });
+
+  it('follows the engine: both units on one slide, or one per slide in book order', () => {
+    expect(orderWarnings(twoUnits, [solve('ex', ['exA', 'exB'])])).toEqual([]);
+    expect(orderWarnings(twoUnits, [solve('a', ['exA']), solve('b', ['exB'])])).toEqual([]);
+  });
+
+  it('warns when the order is reversed, on one slide or across slides', () => {
+    expect(orderWarnings(twoUnits, [solve('ex', ['exB', 'exA'])])).toEqual([
+      EXERCISES_NOT_EASIEST_FIRST,
+    ]);
+    expect(orderWarnings(twoUnits, [solve('b', ['exB']), solve('a', ['exA'])])).toEqual([
+      EXERCISES_NOT_EASIEST_FIRST,
+    ]);
+  });
+
+  it('warns when a unit’s numbered questions are set later-question-first across slides', () => {
+    const second = solve('q2', ['exQ'], ['(2) السؤال الثاني', 'ب', 'ج']);
+    const first = solve('q1', ['exQ'], ['(1) السؤال الأول', 'ب', 'ج']);
+    expect(orderWarnings(questions, [second, first])).toEqual([EXERCISES_NOT_EASIEST_FIRST]);
+    expect(orderWarnings(questions, [first, second])).toEqual([]);
+  });
+
+  it('says nothing when the plan sets other items than the engine: that is the coverage gates’ matter', () => {
+    expect(orderWarnings(twoUnits, [solve('a', ['exA'])])).toEqual([]);
   });
 });

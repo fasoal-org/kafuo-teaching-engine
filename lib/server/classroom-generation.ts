@@ -1983,6 +1983,8 @@ export async function generateClassroom(
         log.warn('Could not decide whether to ask the planner again:', error);
       }
       if (violations && violations.length > 0) {
+        // The re-ask never fails a run: the first answer is kept until the second proves usable.
+        const firstAnswer = outlinesResult;
         correctiveContext = formatBlockingOutlineDiagnostics(violations, OUTLINE_CORRECTION_PREFIX);
         log.warn(
           `Outline answer breaks ${violations.length} rule(s) no deterministic fix repairs; asking the planner once more`,
@@ -2001,6 +2003,15 @@ export async function generateClassroom(
           // through the unchecked path, with no further model call.
           const lastAnswer = lastOutlineAnswer;
           outlinesResult = await callOutlines(async () => lastAnswer, false);
+        }
+        // A second answer that yields no plan at all gives the first one back: it goes
+        // through every gate below and fails closed there if it still violates (review
+        // 27 Nov 2026, LOW) — the re-ask never turns a pausing plan into a failed run.
+        if (!outlinesResult?.success || !outlinesResult.data) {
+          log.warn(
+            'The planner’s second answer gave no usable plan; the first plan stands and goes through every gate',
+          );
+          outlinesResult = firstAnswer;
         }
       }
     }

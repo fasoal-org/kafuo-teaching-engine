@@ -40,7 +40,11 @@
  *    runs first and what it cannot fix fails closed.
  */
 import type { OutlineDiagnostic } from '@openmaic/generation';
-import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
+import {
+  findBookCoverageGaps,
+  isBookPartPlacementModel,
+  type CoverageBookStructure,
+} from '@/lib/server/teaching-package/book-coverage';
 import type { SceneOutline } from '@/lib/types/generation';
 import type {
   GenerationCheckpointLogEntry,
@@ -191,6 +195,26 @@ export function bookPartMapFor(
  */
 export function listedPartUnitIds(map: BookPartMap): string[] {
   return map.parts.flatMap((part) => part.unitIds);
+}
+
+/**
+ * The listed part units no teaching slide of its own cites, in book order (EN-8: such a
+ * unit is never skipped silently). Read with the coverage gate's own rule, so a unit the
+ * gate counts as untaught — also an idea cited only on a check's try-it or solution
+ * slide on g5.v12 — is one of them. The plan can reach a Scene with such a unit only
+ * when a person accepted the finding; it is then named here for the record.
+ */
+export function untaughtListedPartUnits(
+  outlines: readonly SceneOutline[],
+  map: BookPartMap,
+  book: CoverageBookStructure,
+): string[] {
+  const untaught = new Set(
+    findBookCoverageGaps(outlines, book)
+      .filter((gap) => gap.kind === 'missing_teaching')
+      .map((gap) => gap.unit.contentUnitId),
+  );
+  return listedPartUnitIds(map).filter((id) => untaught.has(id));
 }
 
 /**

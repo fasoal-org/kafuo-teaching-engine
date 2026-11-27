@@ -258,6 +258,20 @@ describe('generateClassroom: one bounded re-ask of the planner (g5.v12, EN-4)', 
     expect(reaskPlan).toHaveBeenCalledTimes(1);
   });
 
+  it('a second answer that yields no plan gives the first one back: the run goes on, the gates decide', async () => {
+    outlineAnswers(answer('first plan'), {
+      success: false,
+      error: 'OUTLINE_TEACHING_FLOW_INVALID: no outlines were returned',
+    });
+
+    const result = await generateWith({ reaskPlan: () => [ORDER_VIOLATION] });
+
+    expect(outlineCalls()).toHaveLength(2);
+    // Not a failed run: the first plan is what the gates, the repairs and, if need be,
+    // the pause see.
+    expect(result.outlines.map((entry: { title: string }) => entry.title)).toEqual(['first plan']);
+  });
+
   it('nothing to re-ask: the first answer stands, with one outline call', async () => {
     outlineAnswers(answer('first plan'), answer('second plan'));
 

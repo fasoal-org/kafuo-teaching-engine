@@ -335,9 +335,15 @@ export function correctionCoverageBook(
  * The diagnosis context a checkpoint pins (metadata only — no bytes). On g5.v12 it also
  * carries the lesson's parts (`learningObjectives`, from the attempt's snapshot), so an
  * edit and the revalidation before a resume check the book's order as the run did.
+ *
+ * Not on a plan paused in the `scenes` phase: its Scenes keep their places and only a
+ * pending outline's fields can be edited, so no one could satisfy an order finding there
+ * — it would only block the resume forever (book-section plan W3, review finding 3: an
+ * attempt paused before the gate existed is not affected).
  */
 export function diagnosisContextFromCheckpoint(
-  checkpoint: Pick<GenerationCheckpoint, 'sourceRefs'>,
+  checkpoint: Pick<GenerationCheckpoint, 'sourceRefs'> &
+    Partial<Pick<GenerationCheckpoint, 'phase'>>,
   flow: readonly TeachingFlowEntry[],
   governed: boolean,
   bookStructure?: KafuoBookStructure,
@@ -345,7 +351,7 @@ export function diagnosisContextFromCheckpoint(
   teacherGuide?: KafuoTeacherGuide,
   learningObjectives?: readonly LearningObjectiveRef[],
 ): OutlineDiagnosisContext {
-  const bookParts = bookPartMapFor(
+  const parts = bookPartMapFor(
     teachingModel,
     // The same typed book the coverage book reads, so both hold the same units.
     isGuideAnswerModel(teachingModel)
@@ -359,11 +365,11 @@ export function diagnosisContextFromCheckpoint(
     bookStructure,
     teachingModel,
     teacherGuide,
-    bookParts,
+    parts,
   );
   return {
     ...(coverageBook ? { bookStructure: coverageBook } : {}),
-    ...(bookParts ? { bookParts } : {}),
+    ...(parts && checkpoint.phase !== 'scenes' ? { bookParts: parts } : {}),
     flow,
     contentUnitIds: checkpoint.sourceRefs.contentUnitIds,
     sourceImages: checkpoint.sourceRefs.sourceImages.map((image) => ({

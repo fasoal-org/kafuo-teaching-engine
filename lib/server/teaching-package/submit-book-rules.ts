@@ -51,6 +51,14 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { TeachingModelLineage } from '@/lib/types/teaching-package';
 import type { AppScene, Scene } from '@/lib/types/stage';
 
+/** The coverage gaps Submit re-checks: those the pinned book alone can decide. */
+const SUBMIT_GAP_KINDS: ReadonlySet<string> = new Set([
+  'missing_teaching',
+  'missing_try_it',
+  'missing_solution',
+  'solution_before_try_it',
+]);
+
 /** One book finding on the live Stage: the Scene it is about (none for a missing slide). */
 export interface SubmitBookFinding {
   sceneId: string | null;
@@ -137,12 +145,18 @@ export async function checkSubmitBookRules(
   const projected = projectScenes(scenes, outline);
   const sceneIdOf = new Map(projected.map(({ scene, outline: entry }) => [entry.id, scene.id]));
   const asPlanned = projected.map(({ outline: entry }) => entry);
-  const gaps = findBookCoverageGaps(asPlanned, coverageBook).map((gap) => ({
-    sceneId: null,
-    unitId: gap.unit.contentUnitId,
-    code: 'BOOK_COVERAGE_INCOMPLETE',
-    message: gap.message,
-  }));
+  const gaps = findBookCoverageGaps(asPlanned, coverageBook)
+    // The gaps that need no unit facts: a section without its slide, a check without its
+    // try-it or its solution, a solution before its try-it. The recall and the exercises
+    // blocks are judged against facts the attempt pinned only on a checkpoint (which items
+    // survived the verse strip), so they are not re-judged here (review 27 Nov 2026, LOW).
+    .filter((gap) => SUBMIT_GAP_KINDS.has(gap.kind))
+    .map((gap) => ({
+      sceneId: null,
+      unitId: gap.unit.contentUnitId,
+      code: 'BOOK_COVERAGE_INCOMPLETE',
+      message: gap.message,
+    }));
   const merged = mergedCheckSlides(asPlanned, coverageBook).map((group) => ({
     sceneId: sceneIdOf.get(group.outline.id) ?? null,
     unitId: null,
