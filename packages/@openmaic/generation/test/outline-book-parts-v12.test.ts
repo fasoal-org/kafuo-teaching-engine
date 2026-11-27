@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildOutlinePrompt, sharedFlowBodies } from '../src/outline-generator.js';
+import { loadSnippet, processConditionalBlocks } from '../src/prompts/loader.js';
 
 const BODY = 'Teach every unit of this objective block in book order, one idea per slide.';
 const FLOW = [
@@ -43,11 +44,24 @@ describe('g5.v12 outline prompt', () => {
     for (const text of [v12.user, v12.system]) {
       expect(text).not.toContain('concise learning objectives and the big idea together');
       expect(text).not.toContain('`orientation` slide that includes the learning objectives');
-      expect(text).not.toContain('- the big idea / key framing message');
-      expect(text).not.toContain('- concise learning objectives\n');
     }
     expect(v12.user).toContain('It lists no learning objectives and states no big idea');
     expect(v12.system).toContain('(no learning-objectives list, no big idea)');
+    // The shared classification contract keeps its opening list for every caller (the
+    // host templates load it with no variable defaults); v12 alone adds the override.
+    const override = 'the opening list above is replaced';
+    expect(v12.system).toContain('- the big idea / key framing message');
+    expect(v12.system).toContain(`${override}: the opening slide carries the lesson title`);
+    expect(v12.system).toContain('no learning objectives and no big idea.');
+    expect(other.system).not.toContain(override);
+  });
+
+  it('fresh review HIGH 1: the contract rendered with no variables (the host loader) keeps both opener lines', () => {
+    const contract = processConditionalBlocks(loadSnippet('slide-classification-contract'), {});
+    expect(contract).toContain('- concise learning objectives\n');
+    expect(contract).toContain('- the big idea / key framing message\n');
+    expect(contract).not.toContain('the opening list above is replaced');
+    expect(contract).not.toContain("A check's ONE solution slide");
   });
 
   it('MI-5: a check’s single multi-item solution slide is a worked_example, on v12 only', () => {

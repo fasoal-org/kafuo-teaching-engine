@@ -231,6 +231,50 @@ describe('verifyCheckQuizKeys', () => {
     expect(result.verified).toHaveLength(2);
   });
 
+  it('follow-on review: a wrapped statement matches whole, the fallback is one-item only, an equation key is the same equation', () => {
+    const wrapped = checkQuizReferences(
+      checkQuiz(['u6']),
+      { keyed: [{ ...item('u6', '1', { type: 'bool', value: true }), number: null }] },
+      new Map([['u6', 'ماذا قرأت؟\nكل عدد أولي أكبر من 2\nهو عدد فردي']]),
+    );
+    const bool = (stem: string) =>
+      verifyCheckQuizKeys([question(T1, ['صحيحة', 'خاطئة'], ['A'], 'single', stem)], wrapped).failed
+        .length;
+    expect(bool('صح أم خطأ: كل عدد أولي أكبر من 2 هو عدد فردي')).toBe(0);
+    // Only the second line of the wrapped statement: not the book's statement.
+    expect(bool('صح أم خطأ: كل عدد زوجي هو عدد فردي')).toBe(1);
+    // A numbered item never falls back to a unit line (it could be another item's).
+    const numbered = checkQuizReferences(
+      checkQuiz(['u6']),
+      { keyed: [item('u6', '1', { type: 'bool', value: true })] },
+      new Map([['u6', 'ماذا قرأت؟\nالعبارة الأولى صحيحة تماما\nالعبارة الثانية خاطئة تماما']]),
+    );
+    expect(
+      verifyCheckQuizKeys(
+        [
+          question(
+            T1,
+            ['صحيحة', 'خاطئة'],
+            ['A'],
+            'single',
+            'صح أم خطأ: العبارة الثانية خاطئة تماما',
+          ),
+        ],
+        numbered,
+      ).failed,
+    ).toHaveLength(1);
+    // An equation key that states more than the approved one is not it.
+    const equation = checkQuizReferences(checkQuiz(['u7']), {
+      keyed: [item('u7', '1', { type: 'text', value: 'x = 3' })],
+    });
+    expect(
+      verifyCheckQuizKeys([question(T1, ['x = 3, x = -3', 'x = 4'], ['A'])], equation).failed,
+    ).toHaveLength(1);
+    expect(verifyCheckQuizKeys([question(T1, ['x=3', 'x = 4'], ['A'])], equation).failed).toEqual(
+      [],
+    );
+  });
+
   it('a book choice answer is never a reference: its letter names the book’s own options', () => {
     const guide = { keyed: [item('u3', '2', { type: 'choice', value: 'ب' })] };
     expect(checkQuizReferences(checkQuiz(['u3']), guide)).toEqual([]);

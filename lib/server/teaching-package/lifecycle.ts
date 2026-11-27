@@ -40,6 +40,7 @@ import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owne
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { cloneStageForSuccessor } from '@/lib/server/teaching-package/stage-clone';
 import {
+  readDroppedCheckQuizOutlineIds,
   readFlowForVersion,
   readTeachingSkillsGovernanceForVersion,
   type TeachingSkillsGovernance,
@@ -535,7 +536,13 @@ async function prepareSubmitValidation(
   const outlineRecord = document.outline as
     | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
     | undefined;
-  const check = validateExactTeachingFlow(document.scenes, flow, outlineRecord?.outlines);
+  // g5.v12 (A-32): only the check quizzes the run itself dropped may leave a gap.
+  const check = validateExactTeachingFlow(
+    document.scenes,
+    flow,
+    outlineRecord?.outlines,
+    await readDroppedCheckQuizOutlineIds(pool, version),
+  );
   if (!check.valid) {
     throw new TeachingPackageError(
       'TEACHING_MODEL_FLOW_MISMATCH',
@@ -737,8 +744,14 @@ export async function submitBlockers(
   const outlineRecord = document.outline as
     | { outlines?: Array<{ id: string; teachingStage?: { key: string; flowIndex: number } }> }
     | undefined;
+  const droppedCheckQuizIds = await readDroppedCheckQuizOutlineIds(pool, version);
   await collect(() => {
-    const check = validateExactTeachingFlow(document.scenes, flow, outlineRecord?.outlines);
+    const check = validateExactTeachingFlow(
+      document.scenes,
+      flow,
+      outlineRecord?.outlines,
+      droppedCheckQuizIds,
+    );
     if (!check.valid) {
       throw new TeachingPackageError(
         'TEACHING_MODEL_FLOW_MISMATCH',

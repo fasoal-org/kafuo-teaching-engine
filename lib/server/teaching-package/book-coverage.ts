@@ -952,8 +952,8 @@ export function ideasMergedSlides(
 /** A line beyond the title: one short paragraph at most. */
 const TITLE_ONLY_MAX_CHARS = 160;
 
-/** The exercises block's own transition title, «تمارين». */
-const EXERCISES_TITLE = /^\s*[«"(]?\s*تمارين/u;
+/** The exercises block's own transition title, «تمارين» (or «التمارين»). */
+const EXERCISES_TITLE = /^\s*[«"(]?\s*(?:ال)?تمارين/u;
 
 /**
  * g5.v12 (decision D-2): the transition slides that hold a title and one line at most.

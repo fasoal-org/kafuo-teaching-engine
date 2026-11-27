@@ -1812,10 +1812,19 @@ async function runKafuoAttempt(
         }));
       }
 
+      // g5.v12 (A-32): this run's own dropped check quizzes — marked by the pipeline, with
+      // no Scene — may leave their positions empty; nothing else may.
+      const sceneOutlineIds = new Set(result.scenes.map((scene) => scene.outlineId ?? ''));
+      const droppedCheckQuizIds = new Set(
+        result.outlines
+          .filter((outline) => outline.checkQuizDropped && !sceneOutlineIds.has(outline.id))
+          .map((outline) => outline.id),
+      );
       const flowCheck = validateExactTeachingFlow(
         result.scenes,
         kafuo.teachingFlow,
         result.outlines,
+        isBookPartPlacementModel(kafuo.teachingModel) ? droppedCheckQuizIds : undefined,
       );
       if (!flowCheck.valid) {
         // Discovered after Scene generation: the Stage is RETAINED and only the
@@ -2066,8 +2075,10 @@ async function runKafuoAttempt(
         const citedOf = new Map(
           result.outlines.map((outline) => [outline.id, outline.sourceContentUnitIds ?? []]),
         );
+        // Only a marked entry with no Scene is a drop (a resumed run may have generated it).
+        const withScene = new Set(result.scenes.map((scene) => scene.outlineId ?? ''));
         const droppedCheckQuizzes = result.outlines.flatMap((outline) =>
-          outline.checkQuizDropped
+          outline.checkQuizDropped && !withScene.has(outline.id)
             ? [
                 {
                   sceneId: outline.checkQuizDropped.sceneId,

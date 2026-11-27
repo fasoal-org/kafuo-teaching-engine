@@ -2665,13 +2665,28 @@ export async function generateClassroom(
       }
     }
     const retainedSceneIds = new Set<string>();
+    // g5.v12 (A-32): a check quiz an earlier pass of this run dropped after its one
+    // regeneration keeps its empty position on a `scenes` resume (never paid for again)
+    // unless it is listed again. No other outline carries a drop marker into this pass.
+    const keptCheckQuizDrops = new Set<string>();
+    if (outlines.some((outline) => outline.checkQuizDropped)) {
+      outlines = outlines.map((outline) => {
+        if (!outline.checkQuizDropped) return outline;
+        if (resumeScenes && !regenerate.has(outline.id) && !retainedByOutline.has(outline.id)) {
+          keptCheckQuizDrops.add(outline.id);
+          return outline;
+        }
+        const { checkQuizDropped: _stale, ...rest } = outline;
+        return rest;
+      });
+    }
 
     // Pre-pass, before ANY content spend (the prefetch below starts calls at once):
     // a caller-prohibited widget (Kafuo Release 1 defers games) is refused, and on a
     // governed run each Scene's exact Flow entry is resolved fail-closed (W1,
     // TAE-RQ-009) — exactly the two refusals the loop used to make per Scene first.
     const prepared = outlines.map((outline, index) => {
-      if (retainedByOutline.has(outline.id)) return null;
+      if (retainedByOutline.has(outline.id) || keptCheckQuizDrops.has(outline.id)) return null;
       const safeOutline = applyOutlineFallbacks(outline, true, {
         allowProceduralSkill: vocationalActive,
       });
@@ -3034,7 +3049,7 @@ export async function generateClassroom(
     try {
       for (const [index, outline] of outlines.entries()) {
         loopSceneId = null;
-        if (droppedGuideOutlines.has(outline.id)) continue;
+        if (droppedGuideOutlines.has(outline.id) || keptCheckQuizDrops.has(outline.id)) continue;
         const retained = retainedByOutline.get(outline.id);
         if (retained) {
           store.setState({ scenes: [...store.getState().scenes, retained] });

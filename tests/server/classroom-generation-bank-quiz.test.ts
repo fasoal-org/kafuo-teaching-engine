@@ -324,6 +324,54 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
     expect(droppedPlan(result)).toMatchObject({ reason: 'unverified_answer_key' });
   });
 
+  // Fresh review finding 5: a `scenes` resume of a run that dropped the quiz.
+  const resumeDropped = async (regenerateOutlineIds: string[]) => {
+    keyed(['B', 'B']);
+    const first = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+    expect(droppedPlan(first)).toMatchObject({ reason: 'unverified_answer_key' });
+    const routed = keyed(['A']);
+    const { generateClassroom } = await import('@/lib/server/classroom-generation');
+    const resumed = await generateClassroom(
+      { ...baseInput, checkQuizKeys: gated([REFERENCE]) } as never,
+      {
+        baseUrl: '',
+        persistence: sink(),
+        correction: {
+          resumeOutlines: {
+            outlines: first.outlines as never,
+            courseTitle: null,
+            languageDirective: 'English.',
+          },
+          resumeScenes: {
+            stageId: first.id,
+            stage: first.stage,
+            scenes: first.scenes,
+            regenerateOutlineIds,
+            sourceServingMapping: {},
+            sourceManifest: [],
+          },
+        },
+      },
+    );
+    return { routed, resumed };
+  };
+
+  it('A-32: a scenes resume keeps the dropped quiz dropped and never pays for it again', async () => {
+    const { routed, resumed } = await resumeDropped([]);
+
+    expect(routed.quizCalls()).toBe(0);
+    expect(resumed.scenes.some((scene) => scene.type === 'quiz')).toBe(false);
+    expect(droppedPlan(resumed)).toMatchObject({ reason: 'unverified_answer_key' });
+  });
+
+  it('A-32: a resume that lists the dropped quiz again generates it, and a verified key clears the mark', async () => {
+    const { routed, resumed } = await resumeDropped(['w6o2']);
+
+    expect(routed.quizCalls()).toBe(1);
+    expect(resumed.scenes.some((scene) => scene.type === 'quiz')).toBe(true);
+    expect(droppedPlan(resumed)).toBeUndefined();
+  });
+
   it('without checkQuizKeys (every model before g5.v12) the quiz is generated exactly as before', async () => {
     const routed = keyed(['B']);
 

@@ -10,6 +10,7 @@
 import type { Queryable } from '@openmaic/storage/document/pg';
 
 import type { TeachingFlowEntry } from '@openmaic/generation';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import type { AppScene } from '@/lib/types/stage';
 import type { TeachingFlowEntry as AppTeachingFlowEntry } from '@/lib/types/teaching-package';
 
@@ -72,6 +73,13 @@ export function validateExactTeachingFlow(
     teachingStage?: { key: string; flowIndex: number };
     checkQuizDropped?: unknown;
   }>,
+  /**
+   * g5.v12 only (QZ-2, decision A-32): the plan entries the SERVER dropped as check
+   * quizzes — this run's own, or the producing attempt's `droppedCheckQuizzes`
+   * ({@link readDroppedCheckQuizOutlineIds}). A marked entry outside this set is never
+   * exempt (an editor's outline write cannot forge one). Absent → no exemption at all.
+   */
+  droppedCheckQuizOutlineIds?: ReadonlySet<string>,
 ): ExactFlowResult {
   if (flow.length === 0) {
     return {
@@ -193,6 +201,7 @@ export function validateExactTeachingFlow(
       .filter(
         (outline) =>
           outline.checkQuizDropped &&
+          droppedCheckQuizOutlineIds?.has(outline.id) === true &&
           outline.teachingStage &&
           flow[outline.teachingStage.flowIndex]?.stage === 'outcome_check_understanding',
       )
@@ -234,6 +243,56 @@ export function validateExactTeachingFlow(
       expected,
     },
   };
+}
+
+/**
+ * g5.v12 only (QZ-2, decision A-32): the plan entries the run dropped as check quizzes,
+ * read from the version's producing attempt record (`droppedCheckQuizzes`, written by
+ * the server, never by an editor). A successor clone (`current_attempt_id` null) reads
+ * it over the same predecessor walk as {@link readFlowForVersion}, since it keeps the
+ * plan it was cloned from. Empty on every other model, and when no attempt is reachable.
+ */
+export async function readDroppedCheckQuizOutlineIds(
+  tx: Queryable,
+  version: { id: string; teachingModel?: { key?: string | null; version?: string | null } | null },
+): Promise<Set<string>> {
+  if (!isBookPartPlacementModel(version.teachingModel)) return new Set();
+  const visited = new Set<string>();
+  let currentId: string | null = version.id;
+  let snapshot: { droppedCheckQuizzes?: unknown } | undefined;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const versionResult = await tx.query<Record<string, unknown>>(
+      `SELECT current_attempt_id, predecessor_version_id
+         FROM teaching_package_versions
+        WHERE id = $1`,
+      [currentId],
+    );
+    const row = versionResult.rows[0] as
+      | { current_attempt_id: string | null; predecessor_version_id: string | null }
+      | undefined;
+    if (!row) break;
+    if (row.current_attempt_id) {
+      const attemptResult = await tx.query<Record<string, unknown>>(
+        `SELECT input_snapshot
+           FROM teaching_package_generation_attempts
+          WHERE id = $1`,
+        [row.current_attempt_id],
+      );
+      snapshot = attemptResult.rows[0]?.input_snapshot as typeof snapshot;
+      break;
+    }
+    currentId = row.predecessor_version_id;
+  }
+  const dropped = snapshot?.droppedCheckQuizzes;
+  if (!Array.isArray(dropped)) return new Set();
+  return new Set(
+    dropped.flatMap((entry) =>
+      entry && typeof (entry as { outlineId?: unknown }).outlineId === 'string'
+        ? [(entry as { outlineId: string }).outlineId]
+        : [],
+    ),
+  );
 }
 
 /**

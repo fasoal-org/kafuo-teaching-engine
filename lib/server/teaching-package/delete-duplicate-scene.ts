@@ -97,6 +97,8 @@ export interface DuplicateDeletePlanInput {
   units: Parameters<typeof computeContentUnitCoverage>[0];
   gaps?: Parameters<typeof computeContentUnitCoverage>[3];
   flow: readonly TeachingFlowEntry[] | null;
+  /** g5.v12 (A-32): the check quizzes the run dropped (their positions may be empty). */
+  droppedCheckQuizIds?: ReadonlySet<string>;
 }
 
 export interface DuplicateDeletePlan {
@@ -236,8 +238,8 @@ export function planDuplicateDelete(input: DuplicateDeletePlanInput): DuplicateD
   }
   if (input.flow && input.flow.length > 0) {
     const outlines = outline?.outlines;
-    const was = validateExactTeachingFlow(scenes, input.flow, outlines);
-    const now = validateExactTeachingFlow(after, input.flow, outlines);
+    const was = validateExactTeachingFlow(scenes, input.flow, outlines, input.droppedCheckQuizIds);
+    const now = validateExactTeachingFlow(after, input.flow, outlines, input.droppedCheckQuizIds);
     if (was.valid && !now.valid) {
       throw refuse(
         'INSERTION_FLOW_INVALID',
@@ -492,6 +494,10 @@ export async function deleteDuplicateScene(
     units: context.units,
     gaps: context.gaps,
     flow: context.flow,
+    // g5.v12 (A-32): a check position the run left empty is not this delete's doing.
+    ...(context.droppedCheckQuizIds?.size
+      ? { droppedCheckQuizIds: context.droppedCheckQuizIds }
+      : {}),
   });
   const result = {
     sceneId: plan.scene.id,

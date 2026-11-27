@@ -102,9 +102,11 @@ The first instructional slide of a lesson is normally `"type": "slide"`, `"slide
 - the lesson title
 - a hook or framing question
 - a short introduction / context
-{{#if standardOpener}}- concise learning objectives
-{{/if}}- one pedagogically useful supporting visual — tied to the hook, the context or the big idea, never decoration{{#if standardOpener}}
-- the big idea / key framing message{{/if}}
+- concise learning objectives
+- one pedagogically useful supporting visual — tied to the hook, the context or the big idea, never decoration
+- the big idea / key framing message{{#if bookPartPlacement}}
+
+On this lesson (book-part planning) the opening list above is replaced: the opening slide carries the lesson title, a hook, a short context and its visual only — no learning objectives and no big idea.{{/if}}
 
 The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-only, never shown to the learner) on this slide:
 

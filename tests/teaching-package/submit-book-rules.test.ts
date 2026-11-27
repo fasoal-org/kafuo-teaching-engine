@@ -260,6 +260,8 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
     objectives?: typeof OBJECTIVES;
     /** The plan entries the Stage's outline record keeps (A-32: a dropped check quiz). */
     planned?: AppDocumentOutline['outlines'];
+    /** The run's own record of the check quizzes it dropped (the attempt snapshot). */
+    droppedOutlineIds?: string[];
   }): Promise<string> {
     const stageId = unique('stage-book');
     const versionId = unique('tpv');
@@ -318,6 +320,16 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
           essentialContentUnitIds: ESSENTIAL,
           gapContentUnitIds: options.gapContentUnitIds ?? [],
         },
+        ...(options.droppedOutlineIds
+          ? {
+              droppedCheckQuizzes: options.droppedOutlineIds.map((outlineId) => ({
+                sceneId: outlineId,
+                outlineId,
+                flowIndex: 2,
+                reason: 'unverified_answer_key',
+              })),
+            }
+          : {}),
       } as never,
       now: 1,
     });
@@ -416,6 +428,7 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
         version: 'g5.v12',
         scenes: withoutQ1,
         planned: droppedQ1(true),
+        droppedOutlineIds: ['q1'],
       });
 
       expect(await submitBlockers(tx(), versionId, TENANT)).toEqual([]);
@@ -430,6 +443,31 @@ describe('g5.v12 Submit re-checks the book (EN-6)', () => {
         version: 'g5.v12',
         scenes: withoutQ1,
         planned: droppedQ1(false),
+        droppedOutlineIds: ['q1'],
+      });
+
+      const error = await refusal(submitForReview(tx(), command(versionId)));
+      expect(error.code).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+    });
+
+    it('a marker the run never recorded (an outline write) is refused', async () => {
+      const versionId = await seedBookVersion({
+        version: 'g5.v12',
+        scenes: withoutQ1,
+        planned: droppedQ1(true),
+      });
+
+      const error = await refusal(submitForReview(tx(), command(versionId)));
+      expect(error.code).toBe('TEACHING_MODEL_FLOW_MISMATCH');
+      expect(await submitBlockers(tx(), versionId, TENANT)).not.toEqual([]);
+    });
+
+    it('on g5.v11 a recorded, marked drop is still refused (v12 only)', async () => {
+      const versionId = await seedBookVersion({
+        version: 'g5.v11',
+        scenes: withoutQ1,
+        planned: droppedQ1(true),
+        droppedOutlineIds: ['q1'],
       });
 
       const error = await refusal(submitForReview(tx(), command(versionId)));

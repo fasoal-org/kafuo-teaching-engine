@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
-import { validateExactTeachingFlow } from '@/lib/server/teaching-package/exact-flow';
+import {
+  readDroppedCheckQuizOutlineIds,
+  validateExactTeachingFlow,
+} from '@/lib/server/teaching-package/exact-flow';
 import type { AppScene } from '@/lib/types/stage';
 
 const FLOW: TeachingFlowEntry[] = [
@@ -185,20 +188,91 @@ describe('g5.v12 (QZ-2, decision A-32): a dropped check quiz', () => {
     checkQuizDropped: { reason: 'unverified_answer_key', sceneId: `s-${flowIndex}` },
   });
 
-  it('its marked, empty check position passes', () => {
+  // The run's own record of what it dropped (fresh review finding 4).
+  const recorded = new Set(['dropped-2', 'dropped-3']);
+
+  it('its marked, recorded, empty check position passes', () => {
     expect(
-      validateExactTeachingFlow(scenes, V12_FLOW, [marked(2, 'outcome_check_understanding')]).valid,
+      validateExactTeachingFlow(
+        scenes,
+        V12_FLOW,
+        [marked(2, 'outcome_check_understanding')],
+        recorded,
+      ).valid,
     ).toBe(true);
   });
 
   it('without the marker, or a marker on a teaching position, the gate refuses as before', () => {
-    expect(validateExactTeachingFlow(scenes, V12_FLOW).valid).toBe(false);
+    expect(validateExactTeachingFlow(scenes, V12_FLOW, undefined, recorded).valid).toBe(false);
     const noTeaching = scenes.filter((entry) => entry.teachingStage?.flowIndex !== 3);
     expect(
-      validateExactTeachingFlow(noTeaching, V12_FLOW, [
-        marked(2, 'outcome_check_understanding'),
-        marked(3, 'outcome_visual_explanations'),
-      ]).valid,
+      validateExactTeachingFlow(
+        noTeaching,
+        V12_FLOW,
+        [marked(2, 'outcome_check_understanding'), marked(3, 'outcome_visual_explanations')],
+        recorded,
+      ).valid,
     ).toBe(false);
+  });
+
+  it('a marker the server never recorded (an outline write) is not exempt', () => {
+    const outlines = [marked(2, 'outcome_check_understanding')];
+    expect(validateExactTeachingFlow(scenes, V12_FLOW, outlines).valid).toBe(false);
+    expect(validateExactTeachingFlow(scenes, V12_FLOW, outlines, new Set()).valid).toBe(false);
+    expect(
+      validateExactTeachingFlow(scenes, V12_FLOW, outlines, new Set(['dropped-4'])).valid,
+    ).toBe(false);
+  });
+});
+
+describe('readDroppedCheckQuizOutlineIds (A-32)', () => {
+  const V12 = { key: 'g5', version: 'g5.v12' };
+  const dropped = [
+    { sceneId: 's', outlineId: 'q1', flowIndex: 2, reason: 'unverified_answer_key' },
+  ];
+  // versions: id → [current_attempt_id, predecessor_version_id]; attempts: id → snapshot.
+  const fakeTx = (
+    versions: Record<string, [string | null, string | null]>,
+    attempts: Record<string, unknown>,
+  ) => ({
+    query: async (sql: string, params: unknown[]) => {
+      const id = params[0] as string;
+      if (/FROM teaching_package_versions/.test(sql)) {
+        const row = versions[id];
+        return {
+          rows: row ? [{ current_attempt_id: row[0], predecessor_version_id: row[1] }] : [],
+        };
+      }
+      return { rows: id in attempts ? [{ input_snapshot: attempts[id] }] : [] };
+    },
+  });
+
+  it('reads the producing attempt record on g5.v12', async () => {
+    const tx = fakeTx({ v1: ['a1', null] }, { a1: { droppedCheckQuizzes: dropped } });
+    expect([
+      ...(await readDroppedCheckQuizOutlineIds(tx as never, { id: 'v1', teachingModel: V12 })),
+    ]).toEqual(['q1']);
+  });
+
+  it('a successor clone inherits its predecessor attempt record', async () => {
+    const tx = fakeTx(
+      { v2: [null, 'v1'], v1: ['a1', null] },
+      { a1: { droppedCheckQuizzes: dropped } },
+    );
+    expect([
+      ...(await readDroppedCheckQuizOutlineIds(tx as never, { id: 'v2', teachingModel: V12 })),
+    ]).toEqual(['q1']);
+  });
+
+  it('is empty on every other model, and with no record', async () => {
+    const tx = fakeTx({ v1: ['a1', null] }, { a1: { droppedCheckQuizzes: dropped } });
+    const v11 = { key: 'g5', version: 'g5.v11' };
+    expect(
+      (await readDroppedCheckQuizOutlineIds(tx as never, { id: 'v1', teachingModel: v11 })).size,
+    ).toBe(0);
+    const bare = fakeTx({ v1: ['a1', null] }, { a1: {} });
+    expect(
+      (await readDroppedCheckQuizOutlineIds(bare as never, { id: 'v1', teachingModel: V12 })).size,
+    ).toBe(0);
   });
 });

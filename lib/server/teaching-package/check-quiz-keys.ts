@@ -167,12 +167,21 @@ export function verifyCheckQuizKeys(
     // statement, with no added or dropped negation (review H1).
     if (approved.type === 'bool') {
       const stem = normalizeGuideText(question.question ?? '');
-      // The item's text, or (a one-item check, read whole) its last line: the statement
-      // after the box title and the instruction (re-review N1).
-      const lines = (reference.question ?? '').split('\n').filter((line) => line.trim() !== '');
-      const statements = [reference.question ?? '', lines[lines.length - 1] ?? '']
+      // The item's text; for a one-item check only (read whole: no item number), also its
+      // statement — every line after the box title that is not an instruction ending in
+      // «:», joined, so a statement wrapped over lines is matched whole (re-review N1;
+      // follow-on review: never another item's line, never one line of a wrapped one).
+      const lines = (reference.question ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
+      const statementLines = lines.slice(1).filter((line) => !/[:：]$/.test(line));
+      const statements = [
+        reference.question ?? '',
+        ...(reference.item.number === null ? [statementLines.join(' ')] : []),
+      ]
         .map((text) => normalizeGuideText(text))
-        .filter((text) => text !== '');
+        .filter((text) => text.length >= 8);
       const stated = statements.some(
         (book) => stem.includes(book) && negations(stem) === negations(book),
       );
@@ -229,7 +238,11 @@ function statesApproved(
     // An equation is the same equation, however it is spaced («س=5» is «س = 5»), when the
     // label is only an equation (re-review N2).
     if (isEquationAnswer(approved.value) && isEquationAnswer(label)) {
-      return { match: statesEquation(approved.value, label) };
+      // The SAME equation both ways: a label that states more («x = 3, x = −3») is not
+      // the approved key (follow-on review).
+      return {
+        match: statesEquation(approved.value, label) && statesEquation(label, approved.value),
+      };
     }
     return { match: written === expected || written === bare };
   }

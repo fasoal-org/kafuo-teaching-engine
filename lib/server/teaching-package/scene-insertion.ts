@@ -86,6 +86,7 @@ import {
   type TeachingPackageErrorCode,
 } from '@/lib/server/teaching-package/errors';
 import {
+  readDroppedCheckQuizOutlineIds,
   readFlowForVersion,
   readTeachingSkillsGovernanceForVersion,
   validateExactTeachingFlow,
@@ -479,6 +480,8 @@ interface InsertionContext {
   gaps: CoverageGapEvidence | undefined;
   /** g5.v12 (V12-3): which objective block owns each part; `null` on every other model. */
   blocks: BookPartBlocks | null;
+  /** g5.v12 (A-32): the check quizzes the run dropped; empty on every other model. */
+  droppedCheckQuizIds: ReadonlySet<string>;
 }
 
 /** The coverage-gate evidence of a version (`undefined` → no recorded gaps). */
@@ -540,6 +543,7 @@ export async function readInsertionContext(
     lineageStatus: units.lineageStatus,
     gaps: await readCoverageGapEvidence(pool, version.id),
     blocks: await readPartBlocks(pool, version),
+    droppedCheckQuizIds: await readDroppedCheckQuizOutlineIds(pool, version),
   };
 }
 
@@ -661,8 +665,10 @@ export function exactFlowOrRefuse(
   flow: readonly TeachingFlowEntry[],
   outline: AppDocumentOutline | null | undefined,
   detailScenes: readonly AppScene[] = scenes,
+  /** g5.v12 (A-32): the check quizzes the run dropped (their positions may be empty). */
+  droppedCheckQuizIds?: ReadonlySet<string>,
 ): void {
-  const result = validateExactTeachingFlow(scenes, flow, outline?.outlines);
+  const result = validateExactTeachingFlow(scenes, flow, outline?.outlines, droppedCheckQuizIds);
   if (!result.valid) {
     throw refusal(
       'INSERTION_FLOW_INVALID',
@@ -929,6 +935,7 @@ export async function insertGeneratedSlide(
       flow,
       outlineRecord,
       stageDocument.scenes,
+      context.droppedCheckQuizIds,
     );
     if (context.governed) {
       const preCheck = preCheckExistingSceneSkills(stageDocument.scenes, flow);
@@ -1237,6 +1244,7 @@ export async function insertGeneratedSlide(
           units: context.units,
           gaps: context.gaps,
           blocks: context.blocks,
+          droppedCheckQuizIds: context.droppedCheckQuizIds,
           flow,
           governed: context.governed,
           newSceneId,
@@ -1404,6 +1412,8 @@ function buildFinalDocument(
     gaps: CoverageGapEvidence | undefined;
     /** g5.v12 (V12-3): which objective block owns each part. */
     blocks: PartBlockOwner | null;
+    /** g5.v12 (A-32): the check quizzes the run dropped. */
+    droppedCheckQuizIds?: ReadonlySet<string>;
     flow: readonly TeachingFlowEntry[];
     governed: boolean;
     newSceneId: string;
@@ -1501,6 +1511,7 @@ function buildFinalDocument(
     input.flow,
     outlineRecord,
     migratedScenes.filter((scene) => scene.id !== fresh.id),
+    input.droppedCheckQuizIds,
   );
   const violations = policyViolations(
     doc.scenes,

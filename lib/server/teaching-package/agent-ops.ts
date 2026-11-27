@@ -799,6 +799,7 @@ async function insertionDryRun(
     insertion.flow,
     outline,
     document.scenes,
+    insertion.droppedCheckQuizIds,
   );
   if (insertion.governed) {
     const preCheck = preCheckExistingSceneSkills(document.scenes, insertion.flow);

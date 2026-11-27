@@ -645,6 +645,14 @@ describe('the book-part detectors (g5.v12 only)', () => {
       't6',
       't14',
     ]);
+    const definite = titled.map((outline) =>
+      outline.id === 't-ex' ? { ...outline, title: 'التمارين' } : outline,
+    );
+    expect(titleOnlyTransitions(definite, withBook).map((index) => definite[index]!.id)).toEqual([
+      't2',
+      't6',
+      't14',
+    ]);
   });
 
   it('V12-2 (review): a transition that shows one of the book’s own visuals is a picture slide, never dropped', () => {
