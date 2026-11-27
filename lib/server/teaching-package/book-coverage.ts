@@ -484,6 +484,14 @@ export function findBookCoverageGaps(
           book.units.filter((unit) => unit.element === 'try_it').map((unit) => unit.contentUnitId),
         )
       : null;
+  // g5.v12 (m-A): a side note (`supporting`) cited only on the orientation, the closing
+  // summary or a try-it slide is not taught either — unless it explains the very check
+  // that try-it sets (its `attachesToUnitId`), where the book prints it.
+  const sideNoteNotTaughtOn = (outline: SceneOutline, unit: KafuoBookStructureUnit): boolean =>
+    outline.contentRole === 'orientation' ||
+    outline.contentRole === 'summary' ||
+    (outline.contentRole === 'check_understanding' &&
+      !(unit.attachesToUnitId !== undefined && cites(outline, unit.attachesToUnitId)));
   const taughtOn = (outline: SceneOutline, unit: KafuoBookStructureUnit): boolean =>
     teaches(outline) &&
     cites(outline, unit.contentUnitId) &&
@@ -493,7 +501,8 @@ export function findBookCoverageGaps(
       (outline.contentRole === 'orientation' ||
         outline.contentRole === 'summary' ||
         citedIds(outline).some((id) => checkIds.has(id)))
-    );
+    ) &&
+    !(checkIds !== null && unit.element === 'supporting' && sideNoteNotTaughtOn(outline, unit));
 
   book.units.forEach((unit, position) => {
     if (!unit.required) return;
@@ -943,6 +952,9 @@ export function ideasMergedSlides(
 /** A line beyond the title: one short paragraph at most. */
 const TITLE_ONLY_MAX_CHARS = 160;
 
+/** The exercises block's own transition title, «تمارين». */
+const EXERCISES_TITLE = /^\s*[«"(]?\s*تمارين/u;
+
 /**
  * g5.v12 (decision D-2): the transition slides that hold a title and one line at most.
  * The «تمارين» transition that opens the exercises block is the flow's own, a title by
@@ -962,6 +974,9 @@ export function titleOnlyTransitions(
     if (citedIds(outlines[index + 1] ?? ({} as SceneOutline)).some((id) => exercises.has(id))) {
       return [];
     }
+    // Wave 2: the «تمارين» transition is a title by design, wherever it sits (its next
+    // slide may be an attempt or carry no exercise citation yet).
+    if (EXERCISES_TITLE.test(outline.title ?? '')) return [];
     if ((outline.suggestedImageIds ?? []).length > 0) return [];
     const lines = [...(outline.keyPoints ?? []), outline.description ?? '']
       .map((line) => line.trim())
@@ -1529,6 +1544,12 @@ export function bookStructureRequirement(
     teacherParity?: boolean;
     learnerFirst?: boolean;
     bookPartPlacement?: boolean;
+    /**
+     * g5.v12 only (Wave 2, MI-2 / W2.6): the routing subject code. The maths-only lines
+     * (CLAIMS, DATA, CYCLES, the conjecture caution, the hidden-step catalogue) go to a
+     * `MATH` lesson alone. Read only with `bookPartPlacement`.
+     */
+    subjectCode?: string | null;
   } = {},
 ): string {
   if (!book) return '';
@@ -1539,6 +1560,7 @@ export function bookStructureRequirement(
       rules,
       options.learnerFirst === true,
       options.bookPartPlacement === true,
+      options.subjectCode ?? null,
     );
   }
   return [
@@ -1605,7 +1627,7 @@ const ONE_IDEA_RULE =
  * 2026): the lines the planner gets on top of — or instead of — g5.v8's.
  * `oneIdea` (g5.v12) swaps v10's shared key-concept slide for one idea per slide.
  */
-function learnerFirstLines(book: KafuoBookStructure, oneIdea = false): string[] {
+function learnerFirstLines(book: KafuoBookStructure, oneIdea = false, maths = true): string[] {
   const reading = book.units.some((unit) =>
     /MATH_READING|VOCABULARY_LINK/.test(String(unit.kind ?? '')),
   );
@@ -1617,13 +1639,21 @@ function learnerFirstLines(book: KafuoBookStructure, oneIdea = false): string[] 
           '- Teach each kind=MATH_READING («قراءة الرياضيات») and kind=VOCABULARY_LINK («ربط المفردات») unit where the book prints it, on the slide that first uses its notation or term (cite it there).',
         ]
       : []),
-    '- CLAIMS: a slide that tests a conjecture or gives a counterexample states the conjecture itself first, verbatim from the book, in its key points.',
-    '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use. To estimate a next value, add the last difference again (the latest rise: «آخر زيادة 4، إذن 41 + 4 = 45») and plan that working as key points.',
-    // Quality plan W4 (item 208, 15 Nov 2026): no month list at check 1; the wrong pictures.
-    '- CYCLES: an item on a fixed named cycle (the Hijri months, the days of the week) gives the whole cycle, numbered in order, as given data on its try-it slide and on its solution slide. Listing the cycle is the data of the item, never a hint.',
+    // g5.v12 (Wave 2, MI-2 / W2.6): the conjecture, data and cycle lines are maths rules;
+    // another subject never gets them. Every earlier model: always, as before.
+    ...(maths
+      ? [
+          '- CLAIMS: a slide that tests a conjecture or gives a counterexample states the conjecture itself first, verbatim from the book, in its key points.',
+          '- DATA: a conjecture from data states what is expected next and why the data support it, with the method the book uses; never an average-change calculation the book does not use. To estimate a next value, add the last difference again (the latest rise: «آخر زيادة 4، إذن 41 + 4 = 45») and plan that working as key points.',
+          // Quality plan W4 (item 208, 15 Nov 2026): no month list at check 1; the wrong pictures.
+          '- CYCLES: an item on a fixed named cycle (the Hijri months, the days of the week) gives the whole cycle, numbered in order, as given data on its try-it slide and on its solution slide. Listing the cycle is the data of the item, never a hint.',
+        ]
+      : []),
     "- PICTURES: a unit's book picture is shown once, on the slide whose item it shows. A slide that only solves exercises shows no picture of the exercise list.",
     "- ATTEMPT: never plan a quiz for a check or an exercise; the engine adds the learner's attempt itself, right after each try-it slide and before each exercise slide.",
-    '- Say the caution that examples do not prove a conjecture at most once per lesson part.',
+    ...(maths
+      ? ['- Say the caution that examples do not prove a conjecture at most once per lesson part.']
+      : []),
   ];
 }
 
@@ -1633,9 +1663,10 @@ function teacherParityRequirement(
   rules: string,
   learnerFirst = false,
   bookPartPlacement = false,
+  subjectCode: string | null = null,
 ): string {
   const policy = book.exercisePolicy;
-  if (learnerFirst) return learnerFirstRequirement(book, rules, bookPartPlacement);
+  if (learnerFirst) return learnerFirstRequirement(book, rules, bookPartPlacement, subjectCode);
   return [
     '',
     'BOOK-STRUCTURED LESSON (g5.v8). Each [[CONTENT_UNIT]] marker shows the kind the book',
@@ -1692,8 +1723,11 @@ function learnerFirstRequirement(
   book: KafuoBookStructure,
   rules: string,
   bookPartPlacement = false,
+  subjectCode: string | null = null,
 ): string {
   const policy = book.exercisePolicy;
+  // g5.v12 (Wave 2, MI-2 / W2.6): the maths-only lines go to a MATH lesson alone.
+  const maths = !bookPartPlacement || subjectCode === 'MATH';
   return [
     '',
     `BOOK-STRUCTURED LESSON (${bookPartPlacement ? 'g5.v12' : 'g5.v10'}). Each [[CONTENT_UNIT]] marker shows the kind the book`,
@@ -1714,8 +1748,12 @@ function learnerFirstRequirement(
     "Never solve a try_it unit before its try-it slide: an example's own slide cites only",
     'the example, not the check that follows it.',
     ...checkListLine(book),
-    'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
-    learnerFirstPlannerCatalogue(),
+    ...(maths
+      ? [
+          'VISIBLE WORKING: every solution plans each hidden step as its own key point, by type:',
+          learnerFirstPlannerCatalogue(),
+        ]
+      : ['VISIBLE WORKING: every solution plans each step of its working as its own key point.']),
     ...(policy && !book.units.some(isUsableExercise)
       ? [
           'EXERCISES: no exercise unit of this lesson holds a usable item, so the lesson has no',
@@ -1740,7 +1778,7 @@ function learnerFirstRequirement(
             'paired with the same example.',
           ]
         : []),
-    ...learnerFirstLines(book, bookPartPlacement),
+    ...learnerFirstLines(book, bookPartPlacement, maths),
     'Transition slides never count as teaching a unit.',
   ].join('\n');
 }

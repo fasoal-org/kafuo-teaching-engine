@@ -439,20 +439,45 @@ describe('review 27 Nov 2026: an idea is taught by a teaching slide of its own',
     ).toBe('missing_teaching');
   });
 
-  it('a side note cited on a check slide stays taught, and g5.v11 counts any citation as before', () => {
+  it('m-A: a side note on a try-it is taught only when it explains that check; g5.v11 counts any citation', () => {
     const plan = withoutSlide7().map((outline) =>
       outline.id === 's9'
         ? { ...outline, sourceContentUnitIds: [...cited(outline), '6763'] }
         : outline,
     );
-    // 6763 is a side note (`supporting`): it may sit on the slide of the element it explains.
-    expect(
-      findBookCoverageGaps(plan, BOOK_V12).some((gap) => gap.unit.contentUnitId === '6763'),
-    ).toBe(false);
+    const gap6763 = (book: CoverageBookStructure, outlines: SceneOutline[] = plan) =>
+      findBookCoverageGaps(outlines, book).find((gap) => gap.unit.contentUnitId === '6763')?.kind;
+    // 6763 (`supporting`, the lab) explains no check: cited only on the try-it, untaught.
+    expect(gap6763(BOOK_V12)).toBe('missing_teaching');
+    // A side note that explains the check 6757 sits on that check's try-it, where the book prints it.
+    const attached: CoverageBookStructure = {
+      ...BOOK_V12,
+      units: BOOK_V12.units.map((entry) =>
+        entry.contentUnitId === '6763' ? { ...entry, attachesToUnitId: '6757' } : entry,
+      ),
+    };
+    expect(gap6763(attached)).toBeUndefined();
     expect(
       findBookCoverageGaps(withoutSlide7(), BOOK_V11).some(
         (gap) => gap.unit.contentUnitId === '6758',
       ),
+    ).toBe(false);
+  });
+
+  it('m-A: an in-place side note no teaching slide cites (6357 / 6764 / 6339 shapes) is missing_teaching', () => {
+    for (const contentRole of ['summary', 'orientation'] as const) {
+      const plan = [
+        ...withoutSlide7(),
+        slide(`only-${contentRole}`, 5, ['6765'], { slideType: 'content', contentRole }),
+      ];
+      expect(
+        findBookCoverageGaps(plan, BOOK_V12).find((gap) => gap.unit.contentUnitId === '6765')?.kind,
+      ).toBe('missing_teaching');
+    }
+    // Taught on a teaching slide of its own: no gap.
+    const taught = [...withoutSlide7(), slide('note', 1, ['6765'])];
+    expect(
+      findBookCoverageGaps(taught, BOOK_V12).some((gap) => gap.unit.contentUnitId === '6765'),
     ).toBe(false);
   });
 
@@ -605,6 +630,17 @@ describe('the book-part detectors (g5.v12 only)', () => {
       slide('ex-1', 5, ['6777'], { contentRole: 'worked_example' }),
     ];
     expect(titleOnlyTransitions(exercises, withBook).map((index) => exercises[index]!.id)).toEqual([
+      't2',
+      't6',
+      't14',
+    ]);
+    // Wave 2: titled «تمارين», it is exempt even when its next slide cites no exercise.
+    const titled = [
+      ...plan,
+      slide('t-ex', 5, [], { slideType: 'transition', title: 'تمارين' }),
+      slide('closing2', 5, ['6773'], { contentRole: 'summary' }),
+    ];
+    expect(titleOnlyTransitions(titled, withBook).map((index) => titled[index]!.id)).toEqual([
       't2',
       't6',
       't14',

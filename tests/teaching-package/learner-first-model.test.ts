@@ -191,10 +191,12 @@ describe('g5.v12 registration', () => {
 
   it('gives the g5.v12 planner one idea per slide and one check per slide, v10 and v11 text unchanged (MG-4, MG-1)', () => {
     const v10 = bookStructureRequirement(BOOK, { teacherParity: true, learnerFirst: true });
+    // A MATH lesson: every maths line stays (Wave 2: they go to MATH alone on g5.v12).
     const v12 = bookStructureRequirement(BOOK, {
       teacherParity: true,
       learnerFirst: true,
       bookPartPlacement: true,
+      subjectCode: 'MATH',
     });
     // v10's line, gone on v12 only.
     expect(v10).toContain('a key-concept box and its own first example share one slide');
@@ -212,6 +214,41 @@ describe('g5.v12 registration', () => {
         .replace(/ ONE IDEA PER SLIDE:[^\n]*/, SAME_IDEA)
         .replace(/ONE CHECK PER SLIDE:[^\n]*\n[^\n]*\n/, '');
     expect(strip(v12)).toBe(v10);
+  });
+
+  it('Wave 2 (MI-2 / W2.6): on g5.v12 the maths-only lines go to a MATH lesson alone; v10 unchanged', () => {
+    const forSubject = (subjectCode: string | null) =>
+      bookStructureRequirement(BOOK, {
+        teacherParity: true,
+        learnerFirst: true,
+        bookPartPlacement: true,
+        subjectCode,
+      });
+    const maths = forSubject('MATH');
+    const MATHS_LINES = [
+      '- CLAIMS:',
+      '- DATA:',
+      '- CYCLES:',
+      'examples do not prove a conjecture',
+      'never an average-change calculation the book does not use',
+    ];
+    for (const line of MATHS_LINES) expect(maths).toContain(line);
+    for (const subject of ['CHEM', 'PHYS', 'BIO', null]) {
+      const other = forSubject(subject);
+      for (const line of MATHS_LINES) expect(other).not.toContain(line);
+      expect(other).toContain(
+        'VISIBLE WORKING: every solution plans each step of its working as its own key point.',
+      );
+      expect(other).toContain('ONE CHECK PER SLIDE');
+    }
+    // g5.v10 (no book-part placement) keeps every line, whatever the subject.
+    const v10 = bookStructureRequirement(BOOK, {
+      teacherParity: true,
+      learnerFirst: true,
+      subjectCode: 'CHEM',
+    });
+    expect(v10).toBe(bookStructureRequirement(BOOK, { teacherParity: true, learnerFirst: true }));
+    for (const line of MATHS_LINES) expect(v10).toContain(line);
   });
 
   it('has its own switch, on for g5.v12 only', () => {

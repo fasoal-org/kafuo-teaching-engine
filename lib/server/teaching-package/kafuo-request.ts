@@ -1679,6 +1679,8 @@ export function buildKafuoStartRequest(
     // g5.v10 (learner-first plan W3): its own planner text on top of v8's structure.
     learnerFirst: isLearnerFirstModel(request.teachingModel),
     bookPartPlacement: isBookPartPlacementModel(request.teachingModel),
+    // g5.v12 only (Wave 2, MI-2): the maths-only lines go to a MATH lesson alone.
+    subjectCode: subjectCodeOf(request),
   });
   const requirement = `${buildKafuoRequirement(request)}${book}`;
   const digest = canonicalRequestDigest(request);

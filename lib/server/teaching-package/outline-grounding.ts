@@ -87,8 +87,10 @@ export function essentialContentUnitIds(
   manifest: NormalizedLessonManifest,
   bookStructure?: KafuoBookStructure,
 ): string[] {
-  // g5.v7: the book map decides. The opener («لماذا؟») and the goal list are
-  // cover material (P-7), never a section that needs its own teaching slide.
+  // g5.v7: the book map decides. The goal list is cover material (P-7), never a
+  // section that needs its own teaching slide; so is the opener («لماذا؟») up to
+  // g5.v11. On g5.v12 «لماذا؟» is a supporting unit of its part (taught there, and
+  // required as a listed part unit), not cover material.
   // g5.v8: recall and exercise units are placed by rule (one recall slide, a
   // capped exercises block), never one teaching slide each — whatever role the
   // parse gave them («المثال 1» opens some exercise units). No earlier map has
