@@ -692,6 +692,8 @@ export async function runPackageReview(
     /**
      * L-4: the row's tokens and cost add up every paid attempt of every call;
      * its provider and model are the first review's (set only by that save).
+     * RV-5: the model that served each re-check is on that slide's fix entry
+     * (`StoredFix.reviewModel`), so a resumed or flagged-slide run is named too.
      */
     const recordUsage = async (call: ReviewCallAnswer['call'], extra: ReviewProgress) => {
       if (deps.signal?.aborted) return; // an evicted run writes nothing

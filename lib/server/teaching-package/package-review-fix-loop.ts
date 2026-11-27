@@ -9,7 +9,9 @@
  *      learner never hears old audio over a new slide;
  *   3. re-review ONLY that slide, with its neighbours (as they are now) as context.
  * A finding whose check the re-review no longer reports is `fixed` — unless the
- * slide's narration audio failed (`NARRATION_AUDIO_FAILED`, D-5). Reported
+ * slide's narration audio failed (`NARRATION_AUDIO_FAILED`, D-5), or (RV-4) it is
+ * a HIGH finding and the re-review still reports any HIGH error on the slide. `fixed`
+ * is written here only, always after a re-check of the regenerated slide. Reported
  * again, refused, not re-reviewed (`REREVIEW_UNAVAILABLE`) or not attempted →
  * it stays open with the reason the teacher reads; a new, different error the
  * re-review found is added open (`NOT_ATTEMPTED`).
@@ -39,6 +41,8 @@ import {
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
+  GENERATION_ISSUE_CHECK,
+  LABEL_SCRIPT_CHECK,
   PACKAGE_QUIZ_CHECKS,
   type ReviewerFinding,
 } from '@/lib/server/teaching-package/package-review-prompt';
@@ -60,7 +64,11 @@ import {
   sceneRegenerationLeaseSeconds,
 } from '@/lib/server/teaching-package/scene-regeneration-store';
 import type { AppScene } from '@/lib/types/stage';
-import type { FixLoop, FixLoopContext } from '@/lib/server/teaching-package/package-review';
+import type {
+  FixLoop,
+  FixLoopContext,
+  ReviewCallAnswer,
+} from '@/lib/server/teaching-package/package-review';
 
 const log = createLogger('PackageReviewFixLoop');
 
@@ -92,6 +100,13 @@ const AUTO_FIX_CHECKS: ReadonlySet<string> = new Set([
 ]);
 
 const SEVERITY_RANK: Readonly<Record<string, number>> = { low: 1, medium: 2, high: 3 };
+
+/**
+ * RV-4: the server's own findings, each closed by a deterministic re-check of the
+ * live scene (G1: no kept generation issue; G2: the book's Latin labels), never by
+ * the reviewer's re-review alone.
+ */
+const SERVER_CHECKS: ReadonlySet<string> = new Set([GENERATION_ISSUE_CHECK, LABEL_SCRIPT_CHECK]);
 
 /**
  * g5.v10 quality plan W2: the re-review findings that show a fix made its slide
@@ -359,6 +374,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
 
       let regenerated: AppScene;
       let regenerationId: string | null = null;
+      // RV-5: the model that served this slide's last answered re-review.
+      let served: Pick<StoredFix, 'reviewModel' | 'reviewProvider'> = {
+        reviewModel: null,
+        reviewProvider: null,
+      };
+      const noteServed = (call: ReviewCallAnswer['call']) => {
+        served = { reviewModel: call.modelString ?? null, reviewProvider: call.provider ?? null };
+      };
       // W2 resume (review MED-3): this slide's fix is a replay whose live slide is no
       // longer its result — an evicted run already restored it (or retried it).
       let replayedAway = false;
@@ -469,12 +492,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           );
           try {
             if (!(await context.heartbeat())) throw new Error('lease lost');
-            const { answer } = await context.callReviewer({
+            const { answer, call } = await context.callReviewer({
               review,
               units: context.units,
               slides: neighbourhood(around, candidate),
               focusIds: new Set([slide.id]),
             });
+            noteServed(call);
             return answer.findings.filter((finding) => finding.targetId === slide.id);
           } catch (error) {
             log.warn(
@@ -506,6 +530,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             outcome: 'still_wrong',
             code: 'FIX_ROLLED_BACK',
             regenerationId: id,
+            ...served,
           });
           log.info(`review ${review.id}: ${slide.id} rolled back (the fix made it worse)`);
           await context.recordProgress(findings, fixes);
@@ -617,12 +642,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       if (!reviewed) {
         try {
           if (!(await context.heartbeat())) throw new Error('lease lost');
-          const { answer } = await context.callReviewer({
+          const { answer, call } = await context.callReviewer({
             review,
             units: context.units,
             slides: neighbourhood(nowSlides, changed),
             focusIds: new Set([slide.id]),
           });
+          noteServed(call);
           rereview = answer.findings.filter((finding) => finding.targetId === slide.id);
         } catch (error) {
           log.warn(
@@ -642,6 +668,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           outcome: 'still_wrong',
           code: audioCode ?? 'REREVIEW_UNAVAILABLE',
           regenerationId,
+          ...served,
         });
         await context.recordProgress(findings, fixes);
         continue;
@@ -672,6 +699,16 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             (liveSlide.citedUnitIds ?? []).map((id) => unitTextOf.get(String(id)) ?? '').join('\n'),
           ),
       );
+      // RV-4 (27 Nov 2026): a HIGH finding the reviewer raised is closed only by a
+      // re-check that shows its slide clean of HIGH errors. Under L-2 alone, a
+      // re-review that names the same error under another check code (S1 → S3,
+      // say) closed the original; a HIGH one now stays open (`STILL_WRONG`) while
+      // the re-check of its slide reports any HIGH error. G1/G2 keep their own
+      // deterministic re-check from the live scene (above). Medium and low
+      // findings keep L-2. No new status, no extra regeneration.
+      const rereviewHasHigh = rereview.some((finding) => finding.severity === 'high');
+      const highStillOpen = (finding: StoredFinding) =>
+        finding.severity === 'high' && !SERVER_CHECKS.has(finding.check) && rereviewHasHigh;
       let stillWrong = false;
       for (const finding of sceneFindings) {
         if (finding.check === 'G1' && liveIssueCodes.length > 0) {
@@ -680,7 +717,11 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         } else if (finding.check === 'G2' && liveLabelWrong) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
-        } else if (reportedChecks.has(finding.check) || fixBrokeNarration) {
+        } else if (
+          reportedChecks.has(finding.check) ||
+          fixBrokeNarration ||
+          highStillOpen(finding)
+        ) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (audioCode !== null) {
@@ -745,6 +786,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         outcome: stillWrong ? 'still_wrong' : 'fixed',
         code: audioCode,
         regenerationId,
+        ...served,
       });
       await context.recordProgress(findings, fixes);
     }

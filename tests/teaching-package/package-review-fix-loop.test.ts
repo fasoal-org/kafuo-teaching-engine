@@ -17,9 +17,10 @@ import {
   sceneRegenerationLeaseSeconds,
 } from '@/lib/server/teaching-package/scene-regeneration-store';
 import { reviewSlidesOf } from '@/lib/server/teaching-package/package-review-input';
-import type {
-  PackageReview,
-  StoredFinding,
+import {
+  packageReviewWire,
+  type PackageReview,
+  type StoredFinding,
 } from '@/lib/server/teaching-package/package-review-store';
 
 /**
@@ -107,6 +108,8 @@ function setup(options: {
   restore?: ReturnType<typeof vi.fn>;
   /** The call log, shared with a test's own fakes. */
   order?: string[];
+  /** RV-5: the route that served each re-review (default: Opus). */
+  servedBy?: (focus: string) => { provider: 'anthropic' | 'openai'; modelString: string };
 }) {
   const order: string[] = options.order ?? [];
   const regenerated = new Map<string, AppScene>();
@@ -150,8 +153,10 @@ function setup(options: {
           findings: (options.rereview?.(focus, focusText) ?? []) as never,
         },
         call: {
-          provider: 'anthropic' as const,
-          modelString: 'anthropic:claude-opus-5-5',
+          ...(options.servedBy?.(focus) ?? {
+            provider: 'anthropic' as const,
+            modelString: 'anthropic:claude-opus-5-5',
+          }),
           usage: null,
         },
       };
@@ -499,9 +504,10 @@ describe('package review fix loop (D-1)', () => {
       ],
     });
     const result = await run();
+    // RV-4: f2 is HIGH and the re-check still reports a HIGH error on its slide.
     expect(result.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
       ['f1', 'S2', 'open', 'STILL_WRONG'],
-      ['f2', 'S4', 'fixed', null],
+      ['f2', 'S4', 'open', 'STILL_WRONG'],
       ['r-2-1', 'S2', 'open', 'STILL_WRONG'],
       ['r-2-2', 'S3', 'open', 'NOT_ATTEMPTED'],
     ]);
@@ -528,6 +534,144 @@ describe('package review fix loop (D-1)', () => {
     ]);
     expect(closed.fixes[0]).toMatchObject({ outcome: 'fixed' });
     expect(reviewStatusOf(closed.findings)).toBe('needs_teacher');
+  });
+
+  describe('RV-4: a HIGH finding is closed only by a re-check that shows its slide clean', () => {
+    const relabelled = (focus: string, severity: string) => ({
+      targetId: focus,
+      check: 'S3',
+      severity,
+      bookEvidence: { quote: 'q', unitId: null },
+      whatIsWrong: 'الناتج ما زال يخالف الكتاب',
+      fixNote: 'n',
+    });
+
+    it('a "fixed" HIGH finding stays open when the re-check reports the error under another check', async () => {
+      const { run, regenerate } = setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2')],
+        rereview: (focus) => [relabelled(focus, 'high')],
+      });
+      const result = await run();
+      expect(regenerate).toHaveBeenCalledTimes(1);
+      expect(result.findings.map((f) => [f.id, f.check, f.status, f.teacherReason])).toEqual([
+        ['f1', 'S2', 'open', 'STILL_WRONG'],
+        ['r-2-1', 'S3', 'open', 'NOT_ATTEMPTED'],
+      ]);
+      expect(result.fixes[0]).toMatchObject({ outcome: 'still_wrong' });
+      expect(reviewStatusOf(result.findings)).toBe('needs_teacher');
+    });
+
+    it('a medium finding keeps L-2: another check at HIGH does not hold it, its own check does', async () => {
+      const medium = { ...finding('f1', 's2', 'S2'), severity: 'medium' as const };
+      const { run } = setup({
+        scenes,
+        findings: [medium],
+        rereview: (focus) => [relabelled(focus, 'high')],
+      });
+      const result = await run();
+      expect(result.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
+        ['f1', 'fixed', null],
+        ['r-2-1', 'open', 'NOT_ATTEMPTED'],
+      ]);
+    });
+
+    it('a HIGH finding closes when the re-check reports only a lower error of another check', async () => {
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2')],
+        rereview: (focus) => [relabelled(focus, 'medium')],
+      });
+      const result = await run();
+      expect(result.findings.map((f) => [f.id, f.status])).toEqual([
+        ['f1', 'fixed'],
+        ['r-2-1', 'open'],
+      ]);
+    });
+
+    it('a G1 finding is decided by the live scene (its code re-check), not by other HIGH errors', async () => {
+      const broken = slide('s2', 2, 'ب', {
+        generationIssues: [{ code: 'NARRATION_MISSING', message: 'm' }],
+      });
+      const { run } = setup({
+        scenes: [scenes[0]!, broken, scenes[2]!],
+        findings: [{ ...finding('i1', 's2', 'G1') }],
+        rereview: (focus) => [relabelled(focus, 'high')],
+      });
+      const result = await run();
+      expect(result.findings.map((f) => [f.id, f.check, f.status])).toEqual([
+        ['i1', 'G1', 'fixed'],
+        ['r-2-1', 'S3', 'open'],
+      ]);
+    });
+
+    it('no re-check, no closure: a failed re-review keeps every HIGH finding open', async () => {
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2'), finding('f2', 's2', 'S1')],
+        rereview: () => {
+          throw new Error('unusable output on both routes');
+        },
+      });
+      const result = await run();
+      expect(result.findings.every((f) => f.status === 'open')).toBe(true);
+      expect(result.findings.map((f) => f.teacherReason)).toEqual([
+        'REREVIEW_UNAVAILABLE',
+        'REREVIEW_UNAVAILABLE',
+      ]);
+    });
+  });
+
+  describe('RV-5: the served reviewer model of each re-check is on its fix entry', () => {
+    it('names the route that served the re-review (Sol here), not the first review’s', async () => {
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's1', 'S2'), finding('f2', 's3', 'S2')],
+        servedBy: (focus) =>
+          focus === 's3'
+            ? { provider: 'openai', modelString: 'openai:gpt-6-sol' }
+            : { provider: 'anthropic', modelString: 'anthropic:claude-opus-5-5' },
+      });
+      const result = await run();
+      expect(result.fixes.map((fix) => [fix.sceneId, fix.reviewProvider, fix.reviewModel])).toEqual(
+        [
+          ['s1', 'anthropic', 'anthropic:claude-opus-5-5'],
+          ['s3', 'openai', 'openai:gpt-6-sol'],
+        ],
+      );
+    });
+
+    it('a fix whose re-review never answered names no model', async () => {
+      const { run } = setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2')],
+        rereview: () => {
+          throw new Error('both reviewer routes failed');
+        },
+      });
+      const result = await run();
+      expect(result.fixes[0]).toMatchObject({ reviewModel: null, reviewProvider: null });
+    });
+
+    it('stays off the signed read model (contract §4.1 unchanged)', () => {
+      const wire = packageReviewWire({
+        ...REVIEW,
+        fixes: [
+          {
+            sceneId: 's1',
+            findingIds: ['f1'],
+            outcome: 'fixed',
+            code: null,
+            regenerationId: 'tpsr-s1',
+            reviewModel: 'openai:gpt-6-sol',
+            reviewProvider: 'openai',
+          },
+        ],
+      });
+      expect(wire.fixes).toEqual([
+        { sceneId: 's1', findingIds: ['f1'], outcome: 'fixed', code: null },
+      ]);
+    });
   });
 
   it('L-3: a re-review sees a neighbour regenerated earlier in the same loop in its new form', async () => {

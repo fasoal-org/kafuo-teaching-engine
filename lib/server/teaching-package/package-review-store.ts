@@ -74,6 +74,16 @@ export interface StoredFix {
   outcome: 'fixed' | 'still_wrong' | 'refused' | 'stopped';
   code: string | null;
   regenerationId?: string | null;
+  /**
+   * RV-5 (27 Nov 2026): the model that served the re-review that decided this fix
+   * (`anthropic:claude-opus-5-5`, `openai:gpt-6-sol`), or `null` when no re-review
+   * answered. The row's `provider`/`model` name the first review's call only; this
+   * names every re-check, in a resumed or flagged-slide run too. Stored on the TE row
+   * only: `packageReviewWire` never sends it (contract §4.1 is unchanged).
+   */
+  reviewModel?: string | null;
+  /** RV-5: the provider of `reviewModel`. */
+  reviewProvider?: 'anthropic' | 'openai' | null;
 }
 
 export interface PackageReview {
