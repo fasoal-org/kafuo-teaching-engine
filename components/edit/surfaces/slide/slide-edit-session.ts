@@ -134,13 +134,21 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     const gone = deletedElementIds(previous.canvas.elements, next.canvas.elements);
     let actions = scene?.actions;
     let changed = false;
+    // A flagged image came back or went again: only then is the flag worked out anew,
+    // so a warning the reviewer dismissed stays dismissed across unrelated undos.
+    let flagMoved = false;
+    // Every Action coming back goes in in one pass: their indices all refer to the
+    // same earlier list, so restoring element by element would misplace them.
+    const restored: TakenPointers['actions'] = [];
     for (const id of back) {
       const entry = taken.get(id);
       if (!entry?.away) continue;
-      actions = withActionsRestored(actions, entry.actions);
+      restored.push(...entry.actions);
       entry.away = false;
       changed = true;
+      flagMoved ||= entry.flagged;
     }
+    if (restored.length > 0) actions = withActionsRestored(actions, restored);
     for (const id of gone) {
       const entry = taken.get(id);
       if (!entry || entry.away) continue;
@@ -148,18 +156,17 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
       actions = (actions ?? []).filter((action) => !ids.has(action.id));
       entry.away = true;
       changed = true;
+      flagMoved ||= entry.flagged;
     }
     if (!changed) {
       store.updateScene(sceneId, { content: next });
       return;
     }
     // The deleted-image flag a delete raised stands exactly while one such image is away.
-    const raised = [...taken.values()].filter((entry) => entry.flagged);
     const issues = scene?.generationIssues ?? [];
-    const flagNow = raised.some((entry) => entry.away);
+    const flagNow = [...taken.values()].some((entry) => entry.flagged && entry.away);
     const flagShown = issues.some((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE);
-    const nextIssues =
-      raised.length > 0 && flagNow !== flagShown ? withFlag(issues, flagNow) : null;
+    const nextIssues = flagMoved && flagNow !== flagShown ? withFlag(issues, flagNow) : null;
     store.updateScene(sceneId, {
       content: next,
       actions: actions ?? [],
@@ -195,15 +202,21 @@ export const useSlideEditSession = create<SlideEditSessionState>((set, get) => {
     const flag =
       deletedNarratedImage(history.present.canvas.elements, deletedIds, scene?.actions) &&
       !issues.some((issue) => issue.code === NARRATION_DELETED_IMAGE_ISSUE_CODE);
-    if (actions) {
-      // ED-11: kept for an undo; a later manual delete of a restored element records anew.
-      const images = new Set(
-        history.present.canvas.elements
-          .filter((element) => element.type === 'image')
-          .map((element) => element.id),
-      );
-      for (const [id, pointers] of pointerActionsOn(scene?.actions, deletedIds)) {
-        taken.set(id, { actions: pointers, flagged: flag && images.has(id), away: true });
+    // ED-11: kept for an undo. Each delete records anew: an element deleted with no
+    // pointer Action left forgets an older record (a spotlight the teacher removed on
+    // purpose in between never comes back).
+    const images = new Set(
+      history.present.canvas.elements
+        .filter((element) => element.type === 'image')
+        .map((element) => element.id),
+    );
+    const pointers = pointerActionsOn(scene?.actions, deletedIds);
+    for (const id of deletedIds) {
+      const onElement = pointers.get(id);
+      if (onElement) {
+        taken.set(id, { actions: onElement, flagged: flag && images.has(id), away: true });
+      } else {
+        taken.delete(id);
       }
     }
     store.updateScene(sceneId, {

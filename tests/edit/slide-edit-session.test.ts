@@ -143,6 +143,77 @@ describe('useSlideEditSession (auto-save to stage store)', () => {
     }
   });
 
+  it('an undo of a two-element delete puts every Action back in its own place (review)', () => {
+    scenes.push({
+      id: 'scene-1',
+      actions: [
+        { id: 'sp0', type: 'speech', text: '0' },
+        { id: 'spot-1', type: 'spotlight', elementId: 'text-1' },
+        { id: 'sp1', type: 'speech', text: '1' },
+        { id: 'spot-2', type: 'spotlight', elementId: 'text-2' },
+        { id: 'sp2', type: 'speech', text: '2' },
+      ],
+    });
+    updateScene.mockImplementation((_id: string, patch: { actions?: unknown[] }) => {
+      if (patch.actions) scenes[0]!.actions = patch.actions;
+    });
+    try {
+      // text-2 sits BELOW text-1 on the canvas, the reverse of the Actions' order.
+      const content = makeContent();
+      content.canvas.elements.unshift(createDefaultTextElement('text-2'));
+      useSlideEditSession.getState().seed('scene-1', content);
+      useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+        origin: 'toolbar',
+        history: 'record',
+        operations: [
+          { type: 'element.delete', elementId: 'text-2' },
+          { type: 'element.delete', elementId: 'text-1' },
+        ],
+      });
+      useSlideEditSession.getState().undo();
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'sp0',
+        'spot-1',
+        'sp1',
+        'spot-2',
+        'sp2',
+      ]);
+    } finally {
+      updateScene.mockReset();
+    }
+  });
+
+  it('a delete with no spotlight left forgets an older record (a removed spotlight stays removed)', () => {
+    scenes.push({ id: 'scene-1', actions: pointerActions() });
+    updateScene.mockImplementation((_id: string, patch: { actions?: unknown[] }) => {
+      if (patch.actions) scenes[0]!.actions = patch.actions;
+    });
+    const deleteText = () =>
+      useSlideEditSession.getState().applyTransactionForScene('scene-1', {
+        origin: 'toolbar',
+        history: 'record',
+        operations: [{ type: 'element.delete', elementId: 'text-1' }],
+      });
+    try {
+      useSlideEditSession.getState().seed('scene-1', makeContent());
+      deleteText();
+      useSlideEditSession.getState().undo();
+      // The teacher removes the element's spotlight and laser in the Actions bar.
+      scenes[0]!.actions = [
+        { id: 'a-speech', type: 'speech', text: 'hello' },
+        { id: 'a-other', type: 'spotlight', elementId: 'gone-earlier' },
+      ];
+      deleteText();
+      useSlideEditSession.getState().undo();
+      expect(scenes[0]!.actions!.map((action) => (action as { id: string }).id)).toEqual([
+        'a-speech',
+        'a-other',
+      ]);
+    } finally {
+      updateScene.mockReset();
+    }
+  });
+
   it('a new session forgets what an earlier one took (no restore across seeds)', () => {
     scenes.push({ id: 'scene-1', actions: pointerActions() });
     useSlideEditSession.getState().seed('scene-1', makeContent());

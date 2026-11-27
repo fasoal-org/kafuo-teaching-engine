@@ -19,7 +19,7 @@ import {
   useSlideCanvasController,
   useSyncEditingElementId,
 } from './use-slide-surface';
-import { isElementDeleteKey } from './delete-key';
+import { isElementDeleteKey, isTextEditingTarget } from './delete-key';
 import { RendererEditorCanvas } from './RendererEditorCanvas';
 
 /** Switches between the preserved legacy editor and the renderer editor. */
@@ -50,21 +50,36 @@ export function SlideCanvas() {
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (useRendererEditor) return;
+    // Only for the canvas: the teacher's last press was on it (review: a click on an
+    // empty spot of another pane leaves the focus on <body> too).
+    let lastPressOnCanvas = false;
+    const onPointerDown = (event: PointerEvent) => {
+      lastPressOnCanvas = Boolean(
+        event.target instanceof Node && rootRef.current?.contains(event.target),
+      );
+    };
     const handler = (event: KeyboardEvent) => {
       const active = document.activeElement;
       if (event.key === 'Escape' && active instanceof HTMLElement) {
-        if (active.isContentEditable && active.closest('.editable-element-text')) active.blur();
+        if (isTextEditingTarget(active) && active.closest('.editable-element-text')) active.blur();
         return;
       }
-      // Only for the canvas: a key pressed in a dialog, the rail or a toolbar is theirs.
-      const onCanvas =
+      // A key pressed in a dialog, the rail or a toolbar is theirs.
+      const focusOnCanvas =
         !active || active === document.body || Boolean(rootRef.current?.contains(active));
-      if (!onCanvas || !isElementDeleteKey(event, active)) return;
-      if (useCanvasStore.getState().activeElementIdList.length === 0) return;
+      if (!lastPressOnCanvas || !focusOnCanvas || !isElementDeleteKey(event, active)) return;
+      const canvas = useCanvasStore.getState();
+      // Never mid-crop or while an element picker is armed.
+      if (canvas.activeElementIdList.length === 0 || canvas.clipingImageElementId) return;
+      if (canvas.pickTarget) return;
       if (deleteSelectedSlideElements()) event.preventDefault();
     };
+    document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', handler);
+    };
   }, [useRendererEditor]);
 
   return (

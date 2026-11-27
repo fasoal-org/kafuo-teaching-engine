@@ -166,11 +166,14 @@ export function deleteSelectedSlideElements(): boolean {
       .map((element) => element.id),
   );
   if (deletable.size === 0) return false;
+  const before = session.history;
   session.applyTransaction({
     origin: 'toolbar',
     history: 'record',
     operations: [...deletable].map((elementId) => ({ type: 'element.delete' as const, elementId })),
   });
+  // Refused (an AI slide insertion holds the Stage): the selection stays as it was.
+  if (useSlideEditSession.getState().history === before) return false;
   canvas.setActiveElementIdList([]);
   return true;
 }

@@ -143,6 +143,23 @@ describe('flowPositionDeleteRefusal', () => {
     ).resolves.toBeNull();
   });
 
+  it('a scene PUT that leaves teachingStage out keeps the stored position (the store carries it)', async () => {
+    await expect(
+      flowPositionDeleteRefusal(
+        put('/documents/stage-1/scenes/q1', { id: 'q1', type: 'quiz' }),
+        '/documents/stage-1/scenes/q1',
+        reader(STORED),
+      ),
+    ).resolves.toBeNull();
+    // An explicit null removes it, as the store writes it.
+    const cleared = await flowPositionDeleteRefusal(
+      put('/documents/stage-1/scenes/q1', { id: 'q1', type: 'quiz', teachingStage: null }),
+      '/documents/stage-1/scenes/q1',
+      reader(STORED),
+    );
+    expect(cleared?.positions).toEqual([CHECK_1.flowIndex]);
+  });
+
   it('never judges a non-package stage, a read or an unreadable body', async () => {
     const plain: Row[] = [{ id: 'a', type: 'slide' }];
     await expect(

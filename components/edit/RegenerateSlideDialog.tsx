@@ -197,6 +197,8 @@ export function RegenerateSlideDialog({
                     if (restored.ok) toast.success(tr('restored'));
                     else toast.error(tr('restoreFailed', { code: restored.code }));
                   })
+                  // A request that never reached the server is a failed restore too.
+                  .catch(() => toast.error(tr('restoreFailed', { code: 'NETWORK_ERROR' })))
                   .finally(() => restoreWindow.close());
               },
             },

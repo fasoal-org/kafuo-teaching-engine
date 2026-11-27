@@ -103,6 +103,22 @@ describe('deleteSelectedSlideElements', () => {
     expect(deleteSelectedSlideElements()).toBe(true);
     expect(ids()).toEqual(['text-1', 'text-locked']);
   });
+
+  it('while an AI slide insertion holds the Stage: nothing is deleted and the selection stays', async () => {
+    const { beginStageInsertion, useStageStore } = await import('@/lib/store/stage');
+    useStageStore.setState({ stage: { id: 'stage-lock', name: 'x', createdAt: 1, updatedAt: 1 } });
+    const insertion = beginStageInsertion('stage-lock');
+    insertion.lock();
+    try {
+      useCanvasStore.getState().setActiveElementIdList(['text-1']);
+      expect(deleteSelectedSlideElements()).toBe(false);
+      expect(ids()).toEqual(['text-1', 'text-2', 'text-locked']);
+      expect(useCanvasStore.getState().activeElementIdList).toEqual(['text-1']);
+    } finally {
+      insertion.release();
+      useStageStore.getState().clearStore();
+    }
+  });
 });
 
 vi.mock('next/navigation', () => ({

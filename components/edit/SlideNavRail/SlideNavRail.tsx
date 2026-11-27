@@ -69,6 +69,8 @@ import {
 const RAIL_HANDLE_PX = 16;
 const RAIL_MIN_PX = 180;
 const RAIL_MAX_PX = 360;
+/** ED-5: the longest a rail drag holds the autosave. */
+const DRAG_HOLD_MAX_MS = 30_000;
 
 /**
  * Pro mode slide-navigation left rail (Studio Editor aesthetic).
@@ -413,18 +415,28 @@ export function SlideNavRail() {
   // ED-5 (critical items, 27 Nov 2026): every drag step reorders the store, and a drag
   // held past the 500 ms debounce autosaved an order the drop then put back. The
   // autosave is held for the whole drag, so only the order the drop keeps is saved.
-  const dragHold = useRef<StageAutosaveHold | null>(null);
+  const dragHold = useRef<{ hold: StageAutosaveHold; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
   const releaseDragHold = useCallback(() => {
-    dragHold.current?.release();
+    if (!dragHold.current) return;
+    clearTimeout(dragHold.current.timer);
+    dragHold.current.hold.release();
     dragHold.current = null;
   }, []);
-  // Never left held: a Stage switch or an unmount mid-drag lifts it.
+  // Never left held: a Stage switch or an unmount mid-drag lifts it, and at most
+  // DRAG_HOLD_MAX_MS (a drag end the motion library never reports).
   useEffect(() => releaseDragHold, [stageId, releaseDragHold]);
   const handleDragStart = useCallback(() => {
     dragStartScenes.current = useStageStore.getState().scenes;
     releaseDragHold();
     const dragStageId = useStageStore.getState().stage?.id;
-    if (dragStageId) dragHold.current = holdStageAutosave(dragStageId);
+    if (dragStageId) {
+      dragHold.current = {
+        hold: holdStageAutosave(dragStageId),
+        timer: setTimeout(releaseDragHold, DRAG_HOLD_MAX_MS),
+      };
+    }
   }, [releaseDragHold]);
   const handleDragEnd = useCallback(() => {
     try {

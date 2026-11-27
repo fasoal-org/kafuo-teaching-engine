@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * ED-10 (critical items before package regeneration, 27 Nov 2026): the slide editor's
  * right-click menus (an element's, and the blank canvas's) were Chinese for every
- * teacher. Their words now come from `edit.contextMenu.*` in every locale; the two
+ * teacher. Their words now come from `edit.canvasMenu.*` in every locale; the two
  * files carry no Chinese text of their own.
  */
 const ROOT = resolve(__dirname, '../..');

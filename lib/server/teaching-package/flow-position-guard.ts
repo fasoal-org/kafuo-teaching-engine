@@ -162,9 +162,18 @@ export async function flowPositionDeleteRefusal(
   if (target.kind === 'scene-put') {
     const written = flowSceneOf(body);
     if (!written || written.id !== target.sceneId) return null;
+    // A scene write that leaves `teachingStage` out keeps the stored one (the store
+    // carries the lineage forward, owner-bound-document-store); only an explicit value
+    // (`null` included) moves the scene.
+    const keepsStored = (body as { teachingStage?: unknown }).teachingStage === undefined;
+    const before = stored.find((scene) => scene.id === target.sceneId);
+    const after =
+      keepsStored && before?.teachingStage
+        ? { ...written, teachingStage: before.teachingStage }
+        : written;
     return flowPositionRefusal(stored, [
       ...stored.filter((scene) => scene.id !== target.sceneId),
-      written,
+      after,
     ]);
   }
   const scenes = (body as { scenes?: unknown } | null)?.scenes;
