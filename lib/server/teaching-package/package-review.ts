@@ -320,10 +320,10 @@ export function reviewerImageTokenPriceUsd(card: RateCard = loadRateCard()): num
 }
 
 /**
- * RV-1: the figure tokens one review run may send in all: the owner's $0.30, at the
- * highest figure-token price, for two paid attempts per call, and never more than
- * `REVIEW_IMAGE_MAX_TOKENS_PER_RUN` (an underpriced override cannot widen it). 30,000
- * at today's rates.
+ * RV-1 / page images: the image tokens one review run may send in all: the owner's
+ * $0.60 (`REVIEW_IMAGE_BUDGET_USD`), at the highest image-token price, for two paid
+ * attempts per call, and never more than `REVIEW_IMAGE_MAX_TOKENS_PER_RUN` (an
+ * underpriced override cannot widen it). 60,000 at today's rates.
  */
 export function reviewImageTokenBudget(price: number = reviewerImageTokenPriceUsd()): number {
   if (!(price > 0)) return 0;

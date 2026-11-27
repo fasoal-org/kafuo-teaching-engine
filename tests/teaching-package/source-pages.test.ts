@@ -198,11 +198,11 @@ describe('the reviewer: pages replace the crops on them', () => {
   });
 
   it('reads a page the way a quote may write it, and labels a page with the crops on it', () => {
-    expect(namedPages('[الصفحة 12] و صفحة ١٣ و page 4 و page_05')).toEqual([
+    // Review H-1: only the rubric's bracketed «[الصفحة N]»; a page number the book prints
+    // («تمرين صفحة 45», «page 4») is book text, never a name.
+    expect(namedPages('«[الصفحة 12]» و [ الصفحة ١٣ ] و تمرين صفحة 45 و page 4 و page_05')).toEqual([
       'page_12',
       'page_13',
-      'page_4',
-      'page_5',
     ]);
     expect(namedPages('[الشكل src_2] 25')).toEqual([]);
     expect(

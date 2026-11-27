@@ -634,11 +634,11 @@ describe('page images (contract page-images-export-contract-2026-11-27.md)', () 
     archive(value, (zip) => {
       for (const [name, data] of files) zip.file(name, data);
     });
-  const acquire = (bytes: Buffer) =>
+  const acquire = (bytes: Buffer, keepPages = true) =>
     acquireNormalizedContentResource(
       resource(bytes),
       { type: 'lesson', id: 'li-1' },
-      { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never },
+      { secureFetch: fetchFor(bytes) as never, dispatcher: {} as never, keepPages },
     );
   const twoPages = [pageEntry(1, PAGE_1), pageEntry(2, PAGE_2)];
   const twoFiles: Array<[string, Buffer]> = [
@@ -668,44 +668,83 @@ describe('page images (contract page-images-export-contract-2026-11-27.md)', () 
     expect(source.visionImages).toHaveLength(1);
   });
 
-  it('a page that does not match its manifest fails the archive, like a visual', async () => {
-    const cases: Array<[unknown[], Array<[string, Buffer]>, string]> = [
-      // checksum, size, type, width
-      [[pageEntry(1, PAGE_1, { checksumSha256: 'f'.repeat(64) })], twoFiles.slice(0, 1), 'MEDIA'],
-      [[pageEntry(1, PAGE_1, { sizeBytes: 3 })], twoFiles.slice(0, 1), 'MEDIA'],
-      [[pageEntry(1, PAGE_1, { mimeType: 'image/png' })], twoFiles.slice(0, 1), 'MEDIA'],
-      [[pageEntry(1, PAGE_1, { width: 1000 })], twoFiles.slice(0, 1), 'MEDIA'],
-      // over 1568 px on the long side
-      [
-        [{ ...pageEntry(1, jpeg(1600, 1200)), width: 1600, height: 1200 }],
-        [['media/page-0001.jpg', jpeg(1600, 1200)]],
-        'MEDIA',
-      ],
-      // a declared page missing from the ZIP
-      [[pageEntry(1, PAGE_1)], [], 'MEDIA'],
-      // numbering: repeated, past the page count, not a positive integer
-      [[pageEntry(1, PAGE_1), pageEntry(1, PAGE_2)], twoFiles, 'ARCHIVE'],
-      [[pageEntry(3, PAGE_1)], [['media/page-0003.jpg', PAGE_1]], 'ARCHIVE'],
-      [[pageEntry(0, PAGE_1)], [['media/page-0000.jpg', PAGE_1]], 'ARCHIVE'],
-      // paths: a visual's own path, a sub-folder, not a .jpg
-      [[pageEntry(1, PNG, { mediaPath })], [], 'ARCHIVE'],
-      [
-        [pageEntry(1, PAGE_1, { mediaPath: 'media/pages/1.jpg' })],
-        [['media/pages/1.jpg', PAGE_1]],
-        'ARCHIVE',
-      ],
-      [
-        [pageEntry(1, PAGE_1, { mediaPath: 'media/page-0001.png' })],
-        [['media/page-0001.png', PAGE_1]],
-        'ARCHIVE',
-      ],
-    ];
-    for (const [pages, files, code] of cases) {
-      await expect(acquire(await withPages(withTwoUnits(pages), files))).rejects.toMatchObject({
-        code: `NORMALIZED_CONTENT_${code}_INVALID`,
-      });
-    }
-    // `pages` that is not an array, and a page file no entry declares.
+  it('another Teaching Model verifies the pages but keeps none in memory', async () => {
+    const source = await acquire(await withPages(withTwoUnits(twoPages), twoFiles), false);
+    expect(source.pages).toEqual([]);
+    // Still verified, and still failing closed, on every model.
+    await expect(
+      acquire(
+        await withPages(
+          withTwoUnits([pageEntry(1, PAGE_1, { checksumSha256: 'f'.repeat(64) })]),
+          twoFiles.slice(0, 1),
+        ),
+        false,
+      ),
+    ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_MEDIA_INVALID' });
+  });
+
+  const failing: Array<[string, unknown[], Array<[string, Buffer]>, string]> = [
+    [
+      'a checksum mismatch',
+      [pageEntry(1, PAGE_1, { checksumSha256: 'f'.repeat(64) })],
+      twoFiles.slice(0, 1),
+      'MEDIA',
+    ],
+    ['a size mismatch', [pageEntry(1, PAGE_1, { sizeBytes: 3 })], twoFiles.slice(0, 1), 'MEDIA'],
+    [
+      'a type that is not JPEG',
+      [pageEntry(1, PAGE_1, { mimeType: 'image/png' })],
+      twoFiles.slice(0, 1),
+      'MEDIA',
+    ],
+    ['a width mismatch', [pageEntry(1, PAGE_1, { width: 1000 })], twoFiles.slice(0, 1), 'MEDIA'],
+    [
+      'over 1568 px on the long side',
+      [{ ...pageEntry(1, jpeg(1600, 1200)), width: 1600, height: 1200 }],
+      [['media/page-0001.jpg', jpeg(1600, 1200)]],
+      'MEDIA',
+    ],
+    ['a declared page missing from the ZIP', [pageEntry(1, PAGE_1)], [], 'MEDIA'],
+    ['a repeated page number', [pageEntry(1, PAGE_1), pageEntry(1, PAGE_2)], twoFiles, 'ARCHIVE'],
+    [
+      'a page past the page count',
+      [pageEntry(3, PAGE_1)],
+      [['media/page-0003.jpg', PAGE_1]],
+      'ARCHIVE',
+    ],
+    [
+      'a page number that is not positive',
+      [pageEntry(0, PAGE_1)],
+      [['media/page-0000.jpg', PAGE_1]],
+      'ARCHIVE',
+    ],
+    ['a visual’s own path', [pageEntry(1, PNG, { mediaPath })], [], 'ARCHIVE'],
+    [
+      'a sub-folder',
+      [pageEntry(1, PAGE_1, { mediaPath: 'media/pages/1.jpg' })],
+      [['media/pages/1.jpg', PAGE_1]],
+      'ARCHIVE',
+    ],
+    [
+      'not a .jpg',
+      [pageEntry(1, PAGE_1, { mediaPath: 'media/page-0001.png' })],
+      [['media/page-0001.png', PAGE_1]],
+      'ARCHIVE',
+    ],
+    [
+      'an upper-case .JPG',
+      [pageEntry(1, PAGE_1, { mediaPath: 'media/page-0001.JPG' })],
+      [['media/page-0001.JPG', PAGE_1]],
+      'ARCHIVE',
+    ],
+  ];
+  it.each(failing)('fails the archive, like a visual: %s', async (_label, pages, files, code) => {
+    await expect(acquire(await withPages(withTwoUnits(pages), files))).rejects.toMatchObject({
+      code: `NORMALIZED_CONTENT_${code}_INVALID`,
+    });
+  });
+
+  it('fails the archive: `pages` that is not an array, or a page file no entry declares', async () => {
     await expect(
       acquire(await archive(withTwoUnits({} as never as unknown[]))),
     ).rejects.toMatchObject({ code: 'NORMALIZED_CONTENT_ARCHIVE_INVALID' });

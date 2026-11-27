@@ -117,7 +117,8 @@ export interface AcquiredNormalizedSource extends NormalizedSource {
   blockCount: number;
   /**
    * Contract 27 Nov 2026: the export's verified page images, in page order (`[]` when the
-   * export has none). Stored for g5.v12 only (`materializeSourcePages`); never generated from.
+   * export has none, or the attempt did not ask to keep them: `keepPages`). Stored for
+   * g5.v12 only (`materializeSourcePages`); never generated from.
    */
   pages: NormalizedSourcePage[];
 }
@@ -131,6 +132,11 @@ export interface NormalizedAcquisitionPolicy {
   maxAttempts: number;
   secureFetch?: SecureBytesOptions['fetchImpl'];
   dispatcher?: SecureBytesOptions['dispatcher'];
+  /**
+   * Page images: keep the verified pages' bytes (g5.v12, whose reviewer reads them).
+   * Otherwise every page is still verified (fail closed) and none is kept in memory.
+   */
+  keepPages?: boolean;
 }
 
 const envLimit = (name: string, fallback: number) => {
@@ -619,7 +625,7 @@ export async function acquireNormalizedContentResource(
     if (
       !safePath(pagePath) ||
       pagePath.split('/').length !== 2 ||
-      !pagePath.toLowerCase().endsWith('.jpg') ||
+      !pagePath.endsWith('.jpg') ||
       pagePaths.has(pagePath) ||
       visualPaths.has(pagePath)
     )
@@ -670,7 +676,8 @@ export async function acquireNormalizedContentResource(
     normalizedImages,
     visionImages,
     visionMapping: Object.fromEntries(visionImages.map((image) => [image.id, image.src])),
-    pages,
+    // Review LOW: only a g5.v12 attempt keeps the pages' bytes (up to 40 MiB).
+    pages: policy.keepPages === true ? pages : [],
     measuredBytes: bytes.length,
     measuredSha256,
   };

@@ -437,6 +437,8 @@ export interface ReviewFigure {
   kind?: 'page';
   /** A page: the crops (`src_N`) on it, which are never sent beside it. */
   covers?: string[];
+  /** A page: its readable crops, sent instead when the page itself does not fit a call. */
+  coveredFigures?: ReviewFigure[];
 }
 
 /** A linked figure the reviewer could not be shown (its unit is reviewed from text). */
@@ -556,6 +558,11 @@ export function pageFigureName(pageNumber: number): string {
   return `page_${pageNumber}`;
 }
 
+/** Whether a book-image name is a whole page's (`page_<N>`), not a crop's (`src_N`). */
+function isPageName(name: string): boolean {
+  return /^page_\d+$/.test(name);
+}
+
 /** One stored page, where the reviewed Stage serves it (`readStageSourcePages`). */
 export interface ReviewPageSource {
   pageNumber: number;
@@ -628,7 +635,13 @@ export async function withReviewPages(
     for (const id of crop.unitIds) if (!page.unitIds.includes(id)) page.unitIds.push(id);
     return true;
   };
-  const crops = set.figures.filter((figure) => !coveredBy(figure, figure.pageNumber));
+  const crops = set.figures.filter((figure) => {
+    if (!coveredBy(figure, figure.pageNumber)) return true;
+    // Its page shows it; kept on the page as the cheaper fallback (`pickReviewFigures`).
+    const page = shown.get(figure.pageNumber!)!;
+    page.coveredFigures = [...(page.coveredFigures ?? []), figure];
+    return false;
+  });
   const unreadCrops = set.unreadable.filter((figure) => !coveredBy(figure, figure.pageNumber));
   const unsendableCrops = (set.unsendable ?? []).filter(
     (figure) => !coveredBy(figure, figure.pageNumber),
@@ -655,12 +668,14 @@ function westernDigits(digits: string): string {
 }
 
 /**
- * Page images: every whole page a finding's book quote names (the v12 rubric's
- * «[الصفحة N]»; «صفحة N» and `page N` too, Arabic-Indic digits too), as `page_<N>`.
+ * Page images: every whole page a finding's book quote names, as `page_<N>` -- ONLY the
+ * v12 rubric's bracketed «[الصفحة N]» (Arabic-Indic digits too). Review of 97cc78c3..4f6f8ddb
+ * (H-1): a page number the book itself prints («تمرين صفحة 45») is book text, never a
+ * name.
  */
 export function namedPages(quote: string | null | undefined): string[] {
   const names = new Set<string>();
-  const pattern = /(?:الصفحة|صفحة|\bpage)[\s_-]*([0-9٠-٩]+)/gi;
+  const pattern = /\[\s*الصفحة\s*([0-9٠-٩]+)\s*\]/g;
   for (let match = pattern.exec(quote ?? ''); match; match = pattern.exec(quote ?? '')) {
     names.add(pageFigureName(Number(westernDigits(match[1]!))));
   }
@@ -777,22 +792,32 @@ export function pickReviewFigures(
   const figures: ReviewFigure[] = [];
   let tokens = 0;
   let chars = 0;
-  for (const figure of wanted) {
+  const place = (figure: ReviewFigure): boolean => {
     if (
       !figure.data ||
       tokens + figure.tokens > tokenCap ||
       figures.length >= REVIEW_CALL_MAX_FIGURES ||
       chars + figure.data.length > REVIEW_CALL_MAX_FIGURE_BASE64_CHARS
     ) {
-      continue;
+      return false;
     }
     figures.push(figure);
     tokens += figure.tokens;
     chars += figure.data.length;
+    return true;
+  };
+  for (const figure of wanted) {
+    if (place(figure)) continue;
+    // Review of 97cc78c3..4f6f8ddb (LOW): a whole page that does not fit still sends the
+    // cheaper crops it covers, each one that fits.
+    for (const crop of figure.coveredFigures ?? []) place(crop);
   }
   const sentNames = new Set(figures.map((figure) => figure.name));
   const sent = new Set(figures.flatMap(namesOf));
-  const notSent = wanted.filter((figure) => !sentNames.has(figure.name)).flatMap(namesOf);
+  const notSent = wanted
+    .filter((figure) => !sentNames.has(figure.name))
+    .flatMap(namesOf)
+    .filter((name) => !sent.has(name));
   const known = new Set([
     ...set.figures.flatMap(namesOf),
     ...set.unreadable.map((figure) => figure.name),
@@ -806,7 +831,9 @@ export function pickReviewFigures(
     // A figure a finding names that the Stage's book figures do not hold (they could not
     // be listed, or the name is not among them) was never seen: unread, never closed by
     // this re-check. The set holds EVERY book figure of the Stage (`loadStageFigures`).
-    ...alsoNames.filter((name) => !known.has(name)),
+    // Review H-1: a PAGE name the Stage does not hold (no page index at all, or a page
+    // outside the stored set) names nothing -- never unread, never a hold.
+    ...alsoNames.filter((name) => !known.has(name) && !isPageName(name)),
   ];
   return {
     figures,
