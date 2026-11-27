@@ -84,6 +84,18 @@ export interface ReviewerCallInput {
     data: string;
     mediaType: 'image/jpeg' | 'image/png';
   }>;
+  /**
+   * RV-1 (g5.v12 package review): images sent AFTER the stable (cache-marked) part and
+   * before `prompt`, each after its text label, never cache-marked — so a call whose
+   * images differ (a re-review sees only its slide's figures) still reads the book
+   * text from the prompt cache. Additive: absent, the request is exactly as before.
+   * Never logged, never stored.
+   */
+  images?: ReadonlyArray<{
+    label: string;
+    data: string;
+    mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+  }>;
   prompt: string;
   output: StructuredOutputSpec;
   signal?: AbortSignal;
@@ -91,8 +103,53 @@ export interface ReviewerCallInput {
 
 const CACHE_MARK = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
 
+/** RV-1: the variable images, each after its label (no cache marker). */
+function variableImages(input: ReviewerCallInput) {
+  return (input.images ?? []).flatMap((image) => [
+    { type: 'text' as const, text: image.label },
+    { type: 'image' as const, image: image.data, mediaType: image.mediaType },
+  ]);
+}
+
 /** The user turn: `[stable (cache-marked)] + variable`, or the variable text alone. */
 function userTurn(input: ReviewerCallInput): { messages: ModelMessage[] } | { prompt: string } {
+  if (input.images && input.images.length > 0) {
+    // RV-1: the stable part keeps its own cache marker (on its text, or on its last
+    // stable image as below); the variable images come after it, then the prompt.
+    const stable =
+      input.stableImages && input.stableImages.length > 0
+        ? input.stableImages.flatMap((image, index) => [
+            { type: 'text' as const, text: image.label },
+            {
+              type: 'image' as const,
+              image: image.data,
+              mediaType: image.mediaType,
+              ...(index === input.stableImages!.length - 1 ? { providerOptions: CACHE_MARK } : {}),
+            },
+          ])
+        : [];
+    return {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            ...(input.stablePrompt
+              ? [
+                  {
+                    type: 'text' as const,
+                    text: input.stablePrompt,
+                    ...(stable.length === 0 ? { providerOptions: CACHE_MARK } : {}),
+                  },
+                ]
+              : []),
+            ...stable,
+            ...variableImages(input),
+            { type: 'text', text: input.prompt },
+          ],
+        },
+      ],
+    };
+  }
   if (input.stablePrompt && input.stableImages && input.stableImages.length > 0) {
     const images = input.stableImages.flatMap((image, index) => [
       { type: 'text' as const, text: image.label },

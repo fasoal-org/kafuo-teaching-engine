@@ -10,6 +10,10 @@
  * g5.v10's `package-review-v2` also reads a text description of the pictures,
  * charts and drawings (`visuals`: the book image id, chart values, segment
  * lengths), never the picture itself.
+ *
+ * RV-1 (27 Nov 2026), g5.v12 only: the reviewer also SEES the book's own figures
+ * of the units each call judges (`loadReviewFigures`, `pickReviewFigures`), within
+ * the owner's cost cap. Every other Teaching Model stays text only.
  */
 import { createHash } from 'node:crypto';
 
@@ -22,6 +26,8 @@ import {
   guideItemKey,
   type ResolvedTeacherGuide,
 } from '@/lib/server/teaching-package/guide-answers';
+import { readSourceVisualDataUrl } from '@/lib/server/teaching-package/source-visual-bytes';
+import type { SourceVisualManifestEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 
 /** Bounds that keep one review inside one call (plan §7: ~8k book, ~30k slide text). */
@@ -369,6 +375,132 @@ export async function loadReviewBookUnits(
     };
   }
   return { sourceKind: 'content_units', units: [], truncated: false };
+}
+
+// ── RV-1 (g5.v12 only): the book's own figures for the units the reviewer judges ──────
+
+/**
+ * The owner's cap (§2 RV-1, 27 Nov 2026): the book figures add at most about $0.30 to
+ * one review run. Every figure token is priced at the highest input or cache-write rate
+ * of either reviewer model (`reviewerImageTokenPriceUsd`), times the two paid attempts
+ * one reviewer call may make (primary, then fallback; no same-model retry).
+ */
+export const REVIEW_IMAGE_BUDGET_USD = 0.3;
+export const REVIEW_IMAGE_ATTEMPTS_PER_CALL = 2;
+/** The first (whole-package) call's share, so re-reviews always keep the rest. */
+export const REVIEW_FIRST_CALL_IMAGE_SHARE = 2 / 3;
+/** A figure whose size is unknown is counted at the providers' largest image. */
+export const REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE = 1_600;
+/** Only these reach the reviewer (both providers read them; a GIF may be animated). */
+const REVIEW_FIGURE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+export type ReviewFigureMediaType = 'image/png' | 'image/jpeg' | 'image/webp';
+
+/** One book figure as the reviewer sees it (RV-1). Never logged, never stored. */
+export interface ReviewFigure {
+  /** The id a slide's PICTURES line names (`src_3`), from the TE-minted file name. */
+  name: string;
+  unitIds: string[];
+  pageNumber: number | null;
+  mediaType: ReviewFigureMediaType;
+  /** Base64, no `data:` prefix. */
+  data: string;
+  /** `estimateImageTokens` of its width and height. */
+  tokens: number;
+}
+
+export interface ReviewFigureSet {
+  figures: ReviewFigure[];
+  /** Linked figures that could not be read or are of another type (reviewed from text). */
+  unreadable: number;
+}
+
+/**
+ * An ESTIMATE of one image's input tokens, the larger of the two reviewer providers'
+ * documented rules: Anthropic scales an image to at most 1568 px on its long edge and
+ * about 1.15 MP, then counts width × height / 750; OpenAI (high detail) fits it in
+ * 2048 px, scales its short side to at most 768 px, and counts 85 + 170 per 512-px tile.
+ * No provider call: the real count is only known from the ledger after a paid call.
+ */
+export function estimateImageTokens(width?: number | null, height?: number | null): number {
+  if (!width || !height || width <= 0 || height <= 0) return REVIEW_IMAGE_TOKENS_UNKNOWN_SIZE;
+  const a = Math.min(1, 1568 / Math.max(width, height), Math.sqrt(1_150_000 / (width * height)));
+  const anthropic = Math.ceil((width * a * (height * a)) / 750);
+  const fit = Math.min(1, 2048 / Math.max(width, height));
+  const short = Math.min(1, 768 / Math.min(width * fit, height * fit));
+  const tiles = Math.ceil((width * fit * short) / 512) * Math.ceil((height * fit * short) / 512);
+  return Math.max(anthropic, 85 + 170 * tiles);
+}
+
+/** The same `src_N` the slide's PICTURES line reads from an image's file name. */
+const FIGURE_NAME = /\/(src_\d+)(?:_[^/]*)?\.[a-z]+$/i;
+
+/**
+ * The book figures linked to `unitIds`, read back through the existing crop reader
+ * (`readSourceVisualDataUrl`: only this Stage's media directory, checked against the
+ * manifest checksum). These are the figures the generation selected and materialized
+ * (`sourceVisuals`); a teacher-guide answer drawing (no unit, `guide_<n>` file) is never
+ * one. FAIL-SOFT: a figure that cannot be read, or is not PNG/JPEG/WebP, is counted in
+ * `unreadable` and its unit is reviewed from its text, exactly as before.
+ */
+export async function loadReviewFigures(
+  sourceVisuals: readonly SourceVisualManifestEntry[] | null | undefined,
+  unitIds: ReadonlySet<string>,
+  read: typeof readSourceVisualDataUrl = readSourceVisualDataUrl,
+): Promise<ReviewFigureSet> {
+  const figures: ReviewFigure[] = [];
+  let unreadable = 0;
+  for (const entry of sourceVisuals ?? []) {
+    const linked = (entry.sourceContentUnitIds ?? []).map(String).filter((id) => unitIds.has(id));
+    if (linked.length === 0) continue;
+    const name = FIGURE_NAME.exec(entry.servingPath)?.[1];
+    if (!name) continue;
+    const dataUrl = await read(entry.servingPath, { sha256: entry.sha256 }).catch(() => undefined);
+    const parsed = dataUrl ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl) : null;
+    if (!parsed || !REVIEW_FIGURE_TYPES.has(parsed[1]!)) {
+      unreadable += 1;
+      continue;
+    }
+    figures.push({
+      name,
+      unitIds: (entry.sourceContentUnitIds ?? []).map(String),
+      pageNumber: entry.pageNumber ?? null,
+      mediaType: parsed[1] as ReviewFigureMediaType,
+      data: parsed[2]!,
+      tokens: estimateImageTokens(entry.width, entry.height),
+    });
+  }
+  return { figures, unreadable };
+}
+
+/** The units a call judges: every slide's on a first review, the focused ones' on a re-review. */
+export function judgedUnitIds(
+  slides: readonly Pick<ReviewSlide, 'id' | 'citedUnitIds'>[],
+  focusIds?: ReadonlySet<string>,
+): Set<string> {
+  const judged = focusIds ? slides.filter((slide) => focusIds.has(slide.id)) : slides;
+  return new Set(judged.flatMap((slide) => slide.citedUnitIds.map(String)));
+}
+
+/**
+ * Pick one call's figures within `tokenCap`, in manifest order (a figure that does not
+ * fit is left out, a smaller later one may still fit). `held` is how many figures the
+ * call's judged units have that were not sent: a re-check without them is not proof.
+ */
+export function pickReviewFigures(
+  set: ReviewFigureSet,
+  unitIds: ReadonlySet<string>,
+  tokenCap: number,
+): { figures: ReviewFigure[]; tokens: number; held: number } {
+  const wanted = set.figures.filter((figure) => figure.unitIds.some((id) => unitIds.has(id)));
+  const figures: ReviewFigure[] = [];
+  let tokens = 0;
+  for (const figure of wanted) {
+    if (tokens + figure.tokens > tokenCap) continue;
+    figures.push(figure);
+    tokens += figure.tokens;
+  }
+  return { figures, tokens, held: wanted.length - figures.length };
 }
 
 /** Scenes in display order. */

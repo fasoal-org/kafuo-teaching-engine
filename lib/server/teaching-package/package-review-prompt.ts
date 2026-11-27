@@ -241,6 +241,58 @@ export const PACKAGE_REVIEW_SYSTEM_V2 = `${learnerFirstInstructions()}\n\n${sche
 /** g5.v11: the v2 schema and codes, with the guide-answer rubric (`guideAnswerInstructions`). */
 export const PACKAGE_REVIEW_SYSTEM_V11 = `${guideAnswerInstructions()}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA_V2)}`;
 
+// ── g5.v12: the reviewer sees the book's own figures (RV-1, 27 Nov 2026) ──────────────
+
+/** The g5.v12 rubric version (its g5.v11 rubric plus the book figures). */
+export const PACKAGE_REVIEW_PROMPT_VERSION_V12 = 'package-review-v12';
+
+const V2_PICTURES_LINE =
+  '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.';
+
+/** The title that opens the book-figure parts of a g5.v12 review (RV-1). */
+export const BOOK_FIGURES_HEADING =
+  'BOOK FIGURES (pictures cut from the book pages of the units the slides cite; the book, like its text):';
+
+/** RV-1: said under the heading when a figure of the lesson could not be loaded. */
+export const BOOK_FIGURES_INCOMPLETE_NOTE =
+  'NOTE: some figures of this book could not be loaded; never report a figure as missing or wrong only because it is not shown here.';
+
+/** One book figure's label, right before its picture (RV-1). */
+export function bookFigureLabel(figure: {
+  name: string;
+  unitIds: readonly string[];
+  pageNumber: number | null;
+}): string {
+  return `<<BOOK FIGURE ${figure.name} | unit_id=${figure.unitIds.join(',')} | page=${
+    figure.pageNumber ?? '?'
+  }>>`;
+}
+
+/**
+ * RV-1 (owner §2, 27 Nov 2026): the g5.v11 rubric, with the book figures of the units the
+ * slides cite. The v2 sentence «a book picture by its id (you cannot see its content)» now
+ * says the reviewer sees that picture when it is sent, and one rule says how to judge and
+ * quote a figure. g5.v11 and every earlier rubric stay byte for byte (pinned by a test).
+ */
+function bookFigureInstructions(): string {
+  const v11 = guideAnswerInstructions();
+  if (!v11.includes(V2_PICTURES_LINE)) {
+    throw new Error(
+      'package-review-v11 no longer holds the picture line package-review-v12 extends',
+    );
+  }
+  return v11.replace(
+    V2_PICTURES_LINE,
+    [
+      '- PICTURES AND DRAWINGS lists what a slide shows besides its text: a book picture by its id (src_N: when a BOOK FIGURE with the same src_N is sent, you see that picture there; otherwise you cannot see its content), a chart with its values, drawn segments with their lengths, arrows and text-free shapes. Never report a listed picture, chart or drawing as missing, and never ask to remove the narration about a listed picture.',
+      `- BOOK FIGURES: between the book text and the slides, after the line «${BOOK_FIGURES_HEADING}», each picture follows its label <<BOOK FIGURE src_N | unit_id=… | page=…>>. They are the book, exactly like its text: check every value, label, given and drawing that a slide, its narration or a quiz takes from a figure against that figure (S1, S3, S6). For a finding you read from a figure, book_evidence.quote is «[الشكل src_N]» followed by what the figure shows, and book_evidence.unit_id is its unit. A figure sent here and not shown on a slide is not an error by itself. When no figure of a unit is sent, judge that unit from its text alone.`,
+    ].join('\n'),
+  );
+}
+
+/** g5.v12: the v2 schema and codes, with the g5.v11 rubric and the book figures. */
+export const PACKAGE_REVIEW_SYSTEM_V12 = `${bookFigureInstructions()}\n\n${schemaInstruction(PACKAGE_REVIEW_SCHEMA_V2)}`;
+
 /**
  * The JSON text of an answer: a model in text mode may still wrap it in a
  * markdown fence; nothing else is repaired.

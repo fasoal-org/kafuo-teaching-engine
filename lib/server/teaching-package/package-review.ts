@@ -24,7 +24,11 @@ import {
   type ConnectableQueryable,
 } from '@openmaic/storage/server/reference';
 
-import type { AppDocument, AppStage } from '@/lib/document-store/persistence-types';
+import type {
+  AppDocument,
+  AppDocumentOutline,
+  AppStage,
+} from '@/lib/document-store/persistence-types';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { createLogger } from '@/lib/logger';
 import {
@@ -47,24 +51,38 @@ import {
 } from '@/lib/server/teaching-package/guide-answer-context';
 import { guideLeakIssueItems } from '@/lib/server/teaching-package/guide-answer-guard';
 import {
+  isBookPartPlacementModel,
   isGuideAnswerModel,
   isLearnerFirstModel,
 } from '@/lib/server/teaching-package/book-coverage';
 import { sumAttemptSpend, sumReviewSpend } from '@/lib/persistence/teaching-model-attempts';
 import { TeachingCallAbortedError } from '@/lib/server/teaching-model/execute';
+import { loadRateCard, type RateCard } from '@/lib/server/teaching-model/rate-card';
 import {
   runReviewerCall,
   type ReviewerCallResult,
 } from '@/lib/server/teaching-model/reviewer-call';
+import {
+  REVIEWER_FALLBACK_MODEL,
+  REVIEWER_PRIMARY_MODEL,
+} from '@/lib/server/teaching-model/reviewer-policy';
 import { currentWorkerId } from '@/lib/server/teaching-model/worker-id';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { scenePlayPositions } from '@/lib/server/teaching-package/scene-position';
 import {
+  judgedUnitIds,
   loadReviewBookUnits,
+  loadReviewFigures,
+  pickReviewFigures,
+  REVIEW_FIRST_CALL_IMAGE_SHARE,
+  REVIEW_IMAGE_ATTEMPTS_PER_CALL,
+  REVIEW_IMAGE_BUDGET_USD,
   reviewedSceneDigest,
   reviewSlidesOf,
   withGuideAnswers,
   type ReviewBookUnit,
+  type ReviewFigure,
+  type ReviewFigureSet,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
@@ -72,11 +90,15 @@ import {
   teacherOnlyReason,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
+  BOOK_FIGURES_HEADING,
+  BOOK_FIGURES_INCOMPLETE_NOTE,
+  bookFigureLabel,
   PACKAGE_REVIEW_SCHEMA,
   PACKAGE_REVIEW_SCHEMA_V2,
   PACKAGE_REVIEW_SYSTEM,
   PACKAGE_REVIEW_SYSTEM_V2,
   PACKAGE_REVIEW_SYSTEM_V11,
+  PACKAGE_REVIEW_SYSTEM_V12,
   parseReviewerAnswer,
   renderBookBlock,
   renderSlidesBlock,
@@ -126,6 +148,13 @@ export interface ReviewCallRequest {
   bookTruncated?: boolean;
   /** The run's abort signal: aborted when the sweep evicts a hung run (set by the job). */
   signal?: AbortSignal;
+  /**
+   * RV-1 (g5.v12 only): the book figures this call may see, picked by the job within
+   * the owner's cap (`pickReviewFigures`). Absent on every other package.
+   */
+  figures?: readonly ReviewFigure[];
+  /** RV-1: a figure of the lesson could not be read (the figures' heading says so). */
+  figuresIncomplete?: boolean;
 }
 
 export interface ReviewCallAnswer {
@@ -137,6 +166,12 @@ export interface ReviewCallAnswer {
   call: Pick<ReviewerCallResult, 'provider' | 'modelString' | 'usage'> & {
     attemptIds?: readonly string[];
   };
+  /**
+   * RV-1/RV-4 (g5.v12): how many book figures of this call's judged units were NOT
+   * sent (the run's cap, or a resumed run). A re-check that could not see them is
+   * no proof that a HIGH finding is fixed. Absent or 0: nothing was held back.
+   */
+  figuresHeld?: number;
 }
 
 /** The fix loop's view of one claimed review (Phase 3 fills it). */
@@ -179,6 +214,12 @@ export interface PackageReviewDeps {
   /** Phase 3: regenerate and re-review. Absent → every finding goes to the teacher. */
   fixLoop?: FixLoop;
   loadScenes?: (pool: ConnectableQueryable, stageId: string) => Promise<AppScene[] | null>;
+  /** RV-1 test seam: the g5.v12 book figures of `unitIds` (production: the Stage's). */
+  loadFigures?: (
+    pool: ConnectableQueryable,
+    stageId: string,
+    unitIds: ReadonlySet<string>,
+  ) => Promise<ReviewFigureSet>;
   /** The sweep's tracker: called after the claim and after every renewed lease. */
   onLeaseKept?: () => void;
   /** Aborted by the sweep when it evicts this run; every reviewer call stops with it. */
@@ -200,6 +241,61 @@ export async function loadLiveScenes(
 ): Promise<AppScene[] | null> {
   const document = (await documentStore(pool).loadDocument(stageId)) as AppDocument | null;
   return document ? (document.scenes as AppScene[]) : null;
+}
+
+/** RV-1: the Stage's materialized book figures linked to `unitIds` (g5.v12 reviews only). */
+export async function loadStageFigures(
+  pool: ConnectableQueryable,
+  stageId: string,
+  unitIds: ReadonlySet<string>,
+): Promise<ReviewFigureSet> {
+  const document = (await documentStore(pool).loadDocument(stageId)) as AppDocument | null;
+  const outline = document?.outline as AppDocumentOutline | null | undefined;
+  return loadReviewFigures(outline?.sourceVisuals, unitIds);
+}
+
+/**
+ * RV-1: one figure token at the highest input or cache-write rate of either reviewer
+ * model, every tier included (Opus 5.5's and GPT-6 Sol's long-context cache write are
+ * both $5 per 1M today). `0` when neither model is priced: then no figure is sent.
+ */
+export function reviewerImageTokenPriceUsd(card: RateCard = loadRateCard()): number {
+  let perMillion = 0;
+  for (const model of [REVIEWER_PRIMARY_MODEL, REVIEWER_FALLBACK_MODEL]) {
+    const entry = card.entries[model];
+    if (!entry) continue;
+    for (const rate of [entry, ...(entry.tiers ?? [])]) {
+      perMillion = Math.max(perMillion, rate.inputPerM, rate.cacheWritePerM ?? 0);
+    }
+  }
+  return perMillion / 1_000_000;
+}
+
+/**
+ * RV-1: the figure tokens one review run may send in all: the owner's $0.30, at the
+ * highest figure-token price, for two paid attempts per call. 30,000 at today's rates.
+ */
+export function reviewImageTokenBudget(price: number = reviewerImageTokenPriceUsd()): number {
+  if (!(price > 0)) return 0;
+  // Rounded to 6 places first: 0.3 / 1e-5 is 29999.999… in floating point.
+  const tokens = REVIEW_IMAGE_BUDGET_USD / (price * REVIEW_IMAGE_ATTEMPTS_PER_CALL);
+  return Math.floor(Number(tokens.toFixed(6)));
+}
+
+/** RV-1: the figures as the reviewer call sends them, each after its label. */
+function figureImages(figures: readonly ReviewFigure[], incomplete: boolean) {
+  return figures.map((figure, index) => ({
+    label:
+      index === 0
+        ? [
+            BOOK_FIGURES_HEADING,
+            ...(incomplete ? [BOOK_FIGURES_INCOMPLETE_NOTE] : []),
+            bookFigureLabel(figure),
+          ].join('\n')
+        : bookFigureLabel(figure),
+    data: figure.data,
+    mediaType: figure.mediaType,
+  }));
 }
 
 /** The production reviewer call for one package (or a re-review of some slides). */
@@ -239,6 +335,10 @@ export async function callPackageReviewer(
         removedGuideItemKeys(guideContext?.settlements),
       )
     : slides;
+  // RV-1 (27 Nov 2026), g5.v12 only: its rubric names the book figures, and the call
+  // carries the figures the job picked for it. Every other package is unchanged.
+  const bookFigures = isBookPartPlacementModel(attempt?.teachingModel);
+  const figures = bookFigures ? (request.figures ?? []) : [];
   const call = await runReviewerCall({
     pool: request.pool,
     tenantId: review.tenantId,
@@ -254,12 +354,17 @@ export async function callPackageReviewer(
       reviewId: review.id,
     },
     aggregate: { tenantId: review.tenantId, learningItem: review.learningItem },
-    system: guideAnswers
-      ? PACKAGE_REVIEW_SYSTEM_V11
-      : learnerFirst
-        ? PACKAGE_REVIEW_SYSTEM_V2
-        : PACKAGE_REVIEW_SYSTEM,
+    system: bookFigures
+      ? PACKAGE_REVIEW_SYSTEM_V12
+      : guideAnswers
+        ? PACKAGE_REVIEW_SYSTEM_V11
+        : learnerFirst
+          ? PACKAGE_REVIEW_SYSTEM_V2
+          : PACKAGE_REVIEW_SYSTEM,
     stablePrompt: renderBookBlock(units, { truncated: request.bookTruncated === true }),
+    ...(figures.length > 0
+      ? { images: figureImages(figures, request.figuresIncomplete === true) }
+      : {}),
     prompt: renderSlidesBlock(reviewed, focusIds, learnerFirst ? { learnerFirst } : {}),
     output: {
       kind: 'json',
@@ -639,6 +744,61 @@ export async function runPackageReview(
     if (!scenes) return await unavailable('STAGE_NOT_LIVE');
     const slides = reviewSlidesOf(scenes);
 
+    // RV-1 (owner §2, 27 Nov 2026), g5.v12 only: the book figures of the units the slides
+    // cite, read once per run through the existing crop reader. They are SENT only in a
+    // review's first run (`runAttempts === 1`; a flagged-slide run is a first run too), so
+    // the cap holds across resumes; a resumed run reviews from text, and its re-checks
+    // report the figures they held back (RV-4: no proof). A failed read (the attempt, the
+    // Stage outline or a figure) only reviews that unit from its text, as before, and is
+    // logged; it never ends the review `unavailable`. Every other package reviews exactly
+    // as before.
+    //
+    // The attempt is read ONCE per run, here, for every model gate of the job (the
+    // deterministic findings of the first answer, the figures, the fix loop's
+    // learner-first flow). A failed read gates nothing in -- never a new failure point.
+    const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId)
+      .then(
+        (row) => row,
+        () => null,
+      )
+      .catch(() => null);
+    let figureSet: ReviewFigureSet | null = null;
+    if (isBookPartPlacementModel(attempt?.teachingModel)) {
+      try {
+        figureSet = await (deps.loadFigures ?? loadStageFigures)(
+          pool,
+          claimed.stageId,
+          judgedUnitIds(slides),
+        );
+      } catch (error) {
+        log.warn(
+          `package review ${claimed.id}: the book figures could not be read; reviewed from text`,
+          JSON.stringify(describeErrorSafely(error)),
+        );
+        figureSet = { figures: [], unreadable: 0 };
+      }
+      if (figureSet.unreadable > 0) {
+        log.warn(
+          `package review ${claimed.id}: ${figureSet.unreadable} book figure(s) could not be read; their units are reviewed from text`,
+        );
+      }
+    }
+    const figureBudget = figureSet && claimed.runAttempts === 1 ? reviewImageTokenBudget() : 0;
+    let figureTokensLeft = figureBudget;
+    /** One call's figures within what the run has left (the first call: its share). */
+    const pickFigures = (request: ReviewCallRequest) => {
+      const cap = request.focusIds
+        ? figureTokensLeft
+        : Math.min(figureTokensLeft, Math.floor(figureBudget * REVIEW_FIRST_CALL_IMAGE_SHARE));
+      const picked = pickReviewFigures(
+        figureSet!,
+        judgedUnitIds(request.slides, request.focusIds),
+        cap,
+      );
+      figureTokensLeft -= picked.tokens;
+      return picked;
+    };
+
     /** L-4: a call that failed after paying (both routes down, say) still adds its spend. */
     const recordFailedSpend = async (error: unknown) => {
       const attemptIds = (error as { attemptIds?: unknown } | null)?.attemptIds;
@@ -659,16 +819,25 @@ export async function runPackageReview(
         log.warn('reviewer spend write failed', JSON.stringify(describeErrorSafely(spendError)));
       }
     };
-    const callReviewer = async (request: ReviewCallRequest) => {
+    const callReviewer = async (request: ReviewCallRequest): Promise<ReviewCallAnswer> => {
       // LOW-3: an evicted run never starts another paid reviewer call.
       if (deps.signal?.aborted) throw new TeachingCallAbortedError([]);
+      // RV-1: counted against the run's cap before the call (a failed call may have paid).
+      const picked = figureSet ? pickFigures(request) : null;
       try {
-        return await (deps.callReviewer ?? callPackageReviewer)({
+        const answered = await (deps.callReviewer ?? callPackageReviewer)({
           ...request,
           bookTruncated: book.truncated,
+          ...(picked && picked.figures.length > 0
+            ? {
+                figures: picked.figures,
+                ...(figureSet!.unreadable > 0 ? { figuresIncomplete: true } : {}),
+              }
+            : {}),
           ...(deps.signal ? { signal: deps.signal } : {}),
           pool,
         });
+        return picked && picked.held > 0 ? { ...answered, figuresHeld: picked.held } : answered;
       } catch (error) {
         await recordFailedSpend(error);
         throw error;
@@ -716,20 +885,13 @@ export async function runPackageReview(
     let review = claimed;
     let findings: StoredFinding[];
     if (claimed.reviewedAt === null) {
-      // The attempt is read once for both model-gated deterministic findings (a failed
+      // The run's one attempt read (above) gates both deterministic findings (a failed
       // read adds nothing -- never a new failure point):
       // - g5.v11 (re-review finding 5c): a slide kept while it may still state a checked
       //   answer before the learner's try is a must-fix finding, stored with the first
       //   answer (a resume and a flagged-slide regeneration read it back);
       // - g5.v10/v11 (D2, 21 Nov 2026): the label-script check.
-      // Every package now reads the attempt here; any other Teaching Model gets neither
-      // finding and reviews exactly as before.
-      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId)
-        .then(
-          (row) => row,
-          () => null,
-        )
-        .catch(() => null);
+      // Any other Teaching Model gets neither finding and reviews exactly as before.
       let leakFindings: StoredFinding[] = [];
       if (scenes.some(carriesGuideLeak) && isGuideAnswerModel(attempt?.teachingModel)) {
         leakFindings = guideLeakFindings(scenes, slides);
@@ -782,10 +944,8 @@ export async function runPackageReview(
     let fixes: StoredFix[] = claimed.fixes;
     if (deps.fixLoop && findings.length > 0) {
       // g5.v10 quality plan W2: the fix loop rolls back a fix that made a slide worse.
-      // A failed read keeps the v1 flow (review LOW: never a new failure point).
-      const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId).catch(
-        () => null,
-      );
+      // A failed read (the run's one read, above) keeps the v1 flow (review LOW: never a
+      // new failure point).
       const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
       const result = await deps.fixLoop({
         pool,

@@ -109,6 +109,12 @@ const SEVERITY_RANK: Readonly<Record<string, number>> = { low: 1, medium: 2, hig
 const SERVER_CHECKS: ReadonlySet<string> = new Set([GENERATION_ISSUE_CHECK, LABEL_SCRIPT_CHECK]);
 
 /**
+ * RV-1/RV-4 (g5.v12): the fix code of a slide whose re-check held back book figures of
+ * its units, so a HIGH finding on it stayed open (`REREVIEW_UNAVAILABLE`).
+ */
+export const REREVIEW_FIGURES_HELD = 'REREVIEW_FIGURES_HELD';
+
+/**
  * g5.v10 quality plan W2: the re-review findings that show a fix made its slide
  * WORSE — a new High, S2 (wrong working) or S6 (screen and voice disagree) that
  * the fix did not target, or a targeted check reported at a higher severity than
@@ -379,8 +385,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         reviewModel: null,
         reviewProvider: null,
       };
-      const noteServed = (call: ReviewCallAnswer['call']) => {
-        served = { reviewModel: call.modelString ?? null, reviewProvider: call.provider ?? null };
+      // RV-1/RV-4 (g5.v12): book figures of this slide's units that re-review did not see.
+      let figuresHeld = 0;
+      const noteServed = (answered: ReviewCallAnswer) => {
+        served = {
+          reviewModel: answered.call.modelString ?? null,
+          reviewProvider: answered.call.provider ?? null,
+        };
+        figuresHeld = answered.figuresHeld ?? 0;
       };
       // W2 resume (review MED-3): this slide's fix is a replay whose live slide is no
       // longer its result — an evicted run already restored it (or retried it).
@@ -492,14 +504,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           );
           try {
             if (!(await context.heartbeat())) throw new Error('lease lost');
-            const { answer, call } = await context.callReviewer({
+            const answered = await context.callReviewer({
               review,
               units: context.units,
               slides: neighbourhood(around, candidate),
               focusIds: new Set([slide.id]),
             });
-            noteServed(call);
-            return answer.findings.filter((finding) => finding.targetId === slide.id);
+            noteServed(answered);
+            return answered.answer.findings.filter((finding) => finding.targetId === slide.id);
           } catch (error) {
             log.warn(
               `review ${review.id}: re-review of ${slide.id} failed`,
@@ -642,14 +654,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       if (!reviewed) {
         try {
           if (!(await context.heartbeat())) throw new Error('lease lost');
-          const { answer, call } = await context.callReviewer({
+          const answered = await context.callReviewer({
             review,
             units: context.units,
             slides: neighbourhood(nowSlides, changed),
             focusIds: new Set([slide.id]),
           });
-          noteServed(call);
-          rereview = answer.findings.filter((finding) => finding.targetId === slide.id);
+          noteServed(answered);
+          rereview = answered.answer.findings.filter((finding) => finding.targetId === slide.id);
         } catch (error) {
           log.warn(
             `review ${review.id}: re-review of ${slide.id} failed`,
@@ -707,8 +719,14 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // deterministic re-check from the live scene (above). Medium and low
       // findings keep L-2. No new status, no extra regeneration.
       const rereviewHasHigh = rereview.some((finding) => finding.severity === 'high');
-      const highStillOpen = (finding: StoredFinding) =>
-        finding.severity === 'high' && !SERVER_CHECKS.has(finding.check) && rereviewHasHigh;
+      const reviewerHigh = (finding: StoredFinding) =>
+        finding.severity === 'high' && !SERVER_CHECKS.has(finding.check);
+      const highStillOpen = (finding: StoredFinding) => reviewerHigh(finding) && rereviewHasHigh;
+      // RV-1/RV-4 (g5.v12): a re-check that could not see the book figures of its slide's
+      // units (the run's cap, or a resumed run) is no proof for a HIGH finding: it stays
+      // open, as a re-check that could not run (`REREVIEW_UNAVAILABLE`).
+      const evidenceHeld = (finding: StoredFinding) => reviewerHigh(finding) && figuresHeld > 0;
+      let heldOpen = false;
       let stillWrong = false;
       for (const finding of sceneFindings) {
         if (finding.check === 'G1' && liveIssueCodes.length > 0) {
@@ -724,6 +742,9 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         ) {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
+        } else if (evidenceHeld(finding)) {
+          finding.teacherReason = 'REREVIEW_UNAVAILABLE';
+          heldOpen = true;
         } else if (audioCode !== null) {
           // D-5: the content is fixed, but the slide has no (or partial) audio.
           finding.teacherReason = 'NARRATION_AUDIO_FAILED';
@@ -783,8 +804,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       fixes.push({
         sceneId: slide.id,
         findingIds: sceneFindings.map((f) => f.id),
-        outcome: stillWrong ? 'still_wrong' : 'fixed',
-        code: audioCode,
+        outcome: stillWrong || heldOpen ? 'still_wrong' : 'fixed',
+        code: audioCode ?? (heldOpen ? REREVIEW_FIGURES_HELD : null),
         regenerationId,
         ...served,
       });
