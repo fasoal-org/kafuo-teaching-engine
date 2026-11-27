@@ -48,7 +48,7 @@ import {
   type TeachingSkillsGovernance,
   validateExactTeachingFlow,
 } from '@/lib/server/teaching-package/exact-flow';
-import { flowProblemDetails } from '@/lib/server/teaching-package/scene-insertion';
+import { flowProblemDetails } from '@/lib/server/teaching-package/plan-auto-fixes';
 import { findGameScenesOutsideFlow } from '@/lib/server/teaching-package/kafuo-game-deferral';
 import {
   compareSuccessorMaterialScenes,

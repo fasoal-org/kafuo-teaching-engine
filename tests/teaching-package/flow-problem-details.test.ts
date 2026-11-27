@@ -6,10 +6,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { droppedCheckQuizPositions } from '@/lib/server/teaching-package/exact-flow';
-import {
-  exactFlowOrRefuse,
-  flowProblemDetails,
-} from '@/lib/server/teaching-package/scene-insertion';
+import { flowProblemDetails } from '@/lib/server/teaching-package/plan-auto-fixes';
+import { exactFlowOrRefuse } from '@/lib/server/teaching-package/scene-insertion';
 import type { TeachingFlowEntry } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
 

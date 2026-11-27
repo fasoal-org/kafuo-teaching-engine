@@ -20,6 +20,7 @@
 import type { OutlineDiagnostic } from '@openmaic/generation';
 
 import { createLogger } from '@/lib/logger';
+import { orderedScenes } from '@/lib/server/teaching-package/content-unit-coverage';
 import {
   applyCorrectionOperations,
   type CorrectionEditContext,
@@ -30,6 +31,7 @@ import {
   type PlanFixDraft,
 } from '@/lib/server/teaching-package/plan-fix-records';
 import type { SceneOutline } from '@/lib/types/generation';
+import type { AppScene } from '@/lib/types/stage';
 import type {
   GenerationCheckpointSourceRefs,
   TeachingFlowEntry,
@@ -376,4 +378,47 @@ export function applyPlanAutoFixes(
   }
 
   return { outlines: current, blocking: open, fixes };
+}
+
+/**
+ * Owner, 26 Nov 2026: what is actually wrong with a lesson's order, for the teacher —
+ * the slides out of place (`misplacedSceneIds`, the fewest moves that fix the order)
+ * and the flow positions no scene holds any more (`missing`, each with the slide it
+ * belongs after, e.g. a deleted check quiz), instead of every slide of the lesson.
+ * Shared by an insertion refusal and Submit's flow refusal (ED-1); it lives beside
+ * {@link locateFlowOrderProblems} so Submit never imports the insertion module.
+ */
+export function flowProblemDetails(
+  scenes: readonly AppScene[],
+  flow: readonly TeachingFlowEntry[],
+  /** g5.v12 (A-32): dropped check-quiz positions, empty by design — never "missing". */
+  droppedPositions?: ReadonlySet<number>,
+): {
+  misplacedSceneIds: string[];
+  missing: Array<{ flowIndex: number; stage: string; afterSceneId: string | null }>;
+} {
+  const ordered = orderedScenes(scenes);
+  const located = locateFlowOrderProblems(ordered as unknown as SceneOutline[], flow);
+  const problems = droppedPositions?.size
+    ? {
+        ...located,
+        missing: located.missing.filter((flowIndex) => !droppedPositions.has(flowIndex)),
+      }
+    : located;
+  const misplacedSceneIds = problems.misplaced.map((entry) => entry.outlineId);
+  const misplaced = new Set(misplacedSceneIds);
+  // The slide a missing page belongs after: the last slide IN PLACE before it (a
+  // slide dragged out of place never names the gap).
+  const inPlace = ordered.filter((scene) => !misplaced.has(scene.id));
+  return {
+    misplacedSceneIds,
+    missing: problems.missing.map((flowIndex) => ({
+      flowIndex,
+      stage: flow[flowIndex]?.stage ?? '',
+      afterSceneId:
+        [...inPlace]
+          .reverse()
+          .find((scene) => (scene.teachingStage?.flowIndex ?? Infinity) < flowIndex)?.id ?? null,
+    })),
+  };
 }
