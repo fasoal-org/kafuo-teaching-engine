@@ -1225,3 +1225,73 @@ describe('generateClassroom source visuals', () => {
     expect(Array.isArray(result)).toBe(true);
   });
 });
+
+// g5.v12 (W2.5, review LOW-1): a slide whose planned visual was withheld is generated once
+// more with native elements, and that call and its narration carry bookPartOpener on a
+// governed g5.v12 run — never on g5.v11.
+describe('generateClassroom — the native-visual regeneration on g5.v12', () => {
+  const flow = [{ stage: 'lesson_opener', instructions: 'Open the lesson.' }];
+  const governedRun = async (version: string) => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            slideType: 'cover',
+            contentRole: 'orientation',
+            title: 'Opening',
+            description: 'Open the lesson.',
+            keyPoints: ['Lesson title'],
+            order: 1,
+            visualPlan: { mode: 'image' },
+            mediaGenerations: [{ type: 'image', elementId: 'gen_img_1', prompt: 'opener' }],
+            teachingStage: { key: 'lesson_opener', flowIndex: 0 },
+            teachingSkills: { classification: 'non-instructional' },
+          },
+        ],
+      },
+    });
+    // The first canvas shows only the AI placeholder the media phase never maps.
+    mocks.generateSceneContent.mockImplementation(async () => ({
+      elements: [{ id: 'e1', type: 'image', src: 'gen_img_1' }],
+    }));
+    await generate({
+      input: {
+        pdfContent: { text: 'pdf', images: [] },
+        enableImageGeneration: true,
+        teachingFlow: flow,
+        governed: {
+          contract: 'kafuo.teaching-skills.v1',
+          teachingModel: { key: 'g5', version },
+          flow,
+        },
+      } as never,
+    }).catch(() => undefined);
+    const calls = (spy: { mock: { calls: unknown[][] } }, at: number) =>
+      spy.mock.calls.map((call) => call[at] as Record<string, unknown>);
+    return {
+      native: calls(mocks.generateSceneContent, 2).filter((options) => options.editDirective),
+      actions: calls(mocks.generateSceneActions, 3),
+    };
+  };
+
+  it('the native content call and its narration carry it on v12, never on v11', async () => {
+    const v12 = await governedRun('g5.v12');
+    expect(v12.native.length).toBeGreaterThan(0);
+    expect(v12.actions.length).toBeGreaterThan(1);
+    for (const options of [...v12.native, ...v12.actions]) {
+      expect(options.bookPartOpener).toBe(true);
+    }
+    mocks.generateSceneContent.mockClear();
+    mocks.generateSceneActions.mockClear();
+    const v11 = await governedRun('g5.v11');
+    expect(v11.native.length).toBeGreaterThan(0);
+    expect(v11.actions.length).toBeGreaterThan(1);
+    for (const options of [...v11.native, ...v11.actions]) {
+      expect(options).not.toHaveProperty('bookPartOpener');
+    }
+  });
+});

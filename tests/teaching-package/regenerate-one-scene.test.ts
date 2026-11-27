@@ -1673,3 +1673,69 @@ describe('regenerateOneScene — g5.v11 exercise solution slide', () => {
     expect((result as { scene: AppScene }).scene.title).toBe('حل التمارين ٤–٦');
   });
 });
+
+// g5.v12 (W2.5, review LOW-1): a regenerated slide's canvas and narration get the v12
+// opener guidance (`bookPartOpener`) exactly as the run does; g5.v11 never does.
+describe('regenerateOneScene — g5.v12 bookPartOpener', () => {
+  const spies = async () => {
+    const generation = await import('@openmaic/generation');
+    const contentSpy = vi.fn(generation.generateSceneContent);
+    const actionsSpy = vi.fn(generation.generateSceneActions);
+    return { contentSpy, actionsSpy };
+  };
+  const regenerate = async (
+    teachingModel: { key: string; version: string },
+    narrationOnly = false,
+  ) => {
+    const { contentSpy, actionsSpy } = await spies();
+    const pre = preImage();
+    const stub = model(content([image('src-3', 'x')]));
+    const result = await regenerateOneScene({
+      scene: pre,
+      scenes: [pre],
+      stage,
+      outlineSnapshot: snapshot(),
+      instruction: INSTRUCTION,
+      teachingModel,
+      ...(narrationOnly ? { narrationOnly: true } : {}),
+      aiCallFor: stub.aiCallFor,
+      registerPolicy: policy,
+      refuseFallbackActions: true,
+      generateContent: contentSpy as never,
+      generateActions: actionsSpy as never,
+      now: () => 42,
+    });
+    const optionsOf = (spy: { mock: { calls: unknown[][] } }, at: number) =>
+      spy.mock.calls.map((call) => call[at] as Record<string, unknown>);
+    return { result, content: optionsOf(contentSpy, 2), actions: optionsOf(actionsSpy, 3) };
+  };
+  const V12 = { key: 'g5', version: 'g5.v12' };
+  const V11 = { key: 'g5', version: 'g5.v11' };
+
+  it('a full regeneration: content and narration carry it on v12, never on v11', async () => {
+    const v12 = await regenerate(V12);
+    expect(v12.result).toMatchObject({ ok: true });
+    expect(v12.content.length).toBeGreaterThan(0);
+    expect(v12.actions.length).toBeGreaterThan(0);
+    for (const options of [...v12.content, ...v12.actions]) {
+      expect(options.bookPartOpener).toBe(true);
+    }
+    const v11 = await regenerate(V11);
+    expect(v11.result).toMatchObject({ ok: true });
+    expect(v11.content.length).toBeGreaterThan(0);
+    expect(v11.actions.length).toBeGreaterThan(0);
+    for (const options of [...v11.content, ...v11.actions]) {
+      expect(options).not.toHaveProperty('bookPartOpener');
+    }
+  });
+
+  it('a narration-only regeneration carries it on v12, never on v11', async () => {
+    const v12 = await regenerate(V12, true);
+    expect(v12.content).toEqual([]);
+    expect(v12.actions.length).toBeGreaterThan(0);
+    for (const options of v12.actions) expect(options.bookPartOpener).toBe(true);
+    const v11 = await regenerate(V11, true);
+    expect(v11.actions.length).toBeGreaterThan(0);
+    for (const options of v11.actions) expect(options).not.toHaveProperty('bookPartOpener');
+  });
+});

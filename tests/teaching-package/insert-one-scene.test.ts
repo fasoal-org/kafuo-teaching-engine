@@ -127,6 +127,28 @@ describe('insertOneScene', () => {
     expect(await optionsFor()).not.toHaveProperty('visibleWorkingSteps');
   });
 
+  it('g5.v12 (W2.5, review LOW-1): the inserted slide’s canvas and narration get bookPartOpener; v11 never', async () => {
+    const callsFor = async (teachingModel: { key: string; version: string }) => {
+      const { input, generateContent, generateActions } = run({ teachingModel });
+      await insertOneScene(input);
+      const at = (spy: { mock: { calls: unknown[][] } }, index: number) =>
+        spy.mock.calls.map((call) => call[index] as Record<string, unknown>);
+      return { content: at(generateContent, 2), actions: at(generateActions, 3) };
+    };
+    const v12 = await callsFor({ key: 'g5', version: 'g5.v12' });
+    expect(v12.content.length).toBeGreaterThan(0);
+    expect(v12.actions.length).toBeGreaterThan(0);
+    for (const options of [...v12.content, ...v12.actions]) {
+      expect(options.bookPartOpener).toBe(true);
+    }
+    const v11 = await callsFor({ key: 'g5', version: 'g5.v11' });
+    expect(v11.content.length).toBeGreaterThan(0);
+    expect(v11.actions.length).toBeGreaterThan(0);
+    for (const options of [...v11.content, ...v11.actions]) {
+      expect(options).not.toHaveProperty('bookPartOpener');
+    }
+  });
+
   it('places a sentinel for the new slide in the Actions page context', async () => {
     const { input, generateActions } = run();
     await insertOneScene(input);

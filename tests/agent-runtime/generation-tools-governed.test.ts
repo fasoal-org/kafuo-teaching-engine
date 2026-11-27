@@ -36,6 +36,23 @@ import { makeDocument, makeSlideScene } from '../teaching-package/../agent-runti
  * skills) against this suite's PGlite.
  */
 
+// Pass-through spies (every prompt is the real one), so a test can read the options the
+// tools hand the scene writer (g5.v12 `bookPartOpener`).
+const writer = vi.hoisted(() => ({
+  content: undefined as unknown as ReturnType<typeof vi.fn>,
+  actions: undefined as unknown as ReturnType<typeof vi.fn>,
+}));
+vi.mock('@openmaic/generation', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@openmaic/generation')>();
+  writer.content = vi.fn(original.generateSceneContent);
+  writer.actions = vi.fn(original.generateSceneActions);
+  return {
+    ...original,
+    generateSceneContent: writer.content,
+    generateSceneActions: writer.actions,
+  };
+});
+
 class PGlitePool {
   constructor(readonly db: PGlite) {}
 
@@ -181,10 +198,13 @@ describe('generation tools on a governed Stage (W4)', () => {
    * Seed a stage whose scene 1 is governed at position 0, plus a version +
    * governed attempt (contract marker + flow). Returns ids.
    */
-  async function seedGovernedStage(options: { contract?: string | null } = {}): Promise<{
+  async function seedGovernedStage(
+    options: { contract?: string | null; version?: string } = {},
+  ): Promise<{
     stageId: string;
     versionId: string;
   }> {
+    const teachingModel = { key: 'g5', version: options.version ?? 'g5.v1' };
     const stageId = nextId('stage');
     const store = makeStore();
     await store.saveDocument(
@@ -242,7 +262,7 @@ describe('generation tools on a governed Stage (W4)', () => {
       status: 'draft',
       currentStageId: stageId,
       currentAttemptId: attemptId,
-      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingModel,
       now: 1,
     });
     const contract = options.contract === undefined ? 'kafuo.teaching-skills.v1' : options.contract;
@@ -252,11 +272,11 @@ describe('generation tools on a governed Stage (W4)', () => {
       kind: 'initial',
       status: 'succeeded',
       requestedByActorRef: 'actor-1',
-      teachingModel: { key: 'g5', version: 'g5.v1' },
+      teachingModel,
       ...(contract ? { teachingSkillsContract: contract } : {}),
       inputSnapshot: {
         learningItem: item,
-        teachingModel: { key: 'g5', version: 'g5.v1' },
+        teachingModel,
         learningObjectives: [],
         contentUnitRefs: [],
         sourceRefs: [],
@@ -340,6 +360,39 @@ describe('generation tools on a governed Stage (W4)', () => {
     // New generation-origin baseline; the Scene derives current.
     expect(after.alignmentBaseline?.origin).toBe('generation');
     expect(deriveSceneAlignment(after)).toMatchObject({ state: 'current', aligned: true });
+  });
+
+  it('g5.v12 (W2.5, review LOW-2): generate_scene and generate_actions pass bookPartOpener; g5.v11 never', async () => {
+    const optionsAfter = async (version: string) => {
+      const { stageId } = await seedGovernedStage({ version });
+      writer.content.mockClear();
+      writer.actions.mockClear();
+      const { generateActions, generateScene } = tools();
+      await generateScene.execute(
+        'call-v',
+        { stageId, order: 1, title: 'Opening', brief: 'Rewrite it', type: 'slide' } as never,
+        undefined,
+      );
+      await generateActions.execute('call-a', { stageId, order: 1 } as never, undefined);
+      const at = (spy: ReturnType<typeof vi.fn>, index: number) =>
+        spy.mock.calls.map((call) => call[index] as Record<string, unknown>);
+      return { content: at(writer.content, 2), actions: at(writer.actions, 3) };
+    };
+    const v12 = await optionsAfter('g5.v12');
+    expect(v12.content.length).toBeGreaterThan(0);
+    expect(v12.actions.length).toBeGreaterThanOrEqual(2);
+    for (const options of [...v12.content, ...v12.actions]) {
+      expect(options.bookPartOpener).toBe(true);
+    }
+    const v11 = await optionsAfter('g5.v11');
+    expect(v11.content.length).toBeGreaterThan(0);
+    expect(v11.actions.length).toBeGreaterThanOrEqual(2);
+    for (const options of [...v11.content, ...v11.actions]) {
+      expect(options).not.toHaveProperty('bookPartOpener');
+      // Not passed by this change (LOW-2 note): the agent tools keep their v10/v11 rules.
+      expect(options).not.toHaveProperty('learnerFirst');
+      expect(options).not.toHaveProperty('visibleWorkingSteps');
+    }
   });
 
   it('generate_scene on a governed Stage regenerates under the context and preserves position + Skills (TAE-RQ-020)', async () => {

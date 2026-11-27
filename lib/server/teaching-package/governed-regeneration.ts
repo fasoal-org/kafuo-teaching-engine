@@ -40,6 +40,11 @@ export interface GovernedRegenerationContext {
   flowContext: SceneFlowContext;
   /** The exact resolved canonical Skill definitions for the run. */
   resolvedSkills: ResolvedSkillDefinition[];
+  /**
+   * The version's Teaching Model, so a caller that knows only a Stage (the agent tools)
+   * passes the same model flags as a regeneration (g5.v12 `bookPartOpener`).
+   */
+  teachingModel?: { key: string; version: string };
 }
 
 /**
@@ -112,7 +117,7 @@ export async function resolveGovernedRegenerationContext(
     version: definition.version,
     definition: definition.content,
   }));
-  return { flowContext, resolvedSkills };
+  return { flowContext, resolvedSkills, teachingModel: governed.teachingModel };
 }
 
 /**

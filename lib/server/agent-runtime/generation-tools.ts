@@ -32,6 +32,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { Action } from '@/lib/types/action';
 import type { Scene } from '@/lib/types/stage';
 import { buildSceneAlignmentBaseline } from '@/lib/server/teaching-package/alignment';
+import { isBookPartPlacementModel } from '@/lib/server/teaching-package/book-coverage';
 import type { GovernedRegenerationContext } from '@/lib/server/teaching-package/governed-regeneration';
 import { COURSE_STAGE_ID_DESCRIPTION } from './course-stage';
 import type { CourseToolDeps } from './course-tools';
@@ -693,6 +694,8 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           ...(params.instruction ? { editDirective: params.instruction } : {}),
           ...(baseline ? { baselineContent: baseline } : {}),
           ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
+          // g5.v12 (W2.5): the opener guidance, as a regeneration gets it.
+          ...(isBookPartPlacementModel(governed?.teachingModel) ? { bookPartOpener: true } : {}),
           onFailure: (failure) => {
             contentFailure = failure.code;
           },
@@ -759,6 +762,7 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
           // definitions — the same governed context the content pass used.
           ...(governed ? { flowContext: governed.flowContext } : {}),
           ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
+          ...(isBookPartPlacementModel(governed?.teachingModel) ? { bookPartOpener: true } : {}),
         }),
       );
       const built = buildCompleteScene(
@@ -865,6 +869,7 @@ export function buildGenerationTools(deps: GenerationToolDeps): AgentTool<never,
             userProfile: params.styleDirective,
             ...(governed ? { flowContext: governed.flowContext } : {}),
             ...(governed ? { resolvedSkills: governed.resolvedSkills } : {}),
+            ...(isBookPartPlacementModel(governed?.teachingModel) ? { bookPartOpener: true } : {}),
           },
         ),
       );
