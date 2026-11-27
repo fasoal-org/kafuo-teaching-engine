@@ -356,6 +356,48 @@ describe('generateClassroom — g5.v12 check quiz keys (QZ-2, Q-AK)', () => {
     expect(narration).not.toContain('Check');
   });
 
+  it('A-32 (review MEDIUM-1): the slide before a dropped final quiz is the LAST page, however slow the quiz', async () => {
+    const second = {
+      ...outlines[0]!,
+      id: 'w6o1b',
+      title: 'Closing',
+      order: 2,
+    };
+    const quiz = { ...outlines[1]!, order: 3 };
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: { languageDirective: 'English.', outlines: [outlines[0]!, second, quiz] },
+    });
+    keyed(['B', 'B']);
+    // The quiz's key calls settle well after the slides' narration would have run.
+    const inner = mocks.callLLM.getMockImplementation()!;
+    mocks.callLLM.mockImplementation(
+      async (request: { messages: Array<{ role: string; content: string }> }) => {
+        const system = request.messages.find((m) => m.role === 'system')?.content ?? '';
+        if (/^# Quiz Content Generator/m.test(system)) {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        return inner(request);
+      },
+    );
+
+    const result = await run({ ...baseInput, checkQuizKeys: gated([REFERENCE]) });
+
+    expect(droppedPlan(result)).toMatchObject({ reason: 'unverified_answer_key' });
+    const narration = (
+      mocks.callLLM.mock.calls as unknown as Array<
+        [{ messages: Array<{ role: string; content: string }> }]
+      >
+    )
+      .map(([request]) => request.messages)
+      .filter((messages) => /Action Generator/.test(messages[0]?.content ?? ''))
+      .map((messages) => messages.find((m) => m.role === 'user')?.content ?? '')
+      .find((user) => user.includes('Closing ← current'));
+    expect(narration).toContain('2. Closing ← current');
+    expect(narration).toContain('Position: This is the LAST page.');
+    expect(narration).not.toContain('Check');
+  });
+
   // Fresh review finding 5: a `scenes` resume of a run that dropped the quiz.
   const resumeDropped = async (regenerateOutlineIds: string[]) => {
     keyed(['B', 'B']);

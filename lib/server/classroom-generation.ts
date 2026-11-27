@@ -91,6 +91,7 @@ import {
   type GuideAnswerGuard,
 } from '@/lib/server/teaching-package/guide-answer-guard';
 import {
+  isBankedCheckQuiz,
   keyCorrection,
   referenceDirective,
   verifyCheckQuizKeys,
@@ -3054,6 +3055,25 @@ export async function generateClassroom(
         contentStopped = true;
       });
     }
+    // g5.v12 (A-32, review MEDIUM-1): the first index from which every outline is a check
+    // quiz the run may drop (a banked check quiz on a keyed run). A slide narrated just
+    // before them waits for their content, so its page context knows whether it is the
+    // lesson's last page. `outlines.length` (no trailing quiz) on every other model.
+    let trailingCheckQuizzesFrom = outlines.length;
+    if (input.checkQuizKeys) {
+      while (
+        trailingCheckQuizzesFrom > 0 &&
+        (keptCheckQuizDrops.has(outlines[trailingCheckQuizzesFrom - 1]!.id) ||
+          (prepared[trailingCheckQuizzesFrom - 1] !== null &&
+            !(
+              input.bankCheckQuizzes &&
+              isBankCheckQuizOutline(prepared[trailingCheckQuizzesFrom - 1]!.safeOutline)
+            ) &&
+            isBankedCheckQuiz(prepared[trailingCheckQuizzesFrom - 1]!.safeOutline)))
+      ) {
+        trailingCheckQuizzesFrom -= 1;
+      }
+    }
 
     let refusedScenes = 0;
     let firstRefusal: TeachingModelUnavailableError | undefined;
@@ -3233,7 +3253,15 @@ export async function generateClassroom(
         // Non-governed callers keep today's contract exactly: first result wins.
         // Page position + the previous page's speech, so first/last-page cues,
         // same-session continuity and topic signposting exist on the server path.
-        // g5.v12 (A-32): a dropped check quiz is no page the learner sees.
+        // g5.v12 (A-32): a dropped check quiz is no page the learner sees. When only check
+        // quizzes follow this Scene, their content settles first (as an attempt awaits its
+        // solution slides), so a dropped final quiz never hides the last page.
+        if (index + 1 >= trailingCheckQuizzesFrom) {
+          for (let later = index + 1; later < outlines.length; later += 1) {
+            await sceneContents[later];
+            assertRouteAvailable();
+          }
+        }
         const pages =
           knownCheckQuizDrops.size > 0
             ? outlines.filter((planned) => !knownCheckQuizDrops.has(planned.id))
