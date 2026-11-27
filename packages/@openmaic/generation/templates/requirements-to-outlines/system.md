@@ -345,8 +345,8 @@ Rules:
       "visualPlan": { "mode": "native" },
       "title": "Introduction",
 {{#if standardOpener}}      "description": "Open the lesson on one slide: title, a framing question, brief context, the learning objectives and the big idea.",
-      "keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],{{/if}}{{#if bookPartPlacement}}      "description": "Open the lesson on one slide: title, a framing question and brief context.",
-      "keyPoints": ["Framing question", "Why it matters"],{{/if}}
+      "keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],{{/if}}{{#if bookPartPlacement}}      "description": "Open the lesson on one short intro slide: the title and one sentence saying what the lesson teaches today.",
+      "keyPoints": ["Lesson title", "What this lesson teaches today"],{{/if}}
       "order": 1{{#if normalizedGrounding}},
       "sourceContentUnitIds": ["2900"]{{/if}}{{#if hasSkillPolicy}},
       "teachingSkills": { "classification": "instructional", "primary": { "skillId": "feynman-learning", "version": "v1" } }{{/if}}
@@ -490,7 +490,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 
 4. `type` is one of `"slide"`, `"quiz"`, `"interactive"`, `"pbl"`.
    - Every `slide` scene carries `slideType`, and every instructional slide a `contentRole`, chosen by pedagogical intent (only a purely structural `contents` / `transition` / `end` slide omits the role); `explanation`, `activity` and `practice` MAY add a `contentKind` from their own list, and every other role omits `contentKind`. `practice` + `independent` also carries an `assistancePlan` with `hint` and `explanation`, and its `description` / `keyPoints` hold the task only. `quiz`, `interactive` and `pbl` scenes carry none of these fields. A missing or unknown `contentRole` or `slideType` invalidates the entire response; a `contentKind` outside the role's own list is discarded.
-{{#if standardOpener}}   - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}{{#if bookPartPlacement}}   - The lesson opens with one `cover` + `orientation` slide built only from the opening content the request gives (no learning-objectives list, no big idea) — no separate learning-objectives slide, no `contents` slide, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}
+{{#if standardOpener}}   - The lesson opens with one `cover` + `orientation` slide that includes the learning objectives — no separate learning-objectives slide, no `contents` slide for a normal single lesson, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}{{#if bookPartPlacement}}   - The lesson opens with one short `cover` + `orientation` intro slide: the title, one sentence on what the lesson teaches today and at most one recall a unit states (no hook, no learning-objectives list, no invented big idea) — no separate learning-objectives slide, no `contents` slide, `transition` only between major sections, `end` only for the genuine closing slide.{{/if}}
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.

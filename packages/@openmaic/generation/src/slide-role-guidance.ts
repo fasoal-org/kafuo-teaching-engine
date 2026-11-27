@@ -194,36 +194,37 @@ export function buildSlideRoleContext(
 }
 
 /**
- * g5.v12 (Wave 2, W2.5): the opening slide of a book-part lesson carries the lesson
- * title, a hook, a short context and its visual — no learning objectives and no big
- * idea (the planner is told the same). `orientation.md` with those two lines removed.
+ * g5.v12 (Wave 2, W2.5): the opening slide of a book-part lesson, aligned with the
+ * backend's g5.v12 opener (`G5_V12_OPENER_INSTRUCTIONS`, MI-6): one short intro slide
+ * with the lesson title, one sentence on what the lesson teaches today and, only when a
+ * unit states it, a one-line recall. No hook (the book's «لماذا؟» is taught after the
+ * first idea), no objectives list, no invented big idea, no new content.
  */
 export const BOOK_PART_ORIENTATION_GUIDANCE = [
-  '**Purpose of this slide.** Open the learning: frame what this lesson is about and why it matters, so the learner starts with direction and curiosity.',
+  '**Purpose of this slide.** Open the lesson the way a teacher does, on one short intro slide that says what the lesson teaches today; the explanation starts on the next slide.',
   [
     '**It must contain:**',
     '- the lesson title',
-    '- a hook or framing question that makes the learner want to know more',
-    '- a short context — where this fits and why it matters, from the opening content this slide is given',
-    '- one pedagogically useful supporting visual when media is available; when it is not, build an illustrative visual from native shapes/lines/text; omit a visual only when none would genuinely improve understanding, framing or engagement',
+    "- one sentence saying what the lesson teaches today: the book's own main-idea sentence («الفكرة الرئيسة») exactly as the book prints it when this slide is given it; otherwise one sentence naming the new ideas or rules the lesson teaches, never a list of objectives",
+    '- only when this slide is given the one earlier idea the lesson needs, a one-line recall of it',
+    '- one simple visual',
   ].join('\n'),
-  '**What leads, what supports.** The title and the hook lead. The context supports them as a clearly separated group.',
-  '**Learner engagement.** Invite the learner in with the hook.',
+  "**Every word from the given content.** Take every word, example and value from this slide's key points and source content: never invent a recall, an example or a value they do not give.",
   [
     '**Must NOT appear:**',
-    '- a bare title page',
-    '- a list of learning objectives, or a stated big idea or key framing message: this opening carries neither',
-    '- a long syllabus or agenda',
-    "- teaching of the lesson's content itself",
+    "- an opening story, or the book's hook question (the lesson answers it later)",
+    '- a list of objectives, vocabulary or a lesson journey',
+    "- a 'big idea' the book does not print",
+    "- teaching of the lesson's new content",
   ].join('\n'),
   '**If it does not fit.** An opening belongs on one slide: tighten wording rather than splitting it.',
   'Arrangement is yours to design: choose the hierarchy, grouping and visual structure that serve this purpose best — no fixed arrangement is expected.',
 ].join('\n\n');
 
-/** g5.v12 (W2.5): the opening's narration frames the hook and the context only. */
+/** g5.v12 (W2.5): the opening's narration, as the backend's g5.v12 opener states it. */
 const BOOK_PART_NARRATION_RULES: Readonly<Record<string, string>> = {
   orientation:
-    'Open with the hook, then frame the context. Never list learning objectives or announce a big idea.',
+    "At most three short sentences: the lesson's title, what it teaches today and, only when the slide shows it, the one earlier idea it needs. Never tell an opening story or ask the book's hook question, never list objectives, vocabulary or a lesson journey, never invent a 'big idea' the book does not print, and never teach the lesson's new content.",
 };
 
 const EXPLANATION_VISUAL_GROUNDING =
@@ -284,7 +285,11 @@ export function buildSlideNarrationRoleContext(
   const file = variantFile(input);
   if (!file) return NO_GUIDANCE;
   // The file's first paragraph is its purpose statement.
-  const purpose = loadVariant(file).split('\n\n')[0];
+  const purpose = (
+    file === 'orientation' && options.bookPartOpener
+      ? BOOK_PART_ORIENTATION_GUIDANCE
+      : loadVariant(file)
+  ).split('\n\n')[0];
   const rule =
     (options.bookPartOpener ? BOOK_PART_NARRATION_RULES[file] : undefined) ??
     (options.learnerFirst ? LEARNER_FIRST_NARRATION_RULES[file] : undefined) ??

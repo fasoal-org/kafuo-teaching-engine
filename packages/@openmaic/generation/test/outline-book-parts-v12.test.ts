@@ -47,14 +47,22 @@ describe('g5.v12 outline prompt', () => {
       expect(text).not.toContain('concise learning objectives and the big idea together');
       expect(text).not.toContain('`orientation` slide that includes the learning objectives');
     }
-    expect(v12.user).toContain('It lists no learning objectives and states no big idea');
-    expect(v12.system).toContain('(no learning-objectives list, no big idea)');
+    // The backend's g5.v12 opener (MI-6): title, what the lesson teaches today, at most
+    // one recall; no hook, no objectives list, no invented big idea.
+    expect(v12.user).toContain('one sentence saying what the lesson teaches today');
+    expect(v12.user).toContain("never tells an opening story or the book's hook question");
+    expect(v12.user).toContain('never invents a big idea the book does not print');
+    expect(v12.user).not.toContain('a hook and a short context');
+    expect(v12.system).toContain('(no hook, no learning-objectives list, no invented big idea)');
     // The shared classification contract keeps its opening list for every caller (the
     // host templates load it with no variable defaults); v12 alone adds the override.
     const override = 'the opening list above is replaced';
     expect(v12.system).toContain('- the big idea / key framing message');
-    expect(v12.system).toContain(`${override}: the opening slide carries the lesson title`);
-    expect(v12.system).toContain('no learning objectives and no big idea.');
+    expect(v12.system).toContain(
+      `${override}: the opening is one short intro slide holding the lesson title`,
+    );
+    expect(v12.system).toContain("the book's own «الفكرة الرئيسة» as the book prints it");
+    expect(v12.system).toContain('never invents a big idea the book does not print');
     expect(other.system).not.toContain(override);
   });
 
@@ -69,28 +77,31 @@ describe('g5.v12 outline prompt', () => {
     expect(pin).toBe('1ef6bebb9844c531ab1fa23eb1e8d88cec15be53fe2199a131eeb009e7a18dfe:15150');
   });
 
-  it('W2.5 (contract): on v12 the role table, the orientation line and its visual name no objectives and no big idea', () => {
+  it('W2.5 (contract): on v12 the role table and the orientation line follow the backend opener', () => {
     const v12 = prompt(true).system;
     const other = prompt().system;
     const clauses = [
-      'the big idea (on this lesson: no learning objectives and no big idea)',
-      'its key points are the hook and the short context only — no learning objectives and no big idea — and its visual serves the hook or the context.',
-      'its visual only (tied to the hook or the context)',
+      'the big idea (on this lesson: the title, what the lesson teaches today and at most one recall — no hook, no objectives list, no invented big idea)',
+      'its key points are the lesson title, one sentence saying what the lesson teaches today and, only when a unit states it, a one-line recall of the one earlier idea the lesson needs — never a hook, an objectives list or an invented big idea — and it plans one simple visual.',
     ];
     for (const clause of clauses) {
       expect(v12).toContain(clause);
       expect(other).not.toContain(clause);
     }
+    // No v12 clause asks for a hook or a framing context.
+    expect(v12).not.toContain('tied to the hook or the context');
+    expect(v12).not.toContain('the hook and the short context only');
   });
 
-  it('W2.5 (example): the v12 example opener plans no objectives and no big idea; others keep them', () => {
+  it('W2.5 (example): the v12 example opener is the title and what the lesson teaches today', () => {
     const v12 = prompt(true).system;
     const other = prompt().system;
     const standard =
       '"keyPoints": ["Framing question", "Why it matters", "Learning objectives", "Big idea"],';
     expect(other).toContain(standard);
     expect(v12).not.toContain(standard);
-    expect(v12).toContain('"keyPoints": ["Framing question", "Why it matters"],');
+    expect(v12).toContain('"keyPoints": ["Lesson title", "What this lesson teaches today"],');
+    expect(v12).not.toContain('a framing question');
     expect(v12).not.toContain('brief context, the learning objectives and the big idea.');
   });
 
