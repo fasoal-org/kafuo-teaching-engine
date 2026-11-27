@@ -138,6 +138,11 @@ export interface PackageReview {
    * TE row only: `packageReviewWire` never sends it.
    */
   reviewedStageRev: number | null;
+  /**
+   * A-34b: the review input this verdict read (`reviewInputDigest`), set with
+   * `reviewedStageRev`; `null` with it. TE row only.
+   */
+  reviewedStageDigest: string | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
@@ -238,6 +243,8 @@ function rowToReview(row: Record<string, unknown>): PackageReview {
     leaseUntil: num(row.lease_until),
     reviewedAt: num(row.reviewed_at),
     reviewedStageRev: num(row.reviewed_stage_rev),
+    reviewedStageDigest:
+      typeof row.reviewed_stage_digest === 'string' ? row.reviewed_stage_digest : null,
     createdAt: Number(row.created_at),
     startedAt: num(row.started_at),
     completedAt: num(row.completed_at),
@@ -416,6 +423,8 @@ export interface ReviewOutcome {
    * under the run, or the review is `unavailable`). SET as it is.
    */
   reviewedStageRev?: number | null;
+  /** A-34b: the review input that verdict read (`null`/absent with the revision). */
+  reviewedStageDigest?: string | null;
 }
 
 /**
@@ -440,7 +449,8 @@ export async function finishReview(
             cost_usd = CASE WHEN $9::boolean THEN $12::numeric ELSE cost_usd END,
             lease_owner = NULL, lease_until = NULL,
             completed_at = $8, updated_at = $8,
-            reviewed_stage_rev = $13::bigint
+            reviewed_stage_rev = $13::bigint,
+            reviewed_stage_digest = CASE WHEN $13::bigint IS NULL THEN NULL ELSE $14::text END
       WHERE id = $1 AND status = 'running' AND lease_owner = $2
       RETURNING *`,
     [
@@ -457,6 +467,7 @@ export async function finishReview(
       outcome.usage?.outputTokens ?? null,
       outcome.usage?.costUsd ?? null,
       outcome.reviewedStageRev ?? null,
+      outcome.reviewedStageDigest ?? null,
     ],
   );
   const row = result.rows[0];
@@ -575,7 +586,7 @@ export async function requeueReviewForRefix(
             error_code = NULL, input_tokens = NULL, output_tokens = NULL, cost_usd = NULL,
             run_attempts = 0, lease_owner = NULL, lease_until = NULL,
             started_at = NULL, completed_at = NULL, created_at = $4, updated_at = $4,
-            reviewed_stage_rev = NULL,
+            reviewed_stage_rev = NULL, reviewed_stage_digest = NULL,
             reviewed_at = CASE WHEN $6::boolean THEN NULL ELSE reviewed_at END,
             summary = CASE WHEN $6::boolean THEN NULL ELSE summary END,
             provider = CASE WHEN $6::boolean THEN NULL ELSE provider END,

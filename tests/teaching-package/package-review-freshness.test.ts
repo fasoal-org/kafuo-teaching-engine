@@ -1,8 +1,10 @@
 /**
- * A-34 (27 Nov 2026): a finished AI review is a verdict on one revision of its Stage. An
- * edit after it makes it stale: Submit and Approve refuse PACKAGE_REVIEW_STALE, a legacy
- * row with no revision is stale too (fail closed), and Regenerate flagged asks ONE fresh
- * review that only reviews. Every Teaching Model. A PGlite database, no model call.
+ * A-34 / A-34b (27 Nov 2026): a finished AI review is a verdict on what its reviewer READ
+ * of the Stage. It goes stale only when that changes -- a text edit, a reordered, added
+ * or deleted slide -- never on a save that changed nothing or an editor auto-height pass.
+ * Submit and Approve refuse PACKAGE_REVIEW_STALE; a legacy row with no revision is stale
+ * (fail closed); Regenerate flagged asks ONE fresh review that only reviews. Every
+ * Teaching Model. A PGlite database, no model call.
  */
 import { PGlite } from '@electric-sql/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,9 +20,11 @@ import { ensureStageMetaSchema } from '@/lib/persistence/stage-meta';
 import { ensureTeachingPackageSchema, insertVersion } from '@/lib/persistence/teaching-package';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import {
+  readStageScenesOn,
   refuseStaleReview,
   reviewIsStale,
 } from '@/lib/server/teaching-package/package-review-freshness';
+import { reviewInputDigest } from '@/lib/server/teaching-package/package-review-input';
 import { queueFlaggedSlideRefix } from '@/lib/server/teaching-package/package-review-refix';
 import {
   claimReview,
@@ -58,13 +62,15 @@ const STAGE = 'stage-a34';
 const VERSION = 'tpv-a34';
 const ITEM = { type: 'lesson' as const, id: '226' };
 
-describe('A-34: a review is a verdict on one revision of its Stage', () => {
+describe('A-34b: a verdict is stale only when what the reviewer reads changed', () => {
   let pool: PGlitePool;
   const qp = () => pool as never;
   const cp = () => pool as unknown as ConnectableQueryable;
 
   const currentRev = async () => (await readStageFreshnessManifest(STAGE, qp()))?.rev ?? 0;
+  const liveDigest = async () => reviewInputDigest(await readStageScenesOn(qp(), STAGE));
   const version = { id: VERSION, tenantId: TENANT, currentStageId: STAGE };
+  const refuse = async () => refuseStaleReview(qp(), version, await currentRev());
 
   beforeEach(async () => {
     const db = new PGlite();
@@ -86,6 +92,15 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
         makeSlideScene('scene-2', STAGE, 2),
       ]),
     );
+    // A text box on the first slide, the way a generated slide carries one.
+    await pool.query(
+      `UPDATE document_scenes
+          SET data = jsonb_set(data, '{content,canvas,elements}',
+            '[{"id":"t1","type":"text","content":"<p>الماء يغلي عند 100</p>",
+               "left":10,"top":10,"width":400,"height":60}]'::jsonb)
+        WHERE stage_id = $1 AND id = 'scene-1'`,
+      [STAGE],
+    );
     await insertVersion(qp(), {
       id: VERSION,
       aggregate: { tenantId: TENANT, learningItem: ITEM },
@@ -102,10 +117,10 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
     await pool.end();
   });
 
-  /** A review of the Stage that finished `status`, about `reviewedStageRev`. */
+  /** A review of the Stage that finished `status`, about the Stage as it is now, or none. */
   async function finished(
     status: 'passed' | 'needs_teacher' | 'unavailable',
-    reviewedStageRev: number | null,
+    about: 'now' | 'none' | { rev: number | null; digest: string | null } = 'now',
     id = 'tpr-a34',
   ): Promise<PackageReview> {
     await insertQueuedReview(qp(), {
@@ -122,53 +137,103 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
     if (status !== 'unavailable') {
       await pool.query(`UPDATE teaching_package_reviews SET reviewed_at = 3 WHERE id = $1`, [id]);
     }
+    const verdict =
+      about === 'now'
+        ? { reviewedStageRev: await currentRev(), reviewedStageDigest: await liveDigest() }
+        : about === 'none'
+          ? { reviewedStageRev: null, reviewedStageDigest: null }
+          : { reviewedStageRev: about.rev, reviewedStageDigest: about.digest };
     const done = await finishReview(
       qp(),
       id,
       'w',
-      { status, findings: [], fixes: [], reviewedStageRev },
+      { status, findings: [], fixes: [], ...verdict },
       4,
     );
     return done!;
   }
 
-  const editSlide = () =>
-    pool.query(
-      `UPDATE document_scenes SET data = jsonb_set(data, '{title}', '"عدّله المعلم"')
-        WHERE id = 'scene-1'`,
+  const update = (sql: string) =>
+    pool.query(`UPDATE document_scenes SET ${sql} WHERE stage_id = $1 AND id = 'scene-1'`, [STAGE]);
+  const editText = () =>
+    update(
+      `data = jsonb_set(data, '{content,canvas,elements,0,content}', '"<p>الماء يغلي عند 90</p>"')`,
     );
 
-  it('the finish stores the revision on the TE row only; a passed review of the Stage as it is passes', async () => {
-    const rev = await currentRev();
-    const review = await finished('passed', rev);
-    expect(review.reviewedStageRev).toBe(rev);
-    expect(packageReviewWire(review)).not.toHaveProperty('reviewedStageRev');
-    await expect(refuseStaleReview(qp(), version, rev)).resolves.toBeUndefined();
+  it('the run’s reader and the gate’s reader give one review input for one Stage', async () => {
+    // The job stamps from the document store's slides; Submit reads them on its transaction.
+    const { loadLiveScenes } = await import('@/lib/server/teaching-package/package-review');
+    const loaded = (await loadLiveScenes(cp(), STAGE))!;
+    expect(reviewInputDigest(loaded)).toBe(await liveDigest());
   });
 
-  it('an edit after a passed review: STALE (409) with both revisions', async () => {
-    const reviewed = await currentRev();
-    await finished('passed', reviewed);
-    await editSlide();
-    const now = await currentRev();
-    expect(now).toBeGreaterThan(reviewed);
-    await expect(refuseStaleReview(qp(), version, now)).rejects.toMatchObject({
+  it('the finish stores the revision and the review input on the TE row only', async () => {
+    const review = await finished('passed');
+    expect(review.reviewedStageRev).toBe(await currentRev());
+    expect(review.reviewedStageDigest).toBe(await liveDigest());
+    expect(packageReviewWire(review)).not.toHaveProperty('reviewedStageRev');
+    expect(packageReviewWire(review)).not.toHaveProperty('reviewedStageDigest');
+    await expect(refuse()).resolves.toBeUndefined();
+  });
+
+  it('a save that changed nothing moves the revision but stays fresh', async () => {
+    const review = await finished('passed');
+    await update(`data = data`);
+    expect(await currentRev()).toBeGreaterThan(review.reviewedStageRev!);
+    await expect(refuse()).resolves.toBeUndefined();
+  });
+
+  it('an auto-height pass (a text box’s size only) stays fresh; so do a move and a restyle', async () => {
+    await finished('passed');
+    await update(`data = jsonb_set(data, '{content,canvas,elements,0,height}', '84')`);
+    await update(`data = jsonb_set(data, '{content,canvas,elements,0,top}', '30')`);
+    await update(
+      `data = jsonb_set(data, '{content,canvas,elements,0,content}',
+         '"<p style=\\"line-height:1.5\\">الماء يغلي عند 100</p>"')`,
+    );
+    await expect(refuse()).resolves.toBeUndefined();
+  });
+
+  it('a text edit after a passed review: STALE (409) with both revisions', async () => {
+    const review = await finished('passed');
+    await editText();
+    await expect(refuse()).rejects.toMatchObject({
       code: 'PACKAGE_REVIEW_STALE',
       status: 409,
-      details: { reviewedStageRev: reviewed, currentRev: now },
+      details: { reviewedStageRev: review.reviewedStageRev, currentRev: await currentRev() },
     });
   });
 
-  it('a legacy row with no revision is stale: fail closed', async () => {
-    await finished('passed', null);
-    await expect(refuseStaleReview(qp(), version, await currentRev())).rejects.toMatchObject({
+  it('a deleted slide is stale', async () => {
+    await finished('passed');
+    await pool.query(`DELETE FROM document_scenes WHERE stage_id = $1 AND id = 'scene-2'`, [STAGE]);
+    await expect(refuse()).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_STALE' });
+  });
+
+  it('a reorder is stale', async () => {
+    await finished('passed');
+    await pool.query(
+      `UPDATE document_scenes
+          SET scene_order = CASE id WHEN 'scene-1' THEN 2 ELSE 1 END,
+              data = jsonb_set(data, '{order}', CASE id WHEN 'scene-1' THEN '2' ELSE '1' END::jsonb)
+        WHERE stage_id = $1`,
+      [STAGE],
+    );
+    await expect(refuse()).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_STALE' });
+  });
+
+  it('a legacy row is stale: fail closed (no revision, or no review input)', async () => {
+    await finished('passed', 'none');
+    await expect(refuse()).rejects.toMatchObject({
       code: 'PACKAGE_REVIEW_STALE',
       details: { reviewedStageRev: null },
     });
+    const sameRev = { status: 'passed' as const, reviewedStageRev: 3, reviewedStageDigest: null };
+    expect(await reviewIsStale(sameRev, 3, async () => 'x')).toBe(true);
   });
 
   it('not this gate’s to refuse: no review, a review on its way, an unavailable one', async () => {
-    await expect(refuseStaleReview(qp(), version, await currentRev())).resolves.toBeUndefined();
+    await expect(refuse()).resolves.toBeUndefined();
     await insertQueuedReview(qp(), {
       id: 'tpr-queued',
       aggregate: { tenantId: TENANT, learningItem: ITEM },
@@ -178,11 +243,20 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
       subjectCode: null,
       now: 2,
     });
-    await expect(refuseStaleReview(qp(), version, await currentRev())).resolves.toBeUndefined();
-    expect(reviewIsStale({ status: 'unavailable', reviewedStageRev: null }, 3)).toBe(false);
-    expect(reviewIsStale({ status: 'running', reviewedStageRev: null }, 3)).toBe(false);
-    expect(reviewIsStale({ status: 'needs_teacher', reviewedStageRev: 3 }, 3)).toBe(false);
-    expect(reviewIsStale({ status: 'fixed', reviewedStageRev: 2 }, 3)).toBe(true);
+    await expect(refuse()).resolves.toBeUndefined();
+    const never = async () => {
+      throw new Error('the live Stage is read only when the revision moved');
+    };
+    const of = (status: PackageReview['status'], rev: number | null) => ({
+      status,
+      reviewedStageRev: rev,
+      reviewedStageDigest: rev === null ? null : 'd',
+    });
+    expect(await reviewIsStale(of('unavailable', null), 3, never)).toBe(false);
+    expect(await reviewIsStale(of('running', null), 3, never)).toBe(false);
+    expect(await reviewIsStale(of('needs_teacher', 3), 3, never)).toBe(false);
+    expect(await reviewIsStale(of('fixed', 2), 3, async () => 'd')).toBe(false);
+    expect(await reviewIsStale(of('fixed', 2), 3, async () => 'other')).toBe(true);
   });
 
   async function press(key = 'learning_item_tp_command:226:regeneration:stamp:1:k') {
@@ -194,8 +268,8 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
   }
 
   it('a press on a stale verdict asks ONE fresh review that only reviews; then Submit waits for it', async () => {
-    const done = await finished('passed', await currentRev());
-    await editSlide();
+    const done = await finished('passed');
+    await editText();
     const queued = await press();
     expect(queued).toMatchObject({ previousReviewId: done.id, sceneIds: [], replayed: false });
     expect(queued.review).toMatchObject({
@@ -205,32 +279,34 @@ describe('A-34: a review is a verdict on one revision of its Stage', () => {
       reviewedAt: null,
       summary: null,
       reviewedStageRev: null,
+      reviewedStageDigest: null,
     });
     // A `tpr-rf-` id: its run is a first review that only reviews (`isPressedFirstReview`).
     expect(queued.review.id.startsWith('tpr-rf-')).toBe(true);
     const row = await readPackageReview(qp(), queued.review.id, { tenantId: TENANT });
     expect(row).toMatchObject({ status: 'queued', reviewedAt: null });
     // The fresh review is on its way: not stale, and another press is "in progress".
-    await expect(refuseStaleReview(qp(), version, await currentRev())).resolves.toBeUndefined();
+    await expect(refuse()).resolves.toBeUndefined();
     await expect(press('another-key')).rejects.toMatchObject({
       code: 'PACKAGE_REVIEW_IN_PROGRESS',
     });
   });
 
-  it('a press on a legacy row (no revision) asks the fresh review too', async () => {
-    await finished('passed', null);
+  it('a press on a legacy row asks the fresh review too', async () => {
+    await finished('passed', 'none');
     const queued = await press();
     expect(queued.review).toMatchObject({ status: 'queued', reviewedAt: null, findings: [] });
   });
 
-  it('a press on a verdict of the Stage as it is keeps the old path (nothing to regenerate)', async () => {
-    await finished('passed', await currentRev());
+  it('a press after a save that changed nothing keeps the old path (nothing to regenerate)', async () => {
+    await finished('passed');
+    await update(`data = data`);
     await expect(press()).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
   });
 
   it('an unavailable review is left to its own rule, never counted stale', async () => {
-    await finished('unavailable', null);
-    await editSlide();
-    await expect(refuseStaleReview(qp(), version, await currentRev())).resolves.toBeUndefined();
+    await finished('unavailable', 'none');
+    await editText();
+    await expect(refuse()).resolves.toBeUndefined();
   });
 });

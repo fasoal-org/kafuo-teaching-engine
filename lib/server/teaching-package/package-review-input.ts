@@ -896,3 +896,48 @@ export function reviewedSceneDigest(scene: AppScene): string {
     .digest('base64url')
     .slice(0, 22);
 }
+
+/** JSON with every object's keys in sorted order (arrays keep theirs), `undefined` dropped. */
+export function canonicalJson(value: unknown): string {
+  const sorted = (input: unknown): unknown => {
+    if (Array.isArray(input))
+      return input.map((item) => (item === undefined ? null : sorted(item)));
+    if (input === null || typeof input !== 'object') return input;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(input as Record<string, unknown>).sort()) {
+      const item = (input as Record<string, unknown>)[key];
+      if (item !== undefined) out[key] = sorted(item);
+    }
+    return out;
+  };
+  return JSON.stringify(sorted(value)) ?? 'null';
+}
+
+/**
+ * A-34b (27 Nov 2026): the WHOLE Stage as the package reviewer reads it -- the digest of
+ * the review input itself (`reviewSlidesOf`, the exact slides every reviewer call is
+ * built from), in slide order. A verdict stays fresh while this is unchanged.
+ *
+ * It covers, per slide: its id, its place in the order and its order number (a reorder,
+ * an added or a deleted slide all change it), title, scene type, content role, cited
+ * units, the visible text (text boxes, shape text, LaTeX, table cells; HTML tags
+ * stripped; clipped where the reviewer's copy is), the narration text, a quiz's
+ * questions, options, answers and explanations, pictures by book image id, charts by
+ * their values, drawn line lengths, arrow and text-free shape counts, and the bank-quiz
+ * flag.
+ *
+ * It ignores what the reviewer never reads: element positions and sizes (so a text
+ * auto-height pass, or any layout-only move of a text box, picture or shape, stays fresh),
+ * styles and HTML markup around the same text, narration audio references, alignment
+ * baselines, and every other field of the Scene.
+ */
+export function reviewInputDigest(scenes: readonly AppScene[]): string {
+  // Ties in `order` are broken by id, so every reader of the Stage gives one digest.
+  const ordered = [...scenes].sort(
+    (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  return createHash('sha256')
+    .update(canonicalJson(reviewSlidesOf(ordered)))
+    .digest('base64url')
+    .slice(0, 32);
+}

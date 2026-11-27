@@ -33,13 +33,17 @@ import { readProducingAttemptId } from '@/lib/server/teaching-package/successor-
 import type { TeachingPackageVersion } from '@/lib/types/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { loadLiveScenes } from '@/lib/server/teaching-package/package-review';
-import { reviewIsStale } from '@/lib/server/teaching-package/package-review-freshness';
+import {
+  readStageScenesOn,
+  reviewIsStale,
+} from '@/lib/server/teaching-package/package-review-freshness';
 import {
   REREVIEW_FIGURES_HELD,
   teacherOnlyReason,
 } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
   reviewedSceneDigest,
+  reviewInputDigest,
   reviewSlidesOf,
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
@@ -470,12 +474,16 @@ export async function queueFlaggedSlideRefix(
         'the AI review of this package is still running',
       );
     }
-    // A-34: a verdict on another revision of this Stage (a person edited it since, or a
-    // row from before A-34) is asked again from the start: ONE whole review that only
-    // reviews (`isPressedFirstReview`: its `tpr-rf-` id), never a regeneration over the
-    // edit. Its 202 is what Kafuo adopts; Submit and Approve wait for its verdict.
+    // A-34/A-34b: a verdict on what the reviewer no longer sees (a person changed the
+    // slides it read since, or a row from before A-34) is asked again from the start: ONE
+    // whole review that only reviews (`isPressedFirstReview`: its `tpr-rf-` id), never a
+    // regeneration over the edit. Its 202 is what Kafuo adopts; Submit and Approve wait
+    // for its verdict. The same rule, and reader, as Submit's.
     const currentRev = (await readStageFreshnessManifest(version.currentStageId, tx))?.rev ?? 0;
-    if (reviewIsStale(review, currentRev)) {
+    const stale = await reviewIsStale(review, currentRev, async () =>
+      reviewInputDigest(await readStageScenesOn(tx, version.currentStageId)),
+    );
+    if (stale) {
       const requeued = await requeueReviewForRefix(tx, {
         reviewId: review.id,
         newReviewId,

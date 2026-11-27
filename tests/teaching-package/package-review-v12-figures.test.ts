@@ -74,6 +74,7 @@ import {
   loadReviewFigures,
   namedFigures,
   pickReviewFigures,
+  reviewInputDigest,
   reviewSlidesOf,
   REVIEW_CALL_MAX_FIGURES,
   REVIEW_FIGURE_MAX_BASE64_CHARS,
@@ -525,6 +526,7 @@ describe('RV-1 + RV-4: the review job', () => {
     leaseUntil: 2,
     reviewedAt: null,
     reviewedStageRev: null,
+    reviewedStageDigest: null,
     createdAt: 1,
     startedAt: 1,
     completedAt: null,
@@ -1153,6 +1155,28 @@ describe('RV-1 + RV-4: the review job', () => {
       finalScenes: [SCENES[0]!, FIXED, SCENES[2]!],
     });
     expect(await fixed.run()).toMatchObject({ status: 'fixed', reviewedStageRev: 9 });
+  });
+
+  it('A-34b: a layout-only change under the run (an auto-height pass) still stamps the verdict', async () => {
+    const resized = {
+      ...SCENES[0]!,
+      content: {
+        ...(SCENES[0]!.content as object),
+        canvas: {
+          elements: [{ id: 'e', type: 'text', content: '<p>نص</p>', height: 99, top: 40 }],
+        },
+      },
+    } as AppScene;
+    const finished = await job('g5.v11', {}, undefined, {
+      firstFindings: [],
+      stageRev: 8,
+      finalScenes: [resized, SCENES[1]!, SCENES[2]!],
+    }).run();
+    expect(finished).toMatchObject({
+      status: 'passed',
+      reviewedStageRev: 8,
+      reviewedStageDigest: reviewInputDigest(SCENES),
+    });
   });
 
   it('A-34: a slide changed under the run, or an unreadable revision: no revision (stale)', async () => {

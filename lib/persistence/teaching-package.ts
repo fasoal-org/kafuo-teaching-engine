@@ -730,6 +730,10 @@ ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS book_truncated BOO
 -- A submit or an approval refuses PACKAGE_REVIEW_STALE when it is not the current
 -- revision; Regenerate flagged then asks one fresh review that only reviews.
 ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS reviewed_stage_rev BIGINT;
+-- A-34b: what the reviewer READ of that Stage (reviewInputDigest). A revision that moved
+-- with this unchanged (an editor auto-height pass, a save that changed nothing) is still
+-- fresh; NULL is stale, like the revision.
+ALTER TABLE teaching_package_reviews ADD COLUMN IF NOT EXISTS reviewed_stage_digest TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS tpr_attempt_unique ON teaching_package_reviews (attempt_id);
 CREATE INDEX IF NOT EXISTS tpr_version_idx

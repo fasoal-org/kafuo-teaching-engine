@@ -84,6 +84,7 @@ import {
   REVIEW_IMAGE_BUDGET_USD,
   REVIEW_IMAGE_MAX_TOKENS_PER_RUN,
   reviewedSceneDigest,
+  reviewInputDigest,
   reviewSlidesOf,
   withGuideAnswers,
   withReviewPages,
@@ -696,24 +697,6 @@ export async function readStageRevision(
   return manifest?.rev ?? 0;
 }
 
-/**
- * A-34: whether the live slides are exactly the ones a review saw: the same slides, in the
- * same order, with the same material (`reviewedSceneDigest`).
- */
-export function sameReviewedSlides(live: readonly AppScene[], seen: readonly AppScene[]): boolean {
-  if (live.length !== seen.length) return false;
-  const byOrder = (scenes: readonly AppScene[]) =>
-    [...scenes].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const a = byOrder(live);
-  const b = byOrder(seen);
-  return a.every(
-    (scene, index) =>
-      scene.id === b[index]!.id &&
-      (scene.order ?? 0) === (b[index]!.order ?? 0) &&
-      reviewedSceneDigest(scene) === reviewedSceneDigest(b[index]!),
-  );
-}
-
 /** Every open finding with no reason yet goes to the teacher (no fix loop runs on it). */
 function teacherOwnedFindings(
   findings: readonly StoredFinding[],
@@ -815,15 +798,19 @@ export async function runPackageReview(
   // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
   // its lease failed — so the run that resumes the review owns its ending.
   /**
-   * A-34: the Stage revision a finished verdict is about: the revision read FIRST, then
-   * the live slides, which must be exactly the ones this run saw (`seen`: the same slides,
-   * order and material). Otherwise -- or on any failed read -- `null` (stale: fail closed).
+   * A-34/A-34b: what a finished verdict is about -- the revision read FIRST, then the live
+   * slides, whose review input must be exactly what this run's reviewer read (`seen`, its
+   * own fixes included: `reviewInputDigest`). Then that revision and that digest;
+   * otherwise -- or on any failed read -- none (stale: fail closed).
    */
-  const revisionReviewed = async (seen: readonly AppScene[]): Promise<number | null> => {
+  const revisionReviewed = async (
+    seen: readonly AppScene[],
+  ): Promise<{ rev: number; digest: string } | null> => {
     try {
       const rev = await (deps.readStageRev ?? readStageRevision)(pool, claimed.stageId);
       const live = await (deps.loadScenes ?? loadLiveScenes)(pool, claimed.stageId);
-      return live && sameReviewedSlides(live, seen) ? rev : null;
+      const digest = reviewInputDigest(seen);
+      return live && reviewInputDigest(live) === digest ? { rev, digest } : null;
     } catch (error) {
       log.warn(
         `package review ${claimed.id}: the reviewed Stage revision could not be read`,
@@ -1198,16 +1185,18 @@ export async function runPackageReview(
     // edited since. Review 27 Nov 2026: from what the run saw, never a fresh read of the
     // Stage, which would take in a teacher's edit made during the run as "reviewed".
     findings = stampReviewedDigests(findings, scenes);
-    // A-34: the Stage revision this verdict is about -- only when the Stage is still what
-    // the review saw (its own fixes included). The revision is read BEFORE the slides, so
-    // a write in between, or one after, leaves it behind the Stage: stale, never a
-    // teacher's edit taken as reviewed. Any doubt (a changed or unreadable Stage): none.
-    const reviewedStageRev = await revisionReviewed(seenScenes);
+    // A-34/A-34b: what this verdict is about -- only when the reviewer would still read the
+    // Stage as this run did (its own fixes included). The revision is read BEFORE the
+    // slides, so a write in between, or one after, leaves it behind the Stage: the gate
+    // then compares the review input, never takes a teacher's edit as reviewed. Any doubt
+    // (a changed or unreadable Stage): none.
+    const reviewed = await revisionReviewed(seenScenes);
     return await end({
       status: reviewStatusOf(findings),
       findings,
       fixes,
-      reviewedStageRev,
+      reviewedStageRev: reviewed?.rev ?? null,
+      reviewedStageDigest: reviewed?.digest ?? null,
     });
   } catch (error) {
     // L-1: an evicted run's aborted call is not the review's failure; the
