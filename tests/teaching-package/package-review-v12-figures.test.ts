@@ -874,7 +874,7 @@ describe('RV-1 + RV-4: the review job', () => {
     });
   });
 
-  it('a flagged-slide regeneration retries only a curable figure hold, nothing else', () => {
+  it('a flagged-slide regeneration re-checks a curable figure hold and a failed re-check, never an unread figure', () => {
     const open = (id: string, reason: string) =>
       ({
         id,
@@ -909,12 +909,39 @@ describe('RV-1 + RV-4: the review job', () => {
         { sceneId: 's2', findingIds: ['f3'], outcome: 'still_wrong', code: 'REREVIEW_UNAVAILABLE' },
       ],
     );
-    expect(seed.findings.map((finding) => [finding.id, finding.teacherReason])).toEqual([
-      ['f1', null],
-      ['f2', 'REREVIEW_UNAVAILABLE'],
-      ['f3', 'REREVIEW_UNAVAILABLE'],
+    // f1 (curable) and f3 (its re-check call failed) are re-checked only; f2 waits.
+    expect(
+      seed.findings.map((finding) => [finding.id, finding.teacherReason, finding.recheckOnly]),
+    ).toEqual([
+      ['f1', null, true],
+      ['f2', 'REREVIEW_UNAVAILABLE', undefined],
+      ['f3', null, true],
     ]);
     expect(seed.sceneIds).toEqual(['s2']);
+  });
+
+  it('dead end (a): a stage review reads its producing attempt, and its event names that attempt', async () => {
+    const { run } = job('g5.v11', { attemptId: 'attempt-1#stage:stage-1' });
+    const finished = await run();
+    expect(finished?.status).toBe('fixed');
+    expect(mocks.readAttemptById).toHaveBeenCalledWith(expect.anything(), 'attempt-1');
+    expect(mocks.readAttemptById).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'attempt-1#stage:stage-1',
+    );
+    expect(mocks.readContentUnitsForAttempt).toHaveBeenCalledWith(
+      expect.anything(),
+      'attempt-1',
+      expect.anything(),
+    );
+    const [, , type, payload] = mocks.enqueueWebhookEvent.mock.calls.at(-1) as unknown as [
+      unknown,
+      unknown,
+      string,
+      () => { review: { attemptId: string } },
+    ];
+    expect(type).toBe('teaching_package.review_completed');
+    expect(payload().review.attemptId).toBe('attempt-1');
   });
 
   it('g5.v11: no figure is read or sent, and the review runs exactly as before', async () => {

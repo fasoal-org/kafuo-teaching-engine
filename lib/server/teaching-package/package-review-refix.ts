@@ -27,7 +27,9 @@ import {
 } from '@openmaic/storage/server/reference';
 import type { Queryable } from '@openmaic/storage/document/pg';
 
-import { readVersionForUpdate } from '@/lib/persistence/teaching-package';
+import { readAttemptById, readVersionForUpdate } from '@/lib/persistence/teaching-package';
+import { readProducingAttemptId } from '@/lib/server/teaching-package/successor-model';
+import type { TeachingPackageVersion } from '@/lib/types/teaching-package';
 import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { loadLiveScenes } from '@/lib/server/teaching-package/package-review';
 import {
@@ -40,8 +42,11 @@ import {
   type ReviewSlide,
 } from '@/lib/server/teaching-package/package-review-input';
 import {
+  insertQueuedReview,
+  readPackageReview,
   readStageReviewForUpdate,
   requeueReviewForRefix,
+  stageReviewAttemptId,
   type PackageReview,
   type StoredFinding,
   type StoredFix,
@@ -100,27 +105,42 @@ export function seedRefixFindings(
     finding.sceneDigest !== undefined &&
     liveDigests.size > 0 &&
     liveDigests.get(finding.targetId) !== finding.sceneDigest;
-  // RV-1/RV-4 (g5.v12 only, 27 Nov 2026): a finding left open only because its re-check
-  // could not see book figures that a fresh run sends (the run's budget, a resumed run)
-  // is tried again (its slide regenerated and re-checked, with this run's own figure
-  // budget). A hold no retry cures (an unread or refused figure) is never retried, so no
-  // press pays again for it; every other `REREVIEW_UNAVAILABLE` stays as it is.
-  const figuresHeld = new Set(
-    fixes
-      .filter((fix) => fix.code === REREVIEW_FIGURES_HELD)
-      .flatMap((fix) => fix.retryForFigures ?? []),
-  );
+  // The newest fix entry of each finding (a later run's entry wins).
+  const fixOf = new Map<string, StoredFix>();
+  for (const fix of fixes) for (const id of fix.findingIds) fixOf.set(id, fix);
+  // Dead end (b), 27 Nov 2026: a `REREVIEW_UNAVAILABLE` finding sits on a slide that was
+  // already regenerated, but whose re-check could not run (the call failed) or could not
+  // see the book figures a fresh run sends (RV-1: the run's budget, a resumed run). Each
+  // press now re-checks that live slide ONCE, without paying for a regeneration
+  // (`recheckOnly`). Not retried: a figure hold no retry cures (an unread or refused
+  // figure: `REREVIEW_FIGURES_HELD` without `retryForFigures`). A slide whose narration
+  // audio also failed is regenerated instead, so its audio is made again.
+  const recheck = (finding: StoredFinding) => {
+    if (finding.teacherReason !== 'REREVIEW_UNAVAILABLE') return false;
+    const fix = fixOf.get(finding.id);
+    if (fix?.code === REREVIEW_FIGURES_HELD) {
+      return (fix.retryForFigures ?? []).includes(finding.id);
+    }
+    return true;
+  };
+  const audioFailed = (finding: StoredFinding) =>
+    (fixOf.get(finding.id)?.code ?? '').startsWith('NARRATION_AUDIO');
   const retried = (finding: StoredFinding) =>
     finding.teacherReason === null ||
     RETRIED_REASONS.has(finding.teacherReason) ||
-    (finding.teacherReason === 'REREVIEW_UNAVAILABLE' && figuresHeld.has(finding.id));
+    recheck(finding);
   const reasoned = findings.map((finding): StoredFinding => {
-    if (finding.status !== 'open') return { ...finding };
-    if (!retried(finding)) return { ...finding };
-    const teacherOnly = teacherOnlyReason({ ...finding, teacherReason: null }, slides);
+    // A marker is worked out again on every press, never carried forward.
+    const { recheckOnly: _stale, ...base } = finding;
+    if (base.status !== 'open' || !retried(finding)) return base;
+    const teacherOnly = teacherOnlyReason({ ...base, teacherReason: null }, slides);
+    const teacherReason = teacherOnly ?? (edited(base) ? 'VERSION_CHANGED' : null);
     return {
-      ...finding,
-      teacherReason: teacherOnly ?? (edited(finding) ? 'VERSION_CHANGED' : null),
+      ...base,
+      teacherReason,
+      ...(teacherReason === null && recheck(finding) && !audioFailed(finding)
+        ? { recheckOnly: true as const }
+        : {}),
     };
   });
   // Newest first: the last of one slide's check is the one kept.
@@ -210,11 +230,45 @@ async function generationInFlight(
 }
 
 /**
+ * Dead end (a): the first review of an edit successor's current Stage, read from its
+ * producing attempt (the book, the Teaching Model). One per Stage: the row's attempt key
+ * is `stageReviewAttemptId`. `null` when no attempt produced this content (no book).
+ */
+async function queueStageReview(
+  tx: Queryable,
+  version: TeachingPackageVersion,
+  id: string,
+  now: number,
+): Promise<PackageReview | null> {
+  const producing = await readProducingAttemptId(tx, version.id);
+  if (!producing) return null;
+  const attempt = await readAttemptById(tx, producing.attemptId).catch(() => null);
+  const subjectCode = (attempt?.inputSnapshot as { subjectCode?: unknown } | undefined)
+    ?.subjectCode;
+  const storedId = await insertQueuedReview(tx, {
+    id,
+    aggregate: { tenantId: version.tenantId, learningItem: version.learningItem },
+    versionId: version.id,
+    attemptId: stageReviewAttemptId(producing.attemptId, version.currentStageId),
+    stageId: version.currentStageId,
+    subjectCode: typeof subjectCode === 'string' ? subjectCode : null,
+    now,
+  });
+  return readPackageReview(tx, storedId, { tenantId: version.tenantId });
+}
+
+/**
  * Queue the flagged-slide regeneration of one draft. Refusals (409 unless
  * noted): `NOT_FOUND` (404), `INVALID_TRANSITION` (not a draft),
- * `GENERATION_IN_PROGRESS`, `PACKAGE_REVIEW_NOT_READY` (no finished review of
- * the current Stage), `PACKAGE_REVIEW_IN_PROGRESS`, `STAGE_NOT_LIVE` and
+ * `GENERATION_IN_PROGRESS`, `PACKAGE_REVIEW_NOT_READY` (no finished review of the
+ * current Stage), `PACKAGE_REVIEW_IN_PROGRESS`, `STAGE_NOT_LIVE` and
  * `NO_REGENERABLE_SLIDES`.
+ *
+ * Dead ends (27 Nov 2026), through the same route and wire: an edit successor with no
+ * review of its Stage gets its first review queued (a); a review that ended
+ * `unavailable` before its first answer is asked again from the start (c); a
+ * `REREVIEW_UNAVAILABLE` finding is re-checked without a regeneration (b,
+ * `seedRefixFindings`). Each answers `202` with the queued review.
  */
 export async function queueFlaggedSlideRefix(
   pool: ConnectableQueryable,
@@ -267,7 +321,41 @@ export async function queueFlaggedSlideRefix(
         'a generation of this learning item is in progress',
       );
     }
-    if (!review || review.reviewedAt === null) {
+    if (!review) {
+      // Dead end (a), 27 Nov 2026: an edit successor (no attempt of its own) never had a
+      // review, so Kafuo refuses its approval forever (TEACHING_PACKAGE_REVIEW_MISSING).
+      // A press queues ONE first review of its current Stage; its `review_completed`
+      // creates Kafuo's row. A version with an attempt of its own and no review was not
+      // reviewed on purpose (Kafuo keeps a cleared row for it): still "not ready".
+      if (version.currentAttemptId === null) {
+        const queued = await queueStageReview(tx, version, newReviewId, now());
+        if (queued)
+          return { review: queued, previousReviewId: null, sceneIds: [], replayed: false };
+      }
+      throw new TeachingPackageError(
+        'PACKAGE_REVIEW_NOT_READY',
+        'the current package has no finished AI review to take its open issues from',
+      );
+    }
+    if (review.reviewedAt === null) {
+      // Dead end (c): a review that ended `unavailable` before its first answer (both
+      // routes down, say) is asked again from the start -- one whole-package review per
+      // press, never a slide regeneration.
+      if (review.status === 'unavailable') {
+        const requeued = await requeueReviewForRefix(tx, {
+          reviewId: review.id,
+          newReviewId,
+          findings: [],
+          now: now(),
+        });
+        if (!requeued) {
+          throw new TeachingPackageError(
+            'PACKAGE_REVIEW_IN_PROGRESS',
+            'the AI review of this package changed meanwhile',
+          );
+        }
+        return { review: requeued, previousReviewId: review.id, sceneIds: [], replayed: false };
+      }
       throw new TeachingPackageError(
         'PACKAGE_REVIEW_NOT_READY',
         'the current package has no finished AI review to take its open issues from',

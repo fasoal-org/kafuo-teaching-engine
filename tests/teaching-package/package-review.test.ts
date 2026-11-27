@@ -360,16 +360,18 @@ describe('findings and status', () => {
       ],
       slides,
     );
-    expect(seed.findings.map((f) => [f.id, f.status, f.teacherReason])).toEqual([
-      ['still', 'open', null],
-      ['new', 'open', null],
-      ['changed', 'open', null],
-      ['audio', 'open', 'NARRATION_AUDIO_FAILED'],
-      ['unchecked', 'open', 'REREVIEW_UNAVAILABLE'],
-      ['refused', 'open', 'REGENERATION_REFUSED'],
-      ['missing', 'open', 'S5_TEACHER_ONLY'],
-      ['bank', 'open', 'BANK_QUIZ_NOT_REGENERABLE'],
-      ['done', 'fixed', null],
+    // Dead end (b), 27 Nov 2026: a finding whose re-check could not run is re-checked
+    // (only re-checked: `recheckOnly`) on every press, never left for good.
+    expect(seed.findings.map((f) => [f.id, f.status, f.teacherReason, f.recheckOnly])).toEqual([
+      ['still', 'open', null, undefined],
+      ['new', 'open', null, undefined],
+      ['changed', 'open', null, undefined],
+      ['audio', 'open', 'NARRATION_AUDIO_FAILED', undefined],
+      ['unchecked', 'open', null, true],
+      ['refused', 'open', 'REGENERATION_REFUSED', undefined],
+      ['missing', 'open', 'S5_TEACHER_ONLY', undefined],
+      ['bank', 'open', 'BANK_QUIZ_NOT_REGENERABLE', undefined],
+      ['done', 'fixed', null, undefined],
     ]);
     expect(seed.sceneIds).toEqual(['s1']);
   });

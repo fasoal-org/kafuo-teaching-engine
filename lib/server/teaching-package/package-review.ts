@@ -117,6 +117,7 @@ import {
   packageReviewWire,
   releaseReviewLease,
   renewReviewLease,
+  reviewSourceAttemptId,
   saveReviewProgress,
   type PackageReview,
   type ReviewOutcome,
@@ -345,9 +346,11 @@ export async function callPackageReviewer(
   const quizIds = new Set(
     slides.filter((slide) => slide.sceneType === 'quiz').map((slide) => slide.id),
   );
+  // The attempt that produced the content (a stage review's producing attempt).
+  const sourceAttemptId = review.attemptId ? reviewSourceAttemptId(review.attemptId) : '';
   // g5.v10 (learner-first plan W5): its packages are reviewed with
   // package-review-v2 (the weak-student checks S6/S7); every other package keeps v1.
-  const attempt = review.attemptId ? await readAttemptById(request.pool, review.attemptId) : null;
+  const attempt = sourceAttemptId ? await readAttemptById(request.pool, sourceAttemptId) : null;
   const learnerFirst = isLearnerFirstModel(attempt?.teachingModel);
   // g5.v11 (teacher-guide plan §8.6): its solving slides carry their approved guide
   // answers, and the rubric compares with them instead of re-solving (flag only).
@@ -355,11 +358,11 @@ export async function callPackageReviewer(
   // (from the retained units' full text), shown by the names the writers saw.
   const guideAnswers = isGuideAnswerModel(attempt?.teachingModel);
   const guideContext =
-    guideAnswers && attempt && review.attemptId
+    guideAnswers && attempt && sourceAttemptId
       ? guideAnswerContextOf({
           teachingModel: attempt.teachingModel,
           snapshot: attempt.inputSnapshot,
-          units: await readContentUnitsForAttempt(request.pool, review.attemptId, {
+          units: await readContentUnitsForAttempt(request.pool, sourceAttemptId, {
             tenantId: review.tenantId,
           }),
           // Only the resolved items are read here, never the unit texts.
@@ -385,7 +388,7 @@ export async function callPackageReviewer(
     stage: PACKAGE_REVIEW_STAGE,
     association: {
       kind: 'generation',
-      generationAttemptId: review.attemptId,
+      generationAttemptId: sourceAttemptId,
       versionId: review.versionId,
       learningItemType: review.learningItem.type,
       learningItemId: review.learningItem.id,
@@ -662,7 +665,8 @@ function completedPayload(review: PackageReview) {
       id: review.id,
       versionId: review.versionId,
       stageId: review.stageId,
-      attemptId: review.attemptId,
+      // The producing attempt, never a stage review's row key (dead end (a)).
+      attemptId: reviewSourceAttemptId(review.attemptId),
       status: review.status,
       provider: review.provider,
       model: review.model,
@@ -727,6 +731,9 @@ export async function runPackageReview(
   });
   if (!claimed) return null;
   deps.onLeaseKept?.();
+  // The attempt that produced the reviewed content: a stage review (dead end (a)) reads
+  // its producing attempt's book, Teaching Model and ledger rows, like any review.
+  const sourceAttemptId = reviewSourceAttemptId(claimed.attemptId);
 
   // HIGH-1: an evicted (aborted) run never finalizes — even if the revoke of
   // its lease failed — so the run that resumes the review owns its ending.
@@ -748,7 +755,7 @@ export async function runPackageReview(
     try {
       const spend = await sumReviewSpend(pool as unknown as Queryable, {
         tenantId: claimed.tenantId,
-        generationAttemptId: claimed.attemptId,
+        generationAttemptId: sourceAttemptId,
         reviewId: claimed.id,
       });
       if (spend.rows === 0) return null;
@@ -775,7 +782,7 @@ export async function runPackageReview(
 
     const book = await loadReviewBookUnits(pool as unknown as Queryable, {
       tenantId: claimed.tenantId,
-      attemptId: claimed.attemptId,
+      attemptId: sourceAttemptId,
     });
     if (book.units.length === 0) return await unavailable('NO_BOOK_SOURCE');
     const scenes = await (deps.loadScenes ?? loadLiveScenes)(pool, claimed.stageId);
@@ -785,8 +792,8 @@ export async function runPackageReview(
     // RV-1 (owner §2, 27 Nov 2026), g5.v12 only: the book figures of the units the slides
     // cite, read once per run through the existing crop reader. They are SENT only in a
     // review's first run (`runAttempts === 1`; a flagged-slide run is a first run too), so
-    // the cap holds across resumes of one review; a resumed run reviews from text (no file
-    // is read), and its re-checks report the figures they held back (RV-4: no proof). A
+    // the cap holds across resumes of one review; a resumed run reviews from text, and a
+    // slide whose re-check would hold its figures back is left for a fresh run (RV-4). A
     // failed read (the attempt, the Stage outline or a figure) only reviews that unit from
     // its text, as before, and is logged; it never ends the review `unavailable`. Every
     // other package reviews exactly as before.
@@ -794,7 +801,7 @@ export async function runPackageReview(
     // The attempt is read ONCE per run, here, for every model gate of the job (the
     // deterministic findings of the first answer, the figures, the fix loop's
     // learner-first flow). A failed read gates nothing in -- never a new failure point.
-    const attempt = await readAttemptById(pool as unknown as Queryable, claimed.attemptId)
+    const attempt = await readAttemptById(pool as unknown as Queryable, sourceAttemptId)
       .then(
         (row) => row,
         () => null,

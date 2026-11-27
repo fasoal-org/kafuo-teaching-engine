@@ -377,6 +377,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       const alsoFigures = [
         ...new Set(sceneFindings.flatMap((finding) => namedFigures(finding.bookEvidence?.quote))),
       ];
+      // Dead end (b), 27 Nov 2026: every finding of this slide waits only for the re-check
+      // its regenerated slide never got (`seedRefixFindings`): re-check the live slide, and
+      // pay for no regeneration and no narration audio. The marker is used once.
+      const recheckOnly =
+        sceneFindings.length > 0 && sceneFindings.every((finding) => finding.recheckOnly === true);
+      for (const finding of sceneFindings) delete finding.recheckOnly;
       // RV-1/RV-4 (g5.v12, review 27 Nov 2026): when this run can no longer show the
       // re-check the slide's readable figures (its budget is spent, or a resumed run),
       // a finding that needs them could not close: nothing is paid for the slide, and
@@ -395,12 +401,13 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           alsoFigures,
         })
       ) {
-        mark(slide.id, 'NOT_ATTEMPTED');
+        // A re-check-only slide keeps waiting for its re-check (the next press re-checks it).
+        mark(slide.id, recheckOnly ? 'REREVIEW_UNAVAILABLE' : 'NOT_ATTEMPTED');
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
           outcome: 'stopped',
-          code: REREVIEW_FIGURES_HELD,
+          code: recheckOnly ? 'REREVIEW_UNAVAILABLE' : REREVIEW_FIGURES_HELD,
         });
         await context.recordProgress(findings, fixes);
         continue;
@@ -413,7 +420,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         continue;
       }
 
-      let regenerated: AppScene;
+      // A re-check-only slide is judged as it is live now.
+      let regenerated: AppScene = live.scene;
       let regenerationId: string | null = null;
       // RV-5: the model that served this slide's last answered re-review (an earlier,
       // answered one of this slide's fix when the last could not run).
@@ -455,64 +463,66 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
             voice: async (candidate) => candidate,
           },
         );
-      let attempt = await settle(regenerateWith(fixIdempotencyKey(review.id, slide.id)));
-      if (!attempt.ok && isUncommittedReplay(attempt.error)) {
-        // MEDIUM-1 (D-13, zero manual corrections): an evicted run's
-        // regeneration of this slide ended without a commit, so its key
-        // replays a failure. Regenerate ONCE more under the derived key; a
-        // failure of that one goes to the teacher.
-        log.warn(
-          `review ${review.id}: ${slide.id} was left uncommitted by an evicted run; one retry`,
-        );
-        // LOW: the lease again, right before the paid retry (as before the first).
-        if (!(await context.heartbeat())) {
-          stopped = true;
-          mark(slide.id, 'VERSION_CHANGED');
+      if (!recheckOnly) {
+        let attempt = await settle(regenerateWith(fixIdempotencyKey(review.id, slide.id)));
+        if (!attempt.ok && isUncommittedReplay(attempt.error)) {
+          // MEDIUM-1 (D-13, zero manual corrections): an evicted run's
+          // regeneration of this slide ended without a commit, so its key
+          // replays a failure. Regenerate ONCE more under the derived key; a
+          // failure of that one goes to the teacher.
+          log.warn(
+            `review ${review.id}: ${slide.id} was left uncommitted by an evicted run; one retry`,
+          );
+          // LOW: the lease again, right before the paid retry (as before the first).
+          if (!(await context.heartbeat())) {
+            stopped = true;
+            mark(slide.id, 'VERSION_CHANGED');
+            continue;
+          }
+          attempt = await settle(regenerateWith(fixRetryIdempotencyKey(review.id, slide.id)));
+        }
+        try {
+          if (!attempt.ok) throw attempt.error;
+          const response = attempt.value;
+          if (response.status !== 200) {
+            throw new TeachingPackageError(
+              'SCENE_REGENERATION_IN_PROGRESS',
+              'another regeneration of this slide is in progress',
+            );
+          }
+          regenerationId = response.body.regenerationId;
+          regenerated = response.body.current?.scene ?? response.body.scene;
+          replayedAway =
+            response.body.replayed === true &&
+            response.body.current != null &&
+            response.body.current.rev !== response.body.resultSceneRev;
+        } catch (error) {
+          const code = error instanceof TeachingPackageError ? error.code : 'REGENERATION_FAILED';
+          log.warn(
+            `review ${review.id}: regeneration of ${slide.id} refused (${code})`,
+            JSON.stringify(describeErrorSafely(error)),
+          );
+          if (code === 'STAGE_LOCKED' || code === 'NOT_FOUND' || code === 'STAGE_NOT_LIVE') {
+            stopped = true;
+            mark(slide.id, 'VERSION_CHANGED');
+            fixes.push({
+              sceneId: slide.id,
+              findingIds: sceneFindings.map((f) => f.id),
+              outcome: 'stopped',
+              code,
+            });
+          } else {
+            mark(slide.id, 'REGENERATION_REFUSED');
+            fixes.push({
+              sceneId: slide.id,
+              findingIds: sceneFindings.map((f) => f.id),
+              outcome: 'refused',
+              code,
+            });
+          }
+          await context.recordProgress(findings, fixes);
           continue;
         }
-        attempt = await settle(regenerateWith(fixRetryIdempotencyKey(review.id, slide.id)));
-      }
-      try {
-        if (!attempt.ok) throw attempt.error;
-        const response = attempt.value;
-        if (response.status !== 200) {
-          throw new TeachingPackageError(
-            'SCENE_REGENERATION_IN_PROGRESS',
-            'another regeneration of this slide is in progress',
-          );
-        }
-        regenerationId = response.body.regenerationId;
-        regenerated = response.body.current?.scene ?? response.body.scene;
-        replayedAway =
-          response.body.replayed === true &&
-          response.body.current != null &&
-          response.body.current.rev !== response.body.resultSceneRev;
-      } catch (error) {
-        const code = error instanceof TeachingPackageError ? error.code : 'REGENERATION_FAILED';
-        log.warn(
-          `review ${review.id}: regeneration of ${slide.id} refused (${code})`,
-          JSON.stringify(describeErrorSafely(error)),
-        );
-        if (code === 'STAGE_LOCKED' || code === 'NOT_FOUND' || code === 'STAGE_NOT_LIVE') {
-          stopped = true;
-          mark(slide.id, 'VERSION_CHANGED');
-          fixes.push({
-            sceneId: slide.id,
-            findingIds: sceneFindings.map((f) => f.id),
-            outcome: 'stopped',
-            code,
-          });
-        } else {
-          mark(slide.id, 'REGENERATION_REFUSED');
-          fixes.push({
-            sceneId: slide.id,
-            findingIds: sceneFindings.map((f) => f.id),
-            outcome: 'refused',
-            code,
-          });
-        }
-        await context.recordProgress(findings, fixes);
-        continue;
       }
 
       // g5.v10 quality plan W2: re-review BEFORE the narration audio, so a fix that
@@ -521,7 +531,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // → restored for good. Item 208 kept f1 (times misread) and f15 (average change).
       let rereview: ReviewerFinding[] | null = null;
       let reviewed = false;
-      if (context.learnerFirst) {
+      if (context.learnerFirst && !recheckOnly) {
         const targetedIds = new Set(sceneFindings.map((finding) => finding.id));
         const openOutside = new Set(
           findings
@@ -663,8 +673,9 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         continue;
       }
 
-      // The new slide's narration audio (a regeneration never runs TTS).
-      if (audioCode === null) {
+      // The new slide's narration audio (a regeneration never runs TTS). A re-check-only
+      // slide keeps the audio it has.
+      if (audioCode === null && !recheckOnly) {
         try {
           const audio = await regenerateAudio(grant, slide.id, {
             pool,

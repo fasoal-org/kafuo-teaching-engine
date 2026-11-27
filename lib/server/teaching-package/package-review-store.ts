@@ -66,6 +66,13 @@ export interface StoredFinding {
    * 2026); absent on reviews finished before, and on a finding with no slide.
    */
   sceneDigest?: string;
+  /**
+   * Dead end (b), 27 Nov 2026: set by `seedRefixFindings` on a finding whose slide was
+   * already regenerated but whose re-check could not run: the next fix loop re-checks
+   * the live slide without paying for a regeneration. TE row only: `packageReviewWire`
+   * never sends it.
+   */
+  recheckOnly?: true;
 }
 
 export interface StoredFix {
@@ -123,6 +130,26 @@ export interface PackageReview {
 
 export function newPackageReviewId(): string {
   return `tpr-${randomBytes(12).toString('base64url')}`;
+}
+
+/**
+ * Dead end (a), 27 Nov 2026: a version with no attempt of its own (an edit successor)
+ * gets ONE review per Stage. The row is one per `attempt_id` (`tpr_attempt_unique`), and
+ * the producing attempt already holds its own version's review, so the row's attempt
+ * key names both: `<producing attempt>#stage:<stage>`. Everything that reads the
+ * attempt -- the book units, the Teaching Model, the ledger, the wire -- reads the
+ * producing attempt (`reviewSourceAttemptId`). No schema change.
+ */
+const STAGE_REVIEW_SEPARATOR = '#stage:';
+
+export function stageReviewAttemptId(sourceAttemptId: string, stageId: string): string {
+  return `${sourceAttemptId}${STAGE_REVIEW_SEPARATOR}${stageId}`;
+}
+
+/** The attempt that produced the reviewed content (a stage review's producing attempt). */
+export function reviewSourceAttemptId(attemptId: string): string {
+  const at = attemptId.indexOf(STAGE_REVIEW_SEPARATOR);
+  return at >= 0 ? attemptId.slice(0, at) : attemptId;
 }
 
 function num(value: unknown): number | null {
@@ -506,12 +533,14 @@ export function packageReviewWire(review: PackageReview) {
     id: review.id,
     versionId: review.versionId,
     stageId: review.stageId,
-    attemptId: review.attemptId,
+    // The producing attempt, never a stage review's row key (dead end (a)).
+    attemptId: reviewSourceAttemptId(review.attemptId),
     status: review.status,
     provider: review.provider,
     model: review.model,
     summary: review.summary,
-    findings: review.findings,
+    // `recheckOnly` is TE's own (dead end (b)): the wire keeps exactly its fields.
+    findings: review.findings.map(({ recheckOnly: _recheckOnly, ...finding }) => finding),
     fixes: review.fixes.map((fix) => ({
       sceneId: fix.sceneId,
       findingIds: fix.findingIds,
