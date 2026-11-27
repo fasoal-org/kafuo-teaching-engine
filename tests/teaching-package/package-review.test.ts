@@ -360,14 +360,15 @@ describe('findings and status', () => {
       ],
       slides,
     );
-    // Dead end (b), 27 Nov 2026: a finding whose re-check could not run is re-checked
-    // (only re-checked: `recheckOnly`) on every press, never left for good.
+    // Dead end (b), 27 Nov 2026: a finding whose re-check could not run is tried again on
+    // every press, never left for good. With no record of what it waits for (a row from
+    // before 27 Nov), it is regenerated -- the safe remedy, its audio included.
     expect(seed.findings.map((f) => [f.id, f.status, f.teacherReason, f.recheckOnly])).toEqual([
       ['still', 'open', null, undefined],
       ['new', 'open', null, undefined],
       ['changed', 'open', null, undefined],
       ['audio', 'open', 'NARRATION_AUDIO_FAILED', undefined],
-      ['unchecked', 'open', null, true],
+      ['unchecked', 'open', null, undefined],
       ['refused', 'open', 'REGENERATION_REFUSED', undefined],
       ['missing', 'open', 'S5_TEACHER_ONLY', undefined],
       ['bank', 'open', 'BANK_QUIZ_NOT_REGENERABLE', undefined],

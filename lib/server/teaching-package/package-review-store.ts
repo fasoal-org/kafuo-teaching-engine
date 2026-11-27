@@ -73,6 +73,15 @@ export interface StoredFinding {
    * never sends it.
    */
   recheckOnly?: true;
+  /**
+   * Dead end (b), review of c3f02fdc: what a `REREVIEW_UNAVAILABLE` finding waits for,
+   * kept on the finding itself because a flagged-slide run wipes `fixes`:
+   * `recheck` -- only the re-check of its regenerated slide (the next press re-checks
+   * it); `audio` -- that, and the slide's narration audio failed too (the next press
+   * regenerates it, so its audio is made again); `person` -- a book figure no retry can
+   * show (an unread or refused figure). TE row only: `packageReviewWire` never sends it.
+   */
+  heldFor?: 'recheck' | 'audio' | 'person';
 }
 
 export interface StoredFix {
@@ -539,8 +548,10 @@ export function packageReviewWire(review: PackageReview) {
     provider: review.provider,
     model: review.model,
     summary: review.summary,
-    // `recheckOnly` is TE's own (dead end (b)): the wire keeps exactly its fields.
-    findings: review.findings.map(({ recheckOnly: _recheckOnly, ...finding }) => finding),
+    // `recheckOnly` and `heldFor` are TE's own (dead end (b)): the wire keeps its fields.
+    findings: review.findings.map(
+      ({ recheckOnly: _recheckOnly, heldFor: _heldFor, ...finding }) => finding,
+    ),
     fixes: review.fixes.map((fix) => ({
       sceneId: fix.sceneId,
       findingIds: fix.findingIds,

@@ -68,13 +68,18 @@ export interface RefixSeed {
   sceneIds: string[];
 }
 
+/** Dead end (c): an `unavailable` review a new run would end the same way. */
+const PERMANENTLY_UNAVAILABLE: ReadonlySet<string> = new Set([
+  'NO_BOOK_SOURCE',
+  'VERSION_NOT_FOUND',
+]);
+
 /**
  * The reasons a press of Regenerate tries again (plan §3): the slide stayed
  * wrong, a new error was never attempted, or the run stopped. Every other
- * reason stays as it is — a teacher-only one, a regeneration refused, a slide
+ * reason stays as it is — a teacher-only one, a regeneration refused, or a slide
  * whose content was fixed but whose audio failed (it has its own "regenerate
- * audio" remedy) or could not be re-checked: regenerating those again would
- * pay for a new slide that is not needed.
+ * audio" remedy) -- except a re-check that could not run (dead end (b), below).
  */
 const RETRIED_REASONS: ReadonlySet<string> = new Set([
   'STILL_WRONG',
@@ -113,33 +118,40 @@ export function seedRefixFindings(
   // already regenerated, but whose re-check could not run (the call failed) or could not
   // see the book figures a fresh run sends (RV-1: the run's budget, a resumed run). Each
   // press now re-checks that live slide ONCE, without paying for a regeneration
-  // (`recheckOnly`). Not retried: a figure hold no retry cures (an unread or refused
-  // figure: `REREVIEW_FIGURES_HELD` without `retryForFigures`). A slide whose narration
-  // audio also failed is regenerated instead, so its audio is made again.
-  const recheck = (finding: StoredFinding) => {
-    if (finding.teacherReason !== 'REREVIEW_UNAVAILABLE') return false;
+  // (`recheckOnly`). What it waits for is read from the finding (`heldFor`, kept across
+  // presses), else from its fix entry (a row from before 27 Nov):
+  // - `recheck`: re-checked only;
+  // - `audio`: its narration audio failed too -- regenerated, so its audio is made again;
+  // - `person`: a figure hold no retry cures (an unread or refused figure) -- left as it
+  //   is, so no press pays for it again;
+  // - unknown (no field, no fix entry left): regenerated, the safe remedy (audio included).
+  const heldFor = (finding: StoredFinding): NonNullable<StoredFinding['heldFor']> | null => {
+    if (finding.teacherReason !== 'REREVIEW_UNAVAILABLE') return null;
+    if (finding.heldFor) return finding.heldFor;
     const fix = fixOf.get(finding.id);
-    if (fix?.code === REREVIEW_FIGURES_HELD) {
-      return (fix.retryForFigures ?? []).includes(finding.id);
+    if (!fix) return 'audio';
+    if (fix.code === REREVIEW_FIGURES_HELD) {
+      return (fix.retryForFigures ?? []).includes(finding.id) ? 'recheck' : 'person';
     }
-    return true;
+    return (fix.code ?? '').startsWith('NARRATION_AUDIO') ? 'audio' : 'recheck';
   };
-  const audioFailed = (finding: StoredFinding) =>
-    (fixOf.get(finding.id)?.code ?? '').startsWith('NARRATION_AUDIO');
   const retried = (finding: StoredFinding) =>
     finding.teacherReason === null ||
     RETRIED_REASONS.has(finding.teacherReason) ||
-    recheck(finding);
+    heldFor(finding) === 'recheck' ||
+    heldFor(finding) === 'audio';
   const reasoned = findings.map((finding): StoredFinding => {
-    // A marker is worked out again on every press, never carried forward.
-    const { recheckOnly: _stale, ...base } = finding;
-    if (base.status !== 'open' || !retried(finding)) return base;
+    // A marker is worked out again on every press, never carried forward; `heldFor`
+    // stays only on a finding that is left as it is.
+    const { recheckOnly: _stale, heldFor: _held, ...base } = finding;
+    if (base.status !== 'open') return base;
+    if (!retried(finding)) return finding.heldFor ? { ...base, heldFor: finding.heldFor } : base;
     const teacherOnly = teacherOnlyReason({ ...base, teacherReason: null }, slides);
     const teacherReason = teacherOnly ?? (edited(base) ? 'VERSION_CHANGED' : null);
     return {
       ...base,
       teacherReason,
-      ...(teacherReason === null && recheck(finding) && !audioFailed(finding)
+      ...(teacherReason === null && heldFor(finding) === 'recheck'
         ? { recheckOnly: true as const }
         : {}),
     };
@@ -369,7 +381,9 @@ export async function queueFlaggedSlideRefix(
       // Dead end (c): a review that ended `unavailable` before its first answer (both
       // routes down, say) is asked again from the start -- one whole-package review per
       // press, never a slide regeneration.
-      if (review.status === 'unavailable') {
+      // Review of c3f02fdc: a cause another run cannot cure (no book, no version) is not
+      // re-asked -- it would end the same way on every press.
+      if (review.status === 'unavailable' && !PERMANENTLY_UNAVAILABLE.has(review.errorCode ?? '')) {
         const requeued = await requeueReviewForRefix(tx, {
           reviewId: review.id,
           newReviewId,

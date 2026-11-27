@@ -261,6 +261,16 @@ describe('dead end (c): a review unavailable before its first answer is asked ag
     expect(queued).toMatchObject({ previousReviewId: 'tpr-old', sceneIds: [], replayed: false });
   });
 
+  it('a cause another run cannot cure is not re-asked (no book, no version)', async () => {
+    await expect(
+      refix(
+        { currentAttemptId: 'tpa-1' },
+        { ...REVIEW, status: 'unavailable', reviewedAt: null, errorCode: 'NO_BOOK_SOURCE' },
+      ),
+    ).rejects.toMatchObject({ code: 'PACKAGE_REVIEW_NOT_READY' });
+    expect(mocks.requeueReviewForRefix).not.toHaveBeenCalled();
+  });
+
   it('a first review still running is never re-queued (refused as before)', async () => {
     await expect(
       refix({ currentAttemptId: 'tpa-1' }, { ...REVIEW, status: 'running', reviewedAt: null }),
@@ -295,6 +305,35 @@ describe('dead end (b): a re-check that could not run is re-checked, without a r
     expect(queued.sceneIds).toEqual(['s2']);
     // The marker never reaches the wire.
     expect(packageReviewWire(queued.review).findings[0]).not.toHaveProperty('recheckOnly');
+  });
+
+  it('what a finding waits for survives a press that wiped the fixes (review of c3f02fdc)', async () => {
+    const waiting = (id: string, heldFor: StoredFinding['heldFor']) =>
+      finding(id, { teacherReason: 'REREVIEW_UNAVAILABLE', heldFor });
+    const queued = await refix(
+      { currentAttemptId: 'tpa-1' },
+      {
+        ...REVIEW,
+        // No fix entry left: an earlier press reset them.
+        findings: [
+          waiting('f1', 'recheck'),
+          { ...waiting('f2', 'audio'), targetId: 's1' },
+          { ...waiting('f3', 'person'), check: 'S3' },
+        ],
+        fixes: [],
+      },
+    );
+    const seeded = mocks.requeueReviewForRefix.mock.calls[0]![1].findings as StoredFinding[];
+    expect(seeded.map((f) => [f.id, f.teacherReason, f.recheckOnly, f.heldFor])).toEqual([
+      // re-checked only
+      ['f1', null, true, undefined],
+      // its audio failed too: regenerated
+      ['f2', null, undefined, undefined],
+      // an unread figure: left for a person, and still says so on the next press
+      ['f3', 'REREVIEW_UNAVAILABLE', undefined, 'person'],
+    ]);
+    expect(queued.sceneIds).toEqual(['s1', 's2']);
+    expect(packageReviewWire(queued.review).findings[2]).not.toHaveProperty('heldFor');
   });
 
   function loop(rereview: () => Array<Record<string, unknown>>) {

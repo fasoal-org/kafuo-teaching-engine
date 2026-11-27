@@ -382,7 +382,16 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       // pay for no regeneration and no narration audio. The marker is used once.
       const recheckOnly =
         sceneFindings.length > 0 && sceneFindings.every((finding) => finding.recheckOnly === true);
-      for (const finding of sceneFindings) delete finding.recheckOnly;
+      for (const finding of sceneFindings) {
+        delete finding.recheckOnly;
+        delete finding.heldFor;
+      }
+      /** What a finding left `REREVIEW_UNAVAILABLE` here waits for (`StoredFinding.heldFor`). */
+      const holdFor = (kind: NonNullable<StoredFinding['heldFor']>) => {
+        for (const finding of sceneFindings) {
+          if (finding.teacherReason === 'REREVIEW_UNAVAILABLE') finding.heldFor = kind;
+        }
+      };
       // RV-1/RV-4 (g5.v12, review 27 Nov 2026): when this run can no longer show the
       // re-check the slide's readable figures (its budget is spent, or a resumed run),
       // a finding that needs them could not close: nothing is paid for the slide, and
@@ -403,6 +412,7 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
       ) {
         // A re-check-only slide keeps waiting for its re-check (the next press re-checks it).
         mark(slide.id, recheckOnly ? 'REREVIEW_UNAVAILABLE' : 'NOT_ATTEMPTED');
+        if (recheckOnly) holdFor('recheck');
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
@@ -723,6 +733,8 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
         // L-2: the new slide was never checked again — not "still wrong" (the
         // finding's reason says so). LOW-2: an audio failure keeps its code here.
         mark(slide.id, 'REREVIEW_UNAVAILABLE');
+        // The next press re-checks it, or regenerates it when its audio failed too.
+        holdFor(audioCode !== null ? 'audio' : 'recheck');
         fixes.push({
           sceneId: slide.id,
           findingIds: sceneFindings.map((f) => f.id),
@@ -830,8 +842,12 @@ export function createPackageReviewFixLoop(deps: FixLoopDeps = {}): FixLoop {
           finding.teacherReason = 'STILL_WRONG';
           stillWrong = true;
         } else if (holdOf(finding)) {
-          if (holdOf(finding) === 'curable') retryForFigures.push(finding.id);
+          const curableHold = holdOf(finding) === 'curable';
+          if (curableHold) retryForFigures.push(finding.id);
           finding.teacherReason = 'REREVIEW_UNAVAILABLE';
+          // Review of c3f02fdc: kept on the finding (a flagged-slide run wipes `fixes`).
+          // A curable hold whose audio also failed is regenerated next, never re-checked.
+          finding.heldFor = curableHold ? (audioCode !== null ? 'audio' : 'recheck') : 'person';
           heldOpen = true;
         } else if (audioCode !== null) {
           // D-5: the content is fixed, but the slide has no (or partial) audio.

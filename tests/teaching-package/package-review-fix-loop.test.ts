@@ -619,6 +619,34 @@ describe('package review fix loop (D-1)', () => {
       ]);
     });
 
+    it('a failed re-check records what the finding waits for, on the finding itself', async () => {
+      const failing = () => {
+        throw new Error('both reviewer routes failed');
+      };
+      const plain = await setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2')],
+        rereview: failing,
+      }).run();
+      expect(plain.findings[0]).toMatchObject({
+        teacherReason: 'REREVIEW_UNAVAILABLE',
+        heldFor: 'recheck',
+      });
+      // Its narration audio failed too: the next press regenerates it (audio included).
+      const silent = await setup({
+        scenes,
+        findings: [finding('f1', 's2', 'S2')],
+        rereview: failing,
+        regenerateAudio: vi.fn(async () => {
+          throw new Error('tts down');
+        }),
+      }).run();
+      expect(silent.findings[0]).toMatchObject({
+        teacherReason: 'REREVIEW_UNAVAILABLE',
+        heldFor: 'audio',
+      });
+    });
+
     it('no re-check, no closure: a failed re-review keeps every HIGH finding open', async () => {
       const { run } = setup({
         scenes,
