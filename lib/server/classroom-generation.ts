@@ -642,6 +642,13 @@ export interface GenerateClassroomInput {
    */
   sourceUnits?: readonly SourceUnitText[];
   /**
+   * g5.v12 only (critical items 27 Nov 2026, QZ-1 and QZ-6), with `sourceUnits`: each
+   * quiz is written from the book text of the units it cites, and each try-it slide sets
+   * its check units' own text (`checkUnitIds`: the book's try-it units). Set by the runner
+   * from the Teaching Model; absent → every prompt is byte-identical.
+   */
+  bookGroundedQuestions?: { checkUnitIds: readonly string[] };
+  /**
    * g5.v8 (teacher-parity plan I-2): worked-example canvases write every
    * hidden step from the plan as a visible line. Set by the caller from the
    * Teaching Model; absent → every prompt is byte-identical.
@@ -2725,6 +2732,10 @@ export async function generateClassroom(
                     : {}),
                   ...(resolvedSkills ? { resolvedSkills } : {}),
                   ...(input.sourceUnits?.length ? { sourceUnits: input.sourceUnits } : {}),
+                  // g5.v12 (QZ-1, QZ-6): quizzes and try-its are written from the book.
+                  ...(input.sourceUnits?.length && input.bookGroundedQuestions
+                    ? { bookGroundedQuestions: input.bookGroundedQuestions }
+                    : {}),
                   ...(sacredPrompt ? { sacredText: sacredPrompt } : {}),
                   ...(input.visibleWorkingSteps ? { visibleWorkingSteps: true } : {}),
                   ...(input.learnerFirst ? { learnerFirst: true } : {}),

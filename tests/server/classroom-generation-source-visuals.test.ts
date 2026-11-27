@@ -348,6 +348,43 @@ describe('generateClassroom source visuals', () => {
     expect(mocks.generateSceneActions.mock.calls[0]![3]).not.toHaveProperty('sourceUnits');
   });
 
+  it('QZ-1/QZ-6 (g5.v12): the content call gets bookGroundedQuestions only with the units; narration never', async () => {
+    mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
+      success: true,
+      data: {
+        languageDirective: 'English.',
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'S',
+            description: '',
+            keyPoints: [],
+            order: 1,
+            sourceContentUnitIds: ['10'],
+          },
+        ],
+      },
+    });
+    const sourceUnits = [{ id: '10', title: 'Check', text: 'What is the pressure?' }];
+    const bookGroundedQuestions = { checkUnitIds: ['10'] };
+    await generate({
+      input: { pdfContent: { text: 'pdf', images: [] }, sourceUnits, bookGroundedQuestions },
+    });
+    expect(mocks.generateSceneContent.mock.calls[0]![2].bookGroundedQuestions).toBe(
+      bookGroundedQuestions,
+    );
+    expect(mocks.generateSceneActions.mock.calls[0]![3]).not.toHaveProperty(
+      'bookGroundedQuestions',
+    );
+    // Without units there is nothing to ground on: the option is not passed.
+    mocks.generateSceneContent.mockClear();
+    await generate({ input: { pdfContent: { text: 'pdf', images: [] }, bookGroundedQuestions } });
+    expect(mocks.generateSceneContent.mock.calls[0]![2]).not.toHaveProperty(
+      'bookGroundedQuestions',
+    );
+  });
+
   it("a MATH lesson's fresh slides keep the book's logic notation (lessons 1-2 / 1-3)", async () => {
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,

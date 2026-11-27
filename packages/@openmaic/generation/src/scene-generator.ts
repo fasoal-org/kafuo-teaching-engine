@@ -94,8 +94,10 @@ import type {
 } from './pipeline-types.js';
 import { noopGenerationLogger, type GenerationLogger } from './logger.js';
 import {
+  buildQuestionSourceContext,
   buildSceneSourceContext,
   MAX_SCENE_SOURCE_CHARS,
+  type BookGroundedQuestions,
   type SourceUnitText,
 } from './source-unit-context.js';
 import { isLearnerFirstFrameSlide } from './teaching-flow-policy.js';
@@ -232,6 +234,13 @@ export interface SceneContentOptions {
    */
   sourceUnits?: readonly SourceUnitText[];
   /**
+   * g5.v12 only (critical items 27 Nov 2026, QZ-1 and QZ-6), with `sourceUnits`: a quiz's
+   * questions are written from the approved text of the units it cites, and a try-it
+   * slide sets its cited check units' own text (`buildQuestionSourceContext`). Absent →
+   * every prompt is byte-identical.
+   */
+  bookGroundedQuestions?: BookGroundedQuestions;
+  /**
    * Slide only: the caller's flow writes every hidden step visibly (g5.v8,
    * teacher-parity plan I-2). A worked-example slide then gets the
    * visible-working rule and the hidden-step catalogue. Absent → unchanged.
@@ -351,6 +360,29 @@ function sceneSourceVars(
     );
   }
   return { hasSourceContext: true, sourceContextText: context.sourceContextText };
+}
+
+/**
+ * g5.v12 (QZ-1, QZ-6): template variables for the book text a quiz's questions, or a
+ * try-it slide's question, are written from; empty when there is none (every other
+ * Teaching Model, and every other scene).
+ */
+function questionSourceVars(
+  outline: SceneOutline,
+  sourceUnits: readonly SourceUnitText[] | undefined,
+  questions: BookGroundedQuestions | undefined,
+  log: GenerationLogger,
+): Record<string, unknown> {
+  const context = buildQuestionSourceContext(outline, sourceUnits, questions);
+  if (!context.hasSourceContext) return {};
+  if (context.clippedUnitIds.length > 0) {
+    log.warn(
+      `Source text for the questions of "${outline.title}" exceeds ${MAX_SCENE_SOURCE_CHARS} characters; ${context.clippedUnitIds.length} cited unit(s) shown in part or not at all`,
+    );
+  }
+  return outline.type === 'quiz'
+    ? { hasSourceContext: true, sourceContextText: context.sourceContextText }
+    : { hasQuestionSourceContext: true, questionSourceText: context.sourceContextText };
 }
 
 /** Template variables for the spoken-language policy; empty when there is none. */
@@ -665,6 +697,8 @@ export async function generateSceneContent(
             ...(options.learnerFirst && isLearnerFirstFrameSlide(outline)
               ? {}
               : sceneSourceVars(outline, options.sourceUnits, log)),
+            // g5.v12 (QZ-6): a try-it slide sets its check's own book text.
+            ...questionSourceVars(outline, options.sourceUnits, options.bookGroundedQuestions, log),
             ...sceneSacredVars(outline, options.sacredText),
             ...learnerFirstSlideVars(options.learnerFirst, isLearnerFirstFrameSlide(outline)),
           },
@@ -807,7 +841,11 @@ export async function generateSceneContent(
         options.onFailure,
         options.resolvedSkills,
         editDirective,
-        sceneSacredVars(outline, options.sacredText),
+        {
+          ...sceneSacredVars(outline, options.sacredText),
+          // g5.v12 (QZ-1): the questions are written from the cited units' book text.
+          ...questionSourceVars(outline, options.sourceUnits, options.bookGroundedQuestions, log),
+        },
       );
     case 'pbl':
       return generatePBLSceneContent(
@@ -1516,7 +1554,10 @@ async function generateQuizContent(
    * appended to the user prompt. Absent → the prompt is byte-identical to before.
    */
   editDirective?: string,
-  /** Kafuo Q-4 / Q-12: the Quran and hadith policy variables; empty → unchanged. */
+  /**
+   * Kafuo Q-4 / Q-12: the Quran and hadith policy variables, and (g5.v12, QZ-1) the book
+   * text the questions are written from; empty → unchanged.
+   */
   sacredVars: Record<string, unknown> = {},
 ): Promise<GeneratedQuizContent | null> {
   const quizConfig = outline.quizConfig || {

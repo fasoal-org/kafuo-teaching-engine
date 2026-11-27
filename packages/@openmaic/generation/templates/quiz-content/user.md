@@ -1,7 +1,13 @@
 Title: {{title}}
 Description: {{description}}
 Test Points: {{keyPoints}}
-Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {{questionTypes}}
+Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {{questionTypes}}{{#if hasSourceContext}}
+
+## Approved textbook source these questions test
+
+{{sourceContextText}}
+
+Write every question, every option and every answer key from this text only: the correct option must be stated in it or follow directly from it, with its numbers, values and units exactly as printed. Never test anything this text does not contain, and never invent a value, an example or a fact.{{/if}}
 
 ## Language Directive
 {{languageDirective}}

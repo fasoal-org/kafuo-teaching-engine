@@ -4151,6 +4151,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       /** The violation codes the hook returned for the first answer. */
       reask?: string[];
       final?: SceneOutline[];
+      /** QZ-1/QZ-6: the execution's book-grounded questions option. */
+      bookGroundedQuestions?: unknown;
     }
 
     /**
@@ -4167,6 +4169,9 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       mocks.generateClassroom.mockImplementation(async (execution, options) => {
         const correction = options.correction!;
         seen.requirement = execution.requirement;
+        seen.bookGroundedQuestions = (
+          execution as { bookGroundedQuestions?: unknown }
+        ).bookGroundedQuestions;
         // A slide plan the planner accepts: a content slide with a title, a description
         // and 3–6 key points, the asked role, and the kind an explanation needs.
         const aiCall = async (_system: string, user: string) => {
@@ -4409,6 +4414,18 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       // The second plan is the one the package was built from.
       expect(seen.final!.some((outline) => outline.id === 'x')).toBe(false);
       expect(snapshot.sectionCoverage).toMatchObject({ gapContentUnitIds: [] });
+    });
+
+    it('QZ-1/QZ-6 (wave 3): a g5.v12 run writes its quizzes and try-its from the book; g5.v11 does not', async () => {
+      const v12: Seen = {};
+      mockBookRun({ first: planWithGaps }, v12);
+      await startBook(bookContext('g5.v12'));
+      // The book's check units: the only text a try-it slide is given.
+      expect(v12.bookGroundedQuestions).toEqual({ checkUnitIds: ['u2', 'u5'] });
+      const v11: Seen = {};
+      mockBookRun({ first: planWithGaps }, v11);
+      await startBook(bookContext('g5.v11'));
+      expect(v11.bookGroundedQuestions).toBeUndefined();
     });
 
     it('QZ-3 (wave 3): the run asks a title-only try-it’s attempt from the book lines on g5.v12, from the title on g5.v11', async () => {

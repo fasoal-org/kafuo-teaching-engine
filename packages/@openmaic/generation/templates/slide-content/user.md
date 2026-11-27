@@ -26,6 +26,13 @@
 {{sourceContextText}}
 
 This is the authority for what this slide's key points cover. Keep its definitions, explanations, reasoning and worked-example steps accurate and complete on the slide, in concise slide wording; do not paste it as one block, and do not add parts of it that this slide's title and key points do not cover.
+{{/if}}{{#if hasQuestionSourceContext}}
+
+### The textbook's own question this slide sets
+
+{{questionSourceText}}
+
+Set the question exactly as the textbook prints it: the same numbers, values, units, symbols and wording. Never solve it, never show or hint at its answer on this slide, and never set a different question.
 {{/if}}
 
 {{teacherContext}}

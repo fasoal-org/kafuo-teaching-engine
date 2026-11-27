@@ -148,6 +148,97 @@ describe('scene prompts', () => {
     expect(store.user).not.toContain(WORKED);
   });
 
+  // g5.v12 (critical items 27 Nov 2026, QZ-1 and QZ-6): the questions written from the book.
+  const CHECK = 'Check: what is the pressure of a 900 N box on 3 m²?';
+  const WITH_CHECK: SourceUnitText[] = [...UNITS, { id: '13', title: 'Check', text: CHECK }];
+  const QUIZ_RESPONSE = JSON.stringify([
+    {
+      id: 'q1',
+      type: 'single',
+      question: 'q',
+      options: [
+        { label: 'a', value: 'A' },
+        { label: 'b', value: 'B' },
+      ],
+      answer: ['A'],
+    },
+  ]);
+  const quiz = (fields: Partial<SceneOutline> = {}): SceneOutline =>
+    teaching({
+      type: 'quiz',
+      contentRole: undefined,
+      sourceContentUnitIds: ['10', '11'],
+      ...fields,
+    });
+  const questions = { checkUnitIds: ['13'] };
+
+  it('QZ-1: a quiz is written from the text of the units it cites, with bookGroundedQuestions', async () => {
+    const store: { user?: string } = {};
+    await generateSceneContent(quiz(), capture(store, QUIZ_RESPONSE), {
+      sourceUnits: WITH_CHECK,
+      bookGroundedQuestions: questions,
+    });
+    expect(store.user).toContain('## Approved textbook source these questions test');
+    expect(store.user).toContain(DEFINITION);
+    expect(store.user).toContain(WORKED);
+    expect(store.user).not.toContain(UNRELATED);
+    expect(store.user).not.toContain(CHECK);
+  });
+
+  it('QZ-1: without bookGroundedQuestions the quiz prompt is byte-identical (every other model)', async () => {
+    const bare: { user?: string } = {};
+    const withUnits: { user?: string } = {};
+    await generateSceneContent(quiz(), capture(bare, QUIZ_RESPONSE));
+    await generateSceneContent(quiz(), capture(withUnits, QUIZ_RESPONSE), {
+      sourceUnits: WITH_CHECK,
+    });
+    expect(withUnits.user).toBe(bare.user);
+    expect(bare.user).not.toContain('Approved textbook source');
+  });
+
+  it('QZ-6: a try-it slide sets only its check unit’s own text, never the worked example', async () => {
+    const store: { user?: string } = {};
+    await generateSceneContent(
+      teaching({ contentRole: 'check_understanding', sourceContentUnitIds: ['13', '11'] }),
+      capture(store, CONTENT_RESPONSE),
+      { sourceUnits: WITH_CHECK, bookGroundedQuestions: questions },
+    );
+    expect(store.user).toContain("### The textbook's own question this slide sets");
+    expect(store.user).toContain(CHECK);
+    expect(store.user).not.toContain(WORKED);
+    expect(store.user).not.toContain('### Approved textbook source this slide teaches');
+  });
+
+  it('QZ-6: a solution slide keeps its source as before; a teaching slide is unchanged by the option', async () => {
+    const solution: { user?: string } = {};
+    await generateSceneContent(
+      teaching({ contentRole: 'worked_example', sourceContentUnitIds: ['13', '11'] }),
+      capture(solution, CONTENT_RESPONSE),
+      { sourceUnits: WITH_CHECK, bookGroundedQuestions: questions },
+    );
+    expect(solution.user).toContain('### Approved textbook source this slide teaches');
+    expect(solution.user).toContain(CHECK);
+    expect(solution.user).toContain(WORKED);
+    const plain: { user?: string } = {};
+    const grounded: { user?: string } = {};
+    await generateSceneContent(teaching({}), capture(plain, CONTENT_RESPONSE), {
+      sourceUnits: WITH_CHECK,
+    });
+    await generateSceneContent(teaching({}), capture(grounded, CONTENT_RESPONSE), {
+      sourceUnits: WITH_CHECK,
+      bookGroundedQuestions: questions,
+    });
+    expect(grounded.user).toBe(plain.user);
+    // A try-it slide without the option keeps its answer boundary: no source at all.
+    const boundary: { user?: string } = {};
+    await generateSceneContent(
+      teaching({ contentRole: 'check_understanding', sourceContentUnitIds: ['13'] }),
+      capture(boundary, CONTENT_RESPONSE),
+      { sourceUnits: WITH_CHECK },
+    );
+    expect(boundary.user).not.toContain(CHECK);
+  });
+
   it('renders byte-identical prompts when no units are supplied', async () => {
     const bare: { user?: string } = {};
     const withNone: { user?: string } = {};

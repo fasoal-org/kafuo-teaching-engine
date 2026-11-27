@@ -59,8 +59,56 @@ export function buildSceneSourceContext(
 ): SceneSourceContext {
   if (!sourceUnits?.length || outline.type !== 'slide') return NONE;
   if (outline.contentRole && !SOURCE_CONTEXT_ROLES.has(outline.contentRole)) return NONE;
+  return renderCitedUnits(outline.sourceContentUnitIds, sourceUnits, null);
+}
+
+/**
+ * g5.v12 (critical items 27 Nov 2026, QZ-1 and QZ-6): the questions written from the
+ * book. The caller sets it for that Teaching Model only; absent → nothing changes.
+ */
+export interface BookGroundedQuestions {
+  /** The book's check (try-it) units: the only text a try-it slide is given. */
+  checkUnitIds: readonly string[];
+}
+
+/**
+ * The approved text a g5.v12 question is written from, with the same rendering, the same
+ * bound and the same clip report as {@link buildSceneSourceContext}:
+ * - a quiz: the units it cites (a check quiz cites its objective block's units), so its
+ *   questions and keys come from the book, never from the outline's wording alone;
+ * - a try-it slide (`check_understanding`): only its cited CHECK units — the questions as
+ *   the book prints them (the student's book prints no answers) — never an example's or
+ *   any other unit's text, which could carry a worked answer (the answer boundary).
+ * Every other scene, and an absent `questions`: no context.
+ */
+export function buildQuestionSourceContext(
+  outline: Pick<SceneOutline, 'type' | 'contentRole' | 'sourceContentUnitIds'>,
+  sourceUnits: readonly SourceUnitText[] | undefined,
+  questions: BookGroundedQuestions | undefined,
+): SceneSourceContext {
+  if (!questions || !sourceUnits?.length) return NONE;
+  if (outline.type === 'quiz') {
+    return renderCitedUnits(outline.sourceContentUnitIds, sourceUnits, null);
+  }
+  if (outline.type === 'slide' && outline.contentRole === 'check_understanding') {
+    return renderCitedUnits(
+      outline.sourceContentUnitIds,
+      sourceUnits,
+      new Set(questions.checkUnitIds.map(String)),
+    );
+  }
+  return NONE;
+}
+
+/** The cited units' text in citation order (only `only` when given), within the bound. */
+function renderCitedUnits(
+  citedIds: readonly string[] | undefined,
+  sourceUnits: readonly SourceUnitText[],
+  only: ReadonlySet<string> | null,
+): SceneSourceContext {
   const byId = new Map(sourceUnits.map((unit) => [String(unit.id), unit]));
-  const cited = [...new Set((outline.sourceContentUnitIds ?? []).map(String))]
+  const cited = [...new Set((citedIds ?? []).map(String))]
+    .filter((id) => only === null || only.has(id))
     .map((id) => byId.get(id))
     .filter((unit): unit is SourceUnitText => !!unit && unit.text.trim() !== '');
   if (cited.length === 0) return NONE;

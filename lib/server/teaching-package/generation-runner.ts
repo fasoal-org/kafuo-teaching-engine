@@ -1042,6 +1042,21 @@ async function runKafuoAttempt(
           })),
         }
       : {}),
+    // g5.v12 only (critical items 27 Nov 2026, QZ-1 and QZ-6): each quiz is written from
+    // the book text of the units it cites, and each try-it slide sets its check's own book
+    // lines (never an example's: the answer boundary). Absent for every other version.
+    ...(normalizedSource &&
+    kafuo.normalizedContentResource &&
+    kafuo.bookStructure &&
+    isBookPartPlacementModel(kafuo.teachingModel)
+      ? {
+          bookGroundedQuestions: {
+            checkUnitIds: kafuo.bookStructure.units
+              .filter((unit) => unit.element === 'try_it')
+              .map((unit) => String(unit.contentUnitId)),
+          },
+        }
+      : {}),
     // g5.v8 (teacher-parity plan): solutions write every hidden step on the
     // canvas, and a split unit's textbook image stays on the slide it
     // illustrates. Absent for every earlier version.

@@ -35,6 +35,7 @@ type _SceneContentKeys = Assert<
     | 'pblLoopFallback'
     | 'correctiveNote'
     | 'sourceUnits'
+    | 'bookGroundedQuestions'
     | 'visibleWorkingSteps'
     | 'learnerFirst'
     | 'sacredText'
