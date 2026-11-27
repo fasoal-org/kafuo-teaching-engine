@@ -106,7 +106,7 @@ The first instructional slide of a lesson is normally `"type": "slide"`, `"slide
 - one pedagogically useful supporting visual — tied to the hook, the context or the big idea, never decoration
 - the big idea / key framing message{{#if bookPartPlacement}}
 
-On this lesson (book-part planning) the opening list above is replaced: the opening is one short intro slide holding the lesson title; one sentence saying what the lesson teaches today (the book's own «الفكرة الرئيسة» as the book prints it, citing its unit, otherwise one sentence from the approved Learning Objectives, never a list); only when one of the lesson's units states the one earlier idea the lesson needs, a one-line recall of it, citing that unit; and one simple visual. It never tells an opening story or the book's hook question (the lesson answers it later), never lists objectives, vocabulary or a lesson journey, never invents a big idea the book does not print, and never teaches the lesson's new content.{{/if}}
+On this lesson (book-part planning) the opening list above is replaced: the opening is one short intro slide holding the lesson title; one sentence saying what the lesson teaches today (the book's own «الفكرة الرئيسة» as the book prints it, citing its unit (the lesson's first part still teaches that unit where the book prints it), otherwise one sentence from the approved Learning Objectives, never a list); only when one of the lesson's units states the one earlier idea the lesson needs, a one-line recall of it, citing that unit; and one simple visual. It never tells an opening story or the book's hook question (the lesson answers it later), never lists objectives, vocabulary or a lesson journey, never invents a big idea the book does not print, and never teaches the lesson's new content.{{/if}}
 
 The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-only, never shown to the learner) on this slide:
 
@@ -114,7 +114,7 @@ The opening's visual is REQUIRED planning, recorded in `visualPlan` (planner-onl
 - `{ "mode": "native" }` — the visual is composed from native slide elements (a diagram, chart, or illustrative shape group), e.g. when no image is available;
 - `{ "mode": "omitted", "omissionReason": "…" }` — ONLY when no visual would genuinely improve understanding, framing or engagement for this lesson; the reason must say why, specifically. A missing or boilerplate reason invalidates the response.
 
-Do **NOT** plan a separate learning-objectives slide: the objectives live on the orientation slide. Plan a separate one only when the user requirement{{#if hasTeachingFlow}} or a Teaching Model Flow position's instructions{{/if}} explicitly demands it — and it is then still `"contentRole": "orientation"`.
+Do **NOT** plan a separate learning-objectives slide: the objectives live on the orientation slide. Plan a separate one only when the user requirement{{#if hasTeachingFlow}} or a Teaching Model Flow position's instructions{{/if}} explicitly demands it — and it is then still `"contentRole": "orientation"`.{{#if bookPartPlacement}} On this lesson the orientation slide lists no objectives.{{/if}}
 {{#if hasTeachingFlow}}
 The Teaching Model Flow decides which positions exist and their order; classification never changes that. Classify each outline by what it does for the learner inside its flow position — a stage key is context, never a value of `slideType`, `contentRole` or `contentKind`.
 

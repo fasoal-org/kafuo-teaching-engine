@@ -91,8 +91,10 @@ const FLOW_CARRYING: readonly string[] = [
 // inline `{{#if hasSacredTextPolicy}}` block, rendered only when the caller
 // passes protected quotes, removed by the same recipe; likewise its one-line
 // form `{{#if hasSacredTextShortLine}}` (owner decision S-9).
+// The g5.v12 opener's first-page rule (W2.5, 28 Nov 2026) likewise: an inline
+// `{{#if hasBookPartOpenerPolicy}}` block, rendered only on a book-part run.
 const POLICY_BLOCK =
-  /\{\{#if (?:hasSpokenLanguagePolicy|hasSpokenScriptPolicy|hasSacredTextPolicy|hasSacredTextShortLine)\}\}[\s\S]*?\{\{\/if\}\}/g;
+  /\{\{#if (?:hasSpokenLanguagePolicy|hasSpokenScriptPolicy|hasSacredTextPolicy|hasSacredTextShortLine|hasBookPartOpenerPolicy)\}\}[\s\S]*?\{\{\/if\}\}/g;
 const LEGACY_RULE = /\{\{#if legacy\w+\}\}([\s\S]*?)\{\{\/if\}\}/g;
 
 function stripConditionalFamily(template: (typeof TEMPLATES)[number]): string {

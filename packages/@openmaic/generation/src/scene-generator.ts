@@ -2450,7 +2450,12 @@ export async function generateSceneActions(
       keyPoints: keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
       description: guidance.description,
       elements: elementsText,
-      courseContext: buildCourseContext(ctx),
+      // g5.v12 (W2.5, re-review NIT-c): page 1 is the short opener, not a course intro.
+      courseContext: buildCourseContext(
+        ctx,
+        options.bookPartOpener ? { bookPartOpener: true } : {},
+      ),
+      ...(options.bookPartOpener ? { hasBookPartOpenerPolicy: true } : {}),
       agents: agentsText,
       userProfile: userProfile || '',
       languageDirective: languageDirective || '',

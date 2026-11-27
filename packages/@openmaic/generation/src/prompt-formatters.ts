@@ -6,7 +6,11 @@ import type { PdfImage } from './outline-types.js';
 import type { AgentInfo, SceneGenerationContext } from './pipeline-types.js';
 
 /** Build a course context string for injection into action prompts */
-export function buildCourseContext(ctx?: SceneGenerationContext): string {
+export function buildCourseContext(
+  ctx?: SceneGenerationContext,
+  /** g5.v12 (W2.5): page 1 is the lesson's short opening, never a course introduction. */
+  options: { bookPartOpener?: boolean } = {},
+): string {
   if (!ctx) return '';
 
   const lines: string[] = [];
@@ -25,7 +29,11 @@ export function buildCourseContext(ctx?: SceneGenerationContext): string {
   );
   lines.push('');
   if (ctx.pageIndex === 1) {
-    lines.push('Position: This is the FIRST page. Open with a greeting and course introduction.');
+    lines.push(
+      options.bookPartOpener
+        ? "Position: This is the FIRST page, the lesson's short opening: at most three short sentences, no course introduction."
+        : 'Position: This is the FIRST page. Open with a greeting and course introduction.',
+    );
   } else if (ctx.pageIndex === ctx.totalPages) {
     lines.push('Position: This is the LAST page. Conclude the course with a summary and closing.');
     lines.push(

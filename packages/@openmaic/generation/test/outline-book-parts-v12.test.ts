@@ -88,6 +88,15 @@ describe('g5.v12 outline prompt', () => {
       expect(v12).toContain(clause);
       expect(other).not.toContain(clause);
     }
+    // Re-review NIT-a / NIT-b: the objectives-slide rule and the main-idea unit note.
+    const objectivesNote = 'On this lesson the orientation slide lists no objectives.';
+    expect(v12).toContain(objectivesNote);
+    expect(other).not.toContain(objectivesNote);
+    const unitNote =
+      "citing its unit (the lesson's first part still teaches that unit where the book prints it)";
+    expect(v12).toContain(unitNote);
+    expect(prompt(true).user).toContain(unitNote);
+    expect(other).not.toContain(unitNote);
     // No v12 clause asks for a hook or a framing context.
     expect(v12).not.toContain('tied to the hook or the context');
     expect(v12).not.toContain('the hook and the short context only');

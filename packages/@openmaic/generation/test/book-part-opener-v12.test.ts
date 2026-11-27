@@ -106,6 +106,34 @@ describe('g5.v12 opener guidance (W2.5, aligned with the backend opener)', () =>
     expect(again.prompts).toEqual(plainContent.prompts);
   });
 
+  it('re-review NIT-c: on page 1 of a v12 run the narration is the short opener, never a course introduction', async () => {
+    const ctx = {
+      pageIndex: 1,
+      totalPages: 3,
+      allTitles: ['Opening', 'A', 'B'],
+      previousSpeeches: [],
+    };
+    const plain = capture(ACTIONS);
+    const v12 = capture(ACTIONS);
+    await generateSceneActions(opener(), { elements: [] } as never, plain.call, { ctx });
+    await generateSceneActions(opener(), { elements: [] } as never, v12.call, {
+      ctx,
+      bookPartOpener: true,
+    });
+    const plainText = plain.prompts.join('\n');
+    const v12Text = v12.prompts.join('\n');
+    const intro = 'Position: This is the FIRST page. Open with a greeting and course introduction.';
+    const rule =
+      'On this lesson the first page is its short opening slide instead: at most three short sentences and no course introduction.';
+    expect(plainText).toContain(intro);
+    expect(plainText).not.toContain(rule);
+    expect(v12Text).not.toContain(intro);
+    expect(v12Text).toContain(rule);
+    expect(v12Text).toContain(
+      "Position: This is the FIRST page, the lesson's short opening: at most three short sentences, no course introduction.",
+    );
+  });
+
   it('a native visual plan that misses its visual: the native regeneration keeps the v12 opener', async () => {
     const v12 = capture(CONTENT);
     const issues: unknown[] = [];
