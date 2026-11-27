@@ -13,6 +13,7 @@ vi.mock('@/lib/logger', () => ({
 
 import { createPackageReviewFixLoop } from '@/lib/server/teaching-package/package-review-fix-loop';
 import {
+  figureRoomFor,
   namedBookImages,
   pickReviewFigures,
   reviewSlidesOf,
@@ -202,5 +203,58 @@ describe('LOW: a whole page that does not fit still sends its cheaper crops', ()
     // Room enough: the page, never its crops beside it.
     const whole = pickReviewFigures(set, new Set(['u1']), 60_000, [], 60_000);
     expect(whole.figures.map((figure) => figure.name)).toEqual(['page_13']);
+  });
+
+  it('re-check room is priced with the crops when the page does not fit (and held never goes negative)', () => {
+    const page: ReviewFigure = {
+      name: 'page_13',
+      unitIds: ['u1'],
+      pageNumber: 13,
+      mediaType: 'image/jpeg',
+      data: 'PAGE13',
+      tokens: 2_400,
+      kind: 'page',
+      covers: ['src_1', 'src_2'],
+      coveredFigures: [crop('src_1', 13, 300), crop('src_2', 13, 300)],
+    };
+    const set: ReviewFigureSet = { figures: [page], unreadable: [] };
+    // 1,000 left: no whole page, but its 600 tokens of crops fit.
+    expect(figureRoomFor(set, new Set(['u1']), [], 1_000, 60_000)).toBe(true);
+    expect(figureRoomFor(set, new Set(['u1']), [], 500, 60_000)).toBe(false);
+    // The reviewer's probe: both crops sent in place of the page.
+    const picked = pickReviewFigures(set, new Set(['u1']), 1_000, [], 60_000);
+    expect(picked.figures.map((figure) => figure.name)).toEqual(['src_1', 'src_2']);
+    expect(picked.evidence.held).toEqual(['page_13']);
+    expect(picked.held).toBe(1);
+  });
+});
+
+describe('re-check of ef78fd7a/4bc87796: page names the TE cannot place', () => {
+  const named = namedBookImages('«[الصفحة 12]» الجدول يعطي 25');
+
+  it('MEDIUM-B: a failed listing or an unreadable page index keeps a named page unread', () => {
+    expect(named).toEqual(['page_12']);
+    // The reviewer's probe: under a failed listing the page stays unread, like a crop.
+    const failed: ReviewFigureSet = { figures: [], unreadable: [], loadFailed: true };
+    expect(
+      pickReviewFigures(failed, new Set(['u1']), 60_000, named, 60_000).evidence.unreadable,
+    ).toEqual(['page_12']);
+    expect(
+      pickReviewFigures(failed, new Set(['u1']), 60_000, ['src_3'], 60_000).evidence.unreadable,
+    ).toEqual(['src_3']);
+    const unknown: ReviewFigureSet = { figures: [], unreadable: [], pagesUnknown: true };
+    expect(
+      pickReviewFigures(unknown, new Set(['u1']), 60_000, named, 60_000).evidence.unreadable,
+    ).toEqual(['page_12']);
+    // A Stage that simply has no page index: the name names nothing (H-1).
+    expect(
+      pickReviewFigures(CROPS, new Set(['u1']), 60_000, named, 60_000).evidence.unreadable,
+    ).toEqual([]);
+  });
+
+  it('LOW: «[صفحة N]» names a page too; without brackets nothing does', () => {
+    expect(namedBookImages('[صفحة 12] الجدول')).toEqual(['page_12']);
+    expect(namedBookImages('[الصفحة ١٢]')).toEqual(['page_12']);
+    expect(namedBookImages('«الصفحة 12» الجدول')).toEqual([]);
   });
 });

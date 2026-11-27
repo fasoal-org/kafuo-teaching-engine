@@ -203,8 +203,12 @@ export function isPressedFirstReview(review: Pick<PackageReview, 'id' | 'attempt
 
 /** M-1: whether a press already re-asked this review once (dead end (c)). */
 export function wasReasked(review: Pick<PackageReview, 'id'>): boolean {
-  return review.id.startsWith(REASKED_REVIEW_ID_PREFIX) && PRESSED_REVIEW_ID.test(review.id);
+  // NIT: the re-ask's own shape exactly -- a plain press id whose digest happens to begin
+  // with "ra-" is three characters short of it.
+  return REASKED_REVIEW_ID.test(review.id);
 }
+
+const REASKED_REVIEW_ID = /^tpr-rf-ra-[A-Za-z0-9_-]{16}$/;
 
 function num(value: unknown): number | null {
   if (value === null || value === undefined) return null;

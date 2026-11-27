@@ -129,29 +129,44 @@ function storedPage(value: unknown): StoredSourcePage | null {
 }
 
 /**
- * The pages stored for one Stage, in page order. `null` when it has none (no index: an
- * older export, another Teaching Model, an edit successor's Stage) or its index is not
- * one this TE wrote -- then the reviewer uses the crops, as before. Never throws.
+ * What a Stage holds of its book pages (review MEDIUM-B: "none" and "unreadable" differ).
+ * - `none`: no index (an older export, another Teaching Model, an edit successor's Stage,
+ *   an unsafe Stage id): the reviewer uses the crops, and a page a finding names names
+ *   nothing.
+ * - `unreadable`: an index exists but cannot be read or is not one this TE wrote: the
+ *   crops are used, and a page a finding names stays unread (it may exist).
+ * - `stored`: the pages, in page order.
  */
+export type StageSourcePages =
+  | { status: 'none' }
+  | { status: 'unreadable' }
+  | { status: 'stored'; pages: StoredSourcePage[] };
+
+/** The pages stored for one Stage (`StageSourcePages`). Never throws. */
 export async function readStageSourcePages(
   stageId: string,
   classroomsDir: string = CLASSROOMS_DIR,
-): Promise<StoredSourcePage[] | null> {
-  if (!isValidClassroomId(stageId)) return null;
+): Promise<StageSourcePages> {
+  if (!isValidClassroomId(stageId)) return { status: 'none' };
   let raw: string;
   try {
     raw = await fs.readFile(path.resolve(classroomsDir, stageId, INDEX_FILE), 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === 'ENOENT') return { status: 'none' };
+    log.warn(`stage ${stageId}: its book-page index could not be read; the crops are used`);
+    return { status: 'unreadable' };
   }
   try {
     const parsed = JSON.parse(raw) as { schema?: unknown; pages?: unknown };
     if (parsed.schema !== INDEX_SCHEMA || !Array.isArray(parsed.pages)) throw new Error('shape');
     const pages = parsed.pages.map(storedPage);
     if (pages.some((page) => page === null)) throw new Error('entry');
-    return (pages as StoredSourcePage[]).sort((a, b) => a.pageNumber - b.pageNumber);
+    return {
+      status: 'stored',
+      pages: (pages as StoredSourcePage[]).sort((a, b) => a.pageNumber - b.pageNumber),
+    };
   } catch {
     log.warn(`stage ${stageId}: its book-page index is not readable; the crops are used`);
-    return null;
+    return { status: 'unreadable' };
   }
 }

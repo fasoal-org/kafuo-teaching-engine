@@ -465,6 +465,11 @@ export interface ReviewFigureSet {
   unsendable?: UnreadableReviewFigure[];
   /** The Stage's figures could not be listed at all (a figure a finding names is unread). */
   loadFailed?: boolean;
+  /**
+   * Review MEDIUM-B: the Stage has a page index that could not be read, so whether a page
+   * a finding names exists is unknown: it stays unread, like a crop under `loadFailed`.
+   */
+  pagesUnknown?: boolean;
 }
 
 /**
@@ -675,7 +680,8 @@ function westernDigits(digits: string): string {
  */
 export function namedPages(quote: string | null | undefined): string[] {
   const names = new Set<string>();
-  const pattern = /\[\s*الصفحة\s*([0-9٠-٩]+)\s*\]/g;
+  // LOW: «[صفحة N]» too (with or without «ال»); the brackets stay required.
+  const pattern = /\[\s*(?:ال)?صفحة\s*([0-9٠-٩]+)\s*\]/g;
   for (let match = pattern.exec(quote ?? ''); match; match = pattern.exec(quote ?? '')) {
     names.add(pageFigureName(Number(westernDigits(match[1]!))));
   }
@@ -832,13 +838,20 @@ export function pickReviewFigures(
     // be listed, or the name is not among them) was never seen: unread, never closed by
     // this re-check. The set holds EVERY book figure of the Stage (`loadStageFigures`).
     // Review H-1: a PAGE name the Stage does not hold (no page index at all, or a page
-    // outside the stored set) names nothing -- never unread, never a hold.
-    ...alsoNames.filter((name) => !known.has(name) && !isPageName(name)),
+    // outside the stored set) names nothing -- never unread, never a hold. MEDIUM-B: only
+    // when the listing succeeded; under a failed listing or an unreadable page index the
+    // page may exist, so it stays unread, like a crop.
+    ...alsoNames.filter(
+      (name) =>
+        !known.has(name) &&
+        (!isPageName(name) || set.loadFailed === true || set.pagesUnknown === true),
+    ),
   ];
   return {
     figures,
     tokens,
-    held: wanted.length - figures.length,
+    // NIT: the wanted images not sent (a page's crops sent in its place never count).
+    held: wanted.filter((figure) => !sentNames.has(figure.name)).length,
     evidence: {
       sent: [...sent],
       held: fitsOneRun && !neverSent ? notSent : [],
@@ -873,7 +886,14 @@ export function figureRoomFor(
     chars <= REVIEW_CALL_MAX_FIGURE_BASE64_CHARS &&
     tokens <= freshRunBudget;
   if (wanted.length === 0 || !fitsOneRun) return true;
-  return tokens <= tokensLeft;
+  // Review LOW: a whole page that does not fit is sent as its cheaper crops
+  // (`pickReviewFigures`), so the room is priced with them too.
+  const cheapest = wanted.reduce((sum, figure) => {
+    const crops = figure.coveredFigures ?? [];
+    const cropTokens = crops.reduce((total, crop) => total + crop.tokens, 0);
+    return sum + (crops.length > 0 ? Math.min(figure.tokens, cropTokens) : figure.tokens);
+  }, 0);
+  return tokens <= tokensLeft || cheapest <= tokensLeft;
 }
 
 /** Scenes in display order. */
@@ -891,8 +911,11 @@ export function reviewSlidesOf(scenes: readonly AppScene[]): ReviewSlide[] {
  * revision counter also moves on a save that changed nothing.
  */
 export function reviewedSceneDigest(scene: AppScene): string {
+  // Review of ef78fd7a/4bc87796 (MEDIUM-A): canonical, so a slide built in memory (a
+  // voiced scene) and the same slide read back from JSONB (which reorders keys) agree.
+  // A digest stored before this differs once; nothing is approved in production yet.
   return createHash('sha256')
-    .update(JSON.stringify({ title: scene.title, content: scene.content, actions: scene.actions }))
+    .update(canonicalJson({ title: scene.title, content: scene.content, actions: scene.actions }))
     .digest('base64url')
     .slice(0, 22);
 }

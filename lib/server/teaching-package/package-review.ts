@@ -294,12 +294,17 @@ export async function loadStageFigures(
   const outline = document?.outline as AppDocumentOutline | null | undefined;
   const crops = await loadReviewFigures(outline?.sourceVisuals, unitIds, { stageId });
   const stored = await readStageSourcePages(stageId);
+  // Review MEDIUM-B: an index that exists but cannot be read leaves the crops, and every
+  // page a finding names stays unread -- it may well exist.
+  if (stored.status === 'unreadable') return { ...crops, pagesUnknown: true };
   return withReviewPages(
     crops,
-    stored?.map((page) => ({
-      ...page,
-      servingPath: sourcePageServingPath(stageId, page.fileName),
-    })) ?? null,
+    stored.status === 'stored'
+      ? stored.pages.map((page) => ({
+          ...page,
+          servingPath: sourcePageServingPath(stageId, page.fileName),
+        }))
+      : null,
   );
 }
 

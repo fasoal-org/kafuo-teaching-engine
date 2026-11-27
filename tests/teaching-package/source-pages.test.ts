@@ -73,8 +73,10 @@ describe('storing and reading the pages of one Stage', () => {
     // The index sits beside the media folder (never served) and names no Stage.
     const raw = await fs.readFile(path.join(dir, 'stage-1', 'source-pages.json'), 'utf8');
     expect(raw).not.toContain('stage-1');
-    const pages = await readStageSourcePages('stage-1', dir);
-    expect(pages?.map((entry) => [entry.pageNumber, entry.unitIds, entry.width])).toEqual([
+    const read = await readStageSourcePages('stage-1', dir);
+    expect(read.status).toBe('stored');
+    const pages = read.status === 'stored' ? read.pages : [];
+    expect(pages.map((entry) => [entry.pageNumber, entry.unitIds, entry.width])).toEqual([
       [12, ['6758'], 1108],
       [13, ['6760'], 1108],
     ]);
@@ -83,8 +85,10 @@ describe('storing and reading the pages of one Stage', () => {
     expect((await fs.readdir(path.join(dir, 'stage-1', 'media'))).length).toBe(2);
   });
 
-  it('no index, a foreign index or an unsafe Stage id: no pages (the crops are used)', async () => {
-    expect(await readStageSourcePages('stage-2', dir)).toBeNull();
+  it('no index or an unsafe Stage id is "none"; a foreign or broken index is "unreadable"', async () => {
+    expect(await readStageSourcePages('stage-2', dir)).toEqual({ status: 'none' });
+    expect(await readStageSourcePages('../stage-1', dir)).toEqual({ status: 'none' });
+    // Review MEDIUM-B: an index that exists but is not one this TE wrote, or is not JSON.
     await fs.mkdir(path.join(dir, 'stage-3'), { recursive: true });
     await fs.writeFile(
       path.join(dir, 'stage-3', 'source-pages.json'),
@@ -93,8 +97,9 @@ describe('storing and reading the pages of one Stage', () => {
         pages: [{ pageNumber: 1, fileName: '../x' }],
       }),
     );
-    expect(await readStageSourcePages('stage-3', dir)).toBeNull();
-    expect(await readStageSourcePages('../stage-1', dir)).toBeNull();
+    expect(await readStageSourcePages('stage-3', dir)).toEqual({ status: 'unreadable' });
+    await fs.writeFile(path.join(dir, 'stage-3', 'source-pages.json'), '{not json');
+    expect(await readStageSourcePages('stage-3', dir)).toEqual({ status: 'unreadable' });
     await expect(materializeSourcePages([page(1, [])], '../escape', dir)).rejects.toThrow();
     expect(await materializeSourcePages([], 'stage-4', dir)).toBe(0);
   });
@@ -107,7 +112,8 @@ describe('the reviewer: pages replace the crops on them', () => {
       'stage-1',
       dir,
     );
-    const stored = (await readStageSourcePages('stage-1', dir))!;
+    const read = await readStageSourcePages('stage-1', dir);
+    const stored = read.status === 'stored' ? read.pages : [];
     // Page 13's file no longer matches its checksum.
     await fs.writeFile(
       path.join(dir, 'stage-1', 'media', stored[1]!.fileName),

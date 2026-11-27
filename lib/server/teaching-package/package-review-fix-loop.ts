@@ -269,9 +269,8 @@ function sameMaterialWithoutAudio(a: AppScene, b: AppScene): boolean {
 /** What the reviewer saw, compared with what the database holds now. */
 function sceneChanged(live: AppScene, reviewed: AppScene | undefined): boolean {
   if (!reviewed) return true;
-  const material = (scene: AppScene) =>
-    JSON.stringify({ content: scene.content, actions: scene.actions, title: scene.title });
-  return material(live) !== material(reviewed);
+  // The same material, compared key-order-blind (MEDIUM-A: JSONB reorders keys).
+  return reviewedSceneDigest(live) !== reviewedSceneDigest(reviewed);
 }
 
 export interface FixLoopDeps {

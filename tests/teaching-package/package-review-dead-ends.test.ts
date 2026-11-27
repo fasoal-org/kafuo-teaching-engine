@@ -618,6 +618,10 @@ describe('review of c3f02fdc..97cc78c3: pressed first reviews and digests', () =
     expect(isPressedFirstReview({ id: 'tpr-rf-AAAAAAAAAAAAA', attemptId: 'tpa-1' })).toBe(false);
     expect(newPackageReviewId()).toMatch(/^tpr-[A-Za-z0-9_-]{16}$/);
     expect(wasReasked({ id: NEW_ID })).toBe(false);
+    expect(wasReasked({ id: REASK_ID })).toBe(true);
+    // NIT (re-check): a plain press id whose digest begins with "ra-" is no re-ask.
+    expect(wasReasked({ id: 'tpr-rf-ra-abcdefghijklm' })).toBe(false);
+    expect(isPressedFirstReview({ id: 'tpr-rf-ra-abcdefghijklm', attemptId: 'tpa-1' })).toBe(true);
   });
 
   it('the end of a run keeps each digest as the review saw it, never the Stage as it is then', () => {
