@@ -3914,9 +3914,31 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         `UPDATE document_scenes SET data = jsonb_set(data, '{title}', '"عدّله المعلم"')
           WHERE id = 'scene-f1'`,
       );
-      await expect(refix(versionId)).rejects.toMatchObject({ code: 'NO_REGENERABLE_SLIDES' });
+      // A-34: the verdict is of an earlier revision, so the press asks ONE fresh review
+      // that only reviews -- never a regeneration over the edit.
+      const queued = await refix(versionId);
+      expect(queued).toMatchObject({ previousReviewId: done.id, sceneIds: [], replayed: false });
+      expect(queued.review).toMatchObject({
+        status: 'queued',
+        findings: [],
+        reviewedAt: null,
+        reviewedStageRev: null,
+      });
+      const { runPackageReview } = await import('@/lib/server/teaching-package/package-review');
+      const callReviewer = answering([S2_ON_F1]);
+      const finished = await runPackageReview(queued.review.id, { pool: txPool(), callReviewer });
+      // One whole-package call; its finding waits for the teacher's next press.
+      expect(callReviewer).toHaveBeenCalledTimes(1);
+      expect(finished).toMatchObject({ id: queued.review.id, status: 'needs_teacher' });
+      expect(finished!.findings.map((f) => f.teacherReason)).toEqual(['NOT_ATTEMPTED']);
+      // Its verdict is about the edited Stage, which nothing regenerated.
+      expect(finished!.reviewedStageRev).toEqual(expect.any(Number));
+      const title = await pool.query(
+        `SELECT data->>'title' AS title FROM document_scenes WHERE id = 'scene-f1'`,
+      );
+      expect(title.rows).toEqual([{ title: 'عدّله المعلم' }]);
       const rows = await pool.query(`SELECT id, status FROM teaching_package_reviews`);
-      expect(rows.rows).toEqual([{ id: done.id, status: 'needs_teacher' }]);
+      expect(rows.rows).toEqual([{ id: queued.review.id, status: 'needs_teacher' }]);
     });
 
     it('only teacher-only issues left: NO_REGENERABLE_SLIDES, and the review is left as it was', async () => {

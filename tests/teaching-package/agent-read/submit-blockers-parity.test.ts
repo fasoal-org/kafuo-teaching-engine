@@ -25,6 +25,11 @@ import { TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { stampGenerationAlignmentBaselines } from '@/lib/server/teaching-package/alignment';
 import { submitBlockers, submitForReview } from '@/lib/server/teaching-package/lifecycle';
 import {
+  claimReview,
+  finishReview,
+  insertQueuedReview,
+} from '@/lib/server/teaching-package/package-review-store';
+import {
   clearAgentSceneProjectionCache,
   loadAgentReadiness,
   loadAgentScenes,
@@ -345,6 +350,33 @@ describe('submitBlockers parity with submitForReview', () => {
     expect(await submitOutcome(versionId)).toBe('SLIDES_NEED_REGENERATION');
     // Reading the blockers changed nothing.
     expect((await readVersion(qp(), versionId, { tenantId: TENANT }))!.status).toBe('draft');
+  });
+
+  it('A-34: a stale AI review is the blocker Submit refuses with, and lists last', async () => {
+    const { versionId, stageId } = await seedVersion();
+    const version = (await readVersion(qp(), versionId, { tenantId: TENANT }))!;
+    // A finished review whose row records no revision (a legacy row): stale.
+    await insertQueuedReview(qp(), {
+      id: 'tpr-parity-stale',
+      aggregate: { tenantId: TENANT, learningItem: version.learningItem },
+      versionId,
+      attemptId: 'tpa-parity-review',
+      stageId,
+      subjectCode: null,
+      now: 2,
+    });
+    await claimReview(qp(), 'tpr-parity-stale', { workerId: 'w', now: 3, leaseMs: 60_000 });
+    await finishReview(
+      qp(),
+      'tpr-parity-stale',
+      'w',
+      { status: 'passed', findings: [], fixes: [], reviewedStageRev: null },
+      4,
+    );
+    const blockers = await submitBlockers(txPool(), versionId, TENANT);
+    expect(blockers.map((blocker) => blocker.code)).toEqual(['PACKAGE_REVIEW_STALE']);
+    expect(blockers[0]!.details).toMatchObject({ reviewedStageRev: null });
+    expect(await submitOutcome(versionId)).toBe('PACKAGE_REVIEW_STALE');
   });
 
   it('refuses another tenant with NOT_FOUND', async () => {

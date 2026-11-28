@@ -36,6 +36,7 @@ import {
 } from '@/lib/persistence/teaching-package';
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
 import { isPgUniqueViolation, TeachingPackageError } from '@/lib/server/teaching-package/errors';
+import { refuseStaleReview } from '@/lib/server/teaching-package/package-review-freshness';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { cloneStageForSuccessor } from '@/lib/server/teaching-package/stage-clone';
@@ -739,6 +740,15 @@ export async function submitBlockers(
       );
     }
   };
+  // A-34: the transaction's stale-review refusal, as a plain read (after the live check,
+  // as in Submit).
+  const reviewFresh = async () => {
+    const manifest = await readStageFreshnessManifest(
+      version.currentStageId,
+      pool as unknown as Queryable,
+    );
+    await refuseStaleReview(pool as unknown as Queryable, version, manifest?.rev ?? 0);
+  };
 
   const store = await getOwnerScopedDocumentStore(TEACHING_PACKAGE_STAGE_OWNER);
   const document = await store.loadDocument(version.currentStageId);
@@ -767,6 +777,7 @@ export async function submitBlockers(
       await collect(() => assertLegacySuccessorCloneOnly(pool, version, document.scenes));
     }
     await collect(stageMetaLive);
+    await collect(reviewFresh);
     return blockers;
   }
   if (!document) {
@@ -891,6 +902,7 @@ export async function submitBlockers(
     await collect(() => enforceGovernedSkillGate(document.scenes, flow, version, pool));
   }
   await collect(stageMetaLive);
+  await collect(reviewFresh);
   return blockers;
 }
 
@@ -1044,6 +1056,10 @@ export async function submitForReview(
             return { drifted: true };
           }
         }
+        // A-34: a finished AI review of another revision of this Stage (an edit after its
+        // verdict, or a row from before A-34) is no verdict on what is submitted:
+        // PACKAGE_REVIEW_STALE (409); Regenerate flagged asks a fresh review.
+        await refuseStaleReview(tx, locked, currentRev);
         const updated = await updateVersionStatus(tx, locked.id, {
           status: 'in_review',
           submittedAt: now,
@@ -1185,6 +1201,8 @@ export async function approve(
         { submittedStageRev: locked.submittedStageRev, currentRev },
       );
     }
+    // A-34, the defence on the TE side of Approve: the same stale-verdict rule as submit.
+    await refuseStaleReview(tx, locked, currentRev);
 
     const predecessor = await readApprovedVersion(tx, {
       tenantId: locked.tenantId,

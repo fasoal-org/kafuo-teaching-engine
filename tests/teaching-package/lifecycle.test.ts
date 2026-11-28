@@ -24,6 +24,13 @@ import {
   startReviewEdit,
   submitForReview,
 } from '@/lib/server/teaching-package/lifecycle';
+import { readStageScenesOn } from '@/lib/server/teaching-package/package-review-freshness';
+import { reviewInputDigest } from '@/lib/server/teaching-package/package-review-input';
+import {
+  claimReview,
+  finishReview,
+  insertQueuedReview,
+} from '@/lib/server/teaching-package/package-review-store';
 import type { AppScene } from '@/lib/types/stage';
 import type { AppStage } from '@/lib/document-store/persistence-types';
 import type { TeachingFlowEntry, TeachingPackageStatus } from '@/lib/types/teaching-package';
@@ -1051,6 +1058,139 @@ describe('teaching package lifecycle', () => {
       });
       expect(submitted.status).toBe('in_review');
       expect(approved.status).toBe('approved');
+    });
+  });
+
+  describe('A-34/A-34b: a stale AI review refuses submit and approve (every Teaching Model)', () => {
+    const revOf = async (stageId: string) =>
+      (await readStageFreshnessManifest(stageId, qp()))?.rev ?? 0;
+    /** A review of the version's Stage that finished `passed`: about it as it is, or none. */
+    async function reviewedPassed(
+      versionId: string,
+      stageId: string,
+      about: 'now' | 'none' = 'now',
+    ): Promise<string> {
+      const id = unique('tpr');
+      const version = (await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!;
+      await insertQueuedReview(qp(), {
+        id,
+        aggregate: { tenantId: 'tenant-test', learningItem: version.learningItem },
+        versionId,
+        attemptId: unique('tpa'),
+        stageId,
+        subjectCode: null,
+        now: 3,
+      });
+      await claimReview(qp(), id, { workerId: 'w', now: 3, leaseMs: 60_000 });
+      const verdict =
+        about === 'now'
+          ? {
+              reviewedStageRev: await revOf(stageId),
+              reviewedStageDigest: reviewInputDigest(await readStageScenesOn(qp(), stageId)),
+            }
+          : { reviewedStageRev: null, reviewedStageDigest: null };
+      await finishReview(
+        qp(),
+        id,
+        'w',
+        { status: 'passed', findings: [], fixes: [], ...verdict },
+        4,
+      );
+      return id;
+    }
+    const command = (versionId: string) => ({
+      tenantId: 'tenant-test',
+      versionId,
+      actorRef: 'reviewer-1',
+    });
+    const update = (stageId: string, sql: string) =>
+      pool.query(`UPDATE document_scenes SET ${sql} WHERE stage_id = $1 AND id = 'scene-1'`, [
+        stageId,
+      ]);
+
+    it('a passed review of the Stage as it is: submit and approve pass', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'draft' });
+      await reviewedPassed(versionId, stageId);
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      expect((await approve(tx(), command(versionId))).status).toBe('approved');
+    });
+
+    it('A-34b: a save that changed nothing, or a layout-only change, keeps the verdict', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'draft' });
+      const reviewed = await revOf(stageId);
+      await reviewedPassed(versionId, stageId);
+      await update(stageId, `data = data`);
+      await update(stageId, `data = jsonb_set(data, '{content,canvas,viewportSize}', '1200')`);
+      expect(await revOf(stageId)).toBeGreaterThan(reviewed);
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      expect((await approve(tx(), command(versionId))).status).toBe('approved');
+    });
+
+    it('a title edit after a passed review: submit refuses PACKAGE_REVIEW_STALE (409), nothing changes', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'draft' });
+      const reviewed = await revOf(stageId);
+      await reviewedPassed(versionId, stageId);
+      await update(stageId, `data = jsonb_set(data, '{title}', '"عدّله المعلم"')`);
+      const current = await revOf(stageId);
+      await expectTeachingPackageError(
+        submitForReview(tx(), command(versionId)),
+        'PACKAGE_REVIEW_STALE',
+        409,
+      );
+      await expect(submitForReview(tx(), command(versionId))).rejects.toMatchObject({
+        details: { reviewedStageRev: reviewed, currentRev: current, remedy: 'regenerate_flagged' },
+      });
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'draft',
+      );
+    });
+
+    it('a legacy review row with no revision is stale: submit refuses (fail closed)', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'draft' });
+      await reviewedPassed(versionId, stageId, 'none');
+      await expectTeachingPackageError(
+        submitForReview(tx(), command(versionId)),
+        'PACKAGE_REVIEW_STALE',
+        409,
+      );
+    });
+
+    it('approve refuses a verdict on what the reviewer no longer reads (the defence)', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'draft' });
+      const id = await reviewedPassed(versionId, stageId);
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      // The row is about another revision and other content (no TE path writes this).
+      await pool.query(
+        `UPDATE teaching_package_reviews
+            SET reviewed_stage_rev = reviewed_stage_rev - 1, reviewed_stage_digest = 'other'
+          WHERE id = $1`,
+        [id],
+      );
+      await expectTeachingPackageError(
+        approve(tx(), command(versionId)),
+        'PACKAGE_REVIEW_STALE',
+        409,
+      );
+      // In review, the remedy is Start Edit first (a press asks again only for a draft).
+      await expect(approve(tx(), command(versionId))).rejects.toMatchObject({
+        details: { remedy: 'start_edit_then_regenerate_flagged' },
+      });
+    });
+
+    it('a rejected version the teacher edits: Submit refuses STALE and names the press', async () => {
+      const { versionId, stageId } = await seedVersion({ status: 'rejected' });
+      await reviewedPassed(versionId, stageId);
+      await update(stageId, `data = jsonb_set(data, '{title}', '"عدّله المعلم"')`);
+      await expect(submitForReview(tx(), command(versionId))).rejects.toMatchObject({
+        code: 'PACKAGE_REVIEW_STALE',
+        details: { remedy: 'regenerate_flagged' },
+      });
+    });
+
+    it('a version with no AI review is not refused by this rule', async () => {
+      const { versionId } = await seedVersion({ status: 'draft' });
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      expect((await approve(tx(), command(versionId))).status).toBe('approved');
     });
   });
 });
