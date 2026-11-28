@@ -1083,7 +1083,20 @@ export async function submitForReview(
       },
     );
 
-    if (!outcome.drifted) return outcome.version;
+    if (!outcome.drifted) {
+      // Dead end (a): an edit successor's first review of its Stage, after the commit
+      // (best effort; never fails the submit). One per Stage: a resubmit queues nothing.
+      // It composes with A-34: a successor with no review of its Stage is never STALE.
+      if (outcome.version.currentAttemptId === null) {
+        const { queueSuccessorStageReview } =
+          await import('@/lib/server/teaching-package/package-review-refix');
+        await queueSuccessorStageReview(pool, {
+          tenantId: command.tenantId,
+          versionId: outcome.version.id,
+        }).catch(() => null);
+      }
+      return outcome.version;
+    }
     if (attempt >= MAX_VALIDATION_ATTEMPTS) {
       throw new TeachingPackageError(
         'STALE_STATE',

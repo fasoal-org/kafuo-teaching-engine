@@ -1192,5 +1192,63 @@ describe('teaching package lifecycle', () => {
       expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
       expect((await approve(tx(), command(versionId))).status).toBe('approved');
     });
+
+    // Dead end (a), the submit trigger: an edit successor (no attempt of its own) with no
+    // review of its Stage is submitted, never refused as STALE, and its first review is
+    // queued after the commit; the predecessor's verdict is not the successor's.
+    it('dead end (a): an edit successor with no review is submitted and its first review queued, once', async () => {
+      const { versionId, stageId, predecessorId } = await seedVersion({
+        status: 'draft',
+        withPredecessor: true,
+      });
+      const predecessor = (await readVersion(qp(), predecessorId!, { tenantId: 'tenant-test' }))!;
+      const producingAttempt = unique('tpa-pred');
+      await insertAttempt(qp(), {
+        id: producingAttempt,
+        aggregate: { tenantId: 'tenant-test', learningItem: predecessor.learningItem },
+        kind: 'initial',
+        status: 'succeeded',
+        requestedByActorRef: 'actor-1',
+        teachingModel: { key: 'g5', version: 'g5.v1' },
+        inputSnapshot: {
+          learningItem: predecessor.learningItem,
+          teachingModel: { key: 'g5', version: 'g5.v1' },
+          learningObjectives: [],
+          contentUnitRefs: [],
+          sourceRefs: [],
+          generationContext: {},
+          generationOptions: {},
+          requirementDigest: '0'.repeat(64),
+          requirementPreview: 'p',
+          pdfContentSummary: null,
+          requestedAt: 1,
+        },
+        now: 1,
+      });
+      await pool.query(
+        `UPDATE teaching_package_versions SET current_attempt_id = $2 WHERE id = $1`,
+        [predecessorId, producingAttempt],
+      );
+      // The predecessor's own review, finished and with no revision: stale were it the
+      // successor's (a legacy successor's material edit has its own refusal, so none here).
+      await reviewedPassed(predecessorId!, predecessor.currentStageId, 'none');
+
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      const rows = async () =>
+        (
+          await pool.query(
+            `SELECT status, stage_id, attempt_id FROM teaching_package_reviews WHERE version_id = $1`,
+            [versionId],
+          )
+        ).rows;
+      expect(await rows()).toEqual([
+        { status: 'queued', stage_id: stageId, attempt_id: `${producingAttempt}#stage:${stageId}` },
+      ]);
+      // A resubmit after a rejection queues nothing more (one per Stage), and the queued
+      // review is no verdict, so it never refuses as STALE.
+      await reject(tx(), { ...command(versionId), reason: 'again' });
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      expect(await rows()).toHaveLength(1);
+    });
   });
 });
