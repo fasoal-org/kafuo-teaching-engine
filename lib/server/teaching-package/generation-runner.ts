@@ -84,6 +84,7 @@ import {
   materializeSourceImages,
   toVisionPdfImages,
 } from '@/lib/server/teaching-package/source-images';
+import { materializeSourcePages } from '@/lib/server/teaching-package/source-pages';
 import { createTeachingPackagePersistenceSink } from '@/lib/server/teaching-package/stage-persistence-sink';
 import { readCheckpointByAttemptId } from '@/lib/persistence/generation-checkpoint';
 import { readAttemptById } from '@/lib/persistence/teaching-package';
@@ -507,6 +508,8 @@ async function runKafuoAttempt(
     ? await acquireNormalizedContentResource(
         kafuo.normalizedContentResource,
         kafuo.aggregate.learningItem,
+        // Page images: only g5.v12's reviewer reads them; every model verifies them.
+        { keepPages: isBookPartPlacementModel(kafuo.teachingModel) },
       )
     : await acquireContentResource(kafuo.contentResource, {});
   const normalizedSource = kafuo.normalizedContentResource
@@ -1461,6 +1464,19 @@ async function runKafuoAttempt(
     trackingSink.reserve = async (buildStage) => {
       const reserved = await originalReserve(buildStage);
       reservedStageId = reserved.id;
+      // Page images (contract page-images-export-contract-2026-11-27.md §4.2), g5.v12
+      // only: the export's whole book pages go into this Stage's media folder for the
+      // package reviewer (a failed run's folder goes with its pages). Best effort: a
+      // failed write leaves the reviewer the crops; generation never reads them.
+      const pages = normalizedSource?.pages ?? [];
+      if (pages.length > 0 && isBookPartPlacementModel(kafuo.teachingModel)) {
+        await materializeSourcePages(pages, reserved.id).catch((error) =>
+          log.warn(
+            `attempt ${attemptId}: the book pages were not stored; the reviewer uses the crops`,
+            JSON.stringify(describeErrorSafely(error)),
+          ),
+        );
+      }
       return reserved;
     };
 
