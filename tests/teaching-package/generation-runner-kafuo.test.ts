@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   acquireContentResource: vi.fn(),
   acquireNormalizedContentResource: vi.fn(),
   materializeSourceImages: vi.fn(),
+  /** g5.v12 (slot-4 page images): the whole book pages a run stores for the reviewer. */
+  materializeSourcePages: vi.fn(),
   logWarn: vi.fn(),
   /**
    * Called by the `generateClassroom` mocks at the exact point the real pipeline
@@ -63,6 +65,10 @@ vi.mock('@/lib/server/teaching-package/normalized-content-resource', () => ({
 vi.mock('@/lib/server/teaching-package/source-images', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/server/teaching-package/source-images')>()),
   materializeSourceImages: mocks.materializeSourceImages,
+}));
+vi.mock('@/lib/server/teaching-package/source-pages', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/teaching-package/source-pages')>()),
+  materializeSourcePages: mocks.materializeSourcePages,
 }));
 vi.mock('@/lib/logger', () => ({
   // `warn` is captured rather than discarded: the grounding refusal's diagnostics are part
@@ -397,6 +403,8 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       providerId: 'test',
       apiKey: '',
     });
+    mocks.materializeSourcePages.mockReset();
+    mocks.materializeSourcePages.mockResolvedValue(0);
     mocks.materializeSourceImages.mockReset();
     mocks.materializeSourceImages.mockResolvedValue({
       servingMapping: { 'src-1': `/api/classroom-media/stage-x/media/src_1_ab.png` },
@@ -4325,7 +4333,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       };
     }
 
-    async function startBook(context: ReturnType<typeof bookContext>) {
+    async function startBook(context: ReturnType<typeof bookContext>, pages: unknown[] = []) {
       mocks.acquireNormalizedContentResource.mockResolvedValue({
         text: UNITS.map((unit) => `[[CONTENT_UNIT id=${unit.id}]] ${unit.normalizedText}`).join(
           '\n',
@@ -4338,6 +4346,7 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
         measuredSha256: 'b'.repeat(64),
         manifest: { contentRevisionId: 'rev-1', contentUnits: UNITS },
         blockCount: 1,
+        pages,
       });
       const { startGenerationAttempt } = await import('@/lib/server/teaching-package/generation');
       const runner = await freshModules();
@@ -4471,6 +4480,49 @@ describe('teaching package generation runner — Kafuo Layer B', () => {
       const v11Attempt = await startBook(bookContext('g5.v11'));
       expect(v11.bookGroundedQuestions).toBeUndefined();
       expect(await snapshotOf(v11Attempt)).not.toHaveProperty('slideNumberFindings');
+    });
+
+    // Slot-4 page images (runner-pages, integration review LOW-3): a g5.v12 run keeps the
+    // export's whole pages and stores them in its Stage for the reviewer; every other model
+    // keeps none and stores nothing; a failed write never fails the run.
+    it('page images: g5.v12 keeps and stores the book pages; g5.v11 neither; a failed write never fails the run', async () => {
+      const PAGES = [{ pageNumber: 4, sha256: 'c'.repeat(64), mimeType: 'image/png' }];
+      const producedStageOf = async (attemptId: string) =>
+        (
+          await pool.query<{ produced_stage_id: string | null }>(
+            `SELECT produced_stage_id FROM teaching_package_generation_attempts WHERE id = $1`,
+            [attemptId],
+          )
+        ).rows[0]?.produced_stage_id;
+
+      mockBookRun({ first: planWithGaps }, {});
+      const v12 = await startBook(bookContext('g5.v12'), PAGES);
+      expect((await readAttemptByIdFor(v12)).status).toBe('succeeded');
+      expect(mocks.acquireNormalizedContentResource.mock.calls.at(-1)![2]).toEqual({
+        keepPages: true,
+      });
+      expect(mocks.materializeSourcePages).toHaveBeenCalledTimes(1);
+      const [pages, stageId] = mocks.materializeSourcePages.mock.calls[0]!;
+      expect(pages).toEqual(PAGES);
+      // Into the Stage the run reserved, which is the Stage it produced.
+      expect(stageId).toBe(await producedStageOf(v12));
+
+      mocks.materializeSourcePages.mockClear();
+      mocks.generateClassroom.mockReset();
+      mockBookRun({ first: planWithGaps }, {});
+      const v11 = await startBook(bookContext('g5.v11'), PAGES);
+      expect(mocks.acquireNormalizedContentResource.mock.calls.at(-1)![2]).toEqual({
+        keepPages: false,
+      });
+      expect(mocks.materializeSourcePages).not.toHaveBeenCalled();
+      expect(v11).toEqual(expect.any(String));
+
+      mocks.generateClassroom.mockReset();
+      mocks.materializeSourcePages.mockRejectedValue(new Error('disk full'));
+      mockBookRun({ first: planWithGaps }, {});
+      const failedWrite = await startBook(bookContext('g5.v12'), PAGES);
+      expect(mocks.materializeSourcePages).toHaveBeenCalledTimes(1);
+      expect((await readAttemptByIdFor(failedWrite)).status).toBe('succeeded');
     });
 
     it('A-32: a dropped check quiz passes the exact-flow gate, is recorded, and its check’s try-it stays', async () => {

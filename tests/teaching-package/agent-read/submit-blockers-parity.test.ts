@@ -379,6 +379,59 @@ describe('submitBlockers parity with submitForReview', () => {
     expect(await submitOutcome(versionId)).toBe('PACKAGE_REVIEW_STALE');
   });
 
+  // Integration review LOW-4: the stale blocker comes after the live-stage check, on both
+  // return paths, so the readiness reader's FIRST blocker is still Submit's refusal.
+  async function staleReviewOf(versionId: string, stageId: string, id: string) {
+    const version = (await readVersion(qp(), versionId, { tenantId: TENANT }))!;
+    await insertQueuedReview(qp(), {
+      id,
+      aggregate: { tenantId: TENANT, learningItem: version.learningItem },
+      versionId,
+      attemptId: `${id}-attempt`,
+      stageId,
+      subjectCode: null,
+      now: 2,
+    });
+    await claimReview(qp(), id, { workerId: 'w', now: 3, leaseMs: 60_000 });
+    await finishReview(
+      qp(),
+      id,
+      'w',
+      { status: 'passed', findings: [], fixes: [], reviewedStageRev: null },
+      4,
+    );
+  }
+
+  it('A-34: a dead Stage and a stale review: STAGE_NOT_LIVE alone, as Submit refuses first', async () => {
+    const { versionId, stageId } = await seedVersion({ tombstone: true });
+    await staleReviewOf(versionId, stageId, 'tpr-parity-dead');
+    const blockers = await submitBlockers(txPool(), versionId, TENANT);
+    // A Stage that is not live ends the list (Submit never reaches its transaction).
+    expect(blockers.map((blocker) => blocker.code)).toEqual(['STAGE_NOT_LIVE']);
+    expect(await submitOutcome(versionId)).toBe('STAGE_NOT_LIVE');
+  });
+
+  it('A-34: an earlier gate and a stale review: the gate first, the stale review listed last', async () => {
+    // One governed scene only: the exact-flow gate refuses before the transaction.
+    const { versionId, stageId } = await seedVersion({
+      scenes: (id) => governedScenes(id).slice(0, 1),
+    });
+    await staleReviewOf(versionId, stageId, 'tpr-parity-gate');
+    const blockers = await submitBlockers(txPool(), versionId, TENANT);
+    const codes = blockers.map((blocker) => blocker.code);
+    expect(codes.length).toBeGreaterThan(1);
+    expect(codes.at(-1)).toBe('PACKAGE_REVIEW_STALE');
+    expect(await submitOutcome(versionId)).toBe(codes[0]);
+  });
+
+  it('A-34: a version with no flow and a stale review: the stale blocker on that path too', async () => {
+    const { versionId, stageId } = await seedVersion({ flow: null, contract: null });
+    await staleReviewOf(versionId, stageId, 'tpr-parity-noflow');
+    const blockers = await submitBlockers(txPool(), versionId, TENANT);
+    expect(blockers.map((blocker) => blocker.code)).toEqual(['PACKAGE_REVIEW_STALE']);
+    expect(await submitOutcome(versionId)).toBe('PACKAGE_REVIEW_STALE');
+  });
+
   it('refuses another tenant with NOT_FOUND', async () => {
     const { versionId } = await seedVersion();
     await expect(submitBlockers(txPool(), versionId, 'tenant-other')).rejects.toMatchObject({

@@ -35,8 +35,10 @@ import {
   updateVersionStatus,
 } from '@/lib/persistence/teaching-package';
 import { tombstoneStageMeta } from '@/lib/persistence/stage-meta';
+import { createLogger } from '@/lib/logger';
 import { isPgUniqueViolation, TeachingPackageError } from '@/lib/server/teaching-package/errors';
 import { refuseStaleReview } from '@/lib/server/teaching-package/package-review-freshness';
+import { describeErrorSafely } from '@/lib/server/teaching-package/safe-error';
 import { TEACHING_PACKAGE_STAGE_OWNER } from '@/lib/server/teaching-package/owner';
 import { getOwnerScopedDocumentStore } from '@/lib/server/agent-runtime/owner-scoped-documents';
 import { cloneStageForSuccessor } from '@/lib/server/teaching-package/stage-clone';
@@ -90,6 +92,8 @@ import type {
   TeachingPackageVersion,
 } from '@/lib/types/teaching-package';
 import type { AppScene } from '@/lib/types/stage';
+
+const log = createLogger('TeachingPackageLifecycle');
 
 const ACTOR_REF_MAX_LENGTH = 256;
 const COMMENT_MAX_LENGTH = 4000;
@@ -689,7 +693,8 @@ export interface SubmitBlocker {
  * the SAME order (the generation-issue gate, the governed-without-flow refusal,
  * the legacy tier-A path, STAGE_NOT_LIVE, exact flow, game deferral, essential
  * coverage, legacy successor clone-only, the governed Action, visual and Skill
- * gates) plus the locked transaction's status and live-stage checks, so its
+ * gates) plus the locked transaction's status and live-stage checks and, last, its
+ * A-34 stale-review refusal (`PACKAGE_REVIEW_STALE`), so its
  * FIRST blocker is the refusal `submitForReview` throws. Gate granularity: each
  * gate contributes at most one blocker (the Skill gate its first failure).
  * `submitForReview` and `prepareSubmitValidation` are not changed by it.
@@ -1087,13 +1092,20 @@ export async function submitForReview(
       // Dead end (a): an edit successor's first review of its Stage, after the commit
       // (best effort; never fails the submit). One per Stage: a resubmit queues nothing.
       // It composes with A-34: a successor with no review of its Stage is never STALE.
+      // The import is dynamic for load weight (the reviewer, fix-loop and generation
+      // graph), as webhook-delivery loads it; its failure is caught with the call's.
       if (outcome.version.currentAttemptId === null) {
-        const { queueSuccessorStageReview } =
-          await import('@/lib/server/teaching-package/package-review-refix');
-        await queueSuccessorStageReview(pool, {
-          tenantId: command.tenantId,
-          versionId: outcome.version.id,
-        }).catch(() => null);
+        const versionId = outcome.version.id;
+        await import('@/lib/server/teaching-package/package-review-refix')
+          .then(({ queueSuccessorStageReview }) =>
+            queueSuccessorStageReview(pool, { tenantId: command.tenantId, versionId }),
+          )
+          .catch((error: unknown) =>
+            log.warn(
+              `version ${versionId}: the edit successor's first AI review was not queued`,
+              JSON.stringify(describeErrorSafely(error)),
+            ),
+          );
       }
       return outcome.version;
     }

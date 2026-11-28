@@ -1250,5 +1250,34 @@ describe('teaching package lifecycle', () => {
       expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
       expect(await rows()).toHaveLength(1);
     });
+
+    it('dead end (a): a version with its own attempt queues nothing', async () => {
+      const { versionId } = await seedVersion({ status: 'draft' });
+      await pool.query(
+        `UPDATE teaching_package_versions SET current_attempt_id = 'tpa-own' WHERE id = $1`,
+        [versionId],
+      );
+      expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      const rows = await pool.query(
+        `SELECT id FROM teaching_package_reviews WHERE version_id = $1`,
+        [versionId],
+      );
+      expect(rows.rows).toEqual([]);
+    });
+
+    it('dead end (a), integration review MEDIUM-1: a failed load of the queue never fails a committed Submit', async () => {
+      const { versionId } = await seedVersion({ status: 'draft' });
+      vi.doMock('@/lib/server/teaching-package/package-review-refix', () => {
+        throw new Error('the reviewer module failed to load');
+      });
+      try {
+        expect((await submitForReview(tx(), command(versionId))).status).toBe('in_review');
+      } finally {
+        vi.doUnmock('@/lib/server/teaching-package/package-review-refix');
+      }
+      expect((await readVersion(qp(), versionId, { tenantId: 'tenant-test' }))!.status).toBe(
+        'in_review',
+      );
+    });
   });
 });
